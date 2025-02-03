@@ -16,42 +16,30 @@ class Compare:
         self.pb = my_predbat
         self.log = self.pb.log
 
-    def fetch_load(self):
+    def fetch_config(self, tariff):
         """
-        Re-fetch load
+        Fetch configuration overrides
         """
-        my_predbat = self.pb
-        my_predbat.load_minutes_step = my_predbat.step_data_history(
-            my_predbat.load_minutes,
-            my_predbat.minutes_now,
-            forward=False,
-            scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=1.0,
-            type_load=True,
-            load_forecast=my_predbat.load_forecast,
-            load_scaling_dynamic=my_predbat.load_scaling_dynamic,
-            cloud_factor=my_predbat.metric_load_divergence,
-        )
-        my_predbat.load_minutes_step10 = my_predbat.step_data_history(
-            my_predbat.load_minutes,
-            my_predbat.minutes_now,
-            forward=False,
-            scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=my_predbat.load_scaling10,
-            type_load=True,
-            load_forecast=my_predbat.load_forecast,
-            load_scaling_dynamic=my_predbat.load_scaling_dynamic,
-            cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
-        )
-        my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
-        my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None)
+        config = tariff.get("config", {})
+        for key in config:
+            item = self.pb.config_index.get(key)
+            if item:
+                self.log("Compare, override {} to {}".format(key, config[key]))
+                item["value"] = config[key]
+            else:
+                self.log("Warn: Compare, config item {} not found".format(key))
+        self.pb.fetch_config_options()
 
-    def fetch_rates(self, tariff):
+    def fetch_rates(self, tariff, rate_import_base, rate_export_base):
         pb = self.pb
 
         # Reset threshold to automatic
         pb.rate_low_threshold = 0
         pb.rate_high_threshold = 0
+
+        # Reset rates to base
+        pb.rate_import = copy.deepcopy(rate_import_base)
+        pb.rate_export = copy.deepcopy(rate_export_base)
 
         # Fetch rates from Octopus Energy API
         if "rates_import_octopus_url" in tariff:
@@ -104,7 +92,7 @@ class Compare:
             if pb.rate_low_threshold == 0 and highest >= pb.rate_min:
                 pb.rate_import_cost_threshold = highest
 
-    def run_scenario(self):
+    def run_scenario(self, end_record):
         my_predbat = self.pb
 
         pv_step = my_predbat.pv_forecast_minute_step
@@ -113,8 +101,9 @@ class Compare:
         load10_step = my_predbat.load_minutes_step10
 
         my_predbat.calculate_plan(recompute=True, debug_mode=False, publish=False)
+
         cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-            my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="compare"
+            my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=end_record, save="compare"
         )
         cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10 = my_predbat.run_prediction(
             my_predbat.charge_limit_best,
@@ -122,10 +111,10 @@ class Compare:
             my_predbat.export_window_best,
             my_predbat.export_limits_best,
             True,
-            end_record=my_predbat.end_record,
+            end_record=end_record,
         )
-        metric, battery_value = my_predbat.compute_metric(my_predbat.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
-        html = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record, publish=False)
+        metric, battery_value = my_predbat.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+        html = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record, publish=False)
 
         result_data = {
             "cost": cost,
@@ -147,14 +136,16 @@ class Compare:
             "final_iboost10": final_iboost10,
             "final_carbon_g": final_carbon_g,
             "final_carbon_g10": final_carbon_g10,
+            "end_record": end_record,
         }
         for item in result_data:
             result_data[item] = dp2(result_data[item])
         result_data["html"] = html
+        result_data["date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         return result_data
 
-    def run_single(self, tariff, debug=False):
+    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True):
         """
         Compare a single energy tariff with the current settings and report results
         """
@@ -163,17 +154,19 @@ class Compare:
             self.log("Warn: Compare tariff name not found")
             return None
         self.log("Compare Tariff: {}".format(name))
-        self.fetch_rates(tariff)
-        self.fetch_load()
+        self.fetch_config(tariff)
+        if fetch_sensor:
+            self.pb.fetch_sensor_data()
+        self.fetch_rates(tariff, rate_import_base, rate_export_base)
         self.log("Running scenario for tariff: {}".format(name))
-        result_data = self.run_scenario()
+        result_data = self.run_scenario(end_record)
         self.log("Scenario complete for tariff: {} cost {} metric {}".format(name, result_data["cost"], result_data["metric"]))
         if debug:
             with open("compare_{}.html".format(name), "w") as f:
                 f.write(result_data["html"])
         return result_data
 
-    def run_all(self, debug=False):
+    def run_all(self, debug=False, fetch_sensor=True):
         """
         Compare a comparison in prices across multiple energy tariffs and report results
         take care not to destroy the state of the system for the primary settings
@@ -194,12 +187,19 @@ class Compare:
         my_predbat.forecast_minutes = my_predbat.forecast_plan_hours * 60
         my_predbat.forecast_days = my_predbat.forecast_plan_hours / 24
 
+        # Final reports, cut end_record back to 24 hours to ignore the dump at end of day
+        end_record = int((my_predbat.minutes_now + 24 * 60 + 29) / 30) * 30 - my_predbat.minutes_now
+
+        # Save baseline rates
+        rate_import_base = copy.deepcopy(self.pb.rate_import)
+        rate_export_base = copy.deepcopy(self.pb.rate_export)
+
         self.log("Starting comparison of tariffs")
         for tariff in compare:
-            result_data = self.run_single(tariff, debug)
+            result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor)
             results[tariff["name"]] = result_data
+            self.pb.comparisons = results
 
-        self.pb.comparisons = results
         self.pb.comparisons_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Restore original settings

@@ -902,7 +902,7 @@ var options = {
 
         text += '<input type="hidden" name="run" value="run">\n'
         text += "<table>\n"
-        text += "<tr><th>Tariff</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
+        text += "<tr><th>Tariff</th><th>Date</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
 
         compare_settings = self.base.get_arg("compare", [])
         comparisons = self.base.comparisons
@@ -930,12 +930,13 @@ var options = {
             soc = result.get("soc", "")
             final_iboost = result.get("final_iboost", "")
             final_carbon_g = result.get("final_carbon_g", "")
+            date = result.get("date", "")
 
             selected = "<td bgcolor=#aaFFaa>Best<td>" if name == best_selected else "<td>&nbsp;</td>"
 
             name_anchor = name.replace(" ", "_")
-            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(
-                name_anchor, name, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(
+                name_anchor, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected
             )
 
         text += "</table>"

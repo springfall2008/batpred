@@ -45,7 +45,7 @@ class Alertfeed:
         urgency = alerts.get("urgency", "")
         keep = alerts.get("keep", 100)
 
-        self.log("Info: Processing alerts from {}".format(alert_url))
+        self.log("Processing alerts from {}".format(alert_url))
         alert_xml = self.download_alert_data(alert_url)
         if alert_xml:
             self.alerts = self.parse_alert_data(alert_xml)

@@ -361,7 +361,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, required_unit=None):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None):
         """
         Download one or more entities for load data
         """
@@ -396,7 +396,7 @@ class Fetch:
                     "last_updated",
                     backwards=True,
                     smoothing=True,
-                    scale=self.load_scaling,
+                    scale=load_scaling,
                     clean_increment=True,
                     accumulate=load_minutes,
                     required_unit=required_unit,
@@ -799,7 +799,7 @@ class Fetch:
 
         # iBoost load data
         if "iboost_energy_today" in self.args:
-            self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", self.max_days_previous, required_unit="kWh")
+            self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0)
             if iboost_energy_age >= 1:
                 self.iboost_today = dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
                 self.log("iBoost energy today from sensor reads {} kWh".format(self.iboost_today))
@@ -813,7 +813,7 @@ class Fetch:
         else:
             # Load data
             if "load_today" in self.args:
-                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh")
+                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
             else:

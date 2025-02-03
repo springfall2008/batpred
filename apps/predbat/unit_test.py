@@ -225,6 +225,7 @@ def reset_inverter(my_predbat):
     my_predbat.car_charging_from_battery = True
     my_predbat.car_charging_soc[0] = 0
     my_predbat.car_charging_limit[0] = 100.0
+    my_predbat.car_charging_soc = [0, 0, 0, 0]
     my_predbat.iboost_enable = False
     my_predbat.iboost_solar = False
     my_predbat.iboost_gas = False
@@ -2889,7 +2890,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     if compare:
         print("Run compare")
         compare_tariffs = [
-            {"name": "Fixed exports", "rates_export": [{"rate": 15.0}]},
+            {"name": "Fixed exports", "rates_export": [{"rate": 15.0}], "config": {"load_scaling": 2.0}},
             {"name": "Agile export", "rates_export_octopus_url": "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"},
         ]
         my_predbat.args["compare"] = compare_tariffs
@@ -5123,6 +5124,36 @@ def run_optimise_all_windows_tests(my_predbat):
         battery_soc=5,
         rate_export=15,
     )
+
+    # Compare test
+    print("**** Compare test ****")
+    compare_tariffs = [
+        {"name": "Base", "config": {"load_scaling": 1.0}},
+        {"name": "Double Load", "config": {"load_scaling": 2.0}},
+    ]
+    my_predbat.args["compare"] = compare_tariffs
+    compare = Compare(my_predbat)
+    compare.run_all(debug=True, fetch_sensor=False)
+
+    results = my_predbat.comparisons
+    if len(results) != 2:
+        print("ERROR: Expected 2 results but got {}".format(len(results)))
+        failed = True
+    else:
+        result0 = results.get("Base", None)
+        result1 = results.get("Double Load", None)
+        if not result0:
+            print("ERROR: Expected result 0 to be valid")
+            failed = True
+        if not result1:
+            print("ERROR: Expected result 1 to be valid")
+            failed = True
+        if result0["cost"] != 115.5:
+            print("ERROR: Expected result 0 cost to be 115.5 but got {}".format(result0["cost"]))
+            failed = True
+        if result1["cost"] != 231.0:
+            print("ERROR: Expected result 1 cost to be 231.0 but got {}".format(result1["cost"]))
+            failed = True
 
     return failed
 
