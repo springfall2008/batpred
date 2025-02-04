@@ -1,9 +1,9 @@
 # Comparing Energy Tariff's
 
-While it is quite easy to go off and compare your historical usage against various energy tariff's with existing apps, it is much harder to perform a what-if analysis 
+While it is quite easy to go off and compare your historical usage against various energy tariff's with existing apps, it is much harder to perform a what-if analysis
 as the way you control your battery would be different depending on the tariff.
 
-For this reason Predbat offers an energy rate comparison to allow you to know if you are on the best available tariff or when it might be time to switch. 
+For this reason Predbat offers an energy rate comparison to allow you to know if you are on the best available tariff or when it might be time to switch.
 
 Once you have given Predbat a list of tariff's that you want to compare then it will update its predictions daily and keep a history of these over time.
 
@@ -76,7 +76,7 @@ By default the comparison will be run at Midnight every night and saved for the 
 
 You can view the comparison on the Predbat web interface under the 'Compare' tab and also manually trigger a new comparison by hitting the 'Run' button.
 
-Predbat will highly which tariff maybe the Best cost wise for the next 24-hour period based on the plan optimisation metric you have defined. The metric 
+Predbat will highly which tariff maybe the Best cost wise for the next 24-hour period based on the plan optimisation metric you have defined. The metric
 includes the value of the contents of your battery, any iBoost that has been diverted and also the impact of any keep settings, carbon or self-sufficency settings.
 
 The predicted cost is also shown, but keep in mind ending the day with an empty battery maybe cheaper today but cost more tomorrow.
@@ -91,4 +91,3 @@ as its main value and many details about the prediction in its attributes.
 You can create charts from these sensors to show how the different tariff's could compare on a daily basis.
 
 ![image](https://github.com/user-attachments/assets/6d5c30f6-822f-4d9c-b4a6-701c0b676c61)
-
