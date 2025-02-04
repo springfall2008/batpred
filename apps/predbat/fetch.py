@@ -1338,16 +1338,17 @@ class Fetch:
 
         if prev:
             rates = prev.copy()
+            max_minute = max(rates) + 1
         else:
             # Set to zero
-            for minute in range(48 * 60):
+            for minute in range(24 * 60):
                 rates[minute] = 0
+            max_minute = 48 * 60
 
         manual_items = self.get_manual_api(rtype)
         if manual_items:
             self.log("Basic rate API override items for {} are {}".format(rtype, manual_items))
 
-        max_minute = max(rates) + 1
         midnight = time_string_to_stamp("00:00:00")
         for this_rate in info + manual_items:
             if this_rate:
@@ -1459,7 +1460,7 @@ class Fetch:
                     for minute in range(start_minutes, end_minutes):
                         minute_mod = minute % max_minute
                         if (not date) or (minute >= (-24 * 60) and minute < max_minute):
-                            minute_index = minute_mod
+                            minute_index = minute_mod - 24 * 60
                             # For incremental adjustments we have to loop over 24-hour periods
                             while minute_index < max_minute:
                                 current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
