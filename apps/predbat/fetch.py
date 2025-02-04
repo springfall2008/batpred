@@ -361,7 +361,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0,required_unit=None):
         """
         Download one or more entities for load data
         """
@@ -1456,7 +1456,7 @@ class Fetch:
                 day_of_week_midnight = self.midnight.weekday()
 
                 # Store rates against range
-                if end_minutes >= (-24 * 60) and start_minutes < max_minute:
+                if end_minutes >= (-48 * 60) and start_minutes < max_minute:
                     for minute in range(start_minutes, end_minutes):
                         minute_mod = minute % max_minute
                         if (not date) or (minute >= (-24 * 60) and minute < max_minute):
@@ -1464,7 +1464,7 @@ class Fetch:
                             # For incremental adjustments we have to loop over 24-hour periods
                             while minute_index < max_minute:
                                 current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
-                                if not day_of_week or (current_day_of_week in day_of_week):
+                                if not day_of_week or (current_day_of_week in day_of_week):    
                                     if rate_increment:
                                         rates[minute_index] = rates.get(minute_index, 0.0) + rate
                                         rate_replicate[minute_index] = "increment"

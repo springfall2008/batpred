@@ -85,7 +85,6 @@ from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
 
-
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
@@ -268,8 +267,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         reset_prediction_globals()
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
-        self.comparisons = {}
-        self.comparisons_date = None
+        self.comparison = None
         self.compare_tariffs = False
         self.predheat = None
         self.predbat_mode = "Monitor"
@@ -768,10 +766,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.expose_config("active", False)
         self.save_current_config()
 
-        # Compare tariffs
-        if self.compare_tariffs:
-            compare = Compare(self)
-            compare.run_all()
+        # Compare tariffs either when triggered or daily at midnight
+        if ((scheduled and self.minutes_now < RUN_EVERY) or self.compare_tariffs) and self.comparison:
+            self.comparison.run_all()
             self.compare_tariffs = False
 
     async def async_download_predbat_version(self, version):
@@ -865,6 +862,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.ha_interface.update_states()
             self.auto_config()
             self.load_user_config(quiet=False, register=True)
+            self.comparison = Compare(self)
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
             self.log("Error: " + traceback.format_exc())

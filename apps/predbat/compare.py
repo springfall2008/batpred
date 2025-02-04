@@ -4,17 +4,22 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
-import re
+import os
 from datetime import datetime, timedelta
 from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2
+import yaml
 import copy
-
 
 class Compare:
     def __init__(self, my_predbat):
         self.pb = my_predbat
         self.log = self.pb.log
+        self.config_root = self.pb.config_root
+        self.dashboard_item = self.pb.dashboard_item
+        self.prefix = self.pb.prefix
+        self.comparisons = {}
+        self.load_yaml()
 
     def fetch_config(self, tariff):
         """
@@ -31,6 +36,7 @@ class Compare:
         self.pb.fetch_config_options()
 
     def fetch_rates(self, tariff, rate_import_base, rate_export_base):
+
         pb = self.pb
 
         # Reset threshold to automatic
@@ -45,23 +51,23 @@ class Compare:
         if "rates_import_octopus_url" in tariff:
             # Fixed URL for rate import
             pb.rate_import = pb.download_octopus_rates(tariff["rates_import_octopus_url"])
-        elif "rates_import" in tariff:
-            pb.rate_import = pb.basic_rates(tariff["rates_import"], "rates_import")
+        elif 'rates_import' in tariff:
+            pb.rate_import = pb.basic_rates(tariff['rates_import'], "rates_import")
         else:
             self.log("Using existing rate import data")
 
         if "rates_export_octopus_url" in tariff:
             # Fixed URL for rate export
             pb.rate_export = pb.download_octopus_rates(tariff["rates_export_octopus_url"])
-        elif "rates_export" in tariff:
-            pb.rate_export = pb.basic_rates(tariff["rates_export"], "rates_export")
+        elif 'rates_export' in tariff:
+            pb.rate_export = pb.basic_rates(tariff['rates_export'], "rates_export")
         else:
             self.log("Using existing rate export data")
 
         if pb.rate_import:
             pb.rate_scan(pb.rate_import, print=False)
             pb.rate_import, pb.rate_import_replicated = pb.rate_replicate(pb.rate_import, pb.io_adjusted, is_import=True)
-            if "rates_import_override" in tariff:
+            if 'rates_import_override' in tariff:
                 pb.rate_import = pb.basic_rates(tariff["rates_import_override"], "rates_import_override", pb.rate_import, pb.rate_import_replicated)
             pb.rate_scan(pb.rate_import, print=True)
 
@@ -69,7 +75,7 @@ class Compare:
         if pb.rate_export:
             pb.rate_scan_export(pb.rate_export, print=False)
             pb.rate_export, pb.rate_export_replicated = pb.rate_replicate(pb.rate_export, is_import=False)
-            if "rates_export_override" in tariff:
+            if 'rates_export_override' in tariff:
                 pb.rate_export = pb.basic_rates(tariff["rates_export_override"], "rates_export_override", pb.rate_export, pb.rate_export_replicated)
             pb.rate_scan_export(pb.rate_export, print=True)
 
@@ -90,7 +96,15 @@ class Compare:
             pb.low_rates, lowest, highest = pb.rate_scan_window(pb.rate_import, 5, pb.rate_import_cost_threshold, False)
             # Update threshold automatically
             if pb.rate_low_threshold == 0 and highest >= pb.rate_min:
-                pb.rate_import_cost_threshold = highest
+                pb.rate_import_cost_threshold = highest    
+
+        # Compare to see if rates changes
+        for minute in range(0, pb.forecast_minutes):
+            if pb.rate_import.get(minute, 0) != rate_import_base.get(minute, 0):
+                return False
+            if pb.rate_export.get(minute, 0) != rate_export_base.get(minute, 0):
+                return False
+        return True
 
     def run_scenario(self, end_record):
         my_predbat = self.pb
@@ -103,76 +117,180 @@ class Compare:
         my_predbat.calculate_plan(recompute=True, debug_mode=False, publish=False)
 
         cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-            my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=end_record, save="compare"
+           my_predbat.charge_limit_best, 
+           my_predbat.charge_window_best, 
+           my_predbat.export_window_best, 
+           my_predbat.export_limits_best, 
+           False, 
+           end_record=end_record, 
+           save="compare"
         )
         cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10 = my_predbat.run_prediction(
-            my_predbat.charge_limit_best,
-            my_predbat.charge_window_best,
-            my_predbat.export_window_best,
-            my_predbat.export_limits_best,
-            True,
-            end_record=end_record,
+           my_predbat.charge_limit_best, 
+           my_predbat.charge_window_best, 
+           my_predbat.export_window_best, 
+           my_predbat.export_limits_best, 
+           True, 
+           end_record=end_record, 
+
         )
         metric, battery_value = my_predbat.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
         html = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record, publish=False)
 
         result_data = {
-            "cost": cost,
-            "cost10": cost10,
-            "import": import_kwh_battery + import_kwh_house,
-            "import10": import_kwh_battery10 + import_kwh_house10,
-            "export": export_kwh,
-            "export10": export_kwh10,
-            "soc": soc,
-            "soc10": soc10,
-            "soc_min": soc_min,
-            "soc_min10": soc_min10,
-            "battery_cycle": battery_cycle,
-            "battery_cycle10": battery_cycle10,
-            "metric": metric,
-            "metric_keep": metric_keep,
-            "metric_keep10": metric_keep10,
-            "final_iboost": final_iboost,
-            "final_iboost10": final_iboost10,
-            "final_carbon_g": final_carbon_g,
-            "final_carbon_g10": final_carbon_g10,
+            "cost": dp2(cost),
+            "cost10": dp2(cost10),
+            "import_kwh": dp2(import_kwh_battery + import_kwh_house),
+            "import_kwh10": dp2(import_kwh_battery10 + import_kwh_house10),
+            "export_kwh": dp2(export_kwh),
+            "export_kwh10": dp2(export_kwh10),
+            "soc": dp2(soc),
+            "soc10": dp2(soc10),
+            "soc_min": dp2(soc_min),
+            "soc_min10": dp2(soc_min10),
+            "battery_cycle": dp2(battery_cycle),
+            "battery_cycle10": dp2(battery_cycle10),
+            "metric": dp2(metric),
+            "metric_keep": dp2(metric_keep),
+            "metric_keep10": dp2(metric_keep10),
+            "final_iboost": dp2(final_iboost),
+            "final_iboost10": dp2(final_iboost10),
+            "final_carbon_g": dp2(final_carbon_g),
+            "final_carbon_g10": dp2(final_carbon_g10),
             "end_record": end_record,
         }
         for item in result_data:
             result_data[item] = dp2(result_data[item])
         result_data["html"] = html
         result_data["date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        result_data["best"] = False
 
         return result_data
 
     def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True):
+
         """
         Compare a single energy tariff with the current settings and report results
         """
         name = tariff.get("name", None)
+        tariff_id = tariff.get("id", "")
         if not name:
             self.log("Warn: Compare tariff name not found")
             return None
         self.log("Compare Tariff: {}".format(name))
         self.fetch_config(tariff)
+
         if fetch_sensor:
             self.pb.fetch_sensor_data()
-        self.fetch_rates(tariff, rate_import_base, rate_export_base)
+
+        # Fetch rates
+        try:
+            existing_tariff = self.fetch_rates(tariff, rate_import_base, rate_export_base)
+        except ValueError as e:
+            self.log("Warn fetching rates during comparison of tariff {}: {}".format(tariff, e))
+            return {}
+
         self.log("Running scenario for tariff: {}".format(name))
         result_data = self.run_scenario(end_record)
+        result_data['existing_tariff'] = existing_tariff
         self.log("Scenario complete for tariff: {} cost {} metric {}".format(name, result_data["cost"], result_data["metric"]))
         if debug:
-            with open("compare_{}.html".format(name), "w") as f:
-                f.write(result_data["html"])
+            with open("compare_{}.html".format(tariff_id), "w") as f:
+                f.write(result_data['html'])
         return result_data
+
+
+    def select_best(self, compare_list, results):
+        """
+        Recommend the best tariff
+        """
+        best_selected = ""
+        best_metric = 9999999999
+
+        for compare in compare_list:
+            tariff_id = compare.get("id", "")
+            result = results.get(tariff_id, {})
+            if result:
+                metric = result.get("metric", best_metric)
+                if metric < best_metric:
+                    best_metric = metric
+                    best_selected = tariff_id
+
+        for result_id in results:
+            results[result_id]["best"] = result_id == best_selected
+
+        self.log("Compare, best tariff: {} metric {}".format(best_selected, best_metric))
+
+    def get_comparison(self, tariff_id):
+        """
+        Get comparisons
+        """
+        return self.comparisons.get(tariff_id, {})
+
+    def load_yaml(self):
+        """
+        Load comparisons from yaml
+        """
+        filepath = self.config_root + "/comparisons.yaml"
+        if os.path.exists(filepath):
+            with open(filepath, "r") as f:
+                try:
+                    data = yaml.safe_load(f)
+                    if data:
+                        self.comparisons = data.get("comparisons", {})                        
+                except yaml.YAMLError as exc:
+                    self.log("Error loading comparisons: {}".format(exc))                    
+
+        if self.comparisons:
+            compare_list = self.pb.get_arg("compare_list", [])
+            self.select_best(compare_list, self.comparisons)
+            self.publish_data()
+
+    def save_yaml(self):
+        """
+        Save comparisons to yaml
+        """
+        filepath = self.config_root + "/comparisons.yaml"
+        save_data = {}
+        save_data["comparisons"] = self.comparisons
+
+        with open(filepath, "w") as f:
+            f.write(yaml.dump(save_data, default_flow_style=False))
+
+    def publish_data(self):
+        """
+        Publish comparison data to HA
+        """
+        for tariff_id in self.comparisons:
+            result = self.get_comparison(tariff_id)
+
+            if result:
+                cost = result.get("cost", 0)
+                name = result.get("name", "")
+                attributes={
+                    "friendly_name": "Compare " + name,
+                    "state_class": "measurement",
+                    "unit_of_measurement": "p",
+                    "icon": "mdi::compare-horizontal",
+                }
+                for item in result:
+                    value = result[item]
+                    if item != "html":
+                        attributes[item] = value                    
+
+                self.dashboard_item(
+                    self.prefix + ".compare_tariff_" + tariff_id,
+                    state=cost,
+                    attributes=attributes,
+                )  
 
     def run_all(self, debug=False, fetch_sensor=True):
         """
         Compare a comparison in prices across multiple energy tariffs and report results
         take care not to destroy the state of the system for the primary settings
-        """
-        compare = self.pb.get_arg("compare", [])
-        if not compare:
+        """        
+        compare_list = self.pb.get_arg("compare_list", [])
+        if not compare_list:
             return
 
         results = {}
@@ -182,7 +300,7 @@ class Compare:
         save_forecast_plan_hours = my_predbat.forecast_plan_hours
         save_forecast_minutes = my_predbat.forecast_minutes
         save_forecast_days = my_predbat.forecast_days
-
+        
         my_predbat.forecast_plan_hours = 48
         my_predbat.forecast_minutes = my_predbat.forecast_plan_hours * 60
         my_predbat.forecast_days = my_predbat.forecast_plan_hours / 24
@@ -195,12 +313,15 @@ class Compare:
         rate_export_base = copy.deepcopy(self.pb.rate_export)
 
         self.log("Starting comparison of tariffs")
-        for tariff in compare:
-            result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor)
-            results[tariff["name"]] = result_data
-            self.pb.comparisons = results
 
-        self.pb.comparisons_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for tariff in compare_list:
+            result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor)
+            results[tariff["id"]] = result_data
+            # Save and update comparisons as we go so it is updated in HA
+            self.select_best(compare_list, results)
+            self.comparisons = results
+            self.save_yaml()
+            self.publish_data()
 
         # Restore original settings
         my_predbat.forecast_plan_hours = save_forecast_plan_hours
