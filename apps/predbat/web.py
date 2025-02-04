@@ -760,7 +760,7 @@ var options = {
         args = request.query
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
-        text = self.get_header("Predbat Charts", refresh=60 * 5)
+        text = self.get_header("Predbat Charts", refresh=60*5)
         text += "<body>\n"
         text += "<h2>{} Chart</h2>\n".format(chart)
         text += '- <a href="./charts?chart=Battery">Battery</a> '
@@ -781,7 +781,7 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./apps"
-        text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
+        text = self.get_header("Predbat Apps.yaml", refresh=60*5)
         text += "<body>\n"
         text += "<a href='./debug_apps'>apps.yaml</a><br>\n"
         text += "<table>\n"
@@ -902,7 +902,7 @@ var options = {
         text += "<table>\n"
         text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
 
-        compare_list = self.base.get_arg("compare_list", [])
+        compare_list  = self.base.get_arg('compare_list', [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -925,13 +925,11 @@ var options = {
             best = result.get("best", False)
             existing_tariff = result.get("existing_tariff", False)
 
-            selected = "<td bgcolor=#FFaaaa>Best<td>" if best else "<td>&nbsp;</td>"
+            selected = '<td bgcolor=#FFaaaa>Best<td>' if best else "<td>&nbsp;</td>"
             if existing_tariff:
-                selected = "<td bgcolor=#aaFFaa>Existing<td>"
+                selected += '<td bgcolor=#aaFFaa>Existing<td>'
 
-            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(
-                id, id, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected
-            )
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(id, id, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected)
 
         text += "</table>"
 
