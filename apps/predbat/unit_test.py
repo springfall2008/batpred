@@ -5156,7 +5156,7 @@ def run_optimise_all_windows_tests(my_predbat):
 
     results = compare.comparisons
     if len(results) != 2:
-        print("ERROR: Comparee expected 2 results but got {}".format(len(results)))
+        print("ERROR: Compare expected 2 results but got {}".format(len(results)))
         failed = True
     else:
         result0 = results.get("base", None)
