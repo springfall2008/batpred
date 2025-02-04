@@ -1144,7 +1144,7 @@ class Inverter:
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power) # Reset discharge power too
+                    self.set_current_from_power("discharge", discharge_power)  # Reset discharge power too
             elif self.soc_percent > float(current_charge_limit):
                 # If current SOC is above Target SOC, turn Grid Charging off
                 self.alt_charge_discharge_enable("charge", False)
