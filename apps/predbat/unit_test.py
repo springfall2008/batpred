@@ -5147,25 +5147,25 @@ def run_optimise_all_windows_tests(my_predbat):
     # Compare test
     print("**** Compare test ****")
     compare_tariffs = [
-        {"name": "Base", "config": {"load_scaling": 1.0}},
-        {"name": "Double Load", "config": {"load_scaling": 2.0}},
+        {"id": "base", "name": "Base", "config": {"load_scaling": 1.0}},
+        {"id": "double", "name": "Double Load", "config": {"load_scaling": 2.0}},
     ]
-    my_predbat.args["compare"] = compare_tariffs
+    my_predbat.args["compare_list"] = compare_tariffs
     compare = Compare(my_predbat)
     compare.run_all(debug=True, fetch_sensor=False)
 
-    results = my_predbat.comparisons
+    results = compare.comparisons
     if len(results) != 2:
-        print("ERROR: Expected 2 results but got {}".format(len(results)))
+        print("ERROR: Compare expected 2 results but got {}".format(len(results)))
         failed = True
     else:
-        result0 = results.get("Base", None)
-        result1 = results.get("Double Load", None)
+        result0 = results.get("base", None)
+        result1 = results.get("double", None)
         if not result0:
-            print("ERROR: Expected result 0 to be valid")
+            print("ERROR: Compare expected result 0 to be valid")
             failed = True
         if not result1:
-            print("ERROR: Expected result 1 to be valid")
+            print("ERROR: Compare eExpected result 1 to be valid")
             failed = True
     #    if result0['cost'] != 115.5:
     #        print("ERROR: Expected result 0 cost to be 115.5 but got {}".format(result0['cost']))

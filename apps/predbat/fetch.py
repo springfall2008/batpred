@@ -1456,7 +1456,7 @@ class Fetch:
                 day_of_week_midnight = self.midnight.weekday()
 
                 # Store rates against range
-                if end_minutes >= (-24 * 60) and start_minutes < max_minute:
+                if end_minutes >= (-48 * 60) and start_minutes < max_minute:
                     for minute in range(start_minutes, end_minutes):
                         minute_mod = minute % max_minute
                         if (not date) or (minute >= (-24 * 60) and minute < max_minute):
