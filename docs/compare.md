@@ -15,7 +15,8 @@ current tariff to act as a baseline.
 Below is a suggestion of various tariff combinations from Octopus Intelligent (valid Feb 2025) against region A (please please -A with your region code if you decide
 to use this template). [Region Codes](https://energy-stats.uk/dno-region-codes-explained/)
 
-As well as Octopus rate URLs you can use manual rates (rates_import/rates_export), other types of rates from sensors will be added in future releases.
+As well as Octopus rate URLs (rates_import_octopus_url/rates_export_octopus_url) you can use manual rates (rates_import/rates_export), 
+Octopus integration rates (metric_octopus_import/metric_octopus_export) and Energi Data service rates (metric_energidataservice_import/metric_energidataservice_export).
 
 Each tariff must be given an ID which will be used to create a sensor to track predicted cost over time, the full name is used in the description of that sensor and on
 the web page.
