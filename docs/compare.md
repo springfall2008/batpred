@@ -77,7 +77,7 @@ By default the comparison will be run at Midnight every night and saved for the 
 You can view the comparison on the Predbat web interface under the 'Compare' tab and also manually trigger a new comparison by hitting the 'Run' button.
 
 Predbat will highly which tariff maybe the Best cost wise for the next 24-hour period based on the plan optimisation metric you have defined. The metric
-includes the value of the contents of your battery, any iBoost that has been diverted and also the impact of any keep settings, carbon or self-sufficency settings.
+includes the value of the contents of your battery, any iBoost that has been diverted and also the impact of any keep settings, carbon or self-sufficiency settings.
 
 The predicted cost is also shown, but keep in mind ending the day with an empty battery maybe cheaper today but cost more tomorrow.
 
