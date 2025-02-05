@@ -63,6 +63,7 @@ emszzzz
 enctype
 endt
 Energi
+Energidata
 Energidataservice
 energydataservice
 evse
