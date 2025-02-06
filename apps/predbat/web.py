@@ -21,6 +21,7 @@ from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 
 TIME_FORMAT_DAILY = "%Y-%m-%d"
 
+
 class WebInterface:
     def __init__(self, base) -> None:
         self.abort = False
@@ -97,10 +98,10 @@ class WebInterface:
         self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2))
         self.cost_hour_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2))
 
-        compare_list  = self.base.get_arg('compare_list', [])
+        compare_list = self.base.get_arg("compare_list", [])
         for item in compare_list:
             id = item.get("id", None)
-            if id and self.base.comparison:                
+            if id and self.base.comparison:
                 self.compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
@@ -318,7 +319,7 @@ class WebInterface:
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname='chart'):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart"):
         """
         Render a chart
         """
@@ -794,7 +795,7 @@ var options = {
         args = request.query
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
-        text = self.get_header("Predbat Charts", refresh=60*5)
+        text = self.get_header("Predbat Charts", refresh=60 * 5)
         text += "<body>\n"
         text += "<h2>{} Chart</h2>\n".format(chart)
         text += '- <a href="./charts?chart=Battery">Battery</a> '
@@ -815,7 +816,7 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./apps"
-        text = self.get_header("Predbat Apps.yaml", refresh=60*5)
+        text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
         text += "<body>\n"
         text += "<a href='./debug_apps'>apps.yaml</a><br>\n"
         text += "<table>\n"
@@ -936,7 +937,7 @@ var options = {
         text += "<table>\n"
         text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
 
-        compare_list  = self.base.get_arg('compare_list', [])
+        compare_list = self.base.get_arg("compare_list", [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -959,11 +960,13 @@ var options = {
             best = result.get("best", False)
             existing_tariff = result.get("existing_tariff", False)
 
-            selected = '<td bgcolor=#FFaaaa>Best<td>' if best else "<td>&nbsp;</td>"
+            selected = "<td bgcolor=#FFaaaa>Best<td>" if best else "<td>&nbsp;</td>"
             if existing_tariff:
-                selected += '<td bgcolor=#aaFFaa>Existing<td>'
+                selected += "<td bgcolor=#aaFFaa>Existing<td>"
 
-            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(id, id, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected)
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(
+                id, id, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected
+            )
 
         text += "</table>\n"
 
@@ -973,21 +976,21 @@ var options = {
         for compare in compare_list:
             name = compare.get("name", "")
             id = compare.get("id", "")
-            series_data.append({"name" : name, "data" : self.compare_hist.get(id, {}).get("metric", {}), "opacity" : "1.0", "stroke_width" : "2", "stroke_curve" : "smooth", "chart_type": "bar"})
+            series_data.append({"name": name, "data": self.compare_hist.get(id, {}).get("metric", {}), "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "bar"})
 
         now_str = self.base.now_utc.strftime(TIME_FORMAT)
         text += self.render_chart(series_data, self.base.currency_symbols[1], "Tariff Comparison - metric", now_str)
 
         # Charts
-        #text += '<div id="chart2"></div>'
-        #series_data = []
-        #for compare in compare_list:
+        # text += '<div id="chart2"></div>'
+        # series_data = []
+        # for compare in compare_list:
         #    name = compare.get("name", "")
         #    id = compare.get("id", "")
         #    series_data.append({"name" : name, "data" : self.compare_hist.get(id, {}).get("cost", {}), "opacity" : "1.0", "stroke_width" : "2", "stroke_curve" : "smooth"})
 
-        #now_str = self.base.now_utc.strftime(TIME_FORMAT)
-        #text += self.render_chart(series_data, self.base.currency_symbols[1], "Tariff Comparison - cost", now_str, tagname='chart2')
+        # now_str = self.base.now_utc.strftime(TIME_FORMAT)
+        # text += self.render_chart(series_data, self.base.currency_symbols[1], "Tariff Comparison - cost", now_str, tagname='chart2')
 
         # HTML Plans
         for compare in compare_list:
