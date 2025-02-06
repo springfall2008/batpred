@@ -629,7 +629,7 @@ class UserInterface:
                 if (
                     (key.startswith("db"))
                     or ("_key" in key)
-                    or key in ["pool", "ha_interface", "web_interface", "web_interface_task", "prediction", "logfile", "predheat", "inverters", "run_list", "threads", "EVENT_LISTEN_LIST", "local_tz", "CONFIG_ITEMS", "config_index"]
+                    or key in ["pool", "ha_interface", "web_interface", "web_interface_task", "prediction", "logfile", "predheat", "inverters", "run_list", "threads", "EVENT_LISTEN_LIST", "local_tz", "CONFIG_ITEMS", "config_index", "comparison"]
                 ):
                     pass
                 else:
