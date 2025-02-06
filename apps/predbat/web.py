@@ -21,7 +21,6 @@ from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 
 TIME_FORMAT_DAILY = "%Y-%m-%d"
 
-
 class WebInterface:
     def __init__(self, base) -> None:
         self.abort = False
@@ -104,10 +103,10 @@ class WebInterface:
         self.cost_yesterday_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28), daily=True, offset_days=-1)
         self.cost_yesterday_car_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28), daily=True, offset_days=-1)
 
-        compare_list = self.base.get_arg("compare_list", [])
+        compare_list  = self.base.get_arg('compare_list', [])
         for item in compare_list:
             id = item.get("id", None)
-            if id and self.base.comparison:
+            if id and self.base.comparison:                
                 self.compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
@@ -325,13 +324,13 @@ class WebInterface:
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", fullsize=True):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname='chart', daily_chart=True):
         """
         Render a chart
         """
         midnight_str = (self.base.midnight_utc + timedelta(days=1)).strftime(TIME_FORMAT)
         text = ""
-        if fullsize:
+        if daily_chart:
             text += """
 <script>
 window.onresize = function(){ location.reload(); };
@@ -386,7 +385,7 @@ var options = {
     start: 'day'
   },
 """
-
+            
         text += "  series: [\n"
         first = True
         opacity = []
@@ -830,7 +829,7 @@ var options = {
         args = request.query
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
-        text = self.get_header("Predbat Charts", refresh=60 * 5)
+        text = self.get_header("Predbat Charts", refresh=60*5)
         text += "<body>\n"
         text += "<h2>{} Chart</h2>\n".format(chart)
         text += '- <a href="./charts?chart=Battery">Battery</a> '
@@ -851,7 +850,7 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./apps"
-        text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
+        text = self.get_header("Predbat Apps.yaml", refresh=60*5)
         text += "<body>\n"
         text += "<a href='./debug_apps'>apps.yaml</a><br>\n"
         text += "<table>\n"
@@ -957,7 +956,7 @@ var options = {
         """
         self.default_page = "./compare"
 
-        text = self.get_header("Predbat Compare", refresh=5 * 60)
+        text = self.get_header("Predbat Compare", refresh=5*60)
 
         text += "<body>\n"
         text += '<form class="form-inline" action="./compare" method="post" enctype="multipart/form-data" id="compareform">\n'
@@ -974,7 +973,7 @@ var options = {
         text += "<table>\n"
         text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
 
-        compare_list = self.base.get_arg("compare_list", [])
+        compare_list  = self.base.get_arg('compare_list', [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -997,13 +996,11 @@ var options = {
             best = result.get("best", False)
             existing_tariff = result.get("existing_tariff", False)
 
-            selected = "<td bgcolor=#FFaaaa>Best<td>" if best else "<td>&nbsp;</td>"
+            selected = '<td bgcolor=#FFaaaa>Best<td>' if best else "<td>&nbsp;</td>"
             if existing_tariff:
-                selected += "<td bgcolor=#aaFFaa>Existing<td>"
+                selected += '<td bgcolor=#aaFFaa>Existing<td>'
 
-            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(
-                id, id, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected
-            )
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(id, id, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected)
 
         text += "</table>\n"
 
@@ -1013,14 +1010,14 @@ var options = {
         for compare in compare_list:
             name = compare.get("name", "")
             id = compare.get("id", "")
-            series_data.append({"name": name, "data": self.compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
-        series_data.append({"name": "Actual", "data": self.cost_yesterday_hist, "chart_type": "bar"})
-        series_data.append({"name": "Car actual", "data": self.cost_yesterday_car_hist, "chart_type": "bar"})
+            series_data.append({"name" : name, "data" : self.compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
+        series_data.append({"name" : "Actual", "data" : self.cost_yesterday_hist, "chart_type": "bar"})
+        series_data.append({"name" : "Car actual", "data" : self.cost_yesterday_car_hist, "chart_type": "bar"})
 
         now_str = self.base.now_utc.strftime(TIME_FORMAT)
 
         if self.compare_hist:
-            text += self.render_chart(series_data, self.base.currency_symbols[1], "Tariff Comparison - metric", now_str, fullsize=False)
+            text += self.render_chart(series_data, self.base.currency_symbols[1], "Tariff Comparison - metric", now_str, daily_chart=False)
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
