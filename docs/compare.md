@@ -7,6 +7,12 @@ For this reason Predbat offers an energy rate comparison to allow you to know if
 
 Once you have given Predbat a list of tariff's that you want to compare then it will update its predictions daily and keep a history of these over time.
 
+## Limitations
+
+Keep in mind this is an approximation of costs for the following 24 hour period and the reality could be different. In particular car charging costs is unlikely to reflect
+the true picture as it will only be planned after you plug in. Smart tariff's like Octopus Intelligent GO will give you extra cheap car slots which can also not be
+predicted right now. When changing tariff you should use your own judgement, this data is only a helpful guide.
+
 ## Configuring the tariff's to compare
 
 First you need to tell Predbat which tariff's you want to compare, you should list all the tariff's you realistically might want to switch between, including your
@@ -82,7 +88,9 @@ includes the value of the contents of your battery and iBoost that has been dive
 
 The predicted cost is also shown, but keep in mind ending the day with an empty battery maybe cheaper today but cost more tomorrow.
 
-![image](https://github.com/user-attachments/assets/ed170b51-7f00-4bb3-a036-059b5a96b512)
+![image](https://github.com/user-attachments/assets/399866a1-7d86-457d-b525-7c2e1fdf683b)
+
+![image](https://github.com/user-attachments/assets/b7c7f9a3-8a80-4abf-a08c-4da62b9258fe)
 
 ## Comparison sensors
 
