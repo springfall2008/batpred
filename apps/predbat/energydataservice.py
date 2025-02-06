@@ -77,7 +77,7 @@ class Energidataservice:
             start_time_str = entry.get(from_key)
             rate = entry.get(rate_key, 0) * scale  # Apply scaling
             if not use_cent:
-                rate = rate / 100.0
+                rate = rate * 100.0
 
             # Parse the start time
             try:
