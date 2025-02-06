@@ -1,3 +1,13 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2024 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+#
 # This code creates a web server and serves up the Predbat web pages
 
 from aiohttp import web
@@ -6,8 +16,10 @@ import os
 import re
 from datetime import datetime, timedelta
 
-from utils import calc_percent_limit
+from utils import calc_percent_limit, str2time
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
+
+TIME_FORMAT_DAILY = "%Y-%m-%d"
 
 
 class WebInterface:
@@ -19,10 +31,14 @@ class WebInterface:
         self.pv_power_hist = {}
         self.pv_forecast_hist = {}
         self.cost_today_hist = {}
+        self.compare_hist = {}
+        self.cost_yesterday_hist = {}
+        self.cost_yesterday_car_hist = {}
 
-    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, print=False):
+    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, print=False, daily=False, offset_days=0):
         results = {}
         last_updated_time = None
+        last_day_stamp = None
         if history:
             history = history[0]
 
@@ -56,11 +72,24 @@ class WebInterface:
             try:
                 state = float(state) * scale
                 last_updated_time = item[last_updated_key]
+                last_updated_stamp = str2time(last_updated_time)
             except (ValueError, TypeError):
                 continue
 
+            day_stamp = last_updated_stamp.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            if daily and day_stamp == last_day_stamp:
+                continue
+            last_day_stamp = day_stamp
+
             # Add the state to the result
-            results[last_updated_time] = state
+            if daily:
+                if offset_days:
+                    day_stamp += timedelta(days=offset_days)
+                results[day_stamp.strftime(TIME_FORMAT_DAILY)] = state
+            else:
+                results[last_updated_time] = state
+
         return results
 
     def history_update(self):
@@ -72,6 +101,18 @@ class WebInterface:
         self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7))
         self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2))
         self.cost_hour_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2))
+        self.cost_yesterday_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28), daily=True, offset_days=-1)
+        self.cost_yesterday_car_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28), daily=True, offset_days=-1)
+
+        compare_list = self.base.get_arg("compare_list", [])
+        for item in compare_list:
+            id = item.get("id", None)
+            if id and self.base.comparison:
+                self.compare_hist[id] = {}
+                result = self.base.comparison.get_comparison(id)
+                if result:
+                    self.compare_hist[id]["cost"] = self.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True)
+                    self.compare_hist[id]["metric"] = self.history_attribute(self.base.get_history_wrapper(result["entity_id"], 2), state_key="metric", attributes=True, daily=True)
 
     async def start(self):
         # Start the web server on port 5052
@@ -284,13 +325,14 @@ class WebInterface:
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True):
         """
         Render a chart
         """
         midnight_str = (self.base.midnight_utc + timedelta(days=1)).strftime(TIME_FORMAT)
         text = ""
-        text += """
+        if daily_chart:
+            text += """
 <script>
 window.onresize = function(){ location.reload(); };
 var width = window.innerWidth;
@@ -307,6 +349,7 @@ if (height * 1.68 > width) {
 else {
    width = height * 1.68;
 }
+
 var options = {
   chart: {
     type: 'line',
@@ -317,6 +360,33 @@ var options = {
     start: 'minute', offset: '-12h'
   },
 """
+        else:
+            text += """
+<script>
+window.onresize = function(){ location.reload(); };
+var width = window.innerWidth;
+var height = window.innerHeight;
+width = width / 3 * 2;
+height = height / 3 * 2;
+
+if (height * 1.68 > width) {
+   height = width / 1.68;
+}
+else {
+   width = height * 1.68;
+}
+
+var options = {
+  chart: {
+    type: 'line',
+    width: width,
+    height: height
+  },
+  span: {
+    start: 'day'
+  },
+"""
+
         text += "  series: [\n"
         first = True
         opacity = []
@@ -393,7 +463,7 @@ var options = {
         text += "   ]\n"
         text += "  }\n"
         text += "}\n"
-        text += "var chart = new ApexCharts(document.querySelector('#chart'), options);\n"
+        text += "var chart = new ApexCharts(document.querySelector('#{}'), options);\n".format(tagname)
         text += "chart.render();\n"
         text += "</script>\n"
         return text
@@ -885,7 +955,9 @@ var options = {
         """
         Return the Predbat compare page as an HTML page
         """
-        text = self.get_header("Predbat Compare", refresh=60)
+        self.default_page = "./compare"
+
+        text = self.get_header("Predbat Compare", refresh=5 * 60)
 
         text += "<body>\n"
         text += '<form class="form-inline" action="./compare" method="post" enctype="multipart/form-data" id="compareform">\n'
@@ -933,8 +1005,26 @@ var options = {
                 id, id, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected
             )
 
-        text += "</table>"
+        text += "</table>\n"
 
+        # Charts
+        text += '<div id="chart"></div>'
+        series_data = []
+        for compare in compare_list:
+            name = compare.get("name", "")
+            id = compare.get("id", "")
+            series_data.append({"name": name, "data": self.compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
+        series_data.append({"name": "Actual", "data": self.cost_yesterday_hist, "chart_type": "bar"})
+        series_data.append({"name": "Car actual", "data": self.cost_yesterday_car_hist, "chart_type": "bar"})
+
+        now_str = self.base.now_utc.strftime(TIME_FORMAT)
+
+        if self.compare_hist:
+            text += self.render_chart(series_data, self.base.currency_symbols[1], "Tariff Comparison - metric", now_str, daily_chart=False)
+        else:
+            text += "<br><h2>Loading chart (please wait)...</h2><br>"
+
+        # HTML Plans
         for compare in compare_list:
             name = compare.get("name", "")
             id = compare.get("id", "")
@@ -950,7 +1040,7 @@ var options = {
             if html:
                 text += html
             else:
-                text += "<p>No data yet</p>"
+                text += "<br><p>No data yet....</p>"
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)

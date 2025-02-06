@@ -11,6 +11,11 @@ from utils import str2time, minutes_to_time, dp1, dp2
 import yaml
 import copy
 
+# TODO:
+# 1. Update web UI to show a chart of historical differences
+# 2. Allow change to start/end comparison points e.g. tomorrow or today
+# 3. Consider Octopus API key to access current tariff info and switch links
+
 
 class Compare:
     def __init__(self, my_predbat):
@@ -307,11 +312,13 @@ class Compare:
                     if item != "html":
                         attributes[item] = value
 
+                entity_id = self.prefix + ".compare_tariff_" + tariff_id
                 self.dashboard_item(
-                    self.prefix + ".compare_tariff_" + tariff_id,
+                    entity_id,
                     state=cost,
                     attributes=attributes,
                 )
+                result["entity_id"] = entity_id
 
     def run_all(self, debug=False, fetch_sensor=True):
         """
