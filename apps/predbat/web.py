@@ -34,8 +34,9 @@ class WebInterface:
         self.compare_hist = {}
         self.cost_yesterday_hist = {}
         self.cost_yesterday_car_hist = {}
+        self.cost_yesterday_no_car = {}
 
-    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, print=False, daily=False, offset_days=0):
+    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, print=False, daily=False, offset_days=0, first=True):
         results = {}
         last_updated_time = None
         last_day_stamp = None
@@ -78,7 +79,7 @@ class WebInterface:
 
             day_stamp = last_updated_stamp.replace(hour=0, minute=0, second=0, microsecond=0)
 
-            if daily and day_stamp == last_day_stamp:
+            if first and daily and day_stamp == last_day_stamp:
                 continue
             last_day_stamp = day_stamp
 
@@ -92,6 +93,18 @@ class WebInterface:
 
         return results
 
+    def subtract_daily(self, hist1, hist2):
+        """
+        Subtract the values in hist2 from hist1
+        """
+        results = {}
+        for key in hist1:
+            if key in hist2:
+                results[key] = max(hist1[key] - hist2[key], 0)
+            else:
+                results[key] = hist1[key]
+        return results
+
     def history_update(self):
         """
         Update the history data
@@ -103,6 +116,7 @@ class WebInterface:
         self.cost_hour_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2))
         self.cost_yesterday_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28), daily=True, offset_days=-1)
         self.cost_yesterday_car_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28), daily=True, offset_days=-1)
+        self.cost_yesterday_no_car = self.subtract_daily(self.cost_yesterday_hist, self.cost_yesterday_car_hist)
 
         compare_list = self.base.get_arg("compare_list", [])
         for item in compare_list:
@@ -112,7 +126,7 @@ class WebInterface:
                 result = self.base.comparison.get_comparison(id)
                 if result:
                     self.compare_hist[id]["cost"] = self.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True)
-                    self.compare_hist[id]["metric"] = self.history_attribute(self.base.get_history_wrapper(result["entity_id"], 2), state_key="metric", attributes=True, daily=True)
+                    self.compare_hist[id]["metric"] = self.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True)
 
     async def start(self):
         # Start the web server on port 5052
@@ -256,6 +270,9 @@ class WebInterface:
         h2 {
             color: #4CAF50;
             display: inline
+        }
+        p {
+            white-space: nowrap;
         }
         table {
             border-collapse: collapse;
@@ -972,7 +989,7 @@ var options = {
         text += "</form>"
 
         text += "<table>\n"
-        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
+        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
 
         compare_list = self.base.get_arg("compare_list", [])
 
@@ -997,11 +1014,22 @@ var options = {
             best = result.get("best", False)
             existing_tariff = result.get("existing_tariff", False)
 
-            selected = "<td bgcolor=#FFaaaa>Best<td>" if best else "<td>&nbsp;</td>"
-            if existing_tariff:
-                selected += "<td bgcolor=#aaFFaa>Existing<td>"
+            try:
+                date_timestamp = datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
+                stamp = date_timestamp.strftime(TIME_FORMAT_DAILY)
+            except (ValueError, TypeError):
+                stamp = None
 
-            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(
+            # Save current datapoint for today
+            if stamp and id in self.compare_hist:
+                self.compare_hist[id]["metric"][stamp] = metric
+                self.compare_hist[id]["cost"][stamp] = cost
+
+            selected = '<font style="background-color:#FFaaaa;>"> Best </font>' if best else ""
+            if existing_tariff:
+                selected += '<font style="background-color:#aaFFaa;"> Existing </font>'
+
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>\n".format(
                 id, id, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected
             )
 
@@ -1014,8 +1042,8 @@ var options = {
             name = compare.get("name", "")
             id = compare.get("id", "")
             series_data.append({"name": name, "data": self.compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
-        series_data.append({"name": "Actual", "data": self.cost_yesterday_hist, "chart_type": "bar"})
-        series_data.append({"name": "Car actual", "data": self.cost_yesterday_car_hist, "chart_type": "bar"})
+        series_data.append({"name": "Actual", "data": self.cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
+        series_data.append({"name": "Actual (no car)", "data": self.cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
 
         now_str = self.base.now_utc.strftime(TIME_FORMAT)
 

@@ -7,7 +7,7 @@
 import os
 from datetime import datetime, timedelta
 from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2
+from utils import str2time, minutes_to_time, dp0, dp1, dp2
 import yaml
 import copy
 
@@ -188,8 +188,8 @@ class Compare:
             "metric_keep10": dp2(metric_keep10),
             "final_iboost": dp2(final_iboost),
             "final_iboost10": dp2(final_iboost10),
-            "final_carbon_g": dp2(final_carbon_g),
-            "final_carbon_g10": dp2(final_carbon_g10),
+            "final_carbon_g": dp0(final_carbon_g),
+            "final_carbon_g10": dp0(final_carbon_g10),
             "battery_value_start": dp2(battery_value_start),
             "battery_value_end": dp2(battery_value_end),
             "metric_real": dp2(metric_end),
@@ -319,6 +319,17 @@ class Compare:
                     attributes=attributes,
                 )
                 result["entity_id"] = entity_id
+
+    def publish_only(self):
+        """
+        Update HA sensors only
+        """
+        compare_list = self.pb.get_arg("compare_list", [])
+        if not compare_list:
+            return
+
+        self.select_best(compare_list, self.comparisons)
+        self.publish_data()
 
     def run_all(self, debug=False, fetch_sensor=True):
         """

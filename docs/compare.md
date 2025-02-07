@@ -33,12 +33,14 @@ If you do not set an import or export rate for a particular tariff then your exi
   # Tariff comparison feature
   # Adjust this list to the tariffs you want to compare, include your current tariff also
   compare_list:
-    - id: 'cap_none'
-      name: 'Price cap import/No export'
+    - id: 'current'
+      name: 'Current Tariff'
+    - id: 'cap_seg'
+      name: 'Price cap import/Seg export'
       rates_import:
          - rate 24.86
       rates_export:
-         - rate 0
+         - rate 4.1
     - id: 'igo_fixed'
       name: 'Intelligent GO import/Fixed export'
       rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-BB-VAR-23-03-01/electricity-tariffs/E-1R-INTELLI-BB-VAR-23-03-01-A/standard-unit-rates/'

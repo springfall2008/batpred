@@ -520,7 +520,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.alerts = []
         self.alert_active_keep = {}
         self.alert_cache = {}
-
         self.config_root = "./"
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -767,10 +766,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.expose_config("active", False)
         self.save_current_config()
 
-        # Compare tariffs either when triggered or daily at midnight
         if ((scheduled and self.minutes_now < RUN_EVERY) or self.compare_tariffs) and self.comparison:
+            # Compare tariffs either when triggered or daily at midnight
             self.comparison.run_all()
             self.compare_tariffs = False
+        else:
+            # Otherwise just update HA sensors to prevent then expiring
+            self.comparison.publish_only()
 
     async def async_download_predbat_version(self, version):
         """
@@ -837,6 +839,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
         try:
             self.reset()
+            self.update_time(print=False)
             self.log("Starting HA interface")
             try:
                 self.ha_interface = HAInterface(self)
