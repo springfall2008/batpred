@@ -42,7 +42,7 @@ If you do not set an import or export rate for a particular tariff then your exi
       rates_import:
          - rate: 24.86
       rates_export:
-         - rate: 4.1      
+         - rate: 4.1  
     - id: 'igo_fixed'
       name: 'Intelligent GO import/Fixed export'
       rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-BB-VAR-23-03-01/electricity-tariffs/E-1R-INTELLI-BB-VAR-23-03-01-{octopus_region}/standard-unit-rates/'
