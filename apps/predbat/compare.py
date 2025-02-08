@@ -204,7 +204,7 @@ class Compare:
 
         return result_data
 
-    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True):
+    def run_single(self, tariff, rate_import_base, rate_export_base, end_record, debug=False, fetch_sensor=True, car_charging_slots=[]):
         """
         Compare a single energy tariff with the current settings and report results
         """
@@ -246,6 +246,9 @@ class Compare:
         my_predbat.manual_freeze_export_times = []
         my_predbat.manual_demand_times = []
         my_predbat.manual_all_times = []
+        my_predbat.octopus_intelligent_charging = False
+
+        self.recompute_car_charging(car_charging_slots)
 
         self.log("Running scenario for tariff: {}".format(name))
         result_data = self.run_scenario(end_record)
@@ -353,6 +356,35 @@ class Compare:
         self.select_best(compare_list, self.comparisons)
         self.publish_data()
 
+    def recompute_car_charging(self, car_charging_slots):
+        """
+        Recompute car charging plan
+        """
+        my_predbat = self.pb
+
+        my_predbat.car_charging_slots = [[] for car_n in range(my_predbat.num_cars)]
+
+        for car_n in range(my_predbat.num_cars):
+            total_car_kwh = 0
+            if len(car_charging_slots) > car_n and car_charging_slots[car_n]:
+                for car_slot in car_charging_slots[car_n]:
+                    total_car_kwh += car_slot.get("kwh", 0)
+            if total_car_kwh > 0:
+                my_predbat.car_charging_soc[car_n] = 0
+                my_predbat.car_charging_limit[car_n] = total_car_kwh
+                my_predbat.car_charging_battery_size[car_n] = 100
+            else:
+                my_predbat.car_charging_soc[car_n] = my_predbat.car_charging_battery_size[car_n]
+                my_predbat.car_charging_limit[car_n] = my_predbat.car_charging_battery_size[car_n]
+
+            if my_predbat.car_charging_planned[car_n] or my_predbat.car_charging_now[car_n]:
+                self.log("Re-plan car {} for charing to {}".format(car_n, my_predbat.car_charging_limit[car_n]))
+                my_predbat.car_charging_plan_smart[car_n] = True
+                my_predbat.car_charging_slots[car_n] = my_predbat.plan_car_charging(car_n, my_predbat.low_rates)
+
+            if my_predbat.car_charging_planned[car_n] and my_predbat.car_charging_exclusive[car_n]:
+                break
+
     def run_all(self, debug=False, fetch_sensor=True):
         """
         Compare a comparison in prices across multiple energy tariffs and report results
@@ -385,6 +417,12 @@ class Compare:
         save_iboost_today = my_predbat.iboost_today
         save_import_today_now = my_predbat.import_today_now
         save_export_today_now = my_predbat.export_today_now
+        save_octopus_intelligent_charging = my_predbat.octopus_intelligent_charging
+        save_car_charging_plan_smart = copy.deepcopy(my_predbat.car_charging_plan_smart)
+        save_car_charging_limit = copy.deepcopy(my_predbat.car_charging_limit)
+        save_car_charging_soc = copy.deepcopy(my_predbat.car_charging_soc)
+        save_car_charging_battery_size = copy.deepcopy(my_predbat.car_charging_battery_size)
+        save_car_charging_slots = copy.deepcopy(my_predbat.car_charging_slots)
 
         # Final reports, cut end_record back to 24 hours to ignore the dump at end of day
         end_record = int((my_predbat.minutes_now + 24 * 60 + 29) / 30) * 30 - my_predbat.minutes_now
@@ -396,7 +434,7 @@ class Compare:
         self.log("Starting comparison of tariffs")
 
         for tariff in compare_list:
-            result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor)
+            result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots)
             results[tariff["id"]] = result_data
             # Save and update comparisons as we go so it is updated in HA
             self.select_best(compare_list, results)
@@ -424,3 +462,9 @@ class Compare:
         my_predbat.iboost_today = save_iboost_today
         my_predbat.import_today_now = save_import_today_now
         my_predbat.export_today_now = save_export_today_now
+        my_predbat.octopus_intelligent_charging = save_octopus_intelligent_charging
+        my_predbat.car_charging_limit = save_car_charging_limit
+        my_predbat.car_charging_soc = save_car_charging_soc
+        my_predbat.car_charging_battery_size = save_car_charging_battery_size
+        my_predbat.car_charging_slots = save_car_charging_slots
+        my_predbat.car_charging_plan_smart = save_car_charging_plan_smart
