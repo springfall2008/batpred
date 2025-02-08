@@ -66,6 +66,7 @@ Energi
 Energidata
 Energidataservice
 energydataservice
+epod
 evse
 feedin
 fentry

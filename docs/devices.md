@@ -86,6 +86,16 @@ octopus_charge_limit: 'number.ohme_target_percent'
 
 Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
 
+** Newer Ohme Integrated into Home Assistant ***
+
+The word 'epod_' seems to be have been added to some Ohme sensors in the version bundled with Home Assistant:
+
+```yaml
+  octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  octopus_ready_time: 'time.ohme_epod_target_time'
+  octopus_charge_limit: 'number.ohme_epod_target_percentage'
+```
+
 **Using Ohme car charging plans on other tariff's e.g. Agile**
 
 ```yaml

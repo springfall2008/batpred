@@ -353,6 +353,11 @@ class Compare:
         save_manual_freeze_export_times = my_predbat.manual_freeze_export_times
         save_manual_demand_times = my_predbat.manual_demand_times
         save_manual_all_times = my_predbat.manual_all_times
+        save_charge_window_best = my_predbat.charge_window_best
+        save_export_window_best = my_predbat.export_window_best
+        save_export_limits_best = my_predbat.export_limits_best
+        save_charge_limit_best = my_predbat.charge_limit_best
+        save_charge_limit_percent_best = my_predbat.charge_limit_percent_best
 
         # Change to a fixed 48 hour plan
         my_predbat.forecast_plan_hours = 48
@@ -395,3 +400,8 @@ class Compare:
         my_predbat.manual_freeze_export_times = save_manual_freeze_export_times
         my_predbat.manual_demand_times = save_manual_demand_times
         my_predbat.manual_all_times = save_manual_all_times
+        my_predbat.charge_window_best = save_charge_window_best
+        my_predbat.export_window_best = save_export_window_best
+        my_predbat.export_limits_best = save_export_limits_best
+        my_predbat.charge_limit_best = save_charge_limit_best
+        my_predbat.charge_limit_percent_best = save_charge_limit_percent_best

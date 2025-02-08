@@ -1021,7 +1021,10 @@ var options = {
                 stamp = None
 
             # Save current datapoint for today
-            if stamp and id in self.compare_hist:
+            if stamp and (id in self.compare_hist):
+                if "metric" not in self.compare_hist[id]:
+                    self.compare_hist[id]["metric"] = {}
+                    self.compare_hist[id]["cost"] = {}
                 self.compare_hist[id]["metric"][stamp] = metric
                 self.compare_hist[id]["cost"][stamp] = cost
 
