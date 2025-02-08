@@ -207,6 +207,7 @@ class Compare:
         """
         Compare a single energy tariff with the current settings and report results
         """
+        my_predbat = self.pb
         name = tariff.get("name", None)
         tariff_id = tariff.get("id", "")
         if not name:
@@ -224,6 +225,26 @@ class Compare:
         except ValueError as e:
             self.log("Warn fetching rates during comparison of tariff {}: {}".format(tariff, e))
             return {}
+
+        # Reset totals
+        my_predbat.cost_today_sofar = 0
+        my_predbat.carbon_today_sofar = 0
+        my_predbat.iboost_today = 0
+        my_predbat.import_today_now = 0
+        my_predbat.export_today_now = 0
+
+        # Change to a fixed 48 hour plan
+        my_predbat.forecast_plan_hours = 48
+        my_predbat.forecast_minutes = my_predbat.forecast_plan_hours * 60
+        my_predbat.forecast_days = my_predbat.forecast_plan_hours / 24
+
+        # Clear manual times to avoid users overrides
+        my_predbat.manual_charge_times = []
+        my_predbat.manual_export_times = []
+        my_predbat.manual_freeze_charge_times = []
+        my_predbat.manual_freeze_export_times = []
+        my_predbat.manual_demand_times = []
+        my_predbat.manual_all_times = []
 
         self.log("Running scenario for tariff: {}".format(name))
         result_data = self.run_scenario(end_record)
@@ -358,19 +379,11 @@ class Compare:
         save_export_limits_best = my_predbat.export_limits_best
         save_charge_limit_best = my_predbat.charge_limit_best
         save_charge_limit_percent_best = my_predbat.charge_limit_percent_best
-
-        # Change to a fixed 48 hour plan
-        my_predbat.forecast_plan_hours = 48
-        my_predbat.forecast_minutes = my_predbat.forecast_plan_hours * 60
-        my_predbat.forecast_days = my_predbat.forecast_plan_hours / 24
-
-        # Clear manual times to avoid users overrides
-        my_predbat.manual_charge_times = []
-        my_predbat.manual_export_times = []
-        my_predbat.manual_freeze_charge_times = []
-        my_predbat.manual_freeze_export_times = []
-        my_predbat.manual_demand_times = []
-        my_predbat.manual_all_times = []
+        save_cost_today_sofar = my_predbat.cost_today_sofar
+        save_carbon_today_sofar = my_predbat.carbon_today_sofar
+        save_iboost_today = my_predbat.iboost_today
+        save_import_today_now = my_predbat.import_today_now
+        save_export_today_now = my_predbat.export_today_now
 
         # Final reports, cut end_record back to 24 hours to ignore the dump at end of day
         end_record = int((my_predbat.minutes_now + 24 * 60 + 29) / 30) * 30 - my_predbat.minutes_now
@@ -405,3 +418,8 @@ class Compare:
         my_predbat.export_limits_best = save_export_limits_best
         my_predbat.charge_limit_best = save_charge_limit_best
         my_predbat.charge_limit_percent_best = save_charge_limit_percent_best
+        my_predbat.cost_today_sofar = save_cost_today_sofar
+        my_predbat.carbon_today_sofar = save_carbon_today_sofar
+        my_predbat.iboost_today = save_iboost_today
+        my_predbat.import_today_now = save_import_today_now
+        my_predbat.export_today_now = save_export_today_now

@@ -989,7 +989,12 @@ var options = {
         text += "</form>"
 
         text += "<table>\n"
-        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
+        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th>"
+        if self.base.iboost_enable:
+            text += "<th>Iboost</th>"
+        if self.base.carbon_enable:
+            text += "<th>Carbon</th>"
+        text += "<th>Result</th>\n"
 
         compare_list = self.base.get_arg("compare_list", [])
 
@@ -1032,9 +1037,12 @@ var options = {
             if existing_tariff:
                 selected += '<font style="background-color:#aaFFaa;"> Existing </font>'
 
-            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>\n".format(
-                id, id, name, date, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected
-            )
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(id, id, name, date, metric, cost, cost10, export, imported, soc)
+            if self.base.iboost_enable:
+                text += "<td>{}</td>".format(final_iboost)
+            if self.base.carbon_enable:
+                text += "<td>{}</td>".format(final_carbon_g)
+            text += "<td>{}</td></tr>\n".format(selected)
 
         text += "</table>\n"
 
@@ -1046,12 +1054,13 @@ var options = {
             id = compare.get("id", "")
             series_data.append({"name": name, "data": self.compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
         series_data.append({"name": "Actual", "data": self.cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
-        series_data.append({"name": "Actual (no car)", "data": self.cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
+        if self.base.car_charging_hold:
+            series_data.append({"name": "Actual (no car)", "data": self.cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
 
         now_str = self.base.now_utc.strftime(TIME_FORMAT)
 
         if self.compare_hist:
-            text += self.render_chart(series_data, self.base.currency_symbols[1], "Tariff Comparison - metric", now_str, daily_chart=False)
+            text += self.render_chart(series_data, self.base.currency_symbols[1], "Tariff Comparison - True cost", now_str, daily_chart=False)
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
