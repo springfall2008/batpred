@@ -7,7 +7,7 @@ For this reason Predbat offers an energy rate comparison to allow you to know if
 
 Once you have given Predbat a list of tariff's that you want to compare then it will update its predictions daily and keep a history of these over time.
 
-If you do decide to switch to Octopus Energy after using this feature please consider using my referal link so we can both save some money: https://share.octopus.energy/jolly-eel-176
+If you do decide to switch to Octopus Energy after using this feature please consider using my referal link so we can both save some money: <https://share.octopus.energy/jolly-eel-176>
 
 ## Limitations
 
