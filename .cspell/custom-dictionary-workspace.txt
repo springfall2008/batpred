@@ -104,6 +104,7 @@ hypervolt
 iboost
 idag
 idetails
+iflux
 inday
 invbatpower
 invname
