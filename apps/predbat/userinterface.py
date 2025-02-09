@@ -224,6 +224,11 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
+        for entity_id in entities:
+            if 'predbat_gecloud_' in entity_id:
+                if self.ge_cloud_direct:
+                    await self.ge_cloud_direct.select_event(entity_id, value)
+
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
@@ -273,6 +278,11 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
+        for entity_id in entities:
+            if 'predbat_gecloud_' in entity_id:
+                if self.ge_cloud_direct:
+                    await self.ge_cloud_direct.number_event(entity_id, value)
+
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
@@ -312,6 +322,11 @@ class UserInterface:
         # Can be a string or an array
         if isinstance(entities, str):
             entities = [entities]
+
+        for entity_id in entities:
+            if 'predbat_gecloud_' in entity_id:
+                if self.ge_cloud_direct:
+                    await self.ge_cloud_direct.switch_event(entity_id, service)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -758,6 +773,9 @@ class UserInterface:
             {"domain": "input_number", "service": "set_value", "callback": self.number_event},
             {"domain": "input_number", "service": "increment", "callback": self.number_event},
             {"domain": "input_number", "service": "decrement", "callback": self.number_event},
+            {"domain": "number", "service": "set_value", "callback": self.number_event},
+            {"domain": "number", "service": "increment", "callback": self.number_event},
+            {"domain": "number", "service": "decrement", "callback": self.number_event},
             {"domain": "select", "service": "select_option", "callback": self.select_event},
             {"domain": "select", "service": "select_first", "callback": self.select_event},
             {"domain": "select", "service": "select_last", "callback": self.select_event},
