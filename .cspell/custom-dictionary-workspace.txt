@@ -114,6 +114,7 @@ itemtype
 ivtime
 kopt
 Krakenflex
+kvar
 kvarh
 kwhb
 linebreak
@@ -125,6 +126,7 @@ luxpower
 markdownlint
 matplotlib
 maximise
+measurand
 mdlrc
 Meteo
 Meteoalarm
@@ -162,6 +164,7 @@ perc
 pitem
 pkwh
 postdata
+powerline
 ppdetails
 ppkwh
 Pred
