@@ -41,6 +41,7 @@ Daeamon
 darkgreen
 darkred
 darray
+datain
 datap
 datapoints
 dayname
@@ -113,6 +114,7 @@ itemtype
 ivtime
 kopt
 Krakenflex
+kvarh
 kwhb
 linebreak
 localfolder
@@ -219,10 +221,12 @@ treforsiphone
 unstaged
 useid
 userinterface
+varh
 venv
 Wallbox
 weblink
 welink
+writeonly
 xaxis
 xlabel
 xload
