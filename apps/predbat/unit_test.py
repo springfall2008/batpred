@@ -40,6 +40,7 @@ from inverter import Inverter
 from config import INVERTER_DEF
 from compare import Compare
 from web import WebInterface
+from gecloud import GECloudDirect
 
 # Import MagicMock
 from unittest.mock import MagicMock
@@ -127,7 +128,7 @@ class TestHAInterface:
         return None
 
     def set_state(self, entity_id, state, attributes=None):
-        print("Setting state: {} to {}".format(entity_id, state))
+        print("Setting state: {} to {} attributes {}".format(entity_id, state, attributes))
         self.dummy_items[entity_id] = state
         return None
 
@@ -1535,6 +1536,7 @@ def run_load_octopus_slots_tests(my_predbat):
     TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
     slots = []
+    slots2 = []
     expected_slots = []
     expected_slots2 = []
     expected_slots3 = []
@@ -1551,12 +1553,14 @@ def run_load_octopus_slots_tests(my_predbat):
     soc2 = 2.0
     for i in range(8):
         start = now_utc + timedelta(minutes=i * 60)
+        start_plus_15 = start + timedelta(minutes=15)
         end = start + timedelta(minutes=60)
         prev_soc = soc
         prev_soc2 = soc2
         soc += 5
         soc2 += 2.5
         slots.append({"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": -5, "source": "null", "location": "AT_HOME"})
+        slots2.append({"start": start.strftime(TIME_FORMAT) if i >= 1 else start_plus_15.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": -5, "source": "null", "location": "AT_HOME"})
         minutes_start = int((start - midnight_utc).total_seconds() / 60)
         minutes_end = int((end - midnight_utc).total_seconds() / 60)
         expected_slots.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": 4, "cost": 20.0, "soc": 0.0})
@@ -1569,6 +1573,11 @@ def run_load_octopus_slots_tests(my_predbat):
             expected_slots4.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 20.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 20.0 else 0.0, "soc": min(soc2, 10.0)})
 
     failed |= run_load_octopus_slot_test("test1", my_predbat, slots, expected_slots, False, 2.0, 0.0, 1.0)
+
+    # Misalign the start time by 15 minutes
+    expected_slots[0]["start"] += 15
+    failed |= run_load_octopus_slot_test("test1b", my_predbat, slots2, expected_slots, False, 2.0, 0.0, 1.0)
+
     failed |= run_load_octopus_slot_test("test2", my_predbat, slots, expected_slots2, True, 2.0, 0.0, 1.0)
     failed |= run_load_octopus_slot_test("test3", my_predbat, slots, expected_slots3, True, 2.0, 12.0, 1.0)
     failed |= run_load_octopus_slot_test("test4", my_predbat, slots, expected_slots4, True, 2.0, 10.0, 0.5)
@@ -3013,6 +3022,36 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     print("Wrote plan json to {}".format(filename))
 
     my_predbat.create_debug_yaml(write_file=True)
+
+    return failed
+
+
+def run_test_ge_cloud(my_predbat):
+    """
+    GE Cloud test
+    """
+    failed = False
+
+    ge_cloud_direct = GECloudDirect(my_predbat)
+    ge_cloud_direct_task = my_predbat.create_task(ge_cloud_direct.start())
+    while not "devices" in ge_cloud_direct.__dict__:
+        time.sleep(1)
+    devices = ge_cloud_direct.devices
+    if not devices:
+        print("ERROR: No devices found")
+        failed = True
+    else:
+        for device in devices:
+            print("Device {} found:".format(device))
+            while not ge_cloud_direct.settings.get(device):
+                time.sleep(1)
+            print("Device {} synced".format(device))
+
+        my_predbat.create_task(ge_cloud_direct.switch_event("switch.predbat_gecloud_sa2243g277_ac_charge_enable", "turn_on"))
+        time.sleep(1)
+    print("Stopping cloud")
+    ge_cloud_direct.stop_cloud = True
+    time.sleep(1)
 
     return failed
 
@@ -7926,6 +7965,7 @@ def main():
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     parser.add_argument("--quick", action="store_true", help="Run quick tests")
     parser.add_argument("--compare", action="store_true", help="Run compare")
+    parser.add_argument("--gecloud", action="store_true", help="Run tests for GivEnergy Cloud")
     args = parser.parse_args()
 
     print("**** Starting Predbat tests ****")
@@ -7947,6 +7987,10 @@ def main():
     if args.debug_file:
         run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare)
         sys.exit(0)
+
+    if not failed and args.gecloud:
+        failed |= run_test_ge_cloud(my_predbat)
+        return failed
 
     if not failed:
         failed |= run_test_web_if(my_predbat)

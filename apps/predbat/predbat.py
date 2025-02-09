@@ -38,7 +38,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.14.4"
+THIS_VERSION = "v8.15.0"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py"]
@@ -76,7 +76,7 @@ from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
 from solcast import Solcast
-from gecloud import GECloud
+from gecloud import GECloud, GECloudDirect
 from execute import Execute
 from plan import Plan
 from fetch import Fetch
@@ -267,6 +267,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Init stub
         """
         reset_prediction_globals()
+        self.ge_cloud_direct = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparison = None
         self.compare_tariffs = False
@@ -855,6 +856,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.web_interface = WebInterface(self)
             self.web_interface_task = self.create_task(self.web_interface.start())
 
+            if self.get_arg("ge_cloud_direct", False):
+                self.log("Starting GE cloud direct interface")
+                self.ge_cloud_direct = GECloudDirect(self)
+                self.ge_cloud_direct_task = self.create_task(self.ge_cloud_direct.start())
+
             # Printable config root
             self.config_root_p = self.config_root
             slug = self.ha_interface.get_slug()
@@ -932,6 +938,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.stop_thread = True
         if self.web_interface:
             await self.web_interface.stop()
+        if self.ge_cloud_direct:
+            await self.ge_cloud_direct.stop()
 
         await asyncio.sleep(0)
         if hasattr(self, "pool"):
