@@ -125,6 +125,8 @@ class Octopus:
         Retry 3 times and then throw error
         """
 
+        self.log("Download Octopus rates from {}".format(url))
+
         # Check the cache first
         now = datetime.now()
         if url in self.octopus_url_cache:

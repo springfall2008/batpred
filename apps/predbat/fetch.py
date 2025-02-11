@@ -1244,11 +1244,13 @@ class Fetch:
                     rate_offset = rate_last
 
                 # Only offset once not every day
+                futurerate_adjust_import = self.get_arg("futurerate_adjust_import", False)
+                futurerate_adjust_export = self.get_arg("futurerate_adjust_export", False)
                 if minute_mod not in adjusted_rates:
-                    if is_import and self.get_arg("futurerate_adjust_import", False) and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
+                    if is_import and futurerate_adjust_import and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
                         rate_offset = self.future_energy_rates_import[minute]
                         adjust_type = "future"
-                    elif (not is_import) and (not is_gas) and self.get_arg("futurerate_adjust_export", False) and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
+                    elif (not is_import) and (not is_gas) and futurerate_adjust_export and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
                         rate_offset = max(self.future_energy_rates_export[minute], 0)
                         adjust_type = "future"
                     elif is_import:
