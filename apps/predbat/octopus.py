@@ -343,7 +343,7 @@ class Octopus:
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])
-        
+
         # Add in the current charging slot
         for slot in slots_sorted:
             start_minutes, end_minutes, kwh, source, location = slot
@@ -355,13 +355,13 @@ class Octopus:
                     kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
                     kwh = dp2(kwh_expected / self.car_charging_loss)
 
-                # Remove the remaining unused time
+                # Remove the remaining unused time
                 if octopus_intelligent_consider_full and kwh > 0 and (min(car_soc + kwh_expected, limit) >= limit):
                     required_extra_soc = max(limit - car_soc, 0)
                     required_minutes = int(required_extra_soc / (kwh_original * self.car_charging_loss) * (end_minutes - start_minutes) + 0.5)
                     required_minutes = min(required_minutes, end_minutes - start_minutes)
                     end_minutes = start_minutes + required_minutes
-                    end_minutes = int((end_minutes + 29) / 30) * 30 # Round up to 30 minutes
+                    end_minutes = int((end_minutes + 29) / 30) * 30  # Round up to 30 minutes
 
                     car_soc = min(car_soc + kwh_expected, limit)
                     new_slot = {}
