@@ -1454,7 +1454,7 @@ def test_basic_rates(my_predbat):
     failed = 0
 
     old_midnight = my_predbat.midnight
-    my_predbat.midnight = datetime.strptime("2025-07-05T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
+    my_predbat.midnight = datetime.strptime("2025-07-05T00:00:00", "%Y-%m-%dT%H:%M:%S")
 
     print("*** Running test: Simple rate1")
     simple_rate = [
@@ -1510,6 +1510,20 @@ def test_basic_rates(my_predbat):
     failed |= assert_rates(results, 17 * 60, 19 * 60, 9)
     failed |= assert_rates(results, 19 * 60, 24 * 60 + 12 * 60, 5)
     failed |= assert_rates(results, 24 * 60 + 12 * 60, 24 * 60 + 13 * 60, 6)
+    failed |= assert_rates(results, 24 * 60 + 13 * 60, 24 * 60 + 17 * 60, 5)
+    failed |= assert_rates(results, 24 * 60 + 17 * 60, 24 * 60 + 19 * 60, 10)
+
+    print("*** Running test: Simple rate5")
+    rate_override = [{"start": "12:00:00", "end": "13:00:00", "rate_increment": 1, "date": my_predbat.midnight.strftime("%Y-%m-%d")}]
+    print(rate_override)
+    results = my_predbat.basic_rates(simple_rate2, "import")
+    results = my_predbat.basic_rates(rate_override, "import", prev=results)
+    failed |= assert_rates(results, 0, 12 * 60, 5)
+    failed |= assert_rates(results, 12 * 60, 13 * 60, 6)
+    failed |= assert_rates(results, 13 * 60, 17 * 60, 5)
+    failed |= assert_rates(results, 17 * 60, 19 * 60, 9)
+    failed |= assert_rates(results, 19 * 60, 24 * 60 + 12 * 60, 5)
+    failed |= assert_rates(results, 24 * 60 + 12 * 60, 24 * 60 + 13 * 60, 5)
     failed |= assert_rates(results, 24 * 60 + 13 * 60, 24 * 60 + 17 * 60, 5)
     failed |= assert_rates(results, 24 * 60 + 17 * 60, 24 * 60 + 19 * 60, 10)
 
