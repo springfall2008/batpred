@@ -41,6 +41,7 @@ Daeamon
 darkgreen
 darkred
 darray
+datain
 datap
 datapoints
 dayname
@@ -113,6 +114,8 @@ itemtype
 ivtime
 kopt
 Krakenflex
+kvar
+kvarh
 kwhb
 linebreak
 localfolder
@@ -124,6 +127,7 @@ markdownlint
 matplotlib
 maximise
 mdlrc
+measurand
 Meteo
 Meteoalarm
 metricb
@@ -160,6 +164,7 @@ perc
 pitem
 pkwh
 postdata
+powerline
 ppdetails
 ppkwh
 Pred
@@ -219,10 +224,12 @@ treforsiphone
 unstaged
 useid
 userinterface
+varh
 venv
 Wallbox
 weblink
 welink
+writeonly
 xaxis
 xlabel
 xload
