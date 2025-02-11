@@ -1379,8 +1379,6 @@ class Fetch:
                     self.record_status("Bad end time {} provided in energy rates".format(end_str), had_errors=True)
                     continue
 
-                self.log("Rate {}: {} => {} start/end {} -> {} load_scaling {}".format(rtype, start_str, end_str, start, end, load_scaling))
-
                 date = None
                 if "date" in this_rate:
                     date_str = self.resolve_arg("date", this_rate["date"])
