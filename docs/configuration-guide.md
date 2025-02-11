@@ -1,6 +1,6 @@
 # Configuration guide
 
-First get the basics set up, ensure you have the [inverter controls configured](install.md#inverter-control-install),
+First, get the basics set up, ensure you have the [inverter controls configured](install.md#inverter-control-install),
 you have [configured apps.yaml](apps-yaml.md) to your setup, and the [solar forecast](install.md#solcast-install) is in place.
 Make sure your [energy rates](energy-rates.md) are configured correctly for import and export.
 
@@ -13,22 +13,22 @@ This page gives a summary of some of the key configuration settings you should c
 the [Predbat customisation guide](customisation.md) details all the Predbat customisation options.
 
 You should try to tune **input_number.predbat_inverter_loss**, **input_number.predbat_battery_loss** and **input_number.predbat_battery_loss_discharge** to the correct % loss
-for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter.
+for your system to get more accurate predictions. Around 4% for each is good for a hybrid inverter.
 
-For a Hybrid inverter the inverter loss includes the loss on inverting PV as well going AC to DC when importing. Battery loss charge and discharge are factors to account for the loss
+For a Hybrid inverter, the inverter loss includes the loss on inverting PV as well as going from AC to DC when importing. Battery loss charge and discharge are factors to account for the loss
 in charging and discharging the battery as DC.
 
-For a AC coupled inverter the inverter loss is just the loss of the battery inverter, if you need to model the loss of your PV inverter then use **input_number.predbat_pv_scaling**
+For an AC coupled inverter the inverter loss is just the loss of the battery inverter, if you need to model the loss of your PV inverter then use **input_number.predbat_pv_scaling**
 or adjust your Solcast output. Battery loss charge and discharge are factors to account for the loss in charging and discharging the battery as DC.
 
-Also set **switch.predbat_inverter_hybrid** to True or False depending upon if you have a Hybrid or AC-Coupled battery.
+Also, set **switch.predbat_inverter_hybrid** to True or False depending upon if you have a Hybrid or AC-Coupled battery.
 
 The setting **input_number.predbat_metric_battery_cycle** (_expert mode_) can be used to put a 'virtual cost' in pence per kWh on using your battery for charging and discharging.<BR>
 If you configure this number higher then more expensive plans will be selected which avoids charging and discharging your battery as much.
 The default is 0.5p (meaning charging and discharging the battery would effectively cost an extra 1p per kWh) but can be set to 0 if you want to turn this feature off.
 
 Below is a guide to some of the electricity tariff options and a set of recommended Predbat settings for each tariff type.
-In theory most tariffs will work out of the box but still it's worth reviewing your settings.
+In theory, most tariffs will work out of the box but still, it's worth reviewing your settings.
 
 ## Fixed daily rates
 
@@ -36,9 +36,9 @@ With a fixed daily rate tariff you will just be predicting the battery levels, n
 
 You should set **select.predbat_mode** to 'Monitor'.
 
-## Cheap night rate with bad export rate (e.g. Octopus Go, Economy 7 etc)
+## Cheap night rate with a bad export rate (e.g. Octopus Go, Economy 7 etc)
 
-In this scenario you will want to charge overnight based on the next day's solar forecast and don't want Predbat to force export (discharge) your battery.
+In this scenario, you will want to charge overnight based on the next day's solar forecast and don't want Predbat to force export (discharge) your battery.
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
@@ -47,7 +47,7 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 | select.predbat_mode | Control Charge | You want Predbat to calculate and control charging |
 | input_number.predbat_best_soc_keep |  2.0  | Tweak this to control what battery level you want to keep as a backup in case you use more energy |
 
-If you are using expert mode then these options maybe worth reviewing:
+If you are using expert mode then these options may be worth reviewing:
 
 | Item |  Value  | Comment  |
 |---------|---------------|-------------|
@@ -59,14 +59,14 @@ You should set **select.predbat_mode** to 'Control charge'
 
 ## Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)
 
-Follow the instructions from the _Cheap Night rate_ above, but also you will also want to have automatic export occurring when the export rates are profitable.
+Follow the instructions from the _Cheap Night rate_ above, but you will also want to have automatic export occurring when the export rates are profitable.
 
 | Item |  Value  | Comment  |
 |---------|---------------|-------------|
 | select.predbat_mode  | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
 | input_number.predbat_best_soc_keep |  2.0  | Tweak this to control what battery level you want to keep as a backup in case you use more energy |
 
-If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
+If you are using expert mode then these options may be worth reviewing, otherwise, ignore this:
 
 | Item |  Value  | Comment  |
 |---------|---------------|-------------|
@@ -74,13 +74,13 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 | input_number.predbat_metric_min_improvement  | 0   | Charge less if it's cost neutral |
 | input_number.predbat_metric_min_improvement_export  | 5  | Export only if there is a profit |
 | input_number.predbat_metric_battery_cycle  | 0-2  | Higher numbers mean less charging and discharging but higher costs |
-| input_number.predbat_best_soc_min |  0 | Can be set non-zero if you want to force a minimum charge level |
+| input_number.predbat_best_soc_min |  0 | Can be set to non-zero if you want to force a minimum charge level |
 
 You should set **select.predbat_mode** to 'Control charge & discharge'
 
 ## Multiple rates for import and export (e.g. Octopus Flux & Cozy)
 
-Follow the instructions from _Cheap Night_ rate above, but also you will want to have automatic export when the export rates are profitable.
+Follow the instructions from the _Cheap Night_ rate above, but also you will want to have automatic export when the export rates are profitable.
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
@@ -89,7 +89,7 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 | select.predbat_mode  | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
 | input_number.predbat_best_soc_keep |  0.5  | Use the full battery without going empty |
 
-If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
+If you are using expert mode then these options may be worth reviewing, otherwise, ignore this:
 
 | Item |  Value  | Comment  |
 |---------|---------------|-------------|
@@ -110,7 +110,7 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 | select.predbat_mode  | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
 | input_number.predbat_best_soc_keep |  0.5  | Use the full battery without going empty |
 
-If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
+If you are using expert mode then these options may be worth reviewing, otherwise, ignore this:
 
 | Item |  Value  | Comment  |
 |---------|---------------|-------------|

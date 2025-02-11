@@ -7,19 +7,19 @@ automations which override Predbat settings
 
 For settings inside Home Assistant e.g. switch.predbat_*, select.predbat_* and input_number.predbat_* you can already use an automation to change these values
 
-For settings in apps.yaml its very difficult or impossible to update them via an automation.
+For settings in apps.yaml it's very difficult or impossible to update them via an automation.
 
-For this reasons there is a selector called **select.predbat_manual_api** which works a bit like the manual override ones but this can have new values added using the select API in Home Assistant.
+For this reason, there is a selector called **select.predbat_manual_api** which works a bit like the manual override ones but this can have new values added using the select API in Home Assistant.
 The only function the selector itself serves is to store override commands, you can clear from the selector but you have to set them using a service call.
 
-Certain settings from apps.yaml maybe overridden using this method.
+Certain settings from apps.yaml may be overridden using this method.
 
 Each override is in a string format and works a bit like a web URL, setting the command and the values.
 
 ## Data retention
 
 The data for overrides is kept inside the Home Assistant selector itself and so will survive a reboot. There is likely a limit to the size of this data so be sure to remove
-old overrides when you are done with them. Keep in mind its easy to lose all of the overrides with the 'off' option so do not keep important data here only use it for short term
+old overrides when you are done with them. Keep in mind it's easy to lose all of the overrides with the 'off' option so do not keep important data here only use it for short-term
 automations.
 
 ## Supported command formats

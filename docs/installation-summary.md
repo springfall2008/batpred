@@ -2,7 +2,7 @@
 
 Please see the sections below for how to achieve each step. This is just a checklist of things:
 
-1. Before you start, its recommended that you watch the [step by step installation](video-guides.md#basic-installation) videos,
+1. Before you start, it is recommended that you watch the [step-by-step installation](video-guides.md#basic-installation) videos,
 see the [video guides](video-guides.md) section for those and other videos
 2. Make sure the right [inverter control module](install.md#inverter-control-install) is installed and running
 3. Install a file editor (either the File editor or Studio Code Server add-on) to enable you to edit configuration files if you haven't already - [Editing configuration files](install.md#editing-configuration-files-in-home-assistant)
@@ -25,13 +25,13 @@ The apps.yaml file will be in either the directory `/addon_configs/6adb4f0d_pred
         - Adjust your **inverter_limit** and **export_limit** as required
     - You have your [energy rates](energy-rates.md) set correctly either using Octopus Energy integration or entered manually
     - That the Solcast integration (if being used) is matching the configuration correctly - should be automatic
-    - If you have an electric car you have setup the [Car Charging](apps-yaml.md#car-charging-integration) configuration
+    - If you have an electric car you have set up the [Car Charging](apps-yaml.md#car-charging-integration) configuration
 8. Add the Predbat entities to your dashboard - [Output data](output-data.md)
 9. Follow the [Configuration Guide](configuration-guide.md) to set 'standard' Predbat configuration settings depending on your import and export tariffs
 10. The detailed [Customisation Guide](customisation.md) lists all Predbat's controls and settings in Home Assistant that can be tuned for your system
 11. Set up the Predbat Plan card so you can check what Predbat is planning to do - [Create the Predbat Plan card](predbat-plan-card.md)
 12. Set up the Apex Charts for other views on what Predbat is doing - [Creating the charts](creating-charts.md)
-13. Then check Predbat is working correctly:
+13. Then check that Predbat is working correctly:
     - Look at the [Predbat AppDaemon log file](output-data.md#predbat-logfile) and make sure you have no errors or warnings that are unexpected
     - Comment out or delete the ['template: True' line in apps.yaml](apps-yaml.md#basics) when you are ready to start Predbat
     - The **predbat.status** in Home Assistant should be 'Idle' (if there are any errors then they are reported here too)
