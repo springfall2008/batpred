@@ -6,7 +6,7 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 
 [Playlist of Predbat installation videos](https://www.youtube.com/playlist?list=PLTjtFJ0drtomKJzT7oZ3pCa0kzvFzUA_u)
 
-- [Setting Up HomeAssistant Basics, File Editor, SSH, HACS, Octopus, eWelink](https://youtu.be/zMDLxynHExs?si=QLCDs30bIo3C3Edx)
+- [Setting Up Home Assistant Basics, File Editor, SSH, HACS, Octopus, eWelink](https://youtu.be/zMDLxynHExs?si=QLCDs30bIo3C3Edx)
 - [Installing MQTT and GivTCP on Home Assistant](https://youtu.be/kdqXo2TQWNk?si=jSDL_8jtGR6m-Xtf)
 - [Predbat installation - Predbat, Solcast, Dashboard, Charts and Plans - Add On Method](https://youtu.be/QMvRIbAcpk8)
 
@@ -32,7 +32,7 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 [Playlist of Predbat feature videos](https://www.youtube.com/playlist?list=PLTjtFJ0drtokvs-H0nb1WBO49DNjbyuDb)
 
 - [Intelligent Octopus car charging](https://www.youtube.com/watch?v=XGs_Rph5li0)
-- [Saving sessions and power ups](https://youtu.be/58QVoVhqvmI?si=omkx3KpWavrn9r8r)
+- [Saving sessions and power-ups](https://youtu.be/58QVoVhqvmI?si=omkx3KpWavrn9r8r)
 - [How to update Predbat](https://www.youtube.com/watch?v=Z6-Nds_dlyc)
 - [Predbat mode and read-only mode](https://www.youtube.com/watch?v=YNixY2cF8kE)
 - [Creating a dashboard](https://youtu.be/tGF1LEKiiEY?si=hbiVZCNGSE24f8Zs)
