@@ -300,17 +300,15 @@ for inverter data rather than GivTCP sensors for load_today, import_today and ex
 
 ### GivEnergy Cloud controls
 
-_Experimental_
+*Experimental*
 
 Predbat now supports GE Cloud controls directly from inside Predbat. When enabled Predbat will connect directly with the GE Cloud and expose
 the controls of your inverter inside home assistant.
 
-_Note_ You will still have to configure apps.yaml to point to these controls.
+*Note* You will still have to configure apps.yaml to point to these controls.
 
 - **ge_cloud_direct** - Set to True to enable GE Cloud direct access
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
-
-
 
 ## Load filtering
 
