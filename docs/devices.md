@@ -4,7 +4,7 @@
 
 <https://www.home-assistant.io/integrations/wallbox/>
 
-Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in
+Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in
 
 ```yaml
 car_charging_energy: 're:sensor.wallbox_portal_added_energy'
@@ -12,13 +12,13 @@ car_charging_planned:
   - 're:sensor.wallbox_portal_status_description'
 ```
 
-Wallbox works with Octopus Intelligent GO, and can be triggered via Octopus themselves or via a HA automation linked to the Predbat slot sensor
+Wallbox works with Octopus Intelligent GO and can be triggered via Octopus themselves or an HA automation linked to the Predbat slot sensor
 
 ## Zappi
 
 <https://github.com/CJNE/ha-myenergi>
 
-Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in
+Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in
 
 ```yaml
 car_charging_energy: 're:sensor.myenergi_zappi_[0-9a-z]+_charge_added_session'
@@ -30,7 +30,7 @@ car_charging_planned:
 
 <https://github.com/alandtse/tesla>
 
-Can be used to extract the cars current SOC and Charge limit. Also can be used to control the cars charging with an automation linked to the Predbat slot sensor
+Can be used to extract the car's current SoC and Charge limit. Also can be used to control the cars charging with an automation linked to the Predbat slot sensor
 
 ```yaml
 car_charging_limit:
@@ -43,7 +43,7 @@ car_charging_soc:
 
 <https://github.com/DurgNomis-drol/ha_toyota> - For Toyota EU cars only
 
-Can be used to extract the cars current SOC.
+Can be used to extract the car's current SoC.
 
 ```yaml
 car_charging_soc:
@@ -56,7 +56,7 @@ Example sensor name for BZ4X - `sensor.toyota_bz4x_battery_level`
 
 <https://www.home-assistant.io/integrations/renault>
 
-Can be used to extract the cars current SoC.
+Can be used to extract the car's current SoC.
 
 ```yaml
 car_charging_soc:
@@ -67,7 +67,7 @@ car_charging_soc:
 
 <https://github.com/dan-r/HomeAssistant-Ohme>
 
-Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
+Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
 Also can be used with Octopus Intelligent GO to map out the cars charging slots into Predbat
 
 **car charging energy**
@@ -88,7 +88,7 @@ Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged**
 
 ** Newer Ohme Integrated into Home Assistant ***
 
-The word 'epod_' seems to be have been added to some Ohme sensors in the version bundled with Home Assistant:
+The word 'epod_' seems to have been added to some Ohme sensors in the version bundled with Home Assistant:
 
 ```yaml
   octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
@@ -96,7 +96,7 @@ The word 'epod_' seems to be have been added to some Ohme sensors in the version
   octopus_charge_limit: 'number.ohme_epod_target_percentage'
 ```
 
-**Using Ohme car charging plans on other tariff's e.g. Agile**
+**Using Ohme car charging plans on other tariff e.g. Agile**
 
 ```yaml
 octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
@@ -120,7 +120,7 @@ car_charging_now:
 
 <https://github.com/mattrayner/pod-point-home-assistant-component>
 
-Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
+Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
 
 ```yaml
 car_charging_energy: 're:(sensor.psl_[0-9]+_current_energy)'
@@ -145,9 +145,9 @@ The device needs to be set to 'Smart' mode in the PodPoint app. Your automation 
 
 <https://github.com/gndean/home-assistant-hypervolt-charger>
 
-Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in (only V3 models).
+Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in (only V3 models).
 
-For plugged in detection on V2 models, see guidance <https://springfall2008.github.io/batpred/car-charging/#example-ev-and-charger-setup>.
+For plugged-in detection on V2 models, see guidance <https://springfall2008.github.io/batpred/car-charging/#example-ev-and-charger-setup>.
 
 ```yaml
 car_charging_energy: 're:(sensor.hypervolt_session_energy_total_increasing)'
@@ -165,9 +165,9 @@ Note: **sensor.hypervolt_session_energy_total_increasing** defaults to 'unknown'
 
 **Agile Tariff**
 
-To automate the schedule charging with Predbat, setup the automation to detect when there is a change to `binary_sensor.predbat_car_charging_slot`.
+To automate the schedule charging with Predbat, set up the automation to detect when there is a change to `binary_sensor.predbat_car_charging_slot`.
 
-Ensure that `select.hypervolt_charge_mode` is in 'Boost', when predbat charging slot is 'on', set `select.hypervolt_activation_mode` to 'Plug and Charge', when it is 'off' set the 'Schedule', this is the recommended method for start/stop charging.
+Ensure that `select.hypervolt_charge_mode` is in 'Boost', when Predbat charging slot is 'on', set `select.hypervolt_activation_mode` to 'Plug and Charge', when it is 'off' set the 'Schedule', this is the recommended method for start/stop charging.
 
 ## Octopus Energy
 
