@@ -361,7 +361,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0,required_unit=None):
         """
         Download one or more entities for load data
         """
@@ -1244,11 +1244,13 @@ class Fetch:
                     rate_offset = rate_last
 
                 # Only offset once not every day
+                futurerate_adjust_import = self.get_arg("futurerate_adjust_import", False)
+                futurerate_adjust_export = self.get_arg("futurerate_adjust_export", False)
                 if minute_mod not in adjusted_rates:
-                    if is_import and self.get_arg("futurerate_adjust_import", False) and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
+                    if is_import and futurerate_adjust_import and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
                         rate_offset = self.future_energy_rates_import[minute]
                         adjust_type = "future"
-                    elif (not is_import) and (not is_gas) and self.get_arg("futurerate_adjust_export", False) and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
+                    elif (not is_import) and (not is_gas) and futurerate_adjust_export and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
                         rate_offset = max(self.future_energy_rates_export[minute], 0)
                         adjust_type = "future"
                     elif is_import:
@@ -1464,7 +1466,7 @@ class Fetch:
                             # For incremental adjustments we have to loop over 24-hour periods
                             while minute_index < max_minute:
                                 current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
-                                if not day_of_week or (current_day_of_week in day_of_week):
+                                if not day_of_week or (current_day_of_week in day_of_week):    
                                     if rate_increment:
                                         rates[minute_index] = rates.get(minute_index, 0.0) + rate
                                         rate_replicate[minute_index] = "increment"

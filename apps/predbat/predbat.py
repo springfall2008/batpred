@@ -85,7 +85,6 @@ from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
 
-
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself

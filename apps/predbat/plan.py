@@ -789,7 +789,13 @@ class Plan:
 
         # Final simulation of base
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, save="base" if publish else None, end_record=self.end_record
+            self.charge_limit, 
+            self.charge_window, 
+            self.export_window, 
+            self.export_limits, 
+            False, 
+            save="base" if publish else None, 
+            end_record=self.end_record
         )
         # And base 10
         (
@@ -1403,10 +1409,15 @@ class Plan:
             window_key = str(int(this_export_limit)) + "_" + str(window_size)
             window_results[window_key] = [metric, cost]
 
+            # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             if all_n:
                 min_improvement_scaled = self.metric_min_improvement_export
             else:
                 min_improvement_scaled = self.metric_min_improvement_export * window_size / 30.0
+
+            # Scale back in the case of freeze export as improvements will be smaller
+            if this_export_limit == 99:
+                min_improvement_scaled *= 0.2
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             if ((metric + min_improvement_scaled) <= off_metric) and (metric <= best_metric):
