@@ -21,7 +21,10 @@ def time_string_to_stamp(time_string):
     """
     Convert a time string to a timestamp
     """
-    if len(time_string) == 5:
+    if time_string is None:
+        return None
+
+    if isinstance(time_string, str) and len(time_string) == 5:
         time_string += ":00"
 
     return datetime.strptime(time_string, "%H:%M:%S")
