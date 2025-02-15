@@ -270,7 +270,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.ge_cloud_direct = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparison = None
-        self.compare_tariffs = False
         self.predheat = None
         self.predbat_mode = "Monitor"
         self.soc_kwh_history = {}
@@ -768,13 +767,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.expose_config("active", False)
         self.save_current_config()
 
-        if ((scheduled and self.minutes_now < RUN_EVERY) or self.compare_tariffs) and self.comparison:
-            # Compare tariffs either when triggered or daily at midnight
-            self.comparison.run_all()
-            self.compare_tariffs = False
+        if self.comparison:
+            if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
+                # Compare tariffs either when triggered or daily at midnight
+                self.expose_config("compare_active", True)
+                self.comparison.run_all()
+                self.expose_config("compare_active", False)
+            else:
+                # Otherwise just update HA sensors to prevent then expiring
+                self.comparison.publish_only()
         else:
-            # Otherwise just update HA sensors to prevent then expiring
-            self.comparison.publish_only()
+            self.expose_config("compare_active", False)
 
     async def async_download_predbat_version(self, version):
         """
@@ -958,7 +961,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Called every 15 seconds
         """
         self.check_entity_refresh()
-        if (self.update_pending or self.compare_tariffs) and not self.prediction_started:
+        if self.update_pending and not self.prediction_started:
             self.prediction_started = True
             self.ha_interface.update_states()
             self.load_user_config()

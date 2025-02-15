@@ -962,11 +962,15 @@ var options = {
         """
         Handle post request for html compare
         """
-
         postdata = await request.post()
         for pitem in postdata:
             if pitem == "run":
-                self.base.compare_tariffs = True
+                self.log("Starting compare from web page")
+                service_data = {}
+                service_data["domain"] = "switch"
+                service_data["service"] = "turn_on"
+                service_data["service_data"] = {"entity_id": "switch.{}_compare_active".format(self.base.prefix)}
+                await self.base.trigger_callback(service_data)
 
         return await self.html_compare(request)
 
@@ -995,7 +999,7 @@ var options = {
 
         text += "<body>\n"
         text += '<form class="form-inline" action="./compare" method="post" enctype="multipart/form-data" id="compareform">\n'
-        active = self.base.compare_tariffs
+        active = self.base.get_arg("compare_active", False)
 
         if not active:
             text += '<button type="submit" form="compareform" value="run">Compare now</button>\n'

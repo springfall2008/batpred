@@ -3076,6 +3076,7 @@ def run_test_web_if(my_predbat):
     """
     failed = 0
     print("**** Running web interface test ****\n")
+    ha = my_predbat.ha_interface
     my_predbat.web_interface = WebInterface(my_predbat)
     my_predbat.web_interface_task = my_predbat.create_task(my_predbat.web_interface.start())
 
@@ -3090,15 +3091,20 @@ def run_test_web_if(my_predbat):
 
     # Perform a post to /compare page with data for form 'compareform' value 'run'
     print("**** Running test: Fetch page /compare with post")
+
     address = "http://127.0.0.1:5052/compare"
-    my_predbat.compare_tariffs = False
     data = {"run": "run"}
     res = requests.post(address, data=data)
     if res.status_code != 200:
         print("ERROR: Failed to post to pagepage {} got status {} value {}".format(address, res.status_code, res.text))
         failed = 1
-    if not my_predbat.compare_tariffs:
-        print("ERROR: Compare tariffs not set")
+    time.sleep(0.1)
+    # Get service data
+    entity_id = "switch.predbat_compare_active"
+    result = ha.get_state(entity_id)
+
+    if result != "on":
+        print("ERROR: Compare tariffs not triggered - expected {} got {}".format("on", result))
         failed = 1
 
     my_predbat.web_interface.abort = True
