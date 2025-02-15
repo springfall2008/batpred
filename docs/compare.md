@@ -1,23 +1,23 @@
-# Comparing Energy Tariff's
+# Comparing Energy Tariffs
 
-While it is quite easy to go off and compare your historical usage against various energy tariff's with existing apps, it is much harder to perform a what-if analysis
+While it is quite easy to go off and compare your historical usage against various energy tariffs with existing apps, it is much harder to perform a what-if analysis
 as the way you control your battery would be different depending on the tariff.
 
-For this reason Predbat offers an energy rate comparison to allow you to know if you are on the best available tariff or when it might be time to switch.
+For this reason, Predbat offers an energy rate comparison to allow you to know if you are on the best available tariff or when it might be time to switch.
 
-Once you have given Predbat a list of tariff's that you want to compare then it will update its predictions daily and keep a history of these over time.
+Once you have given Predbat a list of tariffs that you want to compare then it will update its predictions daily and keep a history of these over time.
 
 If you do decide to switch to Octopus Energy after using this feature please consider using my referral link so we can both save some money: <https://share.octopus.energy/jolly-eel-176>
 
 ## Limitations
 
-Keep in mind this is an approximation of costs for the following 24 hour period and the reality could be different. In particular car charging costs is unlikely to reflect
-the true picture as it will only be planned after you plug in. Smart tariff's like Octopus Intelligent GO will give you extra cheap car slots which can also not be
-predicted right now. When changing tariff you should use your own judgement, this data is only a helpful guide.
+Keep in mind this is an approximation of costs for the following 24-hour period and the reality could be different. In particular, car charging costs is unlikely to reflect
+the true picture as it will only be planned after you plug in. Smart tariffs like Octopus Intelligent GO will give you extra cheap car slots which can also not be
+predicted right now. When changing tariffs, you should use your judgment, this data is only a helpful guide.
 
 ## Configuring the tariff's to compare
 
-First you need to tell Predbat which tariff's you want to compare, you should list all the tariff's you realistically might want to switch between, including your
+First, you need to tell Predbat which tariffs you want to compare, you should list all the tariffs you realistically might want to switch between, including your
 current tariff to act as a baseline.
 
 Below is a suggestion of various tariff combinations from Octopus Intelligent (valid Feb 2025) against region A (please please -A with your region code if you decide
@@ -93,14 +93,14 @@ If you do not set an import or export rate for a particular tariff then your exi
 
 ## Running a comparison
 
-By default the comparison will be run at Midnight every night and saved for the entire day.
+By default, the comparison will be run at Midnight every night and saved for the entire day.
 
 You can view the comparison on the Predbat web interface under the 'Compare' tab and also manually trigger a new comparison by hitting the 'Run' button.
 
-Predbat will highly which tariff maybe the Best cost wise for the next 24-hour period based on the plan optimisation metric you have defined. The metric
+Predbat will highlight which tariff may be the best cost-wise for the next 24-hour period based on the plan optimisation metric you have defined. The metric
 includes the value of the contents of your battery and iBoost that has been diverted during this period.
 
-The predicted cost is also shown, but keep in mind ending the day with an empty battery maybe cheaper today but cost more tomorrow.
+The predicted cost is also shown, but keep in mind ending the day with an empty battery may be cheaper today but cost more tomorrow.
 
 ![image](https://github.com/user-attachments/assets/399866a1-7d86-457d-b525-7c2e1fdf683b)
 
@@ -111,6 +111,6 @@ The predicted cost is also shown, but keep in mind ending the day with an empty 
 For each tariff a new sensor is created in Home Assistant called **predbat.compare_tariff_id** where **id** is the ID name you entered above. This sensor will track the cost
 as its main value and many details about the prediction in its attributes.
 
-You can create charts from these sensors to show how the different tariff's could compare on a daily basis.
+You can create charts from these sensors to show how the different tariffs compare on a daily basis.
 
 ![image](https://github.com/user-attachments/assets/6d5c30f6-822f-4d9c-b4a6-701c0b676c61)
