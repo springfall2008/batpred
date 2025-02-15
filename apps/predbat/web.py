@@ -35,6 +35,7 @@ class WebInterface:
         self.cost_yesterday_hist = {}
         self.cost_yesterday_car_hist = {}
         self.cost_yesterday_no_car = {}
+        self.web_port = self.base.get_arg("web_port", 5052)
 
     def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, print=False, daily=False, offset_days=0, first=True, pounds=False):
         results = {}
@@ -131,7 +132,7 @@ class WebInterface:
                     self.compare_hist[id]["metric"] = self.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
 
     async def start(self):
-        # Start the web server on port 5052
+        # Start the web server
         app = web.Application()
         app.router.add_get("/", self.html_index)
         app.router.add_get("/plan", self.html_plan)
@@ -150,7 +151,7 @@ class WebInterface:
         app.router.add_post("/compare", self.html_compare_post)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", 5052)
+        site = web.TCPSite(runner, "0.0.0.0", self.web_port)
         await site.start()
         print("Web interface started")
         while not self.abort:

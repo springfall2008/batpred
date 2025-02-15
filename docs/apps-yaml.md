@@ -141,6 +141,10 @@ Valid values are:
 threads: auto
 ```
 
+## Web interface
+
+Docker users can change the web port by setting **web_port** to a new port number, the default of 5052 must always be used for the Predbat add-on.
+
 ### notify_devices
 
 A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
