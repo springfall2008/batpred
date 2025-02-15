@@ -274,15 +274,18 @@ class Octopus:
                 start_minutes = minutes_to_time(start, self.midnight_utc)
                 end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
-            if start_minutes < self.forecast_minutes and ((export and (start_minutes in self.rate_export)) or (not export and (start_minutes in self.rate_import))):
+            if start_minutes < (self.forecast_minutes + self.minutes_now):
                 self.log("Setting Octopus saving session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        self.rate_export[minute] += rate
+                        if minute in self.rate_export:
+                            self.rate_export[minute] += rate
+                            rate_replicate[minute] = "saving"
                     else:
-                        self.rate_import[minute] += rate
-                        self.load_scaling_dynamic[minute] = self.load_scaling_saving
-                    rate_replicate[minute] = "saving"
+                        if minute in self.rate_import:
+                            self.rate_import[minute] += rate
+                            self.load_scaling_dynamic[minute] = self.load_scaling_saving
+                            rate_replicate[minute] = "saving"
 
     def decode_octopus_slot(self, slot, raw=False):
         """

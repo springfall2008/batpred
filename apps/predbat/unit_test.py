@@ -7883,6 +7883,7 @@ def test_saving_session(my_predbat):
     failed = False
     date_last_year = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
     date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    date_before_yesterday = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
     date_today = datetime.now().strftime("%Y-%m-%d")
     session_binary = f"""
 state: off
@@ -7895,7 +7896,7 @@ next_joined_event_duration_in_minutes: null
 icon: mdi:leaf
 friendly_name: Octoplus Saving Session (A-4DD6C5EE)
 """.format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today
+        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday
     )
 
     session_sensor = f"""
@@ -7930,6 +7931,12 @@ joined_events:
       duration_in_minutes: 60
       rewarded_octopoints: null
       octopoints_per_kwh: 448
+    - id: 1336
+      start: '{date_before_yesterday}T23:30:00+00:00'
+      end: '{date_yesterday}T10:30:00+00:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 448
 friendly_name: Octoplus Saving Session Events (A-12345678)
 """.format(
         date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today
@@ -7951,6 +7958,7 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
     expected_saving = [
         {"start": "{}T17:30:00+00:00".format(date_yesterday), "end": "{}T18:30:00+00:00".format(date_yesterday), "rate": 19.2, "state": False},
         {"start": "{}T16:30:00+00:00".format(date_today), "end": "{}T17:30:00+00:00".format(date_today), "rate": 44.8, "state": False},
+        {"start": "{}T23:30:00+00:00".format(date_before_yesterday), "end": "{}T10:30:00+00:00".format(date_yesterday), "rate": 44.8, "state": False},
     ]
 
     # Example format Sat 25/01
@@ -7969,6 +7977,26 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
     if octopus_free_slots:
         print("ERROR: Expecting no free slots")
         failed = 1
+
+    rate_import_replicated = {}
+    my_predbat.rate_import = {n: 0 for n in range(-24 * 60, 48 * 60)}
+    my_predbat.load_saving_slot(expected_saving, export=False, rate_replicate=rate_import_replicated)
+    price_ranges = [[(17.5 - 24) * 60, (18.5 - 24) * 60, 19.2], [(16.5) * 60, (17.5) * 60, 44.8], [-24 * 60, (10.5 - 24) * 60, 44.8]]
+    for minute in range(-24 * 60, 48 * 60):
+        rate = my_predbat.rate_import[minute]
+        in_range = False
+        for price_range in price_ranges:
+            if minute >= price_range[0] and minute < price_range[1]:
+                if rate != price_range[2]:
+                    print("ERROR: Load Octopus Saving - minute {} Expecting rate to be {} got {}".format(minute, price_range[2], rate))
+                    failed = 1
+                    break
+                in_range = True
+        if not in_range:
+            if rate != 0:
+                print("ERROR: Load Octopus Saving - minute {} Expecting rate to be 0 got {}".format(minute, rate))
+                failed = 1
+                break
 
     return failed
 
