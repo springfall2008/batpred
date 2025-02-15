@@ -94,7 +94,8 @@ Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 
 
 Set **flow_temp** To the target flow temperature of your system, either via a sensor or as a fixed value. E.g. gas boilers are often set to say 60 or 70 degrees while heat pumps are much lower e.g. 30 or 40.
 
-Set **flow_difference_target** to be the difference in flow temperature (in vs out) where your heating system will run at full power if it is above. e.g. for gas boilers this maybe something around 40 while on a heat pump, it could be much lower e.g. 10.
+Set **flow_difference_target** to be the difference in flow temperature (in vs out) where your heating system will run at full power if it is above. e.g. 
+for gas boilers this maybe something around 40 while on a heat pump, it could be much lower e.g. 10.
 
 Set **volume_temp** If you have a sensor on your radiators which can confirm the water temperature, this must not be near the heat pump/boiler but instead as close to the
 interior temperature sensor as possible. If you do not have a sensor then instead PredHeat will calculate the next temperature and store it in **next_volume_temp** for use
