@@ -85,6 +85,7 @@ from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
 
+
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
@@ -767,7 +768,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.save_current_config()
 
         if self.comparison:
-            if ((scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False)):
+            if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
                 # Compare tariffs either when triggered or daily at midnight
                 self.expose_config("compare_active", True)
                 self.comparison.run_all()
