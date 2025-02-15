@@ -104,15 +104,14 @@ Once you have made all other required changes to apps.yaml this line should be d
 template: True
 ```
 
-### Home assistant connection
+### Home Assistant connection
 
 Predbat can speak directly to Home Assistant rather than going via AppDaemon.
 
 If you are using a standard Predbat add-on then this will be automatic and you should normally not need to set this.
-If you find you get issues where Predbat cannot communicate with Home Assistant after running for a long period of time, then creating a HA access token can resolve this.
+If you find you get issues where Predbat cannot communicate with Home Assistant after running for a long period of time and you get web socket errors, then creating a HA access token can resolve this.
 
-If you run AppDaemon/Predbat in a Docker container then you will need to set the URL or IP address of Home Assistant and the access key which is the long
-lived access token you can create inside Home Assistant:
+If you run Predbat in a Docker container then you will need to set the URL or IP address of Home Assistant and an access key which is the long-lived access token you can create inside Home Assistant:
 
 - Click on your user initials (bottom left) in HA;
 - Click the Security tab
