@@ -72,6 +72,13 @@ CONFIG_ITEMS = [
         "restore": False,
     },
     {
+        "name": "compare_active",
+        "friendly_name": "Predbat Compare Active",
+        "type": "switch",
+        "default": False,
+        "restore": False,
+    },
+    {
         "name": "pv_metric10_weight",
         "friendly_name": "Metric 10 Weight",
         "type": "input_number",
