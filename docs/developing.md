@@ -98,7 +98,7 @@ between branches in it.
 
 Once you start your Codespaces environment, it will take a minute to
 create a VM for you, and to install the software we've asked it to
-install in there. It will also clone your repository and branch into 
+install in there. It will also clone your repository and branch into
 it for you, and the VM will be authenticated with GitHub
 so you can commit and push straight back to your fork of Predbat on GitHub.
 

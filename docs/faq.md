@@ -61,7 +61,7 @@ especially if you have a small battery. If you set it to zero then Predbat may n
 
 Round trip losses for charging the battery and then using it for your home are:
 
-**charge loss** x **inverter loss** x **inverter loss** x **discharge loss** 
+**charge loss** x **inverter loss** x **inverter loss** x **discharge loss**
 
 The default is therefore: $0.97 * 0.96 * 0.96 * 0.97 \approx 0.87$ (13%)
 
