@@ -230,7 +230,7 @@ class WebInterface:
         """
         Return the HTML header for a page
         """
-        text = "<!doctype html><html><head><title>Predbat Web Interface</title>"
+        text = '<!doctype html><html><head><meta charset="utf-8"><title>Predbat Web Interface</title>'
 
         text += """
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
