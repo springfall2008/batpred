@@ -258,7 +258,6 @@ class Octopus:
             rate = octopus_saving_slot["rate"]
             state = octopus_saving_slot["state"]
 
-            print("Saving slot", start, end, rate, state)
             if start and end:
                 try:
                     start = str2time(start)
