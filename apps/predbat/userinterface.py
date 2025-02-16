@@ -225,7 +225,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
+            if 'predbat_gecloud_' in entity_id:
                 if self.ge_cloud_direct:
                     await self.ge_cloud_direct.select_event(entity_id, value)
 
@@ -279,7 +279,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
+            if 'predbat_gecloud_' in entity_id:
                 if self.ge_cloud_direct:
                     await self.ge_cloud_direct.number_event(entity_id, value)
 
@@ -324,7 +324,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
+            if 'predbat_gecloud_' in entity_id:
                 if self.ge_cloud_direct:
                     await self.ge_cloud_direct.switch_event(entity_id, service)
 
