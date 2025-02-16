@@ -38,7 +38,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.15.1"
+THIS_VERSION = "v8.15.2"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py"]
@@ -218,30 +218,46 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         Wrapper function to get state from HA
         """
+        if not self.ha_interface:
+            self.log("Error: get_state_wrapper - No HA interface available")
+            return None
         return self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
 
     def set_state_wrapper(self, entity_id, state, attributes={}):
         """
         Wrapper function to get state from HA
         """
+        if not self.ha_interface:
+            self.log("Error: set_state_wrapper - No HA interface available")
+            return False
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
 
     def call_service_wrapper(self, service, **kwargs):
         """
         Wrapper function to call a HA service
         """
+        if not self.ha_interface:
+            self.log("Error: call_service_wrapper - No HA interface available")
+            return False
         return self.ha_interface.call_service(service, **kwargs)
 
     def get_services_wrapper(self):
         """
         Wrapper function to get services from HA
         """
+        if not self.ha_interface:
+            self.log("Error: get_services_wrapper - No HA interface available")
+            return False
         return self.ha_interface.get_services()
 
     def get_history_wrapper(self, entity_id, days=30, required=True):
         """
         Wrapper function to get history from HA
         """
+        if not self.ha_interface:
+            self.log("Error: get_history_wrapper - No HA interface available")
+            return False
+
         history = self.ha_interface.get_history(entity_id, days=days, now=self.now_utc)
 
         if required and (history is None):
@@ -267,6 +283,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Init stub
         """
         reset_prediction_globals()
+        self.ha_interface = None
+        self.fatal_error = False
         self.ge_cloud_direct = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparison = None
@@ -564,11 +582,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.update_time()
         self.save_current_config()
 
-        self.expose_config("active", True)
-
         # Check our version
         self.download_predbat_releases()
 
+        if self.get_arg("template", False):
+            self.log("Error: Template Configuration, please edit apps.yaml")
+            self.record_status("Error: Template Configuration, please edit apps.yaml", had_errors=True)
+            return
+
+        self.expose_config("active", True)
         self.fetch_config_options()
         self.fetch_sensor_data()
         self.fetch_inverter_data()
@@ -837,7 +859,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Setup the app, called once each time the app starts
         """
         self.pool = None
-        self.log("Predbat: Startup {}".format(__name__))
+        if "hass_api_version" not in self.__dict__:
+            self.hass_api_version = 1
+        self.log("Predbat: Startup {} hass version {}".format(__name__, self.hass_api_version))
         self.update_time(print=False)
         run_every = RUN_EVERY * 60
         now = self.now
@@ -882,22 +906,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.log("Error: " + traceback.format_exc())
             self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
             raise e
-
-        # Catch template configurations and exit
-        if self.get_arg("template", False):
-            self.log("Error: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
-            self.record_status("Error: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
-
-            # before terminating, create predbat dashboard for new users
-            try:
-                self.create_entity_list()
-            except Exception as e:
-                self.log("Error: Exception raised {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
-                raise e
-
-            return
 
         # Run every N minutes aligned to the minute
         seconds_now = (now - self.midnight).seconds
@@ -960,6 +968,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         Called every 15 seconds
         """
+        if not self.ha_interface or not self.ha_interface.websocket_active:
+            self.log("Error: HA interface not active")
+            self.fatal_error = True
+            raise Exception("HA interface not active")
+
         self.check_entity_refresh()
         if self.update_pending and not self.prediction_started:
             self.prediction_started = True
@@ -1009,6 +1022,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         Called every N minutes
         """
+        if not self.ha_interface or not self.ha_interface.websocket_active:
+            self.log("Error: HA interface not active")
+            self.fatal_error = True
+            raise Exception("HA interface not active")
+
         if not self.prediction_started:
             config_changed = False
             self.prediction_started = True
@@ -1037,6 +1055,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         Called every N second for balance inverters
         """
+        if self.get_arg("template", False):
+            return
+
         if not self.prediction_started and self.balance_inverters_enable and not self.set_read_only:
             try:
                 self.balance_inverters()

@@ -515,7 +515,7 @@ class GECloudDirect:
         self.log("GECloud: Starting up, found devices {}".format(self.devices))
 
         seconds = 0
-        while not self.stop_cloud:
+        while not self.stop_cloud and not self.base.fatal_error:
             try:
                 if seconds % 60 == 0:
                     for device in self.devices:
@@ -525,12 +525,10 @@ class GECloudDirect:
                         await self.publish_meter(device, self.meter[device])
                         self.info[device] = await self.async_get_device_info(device)
                         await self.publish_info(device, self.info[device])
-                        self.log("GECloud: Completed full status update.")
                 if seconds % 300 == 0:
                     for device in self.devices:
                         self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                         await self.publish_registers(device, self.settings[device])
-                        self.log("GECloud: Completed full register state update.")
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
 
@@ -674,12 +672,16 @@ class GECloudDirect:
                 else:
                     value = None
 
-                results[sid] = {
-                    "name": name,
-                    "value": value,
-                    "validation_rules": validation_rules,
-                    "validation": validation,
-                }
+                if value is None and sid in results:
+                    # Keep previous failure on read failure
+                    pass
+                else:
+                    results[sid] = {
+                        "name": name,
+                        "value": value,
+                        "validation_rules": validation_rules,
+                        "validation": validation,
+                    }
         return results
 
     async def async_get_smart_device_data(self, uuid):

@@ -172,9 +172,14 @@ class HAInterface:
         """
         Web socket loop for HA interface
         """
+        error_count = 0
+
         while True:
-            if self.base.stop_thread:
+            if self.base.stop_thread or self.base.fatal_error:
                 self.log("Info: Web socket stopping")
+                break
+            if self.base.hass_api_version >= 2 and error_count >= 10:
+                self.log("Error: Web socket failed 10 times, stopping")
                 break
 
             url = "{}/api/websocket".format(self.ha_url)
@@ -184,6 +189,9 @@ class HAInterface:
                     async with session.ws_connect(url) as websocket:
                         await websocket.send_json({"type": "auth", "access_token": self.ha_key})
                         sid = 1
+
+                        # Connected okay, reset error count
+                        error_count = 0
 
                         # Subscribe to all state changes
                         await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "state_changed"})
@@ -257,20 +265,29 @@ class HAInterface:
                                 except Exception as e:
                                     self.log("Error: Web Socket exception in update loop: {}".format(e))
                                     self.log("Error: " + traceback.format_exc())
+                                    error_count += 1
                                     break
 
                             elif message.type == WSMsgType.CLOSED:
+                                error_count += 1
                                 break
                             elif message.type == WSMsgType.ERROR:
+                                error_count += 1
                                 break
 
                 except Exception as e:
                     self.log("Error: Web Socket exception in startup: {}".format(e))
                     self.log("Error: " + traceback.format_exc())
+                    error_count += 1
 
             if not self.base.stop_thread:
-                self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds")
+                self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds - error count {}".format(error_count))
                 await asyncio.sleep(5)
+
+        if not self.base.stop_thread:
+            self.log("Error: Web Socket failed to reconnect, stopping....")
+            self.websocket_active = False
+            raise Exception("Web Socket failed to reconnect")
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
