@@ -85,7 +85,6 @@ from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
 
-
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
@@ -586,7 +585,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.download_predbat_releases()
 
         if self.get_arg("template", False):
-            self.log("Note: Template mode active, no prediction will be made")
+            self.log("Error: Template Configuration, please edit apps.yaml")
+            self.record_status("Error: Template Configuration, please edit apps.yaml", had_errors=True)
             return
 
         self.expose_config("active", True)
@@ -789,7 +789,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.save_current_config()
 
         if self.comparison:
-            if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
+            if ((scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False)):
                 # Compare tariffs either when triggered or daily at midnight
                 self.expose_config("compare_active", True)
                 self.comparison.run_all()
@@ -858,7 +858,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Setup the app, called once each time the app starts
         """
         self.pool = None
-        if "hass_api_version" not in self.__dict__:
+        if 'hass_api_version' not in self.__dict__:
             self.hass_api_version = 1
         self.log("Predbat: Startup {} hass version {}".format(__name__, self.hass_api_version))
         self.update_time(print=False)

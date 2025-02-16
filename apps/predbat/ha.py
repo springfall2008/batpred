@@ -178,7 +178,7 @@ class HAInterface:
             if self.base.stop_thread or self.base.fatal_error:
                 self.log("Info: Web socket stopping")
                 break
-            if self.hass_api_version >= 2 and error_count >= 10:
+            if self.base.hass_api_version >= 2 and error_count >= 10:
                 self.log("Error: Web socket failed 10 times, stopping")
                 break
 
