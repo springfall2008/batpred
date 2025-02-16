@@ -361,7 +361,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0,required_unit=None):
         """
         Download one or more entities for load data
         """
@@ -866,6 +866,9 @@ class Fetch:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
             self.rate_import = self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False))
+        elif self.octopus_api_direct:
+            self.log("Downloading rates directly from Octopus API")
+            self.rate_import = self.get_octopus_direct(getImport=True)
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
@@ -1030,6 +1033,9 @@ class Fetch:
             # Fixed URL for rate export
             self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
             self.rate_export = self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False))
+        elif self.octopus_api_direct:
+            self.log("Downloading rates directly from Octopus API")
+            self.rate_export = self.get_octopus_direct(getImport=False)
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
@@ -1467,7 +1473,7 @@ class Fetch:
                             while minute_index < max_minute:
                                 if not date or (minute_index >= start_minutes and minute_index < end_minutes):
                                     current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
-                                    if not day_of_week or (current_day_of_week in day_of_week):
+                                    if not day_of_week or (current_day_of_week in day_of_week):    
                                         if rate_increment:
                                             rates[minute_index] = rates.get(minute_index, 0.0) + rate
                                             rate_replicate[minute_index] = "increment"

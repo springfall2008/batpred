@@ -73,7 +73,7 @@ from utils import minutes_since_yesterday, dp1, dp2, dp3, dp4
 from ha import HAInterface
 from web import WebInterface
 from predheat import PredHeat
-from octopus import Octopus
+from octopus import Octopus, OctopusAPI
 from energydataservice import Energidataservice
 from solcast import Solcast
 from gecloud import GECloud, GECloudDirect
@@ -84,7 +84,6 @@ from output import Output
 from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
-
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
@@ -286,6 +285,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.ha_interface = None
         self.fatal_error = False
         self.ge_cloud_direct = None
+        self.ge_cloud_direct_task = None
+        self.octopus_api_direct = None
+        self.octopus_api_direct_task = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparison = None
         self.predheat = None
@@ -790,7 +792,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.save_current_config()
 
         if self.comparison:
-            if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
+            if ((scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False)):
                 # Compare tariffs either when triggered or daily at midnight
                 self.expose_config("compare_active", True)
                 self.comparison.run_all()
@@ -859,7 +861,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Setup the app, called once each time the app starts
         """
         self.pool = None
-        if "hass_api_version" not in self.__dict__:
+        if 'hass_api_version' not in self.__dict__:
             self.hass_api_version = 1
         self.log("Predbat: Startup {} hass version {}".format(__name__, self.hass_api_version))
         self.update_time(print=False)
@@ -887,6 +889,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.log("Starting GE cloud direct interface")
                 self.ge_cloud_direct = GECloudDirect(self)
                 self.ge_cloud_direct_task = self.create_task(self.ge_cloud_direct.start())
+
+            if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
+                self.log("Starting Octopus API interface")
+                self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", ""), self.get_arg("octopus_api_account", ""), self.log)
+                self.octopus_api_direct_task = self.create_task(self.octopus_api_direct.start())
 
             # Printable config root
             self.config_root_p = self.config_root
@@ -951,6 +958,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             await self.web_interface.stop()
         if self.ge_cloud_direct:
             await self.ge_cloud_direct.stop()
+        if self.octopus_api_direct:
+            self.octopus_api_direct.stop()
 
         await asyncio.sleep(0)
         if hasattr(self, "pool"):
