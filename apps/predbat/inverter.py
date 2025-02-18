@@ -843,7 +843,7 @@ class Inverter:
         self.charge_rate_now = max(self.charge_rate_now * self.base.battery_rate_max_scaling, self.battery_rate_min)
         self.discharge_rate_now = max(self.discharge_rate_now * self.base.battery_rate_max_scaling_discharge, self.battery_rate_min)
 
-        if self.rest_data:
+        if self.rest_data and self.rest_data.get("Power", {}).get("Power", {}).get("SOC_kWh", None) is not None:
             self.soc_kw = dp3(self.rest_data["Power"]["Power"]["SOC_kWh"] * self.battery_scaling)
         else:
             if "soc_percent" in self.base.args:
@@ -1144,7 +1144,7 @@ class Inverter:
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power)  # Reset discharge power too
+                    self.set_current_from_power("discharge", discharge_power) # Reset discharge power too
             elif self.soc_percent > float(current_charge_limit):
                 # If current SOC is above Target SOC, turn Grid Charging off
                 self.alt_charge_discharge_enable("charge", False)
