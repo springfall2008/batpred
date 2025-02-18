@@ -73,7 +73,7 @@ from utils import minutes_since_yesterday, dp1, dp2, dp3, dp4
 from ha import HAInterface
 from web import WebInterface
 from predheat import PredHeat
-from octopus import Octopus
+from octopus import Octopus, OctopusAPI
 from energydataservice import Energidataservice
 from solcast import Solcast
 from gecloud import GECloud, GECloudDirect
@@ -286,6 +286,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.ha_interface = None
         self.fatal_error = False
         self.ge_cloud_direct = None
+        self.ge_cloud_direct_task = None
+        self.octopus_api_direct = None
+        self.octopus_api_direct_task = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparison = None
         self.predheat = None
@@ -888,6 +891,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.ge_cloud_direct = GECloudDirect(self)
                 self.ge_cloud_direct_task = self.create_task(self.ge_cloud_direct.start())
 
+            if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
+                self.log("Starting Octopus API interface")
+                self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", ""), self.get_arg("octopus_api_account", ""), self.log)
+                self.octopus_api_direct_task = self.create_task(self.octopus_api_direct.start())
+
             # Printable config root
             self.config_root_p = self.config_root
             slug = self.ha_interface.get_slug()
@@ -951,6 +959,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             await self.web_interface.stop()
         if self.ge_cloud_direct:
             await self.ge_cloud_direct.stop()
+        if self.octopus_api_direct:
+            self.octopus_api_direct.stop()
 
         await asyncio.sleep(0)
         if hasattr(self, "pool"):

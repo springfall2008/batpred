@@ -866,6 +866,9 @@ class Fetch:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
             self.rate_import = self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False))
+        elif self.octopus_api_direct:
+            self.log("Downloading rates directly from Octopus API")
+            self.rate_import = self.get_octopus_direct(getImport=True)
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
@@ -1030,6 +1033,9 @@ class Fetch:
             # Fixed URL for rate export
             self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
             self.rate_export = self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False))
+        elif self.octopus_api_direct:
+            self.log("Downloading rates directly from Octopus API")
+            self.rate_export = self.get_octopus_direct(getImport=False)
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
