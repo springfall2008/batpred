@@ -1144,7 +1144,7 @@ class Inverter:
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power)  # Reset discharge power too
+                    self.set_current_from_power("discharge", discharge_power) # Reset discharge power too
             elif self.soc_percent > float(current_charge_limit):
                 # If current SOC is above Target SOC, turn Grid Charging off
                 self.alt_charge_discharge_enable("charge", False)
@@ -1954,13 +1954,15 @@ class Inverter:
                 if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                     if self.inv_charge_control_immediate:
                         self.enable_charge_discharge_with_time_current("charge", False)
-                if not self.inv_has_charge_enable_time:
-                    self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
 
             if self.base.set_inverter_notify and notify:
                 self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
 
             self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
+
+        # Reset charge window to midnight if there is no charge enable time
+        if not self.inv_has_charge_enable_time:
+            self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
 
         # Updated cached status to disabled
         self.charge_enable_time = False
