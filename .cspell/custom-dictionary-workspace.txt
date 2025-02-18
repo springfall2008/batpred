@@ -158,6 +158,7 @@ Ohme
 onchange
 oncharge
 openweathermap
+octo
 pdata
 pdetails
 perc
@@ -237,3 +238,7 @@ xticks
 yaxis
 ylabel
 zappi
+euids
+mpan
+mprn
+meterpoint
