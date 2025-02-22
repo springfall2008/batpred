@@ -108,9 +108,9 @@ idag
 idetails
 iflux
 inday
+intelligentdevice
 invbatpower
 invname
-intelligentdevice
 isort
 itemtype
 ivtime
