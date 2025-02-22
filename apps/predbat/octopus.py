@@ -20,7 +20,6 @@ integration_context_header = "Ha-Integration-Context"
 DATE_STR_FORMAT = "%Y-%m-%d"
 DATE_TIME_STR_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
-
 def is_active(now_utc, activeFrom, activeTo):
     if not activeFrom:
         return False
@@ -32,14 +31,12 @@ def is_active(now_utc, activeFrom, activeTo):
         return False
     return True
 
-
 def parse_date(dt_str):
     """Convert a date string to a date object."""
     try:
         return datetime.strptime(dt_str, DATE_STR_FORMAT)
     except (ValueError, TypeError):
         return None
-
 
 def parse_date_time(dt_str):
     """Convert a date string to a date object."""
@@ -48,14 +45,13 @@ def parse_date_time(dt_str):
     except (ValueError, TypeError):
         return None
 
-
-api_token_query = """mutation {{
+api_token_query = '''mutation {{
 	obtainKrakenToken(input: {{ APIKey: "{api_key}" }}) {{
 		token
 	}}
-}}"""
+}}'''
 
-account_query = """query {{
+account_query = '''query {{
   octoplusAccountInfo(accountNumber: "{account_id}") {{
     isOctoplusEnrolled
   }}
@@ -124,9 +120,9 @@ account_query = """query {{
 			}}
     }}
   }}
-}}"""
+}}'''
 
-intelligent_device_query = """query {{
+intelligent_device_query = '''query {{
   electricVehicles {{
 		make
 		models {{
@@ -158,9 +154,9 @@ intelligent_device_query = """query {{
 			model
 		}}
 	}}
-}}"""
+}}'''
 
-intelligent_dispatches_query = """query {{
+intelligent_dispatches_query = '''query {{
   devices(accountNumber: "{account_id}", deviceId: "{device_id}") {{
 		id
     status {{
@@ -185,9 +181,9 @@ intelligent_dispatches_query = """query {{
       location
 		}}
 	}}
-}}"""
+}}'''
 
-intelligent_settings_query = """query {{
+intelligent_settings_query = '''query {{
   devices(accountNumber: "{account_id}", deviceId: "{device_id}") {{
 		id
     status {{
@@ -214,22 +210,56 @@ intelligent_settings_query = """query {{
 			}}
 		}}
 	}}
-}}"""
+}}'''
 
+octoplus_saving_session_query = '''query {{
+	savingSessions {{
+    events(getDevEvents: false) {{
+			id
+      code
+			rewardPerKwhInOctoPoints
+			startAt
+			endAt
+      devEvent
+		}}
+		account(accountNumber: "{account_id}") {{
+			hasJoinedCampaign
+			joinedEvents {{
+				eventId
+				startAt
+				endAt
+        rewardGivenInOctoPoints
+			}}
+		}}
+	}}
+}}'''
+
+octoplus_saving_session_join_mutation = '''mutation {{
+	joinSavingSessionsEvent(input: {{
+		accountNumber: "{account_id}"
+		eventCode: "{event_code}"
+	}}) {{
+		possibleErrors {{
+			message
+		}}
+	}}
+}}
+'''
 
 class OctopusEnergyApiClient:
-    def __init__(self, api_key, log, timeout_in_seconds=20):
-        if api_key is None:
-            raise Exception("Octopus API KEY is not set")
+    def __init__(self, api_key, log, timeout_in_seconds = 20):
+        if (api_key is None):
+            raise Exception('Octopus API KEY is not set')
 
         self.api_key = api_key
-        self.base_url = "https://api.octopus.energy"
+        self.base_url = 'https://api.octopus.energy'
 
-        self.default_headers = {"user-agent": f"{user_agent_value}/1.0"}
+        self.default_headers = { "user-agent": f'{user_agent_value}/1.0' }
         self.timeout = aiohttp.ClientTimeout(total=None, sock_connect=timeout_in_seconds, sock_read=timeout_in_seconds)
 
         self.session = None
-
+        self.saving_sessions_to_join = []
+     
     async def async_close(self):
         if self.session is not None:
             await self.session.close()
@@ -237,10 +267,11 @@ class OctopusEnergyApiClient:
     async def async_create_client_session(self):
         if self.session is not None:
             return self.session
-
-        self.session = aiohttp.ClientSession(headers=self.default_headers, skip_auto_headers=["User-Agent"])
+               
+        self.session = aiohttp.ClientSession(headers=self.default_headers, skip_auto_headers=['User-Agent'])
         return self.session
 
+ 
 
 class OctopusAPI:
     def __init__(self, api_key, account_id, log):
@@ -257,6 +288,35 @@ class OctopusAPI:
         self.tariffs = {}
         self.account_data = {}
         self.intelligent_dispatches = {}
+        self.saving_sessions = {}
+        self.saving_sessions_to_join = []
+
+    async def start(self):
+        """
+        Main run loop
+        """
+        count_seconds = 0
+        while not self.stop_api:
+            # 30 minute update
+            if count_seconds % (30 * 60) == 0:
+                self.now = datetime.now()
+                self.now_utc = datetime.now(timezone.utc).astimezone()
+                self.log("Octopus API: Refreshing token")
+                token = await self.async_refresh_token()
+                self.log("Octopus API: Token refreshed")
+                self.account_data = await self.async_get_account(self.account_id)
+                self.tariffs = await self.async_find_tariffs()
+                self.log("Octopus API: Tariffs found as {}".format(self.tariffs))
+                await self.fetch_tariffs(self.tariffs)
+                self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
+            await self.async_join_saving_session_events(self.account_id)
+            await asyncio.sleep(5)
+            count_seconds += 5
+        await self.api.async_close()
+        print("Octopus API: Stopped")
+
+    def stop(self):
+        self.stop_api = True
 
     def get_tariff(self, tariff_type):
         if tariff_type in self.tariffs:
@@ -270,7 +330,7 @@ class OctopusAPI:
         if not self.account_data:
             return None
         tariffs = {}
-
+        
         electric = self.account_data.get("account", {}).get("electricityAgreements", [])
         for agreement in electric:
             meterpoint = agreement.get("meterPoint", {})
@@ -314,33 +374,149 @@ class OctopusAPI:
         self.log("Octopus API: Found tariffs as {}".format(tariffs))
         return tariffs
 
-    def get_account_data(self):
-        return self.account_data
-
-    async def start(self):
+    def join_saving_session_event(self, event_code):
         """
-        Main run loop
+        Join a saving session event
         """
-        count_seconds = 0
-        while not self.stop_api:
-            # 30 minute update
-            if count_seconds % (30 * 60) == 0:
-                self.now = datetime.now()
-                self.now_utc = datetime.now(timezone.utc).astimezone()
-                self.log("Octopus API: Refreshing token")
-                token = await self.async_refresh_token()
-                self.log("Octopus API: Token refreshed")
-                self.account_data = await self.async_get_account(self.account_id)
-                self.tariffs = await self.async_find_tariffs()
-                self.log("Octopus API: Tariffs found as {}".format(self.tariffs))
-                await self.fetch_tariffs(self.tariffs)
-            await asyncio.sleep(5)
-            count_seconds += 5
-        await self.api.async_close()
-        print("Octopus API: Stopped")
+        self.saving_sessions_to_join.append(event_code)
 
-    def stop(self):
-        self.stop_api = True
+    async def async_join_saving_session_events(self, account_id):
+        """
+        Join the saving session events
+        """
+        sessions_to_join = self.saving_sessions_to_join
+        self.saving_sessions_to_join = []
+
+        for event_code in sessions_to_join:
+            self.log("Octopus API: Joining saving session event {}".format(event_code))
+            await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False)
+
+    def get_intelligent_device(self):
+        """
+        Get the intelligent device
+        """
+        return self.tariffs.get("import", {}).get("intelligent_device", None)
+    
+    def get_intelligent_completed_dispatches(self):
+        """
+        Get the completed intelligent dispatches
+        """
+        devices = self.tariffs.get("import", {}).get("intelligent_device", None)
+        if devices:
+            return devices.get("completed_dispatches", [])
+        else:
+            return []
+
+    def get_intelligent_planned_dispatches(self):
+        """
+        Get the intelligent dispatches
+        """
+        devices = self.tariffs.get("import", {}).get("intelligent_device", None)
+        if devices:
+            return devices.get("planned_dispatches", [])
+        else:
+            return []
+
+    def get_intelligent_vehicle(self):
+        """
+        Get the intelligent vehicle
+        """
+        vehicle = {}
+
+        devices = self.tariffs.get("import", {}).get("intelligent_device", None)
+        if devices:
+            vehicle['vehicleBatterySizeInKwh'] = devices.get("vehicle_battery_size_in_kwh", None)
+            vehicle['chargePointPowerInKw'] = devices.get("charge_point_power_in_kw", None)
+            vehicle['weekdayTargetTime'] = devices.get("weekday_target_time", None)
+            vehicle['weekdayTargetSoc'] = devices.get("weekday_target_soc", None)
+            vehicle['weekendTargetTime'] = devices.get("weekend_target_time", None)
+            vehicle['weekendTargetSoc'] = devices.get("weekend_target_soc", None)
+            vehicle['minimumSoc'] = devices.get("minimum_soc", None)
+            vehicle['maximumSoc'] = devices.get("maximum_soc", None)
+            vehicle['suspended'] = devices.get("suspended", None)
+            vehicle['model'] = devices.get("model", None)
+            vehicle['provider'] = devices.get("provider", None)
+            vehicle['status'] = devices.get("status", None)
+            # Remove None's from the dictionary
+            vehicle = {k: v for k, v in vehicle.items() if v is not None}
+
+        return vehicle
+
+    def get_intelligent_battery_size(self):
+        """
+        Get the intelligent battery size
+        """
+        devices = self.tariffs.get("import", {}).get("intelligent_device", None)
+        if devices:
+            return devices.get("vehicle_battery_size_in_kwh", None)
+        else:
+            return None
+
+    def get_intelligent_target_time(self):
+        """
+        Get the intelligent target time
+        """
+        devices = self.tariffs.get("import", {}).get("intelligent_device", None)
+        if devices:
+            return devices.get("weekday_target_time", None)
+        else:
+            return None
+
+    def get_intelligent_target_soc(self):
+        """
+        Get the intelligent target soc
+        """
+        devices = self.tariffs.get("import", {}).get("intelligent_device", None)
+        if devices:
+            return devices.get("weekday_target_soc", None)
+        else:
+            return None
+
+    def get_saving_session_data(self):
+        """
+        Get the saving sessions data
+        """
+        return_joined_events = []
+        return_available_events = []
+
+        available_events = self.saving_sessions.get('events', [])
+        joined_events = self.saving_sessions.get('account', {}).get('joinedEvents', [])
+        joined_ids = {}
+        event_reward = {}
+        event_code = {}
+
+        for event in joined_events:
+            event_id = event.get('eventId', None)
+            if event_id:
+                joined_ids[event_id] = True
+
+        for event in available_events:
+            start = event.get('startAt', None)
+            end = event.get('endAt', None)
+            event_id = event.get('id', None)
+            code = event.get('code', None)
+            if event_id:
+                event_reward[event_id] = event.get('rewardPerKwhInOctoPoints', None)
+                event_code[event_id] = code
+            if start and end and event_id not in joined_ids:
+                endDataTime = parse_date_time(end)
+                if endDataTime > self.now_utc:
+                    return_available_events.append({"start": start, "end": end, "octopoints_per_kwh": event.get('rewardPerKwhInOctoPoints', None), "code": code, "id": event_id})
+
+        for event in joined_events:
+            start = event.get('startAt', None)
+            end = event.get('endAt', None)
+            event_id = event.get('eventId', None)
+            if start and end:
+                return_joined_events.append({"start": start, "end": end, "octopoints_per_kwh": event_reward.get(event_id, None), "rewarded_octopoints": event.get('rewardGivenInOctoPoints', None), "id": event_id, "code": event_code.get(event_id, None)})
+        return return_available_events, return_joined_events
+
+    async def async_get_saving_sessions(self, account_id):
+        """
+        Get the saving sessions
+        """
+        response_data = await self.async_graphql_query(octoplus_saving_session_query.format(account_id=self.account_id), "get-saving-sessions")
+        return response_data.get('savingSessions', {})
 
     async def async_download_octopus_url(self, url):
         """
@@ -394,7 +570,7 @@ class OctopusAPI:
                 self.log("Warn: Unable to download Octopus data from URL {}".format(url))
             tariffs[tariff]["data"] = data
 
-    async def async_read_response(self, response, url, ignore_errors=False):
+    async def async_read_response(self, response, url, ignore_errors = False):
         """Reads the response, logging any json errors"""
 
         request_context = response.request_info.headers[integration_context_header] if integration_context_header in response.request_info.headers else "Unknown"
@@ -403,37 +579,37 @@ class OctopusAPI:
 
         if response.status >= 400:
             if response.status >= 500:
-                msg = f"Warn: Octopus API: Response received - {url} ({request_context}) - DO NOT REPORT - Octopus Energy server error ({url}): {response.status}; {text}"
+                msg = f'Warn: Octopus API: Response received - {url} ({request_context}) - DO NOT REPORT - Octopus Energy server error ({url}): {response.status}; {text}'
                 self.log(msg)
                 return None
             elif response.status in [401, 403]:
-                msg = f"Warn: Octopus API: Response received - {url} ({request_context}) - Unauthenticated request: {response.status}; {text}"
+                msg = f'Warn: Octopus API: Response received - {url} ({request_context}) - Unauthenticated request: {response.status}; {text}'
                 self.log(msg)
                 return None
             elif response.status not in [404]:
                 self.log(msg)
                 return None
-
+        
             self.log(f"Warn: Octopus API: Response received - {url} ({request_context}) - Unexpected response received: {response.status}; {text}")
             return None
-
+        
         data_as_json = None
         try:
             data_as_json = json.loads(text)
         except Exception as e:
-            self.log(f"Warn: Octopus API: Failed to extract response json: {e} - {url} - {text}")
+            self.log(f'Warn: Octopus API: Failed to extract response json: {e} - {url} - {text}')
             return None
-
-        if "graphql" in url and "errors" in data_as_json and ignore_errors == False:
+        
+        if ("graphql" in url and "errors" in data_as_json and ignore_errors == False):
             msg = f'Warn: Octopus API: Errors in request ({url}): {data_as_json["errors"]}'
             errors = list(map(lambda error: error["message"], data_as_json["errors"]))
             self.log(msg)
 
             for error in data_as_json["errors"]:
-                if error["extensions"]["errorCode"] in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
-                    self.log(f"Warn: Octopus API: Token error - {msg} {errors}")
+                if (error["extensions"]["errorCode"] in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143")):
+                    self.log(f'Warn: Octopus API: Token error - {msg} {errors}')
             return None
-
+        
         return data_as_json
 
     async def async_refresh_token(self):
@@ -441,24 +617,23 @@ class OctopusAPI:
         Refresh the token
         """
 
-        if self.graphql_expiration is not None and (self.graphql_expiration - timedelta(minutes=5)) > datetime.now():
-            return self.graphql_token
+        if (self.graphql_expiration is not None and (self.graphql_expiration - timedelta(minutes=5)) > datetime.now()):
+           return self.graphql_token        
 
         client = await self.api.async_create_client_session()
-        url = f"{self.api.base_url}/v1/graphql/"
-        payload = {"query": api_token_query.format(api_key=self.api_key)}
-        headers = {integration_context_header: "refresh-token"}
+        url = f'{self.api.base_url}/v1/graphql/'
+        payload = { "query": api_token_query.format(api_key=self.api_key) }
+        headers = { integration_context_header: "refresh-token" }
 
         try:
             async with client.post(url, headers=headers, json=payload) as token_response:
                 token_response_body = await self.async_read_response(token_response, url)
-                if (
-                    token_response_body is not None
-                    and "data" in token_response_body
-                    and "obtainKrakenToken" in token_response_body["data"]
-                    and token_response_body["data"]["obtainKrakenToken"] is not None
-                    and "token" in token_response_body["data"]["obtainKrakenToken"]
-                ):
+                if (token_response_body is not None and 
+                    "data" in token_response_body and
+                    "obtainKrakenToken" in token_response_body["data"] and 
+                    token_response_body["data"]["obtainKrakenToken"] is not None and
+                    "token" in token_response_body["data"]["obtainKrakenToken"]):
+                    
                     self.graphql_token = token_response_body["data"]["obtainKrakenToken"]["token"]
                     self.graphql_expiration = datetime.now() + timedelta(hours=1)
                     return self.graphql_token
@@ -466,28 +641,29 @@ class OctopusAPI:
                     self.log("Warn: Octopus API: Failed to retrieve auth token")
                     return None
         except TimeoutError:
-            self.log(f"Failed to connect. Timeout of {self.api.timeout} exceeded.")
+            self.log(f'Failed to connect. Timeout of {self.api.timeout} exceeded.')
             return None
 
-    async def async_graphql_query(self, query, request_context):
+    async def async_graphql_query(self, query, request_context, returns_data = True):
         """
         Execute a graphql query
         """
         await self.async_refresh_token()
         try:
             client = await self.api.async_create_client_session()
-            url = f"{self.api.base_url}/v1/graphql/"
-            payload = {"query": query}
-            headers = {"Authorization": f"JWT {self.graphql_token}", integration_context_header: request_context}
+            url = f'{self.api.base_url}/v1/graphql/'
+            payload = { "query": query }
+            headers = { "Authorization": f"JWT {self.graphql_token}", integration_context_header: request_context }
             async with client.post(url, json=payload, headers=headers) as response:
                 response_body = await self.async_read_response(response, url)
-                if "data" in response_body:
+                if response_body and ('data' in response_body):
                     return response_body["data"]
                 else:
-                    self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
+                    if returns_data:
+                        self.log(f'Warn: Octopus API: Failed to retrieve data from graphql query {request_context}')
                     return None
         except TimeoutError:
-            self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.timeout} exceeded.")
+            self.log(f'Warn: OctopusAPI: Failed to connect. Timeout of {self.timeout} exceeded.')
 
         return None
 
@@ -507,11 +683,11 @@ class OctopusAPI:
                 chargePointVariants = device_result.get("chargePointVariants", [])
                 electricVehicles = device_result.get("electricVehicles", [])
                 devices = device_result.get("devices", [])
-                for device in device_result["devices"]:
+                for device in device_result['devices']:
                     deviceType = device.get("deviceType", None)
                     status = device.get("status", {}).get("current", None)
                     deviceTypeName = device.get("__typename", None)
-                    if status == "LIVE" and deviceType == "ELECTRIC_VEHICLES":
+                    if status == 'LIVE' and deviceType == "ELECTRIC_VEHICLES":
                         isCharger = deviceTypeName == "SmartFlexChargePoint"
                         make = device.get("make", None)
                         model = device.get("model", None)
@@ -522,16 +698,16 @@ class OctopusAPI:
 
                         if IntelligentdeviceID:
                             device_setting_data = await self.async_graphql_query(intelligent_settings_query.format(account_id=account_id, device_id=IntelligentdeviceID), "get-intelligent-settings")
-                            for setting in device_setting_data.get("devices", []):
-                                if setting.get("id", None) == IntelligentdeviceID:
-                                    device_setting_result["suspended"] = setting.get("status", {}).get("isSuspended", None)
-                                    chargingPreferences = setting.get("chargingPreferences", {})
-                                    device_setting_result["weekday_target_time"] = chargingPreferences.get("weekdayTargetTime", None)
-                                    device_setting_result["weekday_target_soc"] = chargingPreferences.get("weekdayTargetSoc", None)
-                                    device_setting_result["weekend_target_time"] = chargingPreferences.get("weekendTargetTime", None)
-                                    device_setting_result["weekend_target_soc"] = chargingPreferences.get("weekendTargetSoc", None)
-                                    device_setting_result["minimum_soc"] = chargingPreferences.get("minimumSoc", None)
-                                    device_setting_result["maximum_soc"] = chargingPreferences.get("maximumSoc", None)
+                            for setting in device_setting_data.get('devices', []):
+                                if setting.get('id', None) == IntelligentdeviceID:
+                                    device_setting_result['suspended'] = setting.get('status', {}).get('isSuspended', None)
+                                    chargingPreferences = setting.get('chargingPreferences', {})
+                                    device_setting_result['weekday_target_time'] = chargingPreferences.get('weekdayTargetTime', None)
+                                    device_setting_result['weekday_target_soc'] = chargingPreferences.get('weekdayTargetSoc', None)
+                                    device_setting_result['weekend_target_time'] = chargingPreferences.get('weekendTargetTime', None)
+                                    device_setting_result['weekend_target_soc'] = chargingPreferences.get('weekendTargetSoc', None)
+                                    device_setting_result['minimum_soc'] = chargingPreferences.get('minimumSoc', None)
+                                    device_setting_result['maximum_soc'] = chargingPreferences.get('maximumSoc', None)
 
                         if isCharger:
                             for charger in chargePointVariants:
@@ -549,12 +725,12 @@ class OctopusAPI:
                                             vehicleBatterySizeInKwh = vehicle_info.get("batterySize", None)
 
                         intelligent_device = {
-                            "deviceType": deviceType,
-                            "status": status,
-                            "provider": make,
+                            "deviceType": deviceType, 
+                            "status": status, 
+                            "provider": make, 
                             "model": model,
-                            "is_charger": isCharger,
-                            "charge_point_power_in_kw": chargePointPowerInKw,
+                            "is_charger": isCharger, 
+                            "charge_point_power_in_kw": chargePointPowerInKw, 
                             "vehicle_battery_size_in_kwh": vehicleBatterySizeInKwh,
                             "device_id": IntelligentdeviceID,
                         }
@@ -588,15 +764,14 @@ class OctopusAPI:
             self.log("Error: OctopusAPI: Failed to retrieve account")
             return None
 
-        response_account = response_data.get("account", {})
+        response_account = response_data.get('account', {})
 
         if response_account:
             return response_data
         else:
             self.log("Error: OctopusAPI: Failed to retrieve account data for account {}".format(account_id))
-
+    
         return None
-
 
 class Octopus:
     def octopus_free_line(self, res, free_sessions):
@@ -762,7 +937,7 @@ class Octopus:
                 pdata = self.minute_data(tariff["data"], self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
                 return pdata
             self.log("Warn: Octopus API direct does not return any rates for {}".format("import" if getImport else "export"))
-            return {n: 0 for n in range(-24 * 60, self.forecast_minutes)}
+            return {n : 0 for n in range(-24*60, self.forecast_minutes)}
         else:
             self.log("Warn: Octopus API direct not available")
 
@@ -955,7 +1130,7 @@ class Octopus:
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])
-
+        
         # Add in the current charging slot
         for slot in slots_sorted:
             start_minutes, end_minutes, kwh, source, location = slot
@@ -967,13 +1142,13 @@ class Octopus:
                     kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
                     kwh = dp2(kwh_expected / self.car_charging_loss)
 
-                # Remove the remaining unused time
+                # Remove the remaining unused time
                 if octopus_intelligent_consider_full and kwh > 0 and (min(car_soc + kwh_expected, limit) >= limit):
                     required_extra_soc = max(limit - car_soc, 0)
                     required_minutes = int(required_extra_soc / (kwh_original * self.car_charging_loss) * (end_minutes - start_minutes) + 0.5)
                     required_minutes = min(required_minutes, end_minutes - start_minutes)
                     end_minutes = start_minutes + required_minutes
-                    end_minutes = int((end_minutes + 29) / 30) * 30  # Round up to 30 minutes
+                    end_minutes = int((end_minutes + 29) / 30) * 30 # Round up to 30 minutes
 
                     car_soc = min(car_soc + kwh_expected, limit)
                     new_slot = {}
@@ -1159,65 +1334,75 @@ class Octopus:
 
         # Octopus saving session
         octopus_saving_slots = []
-        if "octopus_saving_session" in self.args:
+        if self.octopus_api_direct or ("octopus_saving_session" in self.args):
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per found
 
-            entity_id = self.get_arg("octopus_saving_session", indirect=False)
-            if entity_id:
-                state = self.get_arg("octopus_saving_session", False)
+            joined_events = []
+            available_events = []
+            state = False
 
-                joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
-                if not joined_events:
-                    entity_id = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
+            if self.octopus_api_direct:
+                available_events, joined_events = self.octopus_api_direct.get_saving_session_data()
+            else:
+                entity_id = self.get_arg("octopus_saving_session", indirect=False)
+                if entity_id:
+                    state = self.get_arg("octopus_saving_session", False)
                     joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
+                    if not joined_events:
+                        entity_id = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
+                        joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
 
-                available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
-                if available_events:
-                    for event in available_events:
-                        code = event.get("code", None)  # decode the available events structure for code, start/end time & rate
-                        start = event.get("start", None)
-                        end = event.get("end", None)
-                        start_time = str2time(start)  # reformat the saving session start & end time for improved readability
-                        end_time = str2time(end)
-                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
-                        if code:  # Join the new Octopus saving event and send an alert
-                            self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                    available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
+
+            if available_events:
+                for event in available_events:
+                    code = event.get("code", None)  # decode the available events structure for code, start/end time & rate
+                    start = event.get("start", None)
+                    end = event.get("end", None)
+                    start_time = str2time(start)  # reformat the saving session start & end time for improved readability
+                    end_time = str2time(end)
+                    saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
+                    if code:  # Join the new Octopus saving event and send an alert
+                        self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                        if self.octopus_api_direct:
+                            self.octopus_api_direct.join_saving_session_event(code)
+                        else:
                             self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
-                            self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                        self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
 
-                if joined_events:
-                    for event in joined_events:
-                        start = event.get("start", None)
-                        end = event.get("end", None)
-                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
-                        if start and end and saving_rate > 0:
-                            # Save the saving slot?
-                            try:
-                                start_time = str2time(start)
-                                end_time = str2time(end)
-                                diff_time = start_time - self.now_utc
-                                if abs(diff_time.days) <= 3:
-                                    self.log("Joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state))
+            if joined_events:
+                for event in joined_events:
+                    start = event.get("start", None)
+                    end = event.get("end", None)
+                    saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
+                    if start and end and saving_rate > 0:
+                        # Save the saving slot?
+                        try:
+                            start_time = str2time(start)
+                            end_time = str2time(end)
+                            diff_time = start_time - self.now_utc
+                            if abs(diff_time.days) <= 3:
+                                self.log("Joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state))
 
-                                    # Save the slot
-                                    octopus_saving_slot = {}
-                                    octopus_saving_slot["start"] = start
-                                    octopus_saving_slot["end"] = end
-                                    octopus_saving_slot["rate"] = saving_rate
-                                    octopus_saving_slot["state"] = state
-                                    octopus_saving_slots.append(octopus_saving_slot)
-                            except (ValueError, TypeError):
-                                self.log("Warn: Bad start time for joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state))
+                                # Save the slot
+                                octopus_saving_slot = {}
+                                octopus_saving_slot["start"] = start
+                                octopus_saving_slot["end"] = end
+                                octopus_saving_slot["rate"] = saving_rate
+                                octopus_saving_slot["state"] = state
+                                octopus_saving_slots.append(octopus_saving_slot)
+                        except (ValueError, TypeError):
+                            self.log("Warn: Bad start time for joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state))
 
-                    # In saving session that's not reported, assumed 30-minutes
-                    if state and not joined_events:
-                        octopus_saving_slot = {}
-                        octopus_saving_slot["start"] = None
-                        octopus_saving_slot["end"] = None
-                        octopus_saving_slot["rate"] = saving_rate
-                        octopus_saving_slot["state"] = state
-                        octopus_saving_slots.append(octopus_saving_slot)
-                    if state:
-                        self.log("Octopus Saving session is active!")
+                # In saving session that's not reported, assumed 30-minutes
+                if state and not joined_events:
+                    octopus_saving_slot = {}
+                    octopus_saving_slot["start"] = None
+                    octopus_saving_slot["end"] = None
+                    octopus_saving_slot["rate"] = saving_rate
+                    octopus_saving_slot["state"] = state
+                    octopus_saving_slots.append(octopus_saving_slot)
+                if state:
+                    self.log("Octopus Saving session is active!")
         return octopus_free_slots, octopus_saving_slots

@@ -361,7 +361,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0,required_unit=None):
         """
         Download one or more entities for load data
         """
@@ -929,21 +929,27 @@ class Fetch:
         # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
-        # Octopus intelligent slots
-        if "octopus_intelligent_slot" in self.args:
+        if (self.octopus_api_direct and self.octopus_api_direct.get_intelligent_device()) or (not self.octopus_api_direct and ("octopus_intelligent_slot" in self.args)):
             completed = []
             planned = []
             vehicle = {}
             vehicle_pref = {}
-            entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
-            try:
-                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
-                planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
-                vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
-                vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
-            except (ValueError, TypeError):
-                self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
-                self.record_status(message="Error: octopus_intelligent_slot not set correctly", had_errors=True)
+
+            if self.octopus_api_direct:
+                completed = self.octopus_api_direct.get_intelligent_completed_dispatches()
+                planned = self.octopus_api_direct.get_intelligent_planned_dispatches()
+                vehicle = self.octopus_api_direct.get_intelligent_vehicle()
+                vehicle_pref = vehicle
+            else:
+                entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
+                try:
+                    completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
+                    planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
+                    vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
+                    vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
+                except (ValueError, TypeError):
+                    self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
+                    self.record_status(message="Error: octopus_intelligent_slot not set correctly", had_errors=True)
 
             # Completed and planned slots
             if completed:
@@ -958,7 +964,7 @@ class Fetch:
 
             if self.num_cars >= 1:
                 # Extract vehicle data if we can get it
-                if vehicle:
+                if vehicle or self.octopus_api_direct:
                     self.car_charging_battery_size[0] = float(vehicle.get("vehicleBatterySizeInKwh", self.car_charging_battery_size[0]))
                     self.car_charging_rate[0] = float(vehicle.get("chargePointPowerInKw", self.car_charging_rate[0]))
                 else:
@@ -973,19 +979,20 @@ class Fetch:
                 self.car_charging_limit[0] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0)
 
                 # Extract vehicle preference if we can get it
-                if vehicle_pref and self.octopus_intelligent_charging:
+                if (vehicle_pref or self.octopus_api_direct) and self.octopus_intelligent_charging:
                     octopus_limit = max(float(vehicle_pref.get("weekdayTargetSoc", 100)), float(vehicle_pref.get("weekendTargetSoc", 100)))
                     octopus_ready_time = vehicle_pref.get("weekdayTargetTime", None)
                     if not octopus_ready_time:
                         octopus_ready_time = self.car_charging_plan_time[0]
                     else:
-                        octopus_ready_time += ":00"
+                        if isinstance(octopus_ready_time, str) and len(octopus_ready_time) == 5:
+                            octopus_ready_time += ":00"
                     self.car_charging_plan_time[0] = octopus_ready_time
                     octopus_limit = dp3(octopus_limit * self.car_charging_battery_size[0] / 100.0)
                     self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
                 elif self.octopus_intelligent_charging:
                     octopus_ready_time = self.get_arg("octopus_ready_time", None)
-                    if octopus_ready_time is not None and len(octopus_ready_time) == 5:
+                    if isinstance(octopus_ready_time, str) and len(octopus_ready_time) == 5:
                         octopus_ready_time += ":00"
                     octopus_limit = self.get_arg("octopus_charge_limit", None)
                     if octopus_limit:
@@ -1473,7 +1480,7 @@ class Fetch:
                             while minute_index < max_minute:
                                 if not date or (minute_index >= start_minutes and minute_index < end_minutes):
                                     current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
-                                    if not day_of_week or (current_day_of_week in day_of_week):
+                                    if not day_of_week or (current_day_of_week in day_of_week):    
                                         if rate_increment:
                                             rates[minute_index] = rates.get(minute_index, 0.0) + rate
                                             rate_replicate[minute_index] = "increment"
