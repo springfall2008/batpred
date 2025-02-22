@@ -110,6 +110,7 @@ iflux
 inday
 invbatpower
 invname
+intelligentdevice
 isort
 itemtype
 ivtime
