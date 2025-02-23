@@ -749,7 +749,7 @@ class UserInterface:
         """
         for item in self.EVENT_LISTEN_LIST:
             if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
-                # print("Trigger callback for {} {}".format(item["domain"], item["service"]))
+                # self.log("Trigger callback for {} {}".format(item["domain"], item["service"]))
                 await item["callback"](item["service"], service_data, None)
 
     def define_service_list(self):

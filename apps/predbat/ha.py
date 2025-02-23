@@ -665,6 +665,7 @@ class HAInterface:
     def call_service(self, service, **kwargs):
         """
         Call a service in Home Assistant via Websocket
+        or loopback to Predbat in standalone mode
         """
         data = {}
         for key in kwargs:
@@ -673,9 +674,9 @@ class HAInterface:
         if self.websocket_active:
             return self.call_service_websocket_command(domain, service, data)
         else:
-            # Need to feed this back into the database as a direct action
-            self.log("Warn: Call service {} not implemented".format(service))
-            return {}
+            # Loopback with no home assistant
+            data_frame = {"domain": domain, "service": service, "service_data": data}
+            return run_async(self.base.trigger_callback(data_frame))
 
     def api_call(self, endpoint, data_in=None, post=False, core=True):
         """

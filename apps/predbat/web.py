@@ -15,6 +15,7 @@ import asyncio
 import os
 import re
 from datetime import datetime, timedelta
+import json
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
@@ -149,6 +150,10 @@ class WebInterface:
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
+        app.router.add_get("/api/state", self.html_api_get_state)
+        app.router.add_post("/api/state", self.html_api_post_state)
+        app.router.add_post("/api/service", self.html_api_post_service)
+
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self.web_port)
@@ -487,6 +492,46 @@ var options = {
         text += "chart.render();\n"
         text += "</script>\n"
         return text
+
+    async def html_api_post_state(self, request):
+        """
+        JSON API
+        """
+        json_data = await request.json()
+        entity_id = json.get("entity_id", None)
+        state = json_data.get("state", None)
+        attributes = json_data.get("attributes", {})
+        if entity_id:
+            self.base.set_state_wrapper(entity_id, state, attributes=attributes)
+            return web.Response(content_type="application/json", text='{"result": "ok"}')
+        else:
+            return web.Response(content_type="application/json", text='{"result": "error"}')
+
+    async def html_api_get_state(self, request):
+        """
+        JSON API
+        """
+        args = request.query
+        state_data = self.base.get_state_wrapper()
+        if "entity_id" in args:
+            text = json.dumps(state_data.get(args["entity_id"], {}))
+            return web.Response(content_type="application/json", text=text)
+        else:
+            text = json.dumps(state_data)
+            return web.Response(content_type="application/json", text=text)
+
+    async def html_api_post_service(self, request):
+        """
+        JSON API
+        """
+        json_data = await request.json()
+        service = json_data.get("service", None)
+        service_data = json_data.get("data", {})
+        if service:
+            result = self.base.call_service_wrapper(service, **service_data)
+            return web.Response(content_type="application/json", text=json.dumps(result))
+        else:
+            return web.Response(content_type="application/json", text='{"result": "error"}')
 
     async def html_plan(self, request):
         """
