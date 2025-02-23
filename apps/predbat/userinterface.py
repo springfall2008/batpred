@@ -884,7 +884,7 @@ class UserInterface:
             self.watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(self.watch_list))
 
-            if not self.ha_interface.websocket_active:
+            if not self.ha_interface.websocket_active and not self.ha_interface.db_primary:
                 # Registering HA events as Websocket is not active
                 for item in self.SERVICE_REGISTER_LIST:
                     self.fire_event("service_registered", domain=item["domain"], service=item["service"])

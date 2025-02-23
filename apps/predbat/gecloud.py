@@ -193,7 +193,7 @@ class GECloudDirect:
         self.base = base
         self.log = base.log
         self.api_key = self.base.args.get("ge_cloud_key", None)
-        self.automatic = self.base.args.get("ge_cloud_auto", False)
+        self.automatic = self.base.args.get("ge_cloud_automatic", False)
         self.register_list = {}
         self.settings = {}
         self.status = {}
@@ -525,7 +525,7 @@ class GECloudDirect:
         self.base.args["export_today"] = ["sensor.predbat_gecloud_" + device + "_grid_export_today" for device in devices]
         self.base.args["pv_today"] = ["sensor.predbat_gecloud_" + device + "_solar_today" for device in devices]
         self.base.args["charge_rate"] = ["number.predbat_gecloud_" + device + "_battery_charge_power" for device in devices]
-        self.base.args["battery_rate_max"] = ["number.predbat_gecloud_" + device + "_max_charge_rate" for device in devices]
+        self.base.args["battery_rate_max"] = ["sensor.predbat_gecloud_" + device + "_max_charge_rate" for device in devices]
         self.base.args["discharge_rate"] = ["number.predbat_gecloud_" + device + "_battery_discharge_power" for device in devices]
         self.base.args["battery_power"] = ["sensor.predbat_gecloud_" + device + "_battery_power" for device in devices]
         self.base.args["pv_power"] = ["sensor.predbat_gecloud_" + device + "_solar_power" for device in devices]
@@ -534,16 +534,18 @@ class GECloudDirect:
         self.base.args["soc_max"] = ["sensor.predbat_gecloud_" + device + "_battery_size" for device in devices]
         self.base.args["reserve"] = ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in devices]
         self.base.args["inverter_time"] = ["sensor.predbat_gecloud_" + device + "_time" for device in devices]
-        self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + device + "_charge_start_time_slot_1" for device in devices]
-        self.base.args["charge_end_time"] = ["select.predbat_gecloud_" + device + "_charge_end_time_slot_1" for device in devices]
+        self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + device + "_ac_charge_1_start_time" for device in devices]
+        self.base.args["charge_end_time"] = ["select.predbat_gecloud_" + device + "_ac_charge_1_end_time" for device in devices]
         self.base.args["charge_limit"] = ["number.predbat_gecloud_" + device + "_ac_charge_upper_percent_limit" for device in devices]
         self.base.args["discharge_start_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_start_time" for device in devices]
         self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in devices]
         self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in devices]
         self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in devices]
-        self.base.args["pause_mode"] = ["switch.predbat_gecloud_" + device + "_pause_battery" for device in devices]
+        self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in devices]
         self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in devices]
-        self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_batter_end_time" for device in devices]
+        self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in devices]
+        self.base.args["givtcp_rest"] = {}
+        self.base.args["ge_cloud_serial"] = devices[0]
         self.log("GECloud: Automatic configuration complete")
 
     async def start(self):

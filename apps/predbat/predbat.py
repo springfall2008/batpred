@@ -38,7 +38,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.15.2"
+THIS_VERSION = "v8.16.0"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py"]
@@ -978,8 +978,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         Called every 15 seconds
         """
-        if not self.ha_interface or not self.ha_interface.websocket_active:
-            self.log("Error: HA interface not active")
+        if not self.ha_interface or (not self.ha_interface.websocket_active and not self.ha_interface.db_primary):
+            self.log("Error: HA interface not active and db_primary is {}".format(self.ha_interface.db_primary))
             self.fatal_error = True
             raise Exception("HA interface not active")
 
@@ -1032,7 +1032,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         Called every N minutes
         """
-        if not self.ha_interface or not self.ha_interface.websocket_active:
+        if not self.ha_interface or (not self.ha_interface.websocket_active and not self.ha_interface.db_primary):
             self.log("Error: HA interface not active")
             self.fatal_error = True
             raise Exception("HA interface not active")

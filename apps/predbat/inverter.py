@@ -913,8 +913,12 @@ class Inverter:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
 
             # Track charge start/end
-            self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
-            self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
+            if charge_start_time and charge_end_time:
+                self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
+                self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
+            else:
+                self.track_charge_start = "00:00:00"
+                self.track_charge_end = "00:00:00"
 
             # Reverse clock skew
             charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
