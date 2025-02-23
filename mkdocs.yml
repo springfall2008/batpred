@@ -26,6 +26,7 @@ nav:
   - 'Predbat development':
     - todo-list.md
     - developing.md
+    - rest_api.md
   - 'Predheat':
     - predheat.md
 markdown_extensions:
