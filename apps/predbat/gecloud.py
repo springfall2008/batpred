@@ -16,12 +16,8 @@ GE_API_URL = "https://api.givenergy.cloud/v1/"
 GE_API_INVERTER_STATUS = "inverter/{inverter_serial_number}/system-data/latest"
 GE_API_INVERTER_METER = "inverter/{inverter_serial_number}/meter-data/latest"
 GE_API_INVERTER_SETTINGS = "inverter/{inverter_serial_number}/settings"
-GE_API_INVERTER_READ_SETTING = (
-    "inverter/{inverter_serial_number}/settings/{setting_id}/read"
-)
-GE_API_INVERTER_WRITE_SETTING = (
-    "inverter/{inverter_serial_number}/settings/{setting_id}/write"
-)
+GE_API_INVERTER_READ_SETTING = "inverter/{inverter_serial_number}/settings/{setting_id}/read"
+GE_API_INVERTER_WRITE_SETTING = "inverter/{inverter_serial_number}/settings/{setting_id}/write"
 GE_API_DEVICES = "communication-device"
 GE_API_DEVICE_INFO = "communication-device"
 GE_API_SMART_DEVICES = "smart-device"
@@ -139,14 +135,14 @@ EVC_COMMAND_NAMES = {
     "configure-inverter-control": "Configure Inverter Control",
     "perform-factory-reset": "Perform Factory Reset",
     "configuration-mode": "Configuration Mode",
-    "enable-local-control": "Enable Local Control"
+    "enable-local-control": "Enable Local Control",
 }
 EVC_SELECT_VALUE_KEY = {
-    "change-mode" : "mode",
-    "adjust-charge-power-limit" : "limit",
-    "set-session-energy-limit" : "limit",
-    "change-randomised-delay-duration" : "delay",
-    "set-plug-and-go" : "enabled",
+    "change-mode": "mode",
+    "adjust-charge-power-limit": "limit",
+    "set-session-energy-limit": "limit",
+    "change-randomised-delay-duration": "delay",
+    "set-plug-and-go": "enabled",
 }
 
 # Unsupported commands
@@ -157,42 +153,37 @@ RETRIES = 5
 MAX_THREADS = 2
 
 attribute_table = {
-    "time" : {"friendly_name": "Time", "icon": "mdi:clock", "unit_of_measurement": "Time", "state_class": "timestamp"},
-    "status" : {"friendly_name": "Status", "icon": "mdi:alert", "unit_of_measurement": "Status"},
-    "solar_power" : {"friendly_name": "Solar Power", "icon": "mdi:solar-power", "unit_of_measurement": "W", "device_class": "power"},
-    "consumption_power" : {"friendly_name": "Consumption", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power"},
-    "battery_power" : {"friendly_name": "Battery Power", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
-    "battery_percent" : {"friendly_name": "Battery Percent", "icon": "mdi:battery", "unit_of_measurement": "%", "device_class": "battery"},
-    "battery_temperature" : {"friendly_name": "Battery Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature"},
-    "grid_power" : {"friendly_name": "Grid Power", "icon": "mdi:transmission-tower", "unit_of_measurement": "W", "device_class": "power"},
-    "grid_voltage" : {"friendly_name": "Grid Voltage", "icon": "mdi:transmission-tower", "unit_of_measurement": "V", "device_class": "voltage"},
-    "grid_current" : {"friendly_name": "Grid Current", "icon": "mdi:transmission-tower", "unit_of_measurement": "A", "device_class": "current"},
-    "grid_frequency" : {"friendly_name": "Grid Frequency", "icon": "mdi:transmission-tower", "unit_of_measurement": "Hz", "device_class": "frequency"},
-    "solar_today" : {"friendly_name": "Solar Today", "icon": "mdi:solar-power", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "consumption_today" : {"friendly_name": "Consumption Today", "icon": "mdi:flash", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "battery_charge_today" : {"friendly_name": "Battery Charge Today", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "battery_discharge_today" : {"friendly_name": "Battery Discharge Today", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "grid_import_today" : {"friendly_name": "Grid Import Today", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "grid_export_today" : {"friendly_name": "Grid Export Today", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "solar_total" : {"friendly_name": "Solar Total", "icon": "mdi:solar-power", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "consumption_total" : {"friendly_name": "Consumption Total", "icon": "mdi:flash", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "battery_charge_total" : {"friendly_name": "Battery Charge Total", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "battery_discharge_total" : {"friendly_name": "Battery Discharge Total", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "grid_import_total" : {"friendly_name": "Grid Import Total", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "grid_export_total" : {"friendly_name": "Grid Export Total", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy"},
-    "max_charge_rate" : {"friendly_name": "Max Charge Rate", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
-    "battery_size" : {"friendly_name": "Battery Size", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "time": {"friendly_name": "Time", "icon": "mdi:clock", "unit_of_measurement": "Time", "state_class": "timestamp"},
+    "status": {"friendly_name": "Status", "icon": "mdi:alert", "unit_of_measurement": "Status"},
+    "solar_power": {"friendly_name": "Solar Power", "icon": "mdi:solar-power", "unit_of_measurement": "W", "device_class": "power"},
+    "consumption_power": {"friendly_name": "Consumption", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power"},
+    "battery_power": {"friendly_name": "Battery Power", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
+    "battery_percent": {"friendly_name": "Battery Percent", "icon": "mdi:battery", "unit_of_measurement": "%", "device_class": "battery"},
+    "battery_temperature": {"friendly_name": "Battery Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature"},
+    "grid_power": {"friendly_name": "Grid Power", "icon": "mdi:transmission-tower", "unit_of_measurement": "W", "device_class": "power"},
+    "grid_voltage": {"friendly_name": "Grid Voltage", "icon": "mdi:transmission-tower", "unit_of_measurement": "V", "device_class": "voltage"},
+    "grid_current": {"friendly_name": "Grid Current", "icon": "mdi:transmission-tower", "unit_of_measurement": "A", "device_class": "current"},
+    "grid_frequency": {"friendly_name": "Grid Frequency", "icon": "mdi:transmission-tower", "unit_of_measurement": "Hz", "device_class": "frequency"},
+    "solar_today": {"friendly_name": "Solar Today", "icon": "mdi:solar-power", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "consumption_today": {"friendly_name": "Consumption Today", "icon": "mdi:flash", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "battery_charge_today": {"friendly_name": "Battery Charge Today", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "battery_discharge_today": {"friendly_name": "Battery Discharge Today", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "grid_import_today": {"friendly_name": "Grid Import Today", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "grid_export_today": {"friendly_name": "Grid Export Today", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "solar_total": {"friendly_name": "Solar Total", "icon": "mdi:solar-power", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "consumption_total": {"friendly_name": "Consumption Total", "icon": "mdi:flash", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "battery_charge_total": {"friendly_name": "Battery Charge Total", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "battery_discharge_total": {"friendly_name": "Battery Discharge Total", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "grid_import_total": {"friendly_name": "Grid Import Total", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "grid_export_total": {"friendly_name": "Grid Export Total", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "max_charge_rate": {"friendly_name": "Max Charge Rate", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
+    "battery_size": {"friendly_name": "Battery Size", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
 }
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
-OPTIONS_TIME = [
-    ((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M"))
-    for minute in range(0, 24 * 60, 1)
-]
-OPTIONS_TIME_FULL = [
-    ((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M") + ":00")
-    for minute in range(0, 24 * 60, 1)
-]
+OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(0, 24 * 60, 1)]
+OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M") + ":00") for minute in range(0, 24 * 60, 1)]
+
 
 class GECloudDirect:
     def __init__(self, base):
@@ -313,23 +304,23 @@ class GECloudDirect:
         """
         Publish the device info
 
-        {'serial': 'SA2243G277', 
-         'status': 'UNKNOWN', 
-         'last_online': '2025-02-09T17:46:32Z', 
-         'last_updated': '2025-02-09T17:46:32Z', 
-         'commission_date': '2022-12-14T00:00:00Z', 
-         'info': {'battery_type': 'LITHIUM', 'battery': {'nominal_capacity': 186, 'nominal_voltage': 51.2, 'depth_of_discharge': 1}, 'model': 'GIV-HY3.6', 'max_charge_rate': 2600}, 
-         'warranty': {'type': 'Standard Legacy', 'expiry_date': '2027-12-14T00:00:00Z'}, 
-         'firmware_version': {'ARM': 193, 'DSP': 190}, 
-         'connections': {'batteries': [{'module_number': 1, 'serial': 'DF2228G115', 'firmware_version': 3017, 'capacity': {'full': 184.82, 'design': 186}, 'cell_count': 16, 'has_usb': True, 'nominal_voltage': 51.2}], 'meters': []}, 
-         'flags': ['full-power-discharge-in-eco-mode']}        
+        {'serial': 'SA2243G277',
+         'status': 'UNKNOWN',
+         'last_online': '2025-02-09T17:46:32Z',
+         'last_updated': '2025-02-09T17:46:32Z',
+         'commission_date': '2022-12-14T00:00:00Z',
+         'info': {'battery_type': 'LITHIUM', 'battery': {'nominal_capacity': 186, 'nominal_voltage': 51.2, 'depth_of_discharge': 1}, 'model': 'GIV-HY3.6', 'max_charge_rate': 2600},
+         'warranty': {'type': 'Standard Legacy', 'expiry_date': '2027-12-14T00:00:00Z'},
+         'firmware_version': {'ARM': 193, 'DSP': 190},
+         'connections': {'batteries': [{'module_number': 1, 'serial': 'DF2228G115', 'firmware_version': 3017, 'capacity': {'full': 184.82, 'design': 186}, 'cell_count': 16, 'has_usb': True, 'nominal_voltage': 51.2}], 'meters': []},
+         'flags': ['full-power-discharge-in-eco-mode']}
         """
 
         for key in device_info:
             entity_name = "sensor.predbat_gecloud_" + device
             entity_name = entity_name.lower()
             attributes = {}
-            if key == 'info':
+            if key == "info":
                 info = device_info[key]
                 cap = info.get("battery", {}).get("nominal_capacity", None)
                 volt = info.get("battery", {}).get("nominal_voltage", None)
@@ -342,7 +333,7 @@ class GECloudDirect:
                         pass
                 print(info)
 
-                max_charge_rate = info.get('max_charge_rate', 0)
+                max_charge_rate = info.get("max_charge_rate", 0)
                 self.log("GECloud: Device {} battery capacity {} max charge rate {}".format(device, capacity, max_charge_rate))
 
                 self.base.set_state_wrapper(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}))
@@ -352,11 +343,11 @@ class GECloudDirect:
         """
         Publish the status
 
-        Status {'time': '2025-02-09T15:00:03Z', 'status': 'Normal', 'solar': 
-               {'power': 131, 'arrays': [{'array': 1, 'voltage': 251.7, 'current': 0.3, 'power': 77}, 
-               {'array': 2, 'voltage': 144.2, 'current': 0.3, 'power': 54}]}, 
-               'grid': {'voltage': 237.1, 'current': 4.2, 'power': 151, 'frequency': 50.05}, 
-               'battery': {'percent': 60, 'power': 902, 'temperature': 12}, 
+        Status {'time': '2025-02-09T15:00:03Z', 'status': 'Normal', 'solar':
+               {'power': 131, 'arrays': [{'array': 1, 'voltage': 251.7, 'current': 0.3, 'power': 77},
+               {'array': 2, 'voltage': 144.2, 'current': 0.3, 'power': 54}]},
+               'grid': {'voltage': 237.1, 'current': 4.2, 'power': 151, 'frequency': 50.05},
+               'battery': {'percent': 60, 'power': 902, 'temperature': 12},
                'inverter': {'temperature': 27.2, 'power': 1029, 'output_voltage': 237.8, 'output_frequency': 50.06, 'eps_power': 10}, 'consumption': 878}
 
         """
@@ -365,19 +356,19 @@ class GECloudDirect:
             entity_name = "sensor.predbat_gecloud_" + device
             entity_name = entity_name.lower()
             attributes = {}
-            if key == 'time':
+            if key == "time":
                 self.base.set_state_wrapper(entity_name + "_time", state=status[key], attributes=attribute_table.get("time", {}))
-            elif key == 'status':
+            elif key == "status":
                 self.base.set_state_wrapper(entity_name + "_status", state=status[key], attributes=attribute_table.get("status", {}))
-            elif key == 'solar':
+            elif key == "solar":
                 self.base.set_state_wrapper(entity_name + "_solar_power", state=status[key].get("power", 0), attributes=attribute_table.get("solar_power", {}))
-            elif key == 'consumption':
+            elif key == "consumption":
                 self.base.set_state_wrapper(entity_name + "_consumption_power", state=status[key], attributes=attribute_table.get("consumption_power", {}))
-            elif key == 'battery':
+            elif key == "battery":
                 self.base.set_state_wrapper(entity_name + "_battery_power", state=status[key].get("power", 0), attributes=attribute_table.get("battery_power", {}))
                 self.base.set_state_wrapper(entity_name + "_battery_percent", state=status[key].get("percent", 0), attributes=attribute_table.get("battery_percent", {}))
                 self.base.set_state_wrapper(entity_name + "_battery_temperature", state=status[key].get("temperature", 0), attributes=attribute_table.get("battery_temperature", {}))
-            elif key == 'grid':
+            elif key == "grid":
                 self.base.set_state_wrapper(entity_name + "_grid_power", state=status[key].get("power", 0), attributes=attribute_table.get("grid_power", {}))
                 self.base.set_state_wrapper(entity_name + "_grid_voltage", state=status[key].get("voltage", 0), attributes=attribute_table.get("grid_voltage", {}))
                 self.base.set_state_wrapper(entity_name + "_grid_current", state=status[key].get("current", 0), attributes=attribute_table.get("grid_current", {}))
@@ -387,52 +378,52 @@ class GECloudDirect:
         """
         Publish the meter data
 
-        {'time': '2025-02-09T15:20:10Z', 
-        'today':  
-            {'solar': 1.7, 
-             'grid': {'import': 36.9, 'export': 0.8}, 
-             'battery': {'charge': 10.2, 'discharge': 5.4}, 
-             'consumption': 32.4, 
+        {'time': '2025-02-09T15:20:10Z',
+        'today':
+            {'solar': 1.7,
+             'grid': {'import': 36.9, 'export': 0.8},
+             'battery': {'charge': 10.2, 'discharge': 5.4},
+             'consumption': 32.4,
              'ac_charge': 10.6
-             }, 
-        'total': 
-            {'solar': 6539.5, 
-             'grid': {'import': 19508.4, 'export': 3230.3}, 
-             'battery': {'charge': 7290.95, 'discharge': 7290.95}, 
-             'consumption': 21566.6, 
-             'ac_charge': 6350.8}, 
+             },
+        'total':
+            {'solar': 6539.5,
+             'grid': {'import': 19508.4, 'export': 3230.3},
+             'battery': {'charge': 7290.95, 'discharge': 7290.95},
+             'consumption': 21566.6,
+             'ac_charge': 6350.8},
         'is_metered': True}
 
         """
         for key in meter:
-            if key == 'today':
+            if key == "today":
                 for subkey in meter[key]:
                     entity_name = "sensor.predbat_gecloud_" + device
                     entity_name = entity_name.lower()
                     attributes = {}
-                    if subkey == 'solar':
+                    if subkey == "solar":
                         self.base.set_state_wrapper(entity_name + "_solar_today", state=meter[key][subkey], attributes=attribute_table.get("solar_today", {}))
-                    elif subkey == 'consumption':
+                    elif subkey == "consumption":
                         self.base.set_state_wrapper(entity_name + "_consumption_today", state=meter[key][subkey], attributes=attribute_table.get("consumption_today", {}))
-                    elif subkey == 'battery':
+                    elif subkey == "battery":
                         self.base.set_state_wrapper(entity_name + "_battery_charge_today", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_today", {}))
                         self.base.set_state_wrapper(entity_name + "_battery_discharge_today", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_today", {}))
-                    elif subkey == 'grid':
+                    elif subkey == "grid":
                         self.base.set_state_wrapper(entity_name + "_grid_import_today", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_today", {}))
                         self.base.set_state_wrapper(entity_name + "_grid_export_today", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_today", {}))
-            elif key == 'total':
+            elif key == "total":
                 for subkey in meter[key]:
                     entity_name = "sensor.predbat_gecloud_" + device
                     entity_name = entity_name.lower()
                     attributes = {}
-                    if subkey == 'solar':
+                    if subkey == "solar":
                         self.base.set_state_wrapper(entity_name + "_solar_total", state=meter[key][subkey], attributes=attribute_table.get("solar_total", {}))
-                    elif subkey == 'consumption':
+                    elif subkey == "consumption":
                         self.base.set_state_wrapper(entity_name + "_consumption_total", state=meter[key][subkey], attributes=attribute_table.get("consumption_total", {}))
-                    elif subkey == 'battery':
+                    elif subkey == "battery":
                         self.base.set_state_wrapper(entity_name + "_battery_charge_total", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_total", {}))
                         self.base.set_state_wrapper(entity_name + "_battery_discharge_total", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_total", {}))
-                    elif subkey == 'grid':
+                    elif subkey == "grid":
                         self.base.set_state_wrapper(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}))
                         self.base.set_state_wrapper(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}))
 
@@ -469,7 +460,7 @@ class GECloudDirect:
                 if validation_rule.startswith("boolean"):
                     is_switch = True
                 if validation_rule == "writeonly":
-                    is_switch = True            
+                    is_switch = True
 
                 if validation_rule.startswith("in:"):
                     is_select_options = True
@@ -504,7 +495,7 @@ class GECloudDirect:
                 entity_id = entity_id.lower()
                 attributes["options"] = options_text
                 self.base.set_state_wrapper(entity_id, state=value, attributes=attributes)
-                self.register_entity_map[entity_id] = {"device": device, "key": key, "time" : is_select_time}
+                self.register_entity_map[entity_id] = {"device": device, "key": key, "time": is_select_time}
             elif is_number:
                 entity_name = "number.predbat_gecloud_" + device
                 entity_id = entity_name + "_" + ha_name
@@ -527,34 +518,34 @@ class GECloudDirect:
             return
 
         num_inverters = len(devices)
-        self.base.args['num_inverters'] = num_inverters
-        self.base.args['inverter_type'] = ["GEC" for _ in range(num_inverters)]
-        self.base.args['load_today'] = ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in devices]
-        self.base.args['import_today'] = ["sensor.predbat_gecloud_" + device + "_grid_import_today" for device in devices]
-        self.base.args['export_today'] = ["sensor.predbat_gecloud_" + device + "_grid_export_today" for device in devices]
-        self.base.args['pv_today'] = ["sensor.predbat_gecloud_" + device + "_solar_today" for device in devices]
-        self.base.args['charge_rate'] = ["number.predbat_gecloud_" + device + "_battery_charge_power" for device in devices]
-        self.base.args['battery_rate_max'] = ["number.predbat_gecloud_" + device + "_max_charge_rate" for device in devices]
-        self.base.args['discharge_rate'] = ["number.predbat_gecloud_" + device + "_battery_discharge_power" for device in devices]
-        self.base.args['battery_power'] = ["sensor.predbat_gecloud_" + device + "_battery_power" for device in devices]
-        self.base.args['pv_power'] = ["sensor.predbat_gecloud_" + device + "_solar_power" for device in devices]
-        self.base.args['load_power'] = ["sensor.predbat_gecloud_" + device + "_consumption_power" for device in devices]
-        self.base.args['soc_percent'] = ["sensor.predbat_gecloud_" + device + "_battery_percent" for device in devices]
-        self.base.args['soc_max'] = ["sensor.predbat_gecloud_" + device + "_battery_size" for device in devices]
-        self.base.args['reserve'] = ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in devices]
-        self.base.args['inverter_time'] = ["sensor.predbat_gecloud_" + device + "_time" for device in devices]
-        self.base.args['charge_start_time'] = ["select.predbat_gecloud_" + device + "_charge_start_time_slot_1" for device in devices]
-        self.base.args['charge_end_time'] = ["select.predbat_gecloud_" + device + "_charge_end_time_slot_1" for device in devices]
-        self.base.args['charge_limit'] = ["number.predbat_gecloud_" + device + "_ac_charge_upper_percent_limit" for device in devices]
-        self.base.args['discharge_start_time'] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_start_time" for device in devices]
-        self.base.args['discharge_end_time'] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in devices]
-        self.base.args['scheduled_charge_enable'] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in devices]
-        self.base.args['scheduled_discharge_enable'] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in devices]
-        self.base.args['pause_mode'] = ["switch.predbat_gecloud_" + device + "_pause_battery" for device in devices]
-        self.base.args['pause_start_time'] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in devices]
-        self.base.args['pause_end_time'] = ["select.predbat_gecloud_" + device + "_pause_batter_end_time" for device in devices]
+        self.base.args["num_inverters"] = num_inverters
+        self.base.args["inverter_type"] = ["GEC" for _ in range(num_inverters)]
+        self.base.args["load_today"] = ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in devices]
+        self.base.args["import_today"] = ["sensor.predbat_gecloud_" + device + "_grid_import_today" for device in devices]
+        self.base.args["export_today"] = ["sensor.predbat_gecloud_" + device + "_grid_export_today" for device in devices]
+        self.base.args["pv_today"] = ["sensor.predbat_gecloud_" + device + "_solar_today" for device in devices]
+        self.base.args["charge_rate"] = ["number.predbat_gecloud_" + device + "_battery_charge_power" for device in devices]
+        self.base.args["battery_rate_max"] = ["number.predbat_gecloud_" + device + "_max_charge_rate" for device in devices]
+        self.base.args["discharge_rate"] = ["number.predbat_gecloud_" + device + "_battery_discharge_power" for device in devices]
+        self.base.args["battery_power"] = ["sensor.predbat_gecloud_" + device + "_battery_power" for device in devices]
+        self.base.args["pv_power"] = ["sensor.predbat_gecloud_" + device + "_solar_power" for device in devices]
+        self.base.args["load_power"] = ["sensor.predbat_gecloud_" + device + "_consumption_power" for device in devices]
+        self.base.args["soc_percent"] = ["sensor.predbat_gecloud_" + device + "_battery_percent" for device in devices]
+        self.base.args["soc_max"] = ["sensor.predbat_gecloud_" + device + "_battery_size" for device in devices]
+        self.base.args["reserve"] = ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in devices]
+        self.base.args["inverter_time"] = ["sensor.predbat_gecloud_" + device + "_time" for device in devices]
+        self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + device + "_charge_start_time_slot_1" for device in devices]
+        self.base.args["charge_end_time"] = ["select.predbat_gecloud_" + device + "_charge_end_time_slot_1" for device in devices]
+        self.base.args["charge_limit"] = ["number.predbat_gecloud_" + device + "_ac_charge_upper_percent_limit" for device in devices]
+        self.base.args["discharge_start_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_start_time" for device in devices]
+        self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in devices]
+        self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in devices]
+        self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in devices]
+        self.base.args["pause_mode"] = ["switch.predbat_gecloud_" + device + "_pause_battery" for device in devices]
+        self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in devices]
+        self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_batter_end_time" for device in devices]
         self.log("GECloud: Automatic configuration complete")
- 
+
     async def start(self):
         """
         Start the client
@@ -589,7 +580,7 @@ class GECloudDirect:
 
     async def stop(self):
         self.stop_cloud = True
-    
+
     async def async_send_evc_command(self, uuid, command, params):
         """
         Send a command to the EVC
@@ -602,11 +593,7 @@ class GECloudDirect:
                 post=True,
                 datain=params,
             )
-            self.log(
-                "Write EVC command {} params {} returns {}".format(
-                    command, params, data
-                )
-            )
+            self.log("Write EVC command {} params {} returns {}".format(command, params, data))
             if data and "success" in data:
                 if not data["success"]:
                     data = None
@@ -614,9 +601,7 @@ class GECloudDirect:
                 break
             await asyncio.sleep(1 * (retry + 1))
         if data is None:
-            self.log(
-                "Error: GECloud: Failed to send EVC command {} params {}".format(command, params)
-            )
+            self.log("Error: GECloud: Failed to send EVC command {} params {}".format(command, params))
         return data
 
     async def async_read_inverter_setting(self, serial, setting_id):
@@ -624,9 +609,7 @@ class GECloudDirect:
         Read a setting from the inverter
         """
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(
-                GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True
-            )
+            data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
             # -1 is a bad value
             if data and data.get("value", -1) == -1:
                 data = None
@@ -660,9 +643,7 @@ class GECloudDirect:
                 break
             await asyncio.sleep(1 * (retry + 1))
         if data is None:
-            self.log(
-                "Warn: GECloud: Failed to write setting id {} value {}".format(setting_id, value)
-            )
+            self.log("Warn: GECloud: Failed to write setting id {} value {}".format(setting_id, value))
         return data
 
     async def async_get_inverter_settings(self, serial, first=False, previous={}):
@@ -670,9 +651,7 @@ class GECloudDirect:
         Get settings for account
         """
         if serial not in self.register_list:
-            self.register_list[serial] = await self.async_get_inverter_data_retry(
-                GE_API_INVERTER_SETTINGS, serial
-            )
+            self.register_list[serial] = await self.async_get_inverter_data_retry(GE_API_INVERTER_SETTINGS, serial)
         results = previous.copy()
 
         if serial in self.register_list:
@@ -711,11 +690,7 @@ class GECloudDirect:
                 while len(futures) < MAX_THREADS and pending:
                     future = pending.pop(0)
                     if not first:
-                        future["future"] = loop.create_task(
-                            self.async_read_inverter_setting(
-                                future["serial"], future["sid"]
-                            )
-                        )
+                        future["future"] = loop.create_task(self.async_read_inverter_setting(future["serial"], future["sid"]))
                     futures.append(future)
                 if futures:
                     future = futures.pop(0)
@@ -740,7 +715,7 @@ class GECloudDirect:
                 else:
                     value = None
 
-                if value is None and sid in results:    
+                if value is None and sid in results:
                     # Keep previous failure on read failure
                     pass
                 else:
@@ -756,9 +731,7 @@ class GECloudDirect:
         """
         Get smart device data points
         """
-        data = await self.async_get_inverter_data_retry(
-            GE_API_SMART_DEVICE_DATA, uuid=uuid
-        )
+        data = await self.async_get_inverter_data_retry(GE_API_SMART_DEVICE_DATA, uuid=uuid)
         for point in data:
             self.log("Smart device point {}".format(point))
             return point
@@ -770,8 +743,8 @@ class GECloudDirect:
         """
         now = datetime.now(timezone.utc)
         start = now - timedelta(hours=24)
-        start_time=start.strftime("%Y-%m-%dT%H:%M:%SZ")
-        end_time=now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_time = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         data = await self.async_get_inverter_data_retry(GE_API_EVC_SESSIONS, uuid=uuid, start_time=start_time, end_time=end_time)
         if isinstance(data, list):
@@ -784,12 +757,10 @@ class GECloudDirect:
         """
         now = datetime.now(timezone.utc)
         start = now - timedelta(minutes=10)
-        start_time=start.strftime("%Y-%m-%dT%H:%M:%SZ")
-        end_time=now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_time = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        data = await self.async_get_inverter_data_retry(
-            GE_API_EVC_DEVICE_DATA, uuid=uuid, meter_ids=str(EVC_METER_CHARGER), start_time=start_time, end_time=end_time
-        )
+        data = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICE_DATA, uuid=uuid, meter_ids=str(EVC_METER_CHARGER), start_time=start_time, end_time=end_time)
         result = {}
         if not data:
             return result
@@ -810,9 +781,7 @@ class GECloudDirect:
         """
         Get smart device
         """
-        device = await self.async_get_inverter_data_retry(
-            GE_API_SMART_DEVICE, uuid=uuid
-        )
+        device = await self.async_get_inverter_data_retry(GE_API_SMART_DEVICE, uuid=uuid)
         self.log("Device {}".format(device))
         if device:
             uuid = device.get("uuid", None)
@@ -862,15 +831,7 @@ class GECloudDirect:
             went_offline_at = device.get("went_offline_at", None)
             status = device.get("status", None)
             type = device.get("type", None)
-            return {
-                "uuid": uuid,
-                "alias": alias,
-                "serial_number": serial_number,
-                "status": status,
-                "online": online,
-                "type": type,
-                "went_offline_at": went_offline_at
-            }
+            return {"uuid": uuid, "alias": alias, "serial_number": serial_number, "status": status, "online": online, "type": type, "went_offline_at": went_offline_at}
         return {}
 
     async def async_get_smart_devices(self):
@@ -899,9 +860,7 @@ class GECloudDirect:
                 uuid = device.get("uuid", None)
                 other_data = device.get("other_data", {})
                 alias = device.get("alias", None)
-                devices.append(
-                    {"uuid": uuid, "alias": alias}
-                )
+                devices.append({"uuid": uuid, "alias": alias})
         return devices
 
     async def async_get_device_info(self, serial):
@@ -947,16 +906,12 @@ class GECloudDirect:
         meter = await self.async_get_inverter_data_retry(GE_API_INVERTER_METER, serial)
         return meter
 
-    async def async_get_inverter_data_retry(
-        self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command=""
-    ):
+    async def async_get_inverter_data_retry(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command=""):
         """
         Retry API call
         """
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(
-                endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command
-            )
+            data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command)
             if data is not None:
                 break
             await asyncio.sleep(1 * (retry + 1))
@@ -964,15 +919,11 @@ class GECloudDirect:
             self.log("Warn: GECloud: Failed to get data from {}".format(endpoint))
         return data
 
-    async def async_get_inverter_data(
-        self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command=""
-    ):
+    async def async_get_inverter_data(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command=""):
         """
         Basic API call to GE Cloud
         """
-        url = GE_API_URL + endpoint.format(
-            inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command
-        )
+        url = GE_API_URL + endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
         headers = {
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
@@ -980,17 +931,11 @@ class GECloudDirect:
         }
         if post:
             if datain:
-                response = await asyncio.to_thread(
-                    requests.post, url, headers=headers, json=datain, timeout=TIMEOUT
-                )
+                response = await asyncio.to_thread(requests.post, url, headers=headers, json=datain, timeout=TIMEOUT)
             else:
-                response = await asyncio.to_thread(
-                    requests.post, url, headers=headers, timeout=TIMEOUT
-                )
+                response = await asyncio.to_thread(requests.post, url, headers=headers, timeout=TIMEOUT)
         else:
-            response = await asyncio.to_thread(
-                requests.get, url, headers=headers, timeout=TIMEOUT
-            )
+            response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=TIMEOUT)
         try:
             data = response.json()
         except requests.exceptions.JSONDecodeError:
