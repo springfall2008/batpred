@@ -108,7 +108,7 @@ pred_bat:
 
   # Solcast cloud interface, set this or the local interface below
   solcast_host: 'https://api.solcast.com.au/'
-  solcast_api_key: 'N3yjTxS7NHCmNdOAMEtgp4eA3so45YbQ'
+  solcast_api_key: 'xxxx'
   solcast_poll_hours: 6.2
 
   # car_charging_energy defines an incrementing sensor which measures the charge added to your car
