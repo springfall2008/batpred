@@ -68,6 +68,7 @@ Energidata
 Energidataservice
 energydataservice
 epod
+euids
 evse
 feedin
 fentry
@@ -107,6 +108,7 @@ idag
 idetails
 iflux
 inday
+intelligentdevice
 invbatpower
 invname
 isort
@@ -130,6 +132,7 @@ mdlrc
 measurand
 Meteo
 Meteoalarm
+meterpoint
 metricb
 metricmid
 minb
@@ -139,6 +142,8 @@ Mixergy
 mkdocs
 Modbus
 Mosquitto
+mpan
+mprn
 mqtt
 mult
 myenergi
@@ -152,6 +157,7 @@ nord
 Nordpool
 nosc
 nrgheat
+octo
 octoplus
 octopoints
 Ohme

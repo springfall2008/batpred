@@ -305,6 +305,7 @@ pred_bat:
     - 'latched'
     - 'locked'
     - 'plugged in'
+    - 'waiting'
 
   # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
   # The car charging now can be set to a sensor to indicate the car is charging and to plan

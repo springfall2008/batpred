@@ -41,6 +41,7 @@ from config import INVERTER_DEF
 from compare import Compare
 from web import WebInterface
 from gecloud import GECloudDirect
+from octopus import OctopusAPI
 
 # Import MagicMock
 from unittest.mock import MagicMock
@@ -8007,6 +8008,35 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
     return failed
 
 
+def run_test_octopus_api(my_predbat, octopus_api, octopus_account):
+    """
+    Run the Octopus API tests
+    """
+    print("Test Octopus API")
+    failed = False
+
+    octopus_api = OctopusAPI(octopus_api, octopus_account, my_predbat.log)
+    my_predbat.create_task(octopus_api.start())
+    time.sleep(3)
+
+    planned_dispatches = octopus_api.get_intelligent_planned_dispatches()
+    completed_dispatches = octopus_api.get_intelligent_completed_dispatches()
+    vehicle = octopus_api.get_intelligent_vehicle()
+    available_events, joined_events = octopus_api.get_saving_session_data()
+    print("Planned dispatches: {}".format(planned_dispatches))
+    print("Completed dispatches: {}".format(completed_dispatches))
+    print("Vehicle: {}".format(vehicle))
+    print("Saving session available {}".format(available_events))
+    print("Saving session joined {}".format(joined_events))
+    octopus_api.join_saving_session_event("EVENT_3_210125")
+    time.sleep(10)
+    octopus_api.stop()
+    time.sleep(1)
+
+    failed = 1
+    return failed
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
@@ -8014,6 +8044,8 @@ def main():
     parser.add_argument("--quick", action="store_true", help="Run quick tests")
     parser.add_argument("--compare", action="store_true", help="Run compare")
     parser.add_argument("--gecloud", action="store_true", help="Run tests for GivEnergy Cloud")
+    parser.add_argument("--octopus_api", action="store", help="Run Octopus API tests with given token")
+    parser.add_argument("--octopus_account", action="store", help="Octopus API account ID")
     args = parser.parse_args()
 
     print("**** Starting Predbat tests ****")
@@ -8038,6 +8070,10 @@ def main():
 
     if not failed and args.gecloud:
         failed |= run_test_ge_cloud(my_predbat)
+        return failed
+
+    if not failed and args.octopus_api:
+        failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
 
     if not failed:

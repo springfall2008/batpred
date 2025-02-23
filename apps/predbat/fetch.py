@@ -866,6 +866,9 @@ class Fetch:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
             self.rate_import = self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False))
+        elif self.octopus_api_direct:
+            self.log("Downloading rates directly from Octopus API")
+            self.rate_import = self.get_octopus_direct(getImport=True)
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
@@ -926,21 +929,28 @@ class Fetch:
         # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
-        # Octopus intelligent slots
-        if "octopus_intelligent_slot" in self.args:
+        if (self.octopus_api_direct and self.octopus_api_direct.get_intelligent_device()) or (not self.octopus_api_direct and ("octopus_intelligent_slot" in self.args)):
             completed = []
             planned = []
             vehicle = {}
             vehicle_pref = {}
-            entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
-            try:
-                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
-                planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
-                vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
-                vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
-            except (ValueError, TypeError):
-                self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
-                self.record_status(message="Error: octopus_intelligent_slot not set correctly", had_errors=True)
+
+            if self.octopus_api_direct:
+                completed = self.octopus_api_direct.get_intelligent_completed_dispatches()
+                planned = self.octopus_api_direct.get_intelligent_planned_dispatches()
+                vehicle = self.octopus_api_direct.get_intelligent_vehicle()
+                vehicle_pref = vehicle
+                self.log("Octopus API planned and completed slots: {} - {}".format(completed, planned))
+            else:
+                entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
+                try:
+                    completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
+                    planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
+                    vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
+                    vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
+                except (ValueError, TypeError):
+                    self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
+                    self.record_status(message="Error: octopus_intelligent_slot not set correctly", had_errors=True)
 
             # Completed and planned slots
             if completed:
@@ -955,7 +965,7 @@ class Fetch:
 
             if self.num_cars >= 1:
                 # Extract vehicle data if we can get it
-                if vehicle:
+                if vehicle or self.octopus_api_direct:
                     self.car_charging_battery_size[0] = float(vehicle.get("vehicleBatterySizeInKwh", self.car_charging_battery_size[0]))
                     self.car_charging_rate[0] = float(vehicle.get("chargePointPowerInKw", self.car_charging_rate[0]))
                 else:
@@ -970,19 +980,20 @@ class Fetch:
                 self.car_charging_limit[0] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0)
 
                 # Extract vehicle preference if we can get it
-                if vehicle_pref and self.octopus_intelligent_charging:
+                if (vehicle_pref or self.octopus_api_direct) and self.octopus_intelligent_charging:
                     octopus_limit = max(float(vehicle_pref.get("weekdayTargetSoc", 100)), float(vehicle_pref.get("weekendTargetSoc", 100)))
                     octopus_ready_time = vehicle_pref.get("weekdayTargetTime", None)
                     if not octopus_ready_time:
                         octopus_ready_time = self.car_charging_plan_time[0]
                     else:
-                        octopus_ready_time += ":00"
+                        if isinstance(octopus_ready_time, str) and len(octopus_ready_time) == 5:
+                            octopus_ready_time += ":00"
                     self.car_charging_plan_time[0] = octopus_ready_time
                     octopus_limit = dp3(octopus_limit * self.car_charging_battery_size[0] / 100.0)
                     self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
                 elif self.octopus_intelligent_charging:
                     octopus_ready_time = self.get_arg("octopus_ready_time", None)
-                    if octopus_ready_time is not None and len(octopus_ready_time) == 5:
+                    if isinstance(octopus_ready_time, str) and len(octopus_ready_time) == 5:
                         octopus_ready_time += ":00"
                     octopus_limit = self.get_arg("octopus_charge_limit", None)
                     if octopus_limit:
@@ -1030,6 +1041,9 @@ class Fetch:
             # Fixed URL for rate export
             self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
             self.rate_export = self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False))
+        elif self.octopus_api_direct:
+            self.log("Downloading rates directly from Octopus API")
+            self.rate_export = self.get_octopus_direct(getImport=False)
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
