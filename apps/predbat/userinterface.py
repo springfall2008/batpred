@@ -225,7 +225,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
+            if 'predbat_gecloud_' in entity_id:
                 if self.ge_cloud_direct:
                     await self.ge_cloud_direct.select_event(entity_id, value)
 
@@ -279,7 +279,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
+            if 'predbat_gecloud_' in entity_id:
                 if self.ge_cloud_direct:
                     await self.ge_cloud_direct.number_event(entity_id, value)
 
@@ -319,14 +319,13 @@ class UserInterface:
         service_data = data.get("service_data", {})
         entities = service_data.get("entity_id", [])
 
+
         # Can be a string or an array
         if isinstance(entities, str):
             entities = [entities]
-
-        self.log("Switch event: {} = {}".format(entities, service))
-
+        
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
+            if 'predbat_gecloud_' in entity_id:
                 if self.ge_cloud_direct:
                     await self.ge_cloud_direct.switch_event(entity_id, service)
 
@@ -749,10 +748,9 @@ class UserInterface:
         """
         Trigger a callback for a service via HA Interface
         """
-        self.log("Trigger callback for {}".format(service_data))
         for item in self.EVENT_LISTEN_LIST:
             if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
-                self.log("Trigger callback for {} {}".format(item["domain"], item["service"]))
+                #self.log("Trigger callback for {} {}".format(item["domain"], item["service"]))
                 await item["callback"](item["service"], service_data, None)
 
     def define_service_list(self):
