@@ -361,7 +361,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0,required_unit=None):
         """
         Download one or more entities for load data
         """
@@ -940,6 +940,7 @@ class Fetch:
                 planned = self.octopus_api_direct.get_intelligent_planned_dispatches()
                 vehicle = self.octopus_api_direct.get_intelligent_vehicle()
                 vehicle_pref = vehicle
+                self.log("Octopus API planned and completed slots: {} - {}".format(completed, planned))
             else:
                 entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
                 try:
@@ -1480,7 +1481,7 @@ class Fetch:
                             while minute_index < max_minute:
                                 if not date or (minute_index >= start_minutes and minute_index < end_minutes):
                                     current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
-                                    if not day_of_week or (current_day_of_week in day_of_week):
+                                    if not day_of_week or (current_day_of_week in day_of_week):    
                                         if rate_increment:
                                             rates[minute_index] = rates.get(minute_index, 0.0) + rate
                                             rate_replicate[minute_index] = "increment"
