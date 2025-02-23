@@ -174,7 +174,7 @@ pred_bat:
   #  - 15
 
   # When true only one car can charge at once, when False multiple cars can charge at once
-  #car_charging_exclusive: 
+  #car_charging_exclusive:
   #  - True
 
   octopus_saving_session_octopoints_per_penny: 8
@@ -207,7 +207,7 @@ pred_bat:
   #  -  start: "05:30:00"
   #     end: "23:30:00"
   #     rate: 26.78
-  
+
   #rates_export:
   #  -  rate: 15.0
 
@@ -276,7 +276,7 @@ pred_bat:
 
   # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
-  battery_scaling: 
+  battery_scaling:
     - 1.0
 
   # Can be used to scale import and export data, used for workarounds
