@@ -15,12 +15,12 @@ import asyncio
 import os
 import re
 from datetime import datetime, timedelta
+import json
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 
 TIME_FORMAT_DAILY = "%Y-%m-%d"
-
 
 class WebInterface:
     def __init__(self, base) -> None:
@@ -36,6 +36,7 @@ class WebInterface:
         self.cost_yesterday_car_hist = {}
         self.cost_yesterday_no_car = {}
         self.web_port = self.base.get_arg("web_port", 5052)
+
 
     def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, print=False, daily=False, offset_days=0, first=True, pounds=False):
         results = {}
@@ -74,7 +75,7 @@ class WebInterface:
             try:
                 state = float(state) * scale
                 if pounds:
-                    state = dp2(state / 100)
+                    state = dp2(state/100)
                 last_updated_time = item[last_updated_key]
                 last_updated_stamp = str2time(last_updated_time)
             except (ValueError, TypeError):
@@ -121,10 +122,10 @@ class WebInterface:
         self.cost_yesterday_car_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
         self.cost_yesterday_no_car = self.subtract_daily(self.cost_yesterday_hist, self.cost_yesterday_car_hist)
 
-        compare_list = self.base.get_arg("compare_list", [])
+        compare_list  = self.base.get_arg('compare_list', [])
         for item in compare_list:
             id = item.get("id", None)
-            if id and self.base.comparison:
+            if id and self.base.comparison:                
                 self.compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
@@ -149,6 +150,10 @@ class WebInterface:
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
+        app.router.add_get("/api/state", self.html_api_get_state)
+        app.router.add_post("/api/state", self.html_api_post_state)
+        app.router.add_post("/api/service", self.html_api_post_service)
+
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self.web_port)
@@ -231,7 +236,7 @@ class WebInterface:
         """
         Return the HTML header for a page
         """
-        text = '<!doctype html><html><head><meta charset="utf-8"><title>Predbat Web Interface</title>'
+        text = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Predbat Web Interface</title>"
 
         text += """
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
@@ -345,7 +350,7 @@ class WebInterface:
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname='chart', daily_chart=True):
         """
         Render a chart
         """
@@ -406,7 +411,7 @@ var options = {
     start: 'day'
   },
 """
-
+            
         text += "  series: [\n"
         first = True
         opacity = []
@@ -487,6 +492,46 @@ var options = {
         text += "chart.render();\n"
         text += "</script>\n"
         return text
+
+    async def html_api_post_state(self, request):
+        """
+        JSON API
+        """
+        json_data = await request.json()
+        entity_id = json.get("entity_id", None)
+        state = json_data.get("state", None)
+        attributes = json_data.get("attributes", {})
+        if entity_id:
+            self.base.set_state_wrapper(entity_id, state, attributes=attributes)
+            return web.Response(content_type="application/json", text='{"result": "ok"}')
+        else:
+            return web.Response(content_type="application/json", text='{"result": "error"}')
+
+    async def html_api_get_state(self, request):
+        """
+        JSON API
+        """
+        args = request.query
+        state_data = self.base.get_state_wrapper()
+        if "entity_id" in args:
+            text = json.dumps(state_data.get(args["entity_id"], {}))
+            return web.Response(content_type="application/json", text=text)
+        else:
+            text = json.dumps(state_data)
+            return web.Response(content_type="application/json", text=text)
+
+    async def html_api_post_service(self, request):
+        """
+        JSON API
+        """
+        json_data = await request.json()
+        service = json_data.get("service", None)
+        service_data = json_data.get("data", {})
+        if service:
+            result = self.base.call_service_wrapper(service, **service_data)
+            return web.Response(content_type="application/json", text=json.dumps(result))
+        else:
+            return web.Response(content_type="application/json", text='{"result": "error"}')
 
     async def html_plan(self, request):
         """
@@ -850,7 +895,7 @@ var options = {
         args = request.query
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
-        text = self.get_header("Predbat Charts", refresh=60 * 5)
+        text = self.get_header("Predbat Charts", refresh=60*5)
         text += "<body>\n"
         text += "<h2>{} Chart</h2>\n".format(chart)
         text += '- <a href="./charts?chart=Battery">Battery</a> '
@@ -871,7 +916,7 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./apps"
-        text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
+        text = self.get_header("Predbat Apps.yaml", refresh=60*5)
         text += "<body>\n"
         text += "<a href='./debug_apps'>apps.yaml</a><br>\n"
         text += "<table>\n"
@@ -996,7 +1041,7 @@ var options = {
         """
         self.default_page = "./compare"
 
-        text = self.get_header("Predbat Compare", refresh=5 * 60)
+        text = self.get_header("Predbat Compare", refresh=5*60)
 
         text += "<body>\n"
         text += '<form class="form-inline" action="./compare" method="post" enctype="multipart/form-data" id="compareform">\n'
@@ -1018,7 +1063,7 @@ var options = {
             text += "<th>Carbon</th>"
         text += "<th>Result</th>\n"
 
-        compare_list = self.base.get_arg("compare_list", [])
+        compare_list  = self.base.get_arg('compare_list', [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -1055,7 +1100,7 @@ var options = {
                 self.compare_hist[id]["metric"][stamp] = dp2(metric / 100)
                 self.compare_hist[id]["cost"][stamp] = dp2(cost / 100.0)
 
-            selected = '<font style="background-color:#FFaaaa;>"> Best </font>' if best else ""
+            selected = '<font style="background-color:#FFaaaa;>"> Best </font>' if best else ''
             if existing_tariff:
                 selected += '<font style="background-color:#aaFFaa;"> Existing </font>'
 
@@ -1078,10 +1123,10 @@ var options = {
         for compare in compare_list:
             name = compare.get("name", "")
             id = compare.get("id", "")
-            series_data.append({"name": name, "data": self.compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
-        series_data.append({"name": "Actual", "data": self.cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
+            series_data.append({"name" : name, "data" : self.compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
+        series_data.append({"name" : "Actual", "data" : self.cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
         if self.base.car_charging_hold:
-            series_data.append({"name": "Actual (no car)", "data": self.cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
+            series_data.append({"name" : "Actual (no car)", "data" : self.cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
 
         now_str = self.base.now_utc.strftime(TIME_FORMAT)
 
