@@ -913,8 +913,12 @@ class Inverter:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
 
             # Track charge start/end
-            self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
-            self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
+            if charge_start_time and charge_end_time:
+                self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
+                self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
+            else:
+                self.track_charge_start = "00:00:00"
+                self.track_charge_end = "00:00:00"
 
             # Reverse clock skew
             charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
@@ -1144,7 +1148,7 @@ class Inverter:
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power)  # Reset discharge power too
+                    self.set_current_from_power("discharge", discharge_power) # Reset discharge power too
             elif self.soc_percent > float(current_charge_limit):
                 # If current SOC is above Target SOC, turn Grid Charging off
                 self.alt_charge_discharge_enable("charge", False)

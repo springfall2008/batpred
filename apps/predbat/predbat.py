@@ -38,7 +38,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.15.2"
+THIS_VERSION = "v8.16.0"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py"]
@@ -84,7 +84,6 @@ from output import Output
 from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
-
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
@@ -793,7 +792,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.save_current_config()
 
         if self.comparison:
-            if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
+            if ((scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False)):
                 # Compare tariffs either when triggered or daily at midnight
                 self.expose_config("compare_active", True)
                 self.comparison.run_all()
@@ -862,7 +861,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Setup the app, called once each time the app starts
         """
         self.pool = None
-        if "hass_api_version" not in self.__dict__:
+        if 'hass_api_version' not in self.__dict__:
             self.hass_api_version = 1
         self.log("Predbat: Startup {} hass version {}".format(__name__, self.hass_api_version))
         self.update_time(print=False)
@@ -978,8 +977,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         Called every 15 seconds
         """
-        if not self.ha_interface or not self.ha_interface.websocket_active:
-            self.log("Error: HA interface not active")
+        if not self.ha_interface or (not self.ha_interface.websocket_active and not self.ha_interface.db_primary):
+            self.log("Error: HA interface not active and db_primary is {}".format(self.ha_interface.db_primary))
             self.fatal_error = True
             raise Exception("HA interface not active")
 
@@ -1032,7 +1031,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         Called every N minutes
         """
-        if not self.ha_interface or not self.ha_interface.websocket_active:
+        if not self.ha_interface or (not self.ha_interface.websocket_active and not self.ha_interface.db_primary):
             self.log("Error: HA interface not active")
             self.fatal_error = True
             raise Exception("HA interface not active")

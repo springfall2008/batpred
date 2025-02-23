@@ -101,13 +101,13 @@ class HAInterface:
                 self.websocket_active = True
                 self.log("Info: Web Socket task started")
 
-                if self.db_enable:
-                    # Open the SQL Lite database called predbat.db
-                    self.log("Info: Opening database")
-                    self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
-                    self.db_cursor = self.db.cursor()
-                    self.log("Info: Clean data older than {} days".format(self.db_days))
-                    self.cleanup_db()
+        if self.db_enable:
+            # Open the SQL Lite database called predbat.db
+            self.log("Info: Opening database")
+            self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
+            self.db_cursor = self.db.cursor()
+            self.log("Info: Clean data older than {} days".format(self.db_days))
+            self.cleanup_db()
 
     def get_slug(self):
         """
@@ -373,7 +373,7 @@ class HAInterface:
         if "state" in item:
             state = item["state"]
             self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
-            if not nodb and self.db_mirror_ha and (entity_id in self.db_mirror_list):
+            if not nodb and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
                 self.db_mirror_updates.append({"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": self.base.now_utc_real})
 
     def db_tick(self):
@@ -521,7 +521,7 @@ class HAInterface:
         now_utc_txt = now_utc.strftime(TIME_FORMAT_DB)
 
         item = {"last_changed": now_utc_txt, "state": state, "attributes": attributes}
-        self.update_state_item(item=item, entity_id=entity_id, nodb=True)
+        self.update_state_item(item=item, entity_id=entity_id, nodb=False)
         return
 
     def set_state_db(self, entity_id, state, attributes, timestamp=None):
@@ -670,7 +670,12 @@ class HAInterface:
         for key in kwargs:
             data[key] = kwargs[key]
         domain, service = service.split("/")
-        return self.call_service_websocket_command(domain, service, data)
+        if self.websocket_active:
+            return self.call_service_websocket_command(domain, service, data)
+        else:
+            # Need to feed this back into the database as a direct action
+            self.log("Warn: Call service {} not implemented".format(service))
+            return {}
 
     def api_call(self, endpoint, data_in=None, post=False, core=True):
         """
