@@ -388,7 +388,7 @@ class HAInterface:
             self.db_mirror_updates = []
             for item in mirror_list:
                 self.set_state_db(item["entity_id"], item["state"], item["attributes"], timestamp=item["timestamp"])
-        
+
     def update_states_db(self):
         """
         Update the state data from the SQL Lite database
