@@ -30,6 +30,28 @@ from config import (
     CONFIG_ROOTS,
 )
 
+DEBUG_EXCLUDE_LIST = [
+    "pool", 
+    "ha_interface", 
+    "web_interface", 
+    "web_interface_task", 
+    "prediction", 
+    "logfile", 
+    "predheat", 
+    "inverters",
+    "run_list", 
+    "threads", 
+    "EVENT_LISTEN_LIST", 
+    "local_tz", 
+    "CONFIG_ITEMS", 
+    "config_index", 
+    "comparison",
+    "octopus_api_direct",
+    "octopus_api_direct_task",
+    "ge_cloud_direct",
+    "ge_cloud_direct_task"
+]
+
 
 class UserInterface:
     def call_notify(self, message):
@@ -644,7 +666,7 @@ class UserInterface:
                 if (
                     (key.startswith("db"))
                     or ("_key" in key)
-                    or key in ["pool", "ha_interface", "web_interface", "web_interface_task", "prediction", "logfile", "predheat", "inverters", "run_list", "threads", "EVENT_LISTEN_LIST", "local_tz", "CONFIG_ITEMS", "config_index", "comparison"]
+                    or key in DEBUG_EXCLUDE_LIST
                 ):
                     pass
                 else:
