@@ -213,22 +213,38 @@ class WebInterface:
         text += "</table>\n"
         text += "<br>\n"
 
-        text += "<h2>Entities</h2>\n"
-        text += "<table>\n"
-        text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
+        # Form the app list
+        app_list = ["predbat"]
+        for entity_id in self.base.dashboard_index_app.keys():
+            app = self.base.dashboard_index_app[entity_id]
+            if app not in app_list:
+                app_list.append(app)
 
-        for entity in self.base.dashboard_index:
-            state = self.base.dashboard_values.get(entity, {}).get("state", None)
-            attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
-            unit_of_measurement = attributes.get("unit_of_measurement", "")
-            icon = self.icon2html(attributes.get("icon", ""))
-            if unit_of_measurement is None:
-                unit_of_measurement = ""
-            friendly_name = attributes.get("friendly_name", "")
-            if not state:
-                state = "None"
-            text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
-        text += "</table>\n"
+        # Display per app
+        for app in app_list:
+            text += "<h2>{} Entities</h2>\n".format(app)
+            text += "<table>\n"
+            text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
+            if app == "predbat":
+                entity_list = self.base.dashboard_index
+            else:
+                entity_list = []
+                for entity_id in self.base.dashboard_index_app.keys():
+                    if self.base.dashboard_index_app[entity_id] == app:
+                        entity_list.append(entity_id)
+
+            for entity in entity_list:
+                state = self.base.dashboard_values.get(entity, {}).get("state", None)
+                attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
+                unit_of_measurement = attributes.get("unit_of_measurement", "")
+                icon = self.icon2html(attributes.get("icon", ""))
+                if unit_of_measurement is None:
+                    unit_of_measurement = ""
+                friendly_name = attributes.get("friendly_name", "")
+                if not state:
+                    state = "None"
+                text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
+            text += "</table>\n"
 
         return text
 

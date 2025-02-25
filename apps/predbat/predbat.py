@@ -315,6 +315,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.manual_api = []
         self.config_index = {}
         self.dashboard_index = []
+        self.dashboard_index_app = {}
         self.dashboard_values = {}
         self.prefix = self.args.get("prefix", "predbat")
         self.current_status = None

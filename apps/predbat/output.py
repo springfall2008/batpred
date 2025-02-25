@@ -2316,13 +2316,16 @@ class Output:
         txt += " ]"
         return txt
 
-    def dashboard_item(self, entity, state, attributes):
+    def dashboard_item(self, entity, state, attributes, app=None):
         """
         Publish state and log dashboard item
         """
         self.set_state_wrapper(entity_id=entity, state=state, attributes=attributes)
-        if entity not in self.dashboard_index:
-            self.dashboard_index.append(entity)
+        if app:
+            self.dashboard_index_app[entity] = app
+        else:
+            if entity not in self.dashboard_index:
+                self.dashboard_index.append(entity)
         self.dashboard_values[entity] = {}
         self.dashboard_values[entity]["state"] = state
         self.dashboard_values[entity]["attributes"] = attributes

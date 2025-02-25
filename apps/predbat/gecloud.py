@@ -351,8 +351,8 @@ class GECloudDirect:
                 max_charge_rate = info.get("max_charge_rate", 0)
                 self.log("GECloud: Device {} battery capacity {} max charge rate {}".format(device, capacity, max_charge_rate))
 
-                self.base.set_state_wrapper(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}))
-                self.base.set_state_wrapper(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}))
+                self.base.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
+                self.base.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
 
     async def publish_status(self, device, status):
         """
@@ -372,22 +372,22 @@ class GECloudDirect:
             entity_name = entity_name.lower()
             attributes = {}
             if key == "time":
-                self.base.set_state_wrapper(entity_name + "_time", state=status[key], attributes=attribute_table.get("time", {}))
+                self.base.dashboard_item(entity_name + "_time", state=status[key], attributes=attribute_table.get("time", {}), app="gecloud")
             elif key == "status":
-                self.base.set_state_wrapper(entity_name + "_status", state=status[key], attributes=attribute_table.get("status", {}))
+                self.base.dashboard_item(entity_name + "_status", state=status[key], attributes=attribute_table.get("status", {}), app="gecloud")
             elif key == "solar":
-                self.base.set_state_wrapper(entity_name + "_solar_power", state=status[key].get("power", 0), attributes=attribute_table.get("solar_power", {}))
+                self.base.dashboard_item(entity_name + "_solar_power", state=status[key].get("power", 0), attributes=attribute_table.get("solar_power", {}), app="gecloud")
             elif key == "consumption":
-                self.base.set_state_wrapper(entity_name + "_consumption_power", state=status[key], attributes=attribute_table.get("consumption_power", {}))
+                self.base.dashboard_item(entity_name + "_consumption_power", state=status[key], attributes=attribute_table.get("consumption_power", {}), app="gecloud")
             elif key == "battery":
-                self.base.set_state_wrapper(entity_name + "_battery_power", state=status[key].get("power", 0), attributes=attribute_table.get("battery_power", {}))
-                self.base.set_state_wrapper(entity_name + "_battery_percent", state=status[key].get("percent", 0), attributes=attribute_table.get("battery_percent", {}))
-                self.base.set_state_wrapper(entity_name + "_battery_temperature", state=status[key].get("temperature", 0), attributes=attribute_table.get("battery_temperature", {}))
+                self.base.dashboard_item(entity_name + "_battery_power", state=status[key].get("power", 0), attributes=attribute_table.get("battery_power", {}), app="gecloud")
+                self.base.dashboard_item(entity_name + "_battery_percent", state=status[key].get("percent", 0), attributes=attribute_table.get("battery_percent", {}), app="gecloud")
+                self.base.dashboard_item(entity_name + "_battery_temperature", state=status[key].get("temperature", 0), attributes=attribute_table.get("battery_temperature", {}), app="gecloud")
             elif key == "grid":
-                self.base.set_state_wrapper(entity_name + "_grid_power", state=status[key].get("power", 0), attributes=attribute_table.get("grid_power", {}))
-                self.base.set_state_wrapper(entity_name + "_grid_voltage", state=status[key].get("voltage", 0), attributes=attribute_table.get("grid_voltage", {}))
-                self.base.set_state_wrapper(entity_name + "_grid_current", state=status[key].get("current", 0), attributes=attribute_table.get("grid_current", {}))
-                self.base.set_state_wrapper(entity_name + "_grid_frequency", state=status[key].get("frequency", 0), attributes=attribute_table.get("grid_frequency", {}))
+                self.base.dashboard_item(entity_name + "_grid_power", state=status[key].get("power", 0), attributes=attribute_table.get("grid_power", {}), app="gecloud")
+                self.base.dashboard_item(entity_name + "_grid_voltage", state=status[key].get("voltage", 0), attributes=attribute_table.get("grid_voltage", {}), app="gecloud")
+                self.base.dashboard_item(entity_name + "_grid_current", state=status[key].get("current", 0), attributes=attribute_table.get("grid_current", {}), app="gecloud")
+                self.base.dashboard_item(entity_name + "_grid_frequency", state=status[key].get("frequency", 0), attributes=attribute_table.get("grid_frequency", {}), app="gecloud")
 
     async def publish_meter(self, device, meter):
         """
@@ -417,30 +417,30 @@ class GECloudDirect:
                     entity_name = entity_name.lower()
                     attributes = {}
                     if subkey == "solar":
-                        self.base.set_state_wrapper(entity_name + "_solar_today", state=meter[key][subkey], attributes=attribute_table.get("solar_today", {}))
+                        self.base.dashboard_item(entity_name + "_solar_today", state=meter[key][subkey], attributes=attribute_table.get("solar_today", {}), app="gecloud")
                     elif subkey == "consumption":
-                        self.base.set_state_wrapper(entity_name + "_consumption_today", state=meter[key][subkey], attributes=attribute_table.get("consumption_today", {}))
+                        self.base.dashboard_item(entity_name + "_consumption_today", state=meter[key][subkey], attributes=attribute_table.get("consumption_today", {}), app="gecloud")
                     elif subkey == "battery":
-                        self.base.set_state_wrapper(entity_name + "_battery_charge_today", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_today", {}))
-                        self.base.set_state_wrapper(entity_name + "_battery_discharge_today", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_today", {}))
+                        self.base.dashboard_item(entity_name + "_battery_charge_today", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_today", {}), app="gecloud")
+                        self.base.dashboard_item(entity_name + "_battery_discharge_today", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_today", {}), app="gecloud")
                     elif subkey == "grid":
-                        self.base.set_state_wrapper(entity_name + "_grid_import_today", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_today", {}))
-                        self.base.set_state_wrapper(entity_name + "_grid_export_today", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_today", {}))
+                        self.base.dashboard_item(entity_name + "_grid_import_today", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_today", {}), app="gecloud")
+                        self.base.dashboard_item(entity_name + "_grid_export_today", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_today", {}), app="gecloud")
             elif key == "total":
                 for subkey in meter[key]:
                     entity_name = "sensor.predbat_gecloud_" + device
                     entity_name = entity_name.lower()
                     attributes = {}
                     if subkey == "solar":
-                        self.base.set_state_wrapper(entity_name + "_solar_total", state=meter[key][subkey], attributes=attribute_table.get("solar_total", {}))
+                        self.base.dashboard_item(entity_name + "_solar_total", state=meter[key][subkey], attributes=attribute_table.get("solar_total", {}), app="gecloud")
                     elif subkey == "consumption":
-                        self.base.set_state_wrapper(entity_name + "_consumption_total", state=meter[key][subkey], attributes=attribute_table.get("consumption_total", {}))
+                        self.base.dashboard_item(entity_name + "_consumption_total", state=meter[key][subkey], attributes=attribute_table.get("consumption_total", {}), app="gecloud")
                     elif subkey == "battery":
-                        self.base.set_state_wrapper(entity_name + "_battery_charge_total", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_total", {}))
-                        self.base.set_state_wrapper(entity_name + "_battery_discharge_total", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_total", {}))
+                        self.base.dashboard_item(entity_name + "_battery_charge_total", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_total", {}), app="gecloud")
+                        self.base.dashboard_item(entity_name + "_battery_discharge_total", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_total", {}), app="gecloud")
                     elif subkey == "grid":
-                        self.base.set_state_wrapper(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}))
-                        self.base.set_state_wrapper(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}))
+                        self.base.dashboard_item(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}), app="gecloud")
+                        self.base.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
 
     async def publish_registers(self, device, registers, select_key=None):
         """
@@ -509,19 +509,19 @@ class GECloudDirect:
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
                 attributes["options"] = options_text
-                self.base.set_state_wrapper(entity_id, state=value, attributes=attributes)
+                self.base.dashboard_item(entity_id, state=value, attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key, "time": is_select_time}
             elif is_number:
                 entity_name = "number.predbat_gecloud_" + device
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
-                self.base.set_state_wrapper(entity_id, state=value, attributes=attributes)
+                self.base.dashboard_item(entity_id, state=value, attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
             elif is_switch:
                 entity_name = "switch.predbat_gecloud_" + device
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
-                self.base.set_state_wrapper(entity_id, state="on" if value else "off", attributes=attributes)
+                self.base.dashboard_item(entity_id, state="on" if value else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
     async def async_automatic_config(self, devices):
