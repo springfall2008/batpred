@@ -886,15 +886,24 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.web_interface = WebInterface(self)
             self.web_interface_task = self.create_task(self.web_interface.start())
 
-            if self.get_arg("ge_cloud_direct", False):
-                self.log("Starting GE cloud direct interface")
-                self.ge_cloud_direct = GECloudDirect(self)
-                self.ge_cloud_direct_task = self.create_task(self.ge_cloud_direct.start())
-
             if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
                 self.log("Starting Octopus API interface")
                 self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", ""), self.get_arg("octopus_api_account", ""), self.log)
                 self.octopus_api_direct_task = self.create_task(self.octopus_api_direct.start())
+                if not self.octopus_api_direct.wait_api_started():
+                    self.log("Error: Octopus API failed to start")
+                    self.record_status("Error: Octopus API failed to start")
+                    raise ValueError("Octopus API failed to start")
+
+            if self.get_arg("ge_cloud_direct", False):
+                self.log("Starting GE cloud direct interface")
+                self.ge_cloud_direct = GECloudDirect(self)
+                self.ge_cloud_direct_task = self.create_task(self.ge_cloud_direct.start())
+                # Allow GE Cloud API to start
+                if not self.ge_cloud_direct.wait_api_started():
+                    self.log("Error: GE Cloud API failed to start")
+                    self.record_status("Error: GE Cloud API failed to start")
+                    raise ValueError("GE Cloud API failed to start")
 
             # Printable config root
             self.config_root_p = self.config_root

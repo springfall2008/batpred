@@ -7,6 +7,7 @@ import requests
 import json
 import asyncio
 import random
+import time
 
 """
 GE Cloud data download
@@ -200,7 +201,22 @@ class GECloudDirect:
         self.meter = {}
         self.info = {}
         self.stop_cloud = False
+        self.api_started = False
         self.register_entity_map = {}
+
+    def wait_api_started(self):
+        """
+        Return if the API has started
+        """
+        self.log("GECloud: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 120:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: GECloud: API failed to start in required time")
+            return False
+        return True
 
     async def switch_event(self, entity_id, service):
         """
@@ -331,7 +347,6 @@ class GECloudDirect:
                         capacity = round(cap * volt / 1000.0, 2)
                     except (ValueError, TypeError):
                         pass
-                print(info)
 
                 max_charge_rate = info.get("max_charge_rate", 0)
                 self.log("GECloud: Device {} battery capacity {} max charge rate {}".format(device, capacity, max_charge_rate))
@@ -553,6 +568,7 @@ class GECloudDirect:
         Start the client
         """
         self.stop_cloud = False
+        self.api_started = False
         self.devices = await self.async_get_devices()
         self.log("GECloud: Starting up, found devices {}".format(self.devices))
 
@@ -577,6 +593,9 @@ class GECloudDirect:
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
 
+            if not self.api_started:
+                print("GECloud API Started")
+                self.api_started = True
             await asyncio.sleep(5)
             seconds += 5
 

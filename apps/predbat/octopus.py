@@ -13,6 +13,7 @@ import aiohttp
 import asyncio
 import json
 from datetime import timezone
+import time
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -294,6 +295,21 @@ class OctopusAPI:
         self.intelligent_dispatches = {}
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
+        self.api_started = False
+
+    def wait_api_started(self):
+        """
+        Wait for the API to start
+        """
+        self.log("Octopus API: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 240:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn:Octopus API: Failed to start")
+            return False
+        return True
 
     async def start(self):
         """
@@ -313,6 +329,9 @@ class OctopusAPI:
                 await self.fetch_tariffs(self.tariffs)
                 self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
             await self.async_join_saving_session_events(self.account_id)
+            if not self.api_started:
+                print("Octopus API: Started")
+                self.api_started = True
             await asyncio.sleep(5)
             count_seconds += 5
         await self.api.async_close()
@@ -657,7 +676,7 @@ class OctopusAPI:
             self.log(f"Failed to connect. Timeout of {self.api.timeout} exceeded.")
             return None
 
-    async def async_graphql_query(self, query, request_context, returns_data=True):
+    async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False):
         """
         Execute a graphql query
         """
@@ -668,7 +687,7 @@ class OctopusAPI:
             payload = {"query": query}
             headers = {"Authorization": f"JWT {self.graphql_token}", integration_context_header: request_context}
             async with client.post(url, json=payload, headers=headers) as response:
-                response_body = await self.async_read_response(response, url)
+                response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
                 if response_body and ("data" in response_body):
                     return response_body["data"]
                 else:
@@ -687,12 +706,12 @@ class OctopusAPI:
         result = {}
         if device_id:
             self.log("Octopus API: Fetching intelligent dispatches for device {}".format(device_id))
-            dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=device_id), "get-intelligent-dispatches")
-            device_result = await self.async_graphql_query(intelligent_device_query.format(account_id=account_id), "get-intelligent-devices")
+            device_result = await self.async_graphql_query(intelligent_device_query.format(account_id=account_id), "get-intelligent-devices", ignore_errors=True)
             intelligent_device = {}
             planned = []
             completed = []
             if device_result:
+                dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=device_id), "get-intelligent-dispatches", ignore_errors=True)
                 chargePointVariants = device_result.get("chargePointVariants", [])
                 electricVehicles = device_result.get("electricVehicles", [])
                 devices = device_result.get("devices", [])

@@ -904,6 +904,11 @@ class Inverter:
                 self.base.record_status("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True)
                 raise ValueError
 
+            if charge_start_time is None or charge_end_time is None:
+                self.log("Error: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None".format(self.id))
+                self.base.record_status("Error: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None".format(self.id), had_errors=True)
+                raise ValueError
+
             # Update simulated charge enable time to match the charge window time.
             if not self.inv_has_charge_enable_time:
                 if charge_start_time == charge_end_time:
