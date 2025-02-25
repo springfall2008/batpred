@@ -2035,7 +2035,7 @@ class Output:
         self.log("Yesterday basic charge window best: {} charge limit best: {}".format(charge_window_best, charge_limit_best))
 
         # Get Cost yesterday
-        cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2)
+        cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
         if not cost_today_data:
             self.log("Warn: No cost_today data for yesterday")
             return
@@ -2044,7 +2044,7 @@ class Output:
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
 
-        cost_today_car_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today_car", days=2)
+        cost_today_car_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today_car", days=2, required=False)
         if not cost_today_car_data:
             cost_today_car_data = {}
             cost_data_car = {}

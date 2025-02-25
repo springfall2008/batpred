@@ -85,7 +85,6 @@ from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
 
-
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
@@ -793,7 +792,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.save_current_config()
 
         if self.comparison:
-            if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
+            if ((scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False)):
                 # Compare tariffs either when triggered or daily at midnight
                 self.expose_config("compare_active", True)
                 self.comparison.run_all()
@@ -862,7 +861,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Setup the app, called once each time the app starts
         """
         self.pool = None
-        if "hass_api_version" not in self.__dict__:
+        if 'hass_api_version' not in self.__dict__:
             self.hass_api_version = 1
         self.log("Predbat: Startup {} hass version {}".format(__name__, self.hass_api_version))
         self.update_time(print=False)
@@ -886,15 +885,24 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.web_interface = WebInterface(self)
             self.web_interface_task = self.create_task(self.web_interface.start())
 
-            if self.get_arg("ge_cloud_direct", False):
-                self.log("Starting GE cloud direct interface")
-                self.ge_cloud_direct = GECloudDirect(self)
-                self.ge_cloud_direct_task = self.create_task(self.ge_cloud_direct.start())
-
             if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
                 self.log("Starting Octopus API interface")
                 self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", ""), self.get_arg("octopus_api_account", ""), self.log)
                 self.octopus_api_direct_task = self.create_task(self.octopus_api_direct.start())
+                if not self.octopus_api_direct.wait_api_started():
+                    self.log("Error: Octopus API failed to start")
+                    self.record_status("Error: Octopus API failed to start")
+                    raise ValueError("Octopus API failed to start")
+
+            if self.get_arg("ge_cloud_direct", False):
+                self.log("Starting GE cloud direct interface")
+                self.ge_cloud_direct = GECloudDirect(self)
+                self.ge_cloud_direct_task = self.create_task(self.ge_cloud_direct.start())
+                # Allow GE Cloud API to start
+                if not self.ge_cloud_direct.wait_api_started():
+                    self.log("Error: GE Cloud API failed to start")
+                    self.record_status("Error: GE Cloud API failed to start")
+                    raise ValueError("GE Cloud API failed to start")
 
             # Printable config root
             self.config_root_p = self.config_root
