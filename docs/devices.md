@@ -65,7 +65,7 @@ car_charging_soc:
 
 ## Ohme
 
-New Ohme: https://www.home-assistant.io/integrations/ohme
+New Ohme: <https://www.home-assistant.io/integrations/ohme>
 Older integration: <https://github.com/dan-r/HomeAssistant-Ohme>
 
 Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
