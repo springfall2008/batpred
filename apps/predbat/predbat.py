@@ -306,6 +306,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.restart_active = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
+        self.inverters = []
         self.manual_charge_times = []
         self.manual_export_times = []
         self.manual_freeze_charge_times = []
