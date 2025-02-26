@@ -388,11 +388,11 @@ class OctopusAPI:
                     productCode = tariff.get("productCode", None)
                     break
             if isActiveMeter and isActiveAgreement:
+                self.log("Octopus API: Found tariff code {} product {} device_id {}".format(tariffCode, productCode, deviceID_import))
                 if isImport:
                     tariffs["import"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_import}
                 if isExport:
                     tariffs["export"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_export}
-        self.log("Octopus API: Found tariffs as {}".format(tariffs))
         return tariffs
 
     async def async_update_intelligent_device(self, account_id):
@@ -962,7 +962,6 @@ class Octopus:
             self.log("Octopus api is active")
             if getImport:
                 tariff = self.octopus_api_direct.get_tariff("import")
-                self.log("import tariff is {}".format(tariff))
             else:
                 tariff = self.octopus_api_direct.get_tariff("export")
 

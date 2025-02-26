@@ -179,6 +179,7 @@ attribute_table = {
     "grid_export_total": {"friendly_name": "Grid Export Total", "icon": "mdi:transmission-tower", "unit_of_measurement": "kWh", "device_class": "energy"},
     "max_charge_rate": {"friendly_name": "Max Charge Rate", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
     "battery_size": {"friendly_name": "Battery Size", "icon": "mdi:battery", "unit_of_measurement": "kWh", "device_class": "energy"},
+    "battery_dod": {"friendly_name": "Battery Depth of Discharge", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
 }
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
@@ -340,6 +341,7 @@ class GECloudDirect:
                 info = device_info[key]
                 cap = info.get("battery", {}).get("nominal_capacity", None)
                 volt = info.get("battery", {}).get("nominal_voltage", None)
+                dod = info.get("battery", {}).get("depth_of_discharge", None)
 
                 capacity = None
                 if cap and volt:
@@ -353,6 +355,7 @@ class GECloudDirect:
 
                 self.base.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
                 self.base.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
+                self.base.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("_battery_dod", {}), app="gecloud")
 
     async def publish_status(self, device, status):
         """
@@ -547,6 +550,7 @@ class GECloudDirect:
         self.base.args["load_power"] = ["sensor.predbat_gecloud_" + device + "_consumption_power" for device in devices]
         self.base.args["soc_percent"] = ["sensor.predbat_gecloud_" + device + "_battery_percent" for device in devices]
         self.base.args["soc_max"] = ["sensor.predbat_gecloud_" + device + "_battery_size" for device in devices]
+        self.base.args["battery_scaling"] = ["sensor.predbat_gecloud_" + device + "_battery_dod" for device in devices]
         self.base.args["reserve"] = ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in devices]
         self.base.args["inverter_time"] = ["sensor.predbat_gecloud_" + device + "_time" for device in devices]
         self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + device + "_ac_charge_1_start_time" for device in devices]
@@ -906,11 +910,12 @@ class GECloudDirect:
         serials = []
         if device_list is not None:
             for device in device_list:
-                inverter = device.get("inverter", None)
-                if inverter:
-                    serial = inverter.get("serial", None)
-                    if serial:
-                        serials.append(serial)
+                self.log("GECloud: Found device {}".format(device))
+                serial = device.get("inverter", {}).get("serial", None)
+                batteries = device.get("inverter", {}).get("connections", {}).get("batteries", [])
+                if serial and batteries:
+                    # Only include devices with batteries
+                    serials.append(serial)
 
         return serials
 
