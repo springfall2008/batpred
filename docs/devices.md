@@ -63,10 +63,9 @@ car_charging_soc:
   - 'sensor.battery'
 ```
 
-## Ohme
+## New Ohme
 
-New Ohme: <https://www.home-assistant.io/integrations/ohme>
-Older integration: <https://github.com/dan-r/HomeAssistant-Ohme>
+<https://www.home-assistant.io/integrations/ohme>
 
 Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
 Also can be used with Octopus Intelligent GO to map out the cars charging slots into Predbat
@@ -74,7 +73,8 @@ Also can be used with Octopus Intelligent GO to map out the cars charging slots 
 **car charging energy**
 
 ```yaml
-car_charging_energy: 'sensor.ohme_session_energy'
+ohme_name = 're:ohme_(.+)_target_time'
+car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
 ```
 
 **Octopus Intelligent GO**
@@ -88,16 +88,44 @@ Replace XXX with your target_config for Ohme which is the device ID.
 ```yaml
   octopus_intelligent_slot: 'ohme.list_charge_slots'
   octopus_intelligent_slot_action_config: 'XXX'
-  octopus_ready_time: 'time.ohme_epod_target_time'
-  octopus_charge_limit: 'number.ohme_epod_target_percentage'
+  octopus_ready_time: 'time.ohme_{ohme_name}_target_time'
+  octopus_charge_limit: 'number.ohme_{ohme_name}_target_percentage'
 ```
 
-Older Ohme:
+Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
+
+**Using Ohme car charging plans on other tariff e.g. Agile**
+
+```yaml
+octopus_intelligent_slot: 'binary_sensor.ohme_{ohme_name}_slot_active'
+octopus_ready_time: 'time.ohme_{ohme_name}_target_time'
+octopus_charge_limit: 'number.ohme_{ohme_name}_target_percentage'
+octopus_slot_low_rate: False
+```
+
+Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
+
+```
+
+## Old Ohme
+
+<https://github.com/dan-r/HomeAssistant-Ohme>
+
+Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
+Also can be used with Octopus Intelligent GO to map out the cars charging slots into Predbat
+
+**car charging energy**
+
+```yaml
+car_charging_energy: 'sensor.ohme_session_energy'
+```
+
+**Octopus Intelligent GO**
 
 ```yaml
 octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
 octopus_ready_time: 'time.ohme_target_time'
-octopus_charge_limit: 'number.ohme_target_percent'
+octopus_charge_limit: 'number.ohme_target_percentage'
 ```
 
 Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
