@@ -65,7 +65,8 @@ car_charging_soc:
 
 ## Ohme
 
-<https://github.com/dan-r/HomeAssistant-Ohme>
+New Ohme: https://www.home-assistant.io/integrations/ohme
+Older integration: <https://github.com/dan-r/HomeAssistant-Ohme>
 
 Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
 Also can be used with Octopus Intelligent GO to map out the cars charging slots into Predbat
@@ -78,6 +79,21 @@ car_charging_energy: 'sensor.ohme_session_energy'
 
 **Octopus Intelligent GO**
 
+Newer Ohme Integrated into Home Assistant:
+
+The word 'epod_' seems to have been added to some Ohme sensors in the version bundled with Home Assistant:
+
+Replace XXX with your target_config for Ohme which is the device ID.
+
+```yaml
+  octopus_intelligent_slot: 'ohme.list_charge_slots'
+  octopus_intelligent_slot_action_config: 'XXX'
+  octopus_ready_time: 'time.ohme_epod_target_time'
+  octopus_charge_limit: 'number.ohme_epod_target_percentage'
+```
+
+Older Ohme:
+
 ```yaml
 octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
 octopus_ready_time: 'time.ohme_target_time'
@@ -85,16 +101,6 @@ octopus_charge_limit: 'number.ohme_target_percent'
 ```
 
 Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
-
-** Newer Ohme Integrated into Home Assistant ***
-
-The word 'epod_' seems to have been added to some Ohme sensors in the version bundled with Home Assistant:
-
-```yaml
-  octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
-  octopus_ready_time: 'time.ohme_epod_target_time'
-  octopus_charge_limit: 'number.ohme_epod_target_percentage'
-```
 
 **Using Ohme car charging plans on other tariff e.g. Agile**
 
