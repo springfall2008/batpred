@@ -106,9 +106,11 @@ car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
 
 Newer Ohme Integrated into Home Assistant:
 
-The word 'epod_' seems to have been added to some Ohme sensors in the version bundled with Home Assistant:
+Replace XXX with your device ID which can be found by going to 'Developer Tools', Selecting 'Actions', Selecting 'Ohme: List Charge Slots'
+then selecting your Device from the drop down menu. Then click on Go to YAML mode and copy the long string after config_entry: 
 
-Replace XXX with your target_config for Ohme which is the device ID.
+![image](https://github.com/user-attachments/assets/fce4bce1-c6f7-49fe-96bc-7d062977059b)
+
 
 ```yaml
   octopus_intelligent_slot: 'ohme.list_charge_slots'
