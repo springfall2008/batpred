@@ -98,7 +98,7 @@ car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
     - "latched"
     - "locked"
     - "plugged in"
-    - "pluggin_in"
+    - "plugged_in"
     - "pending_approval"
 ```
 
