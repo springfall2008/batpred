@@ -1135,6 +1135,8 @@ class Octopus:
         # The load expected is stored in chargeKwh for the period in use
         if "charge_in_kwh" in slot:
             kwh = abs(float(slot.get("charge_in_kwh", 0.0)))
+        elif "energy" in slot:
+            kwh = abs(float(slot.get("energy", 0.0)))
         else:
             kwh = abs(float(slot.get("chargeKwh", 0.0)))
 

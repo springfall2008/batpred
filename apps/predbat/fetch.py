@@ -943,14 +943,22 @@ class Fetch:
                 self.log("Octopus API planned and completed slots: {} - {}".format(completed, planned))
             else:
                 entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
-                try:
-                    completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
-                    planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
-                    vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
-                    vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
-                except (ValueError, TypeError):
-                    self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
-                    self.record_status(message="Error: octopus_intelligent_slot not set correctly", had_errors=True)
+                if "octopus_intelligent_slot_action_config" in self.args:
+                    config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
+                    result = self.call_service_wrapper(entity_id, config_entry=config_entry, return_response=True)
+                    if result and ("slots" in result):
+                        planned = result["slots"]
+                    else:
+                        self.log("Warn: Unable to get data from {} - octopus_intelligent_slot using action config {} result was {}".format(entity_id, config_entry, result))
+                else:
+                    try:
+                        completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
+                        planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
+                        vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
+                        vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
+                    except (ValueError, TypeError):
+                        self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
+                        self.record_status(message="Error: octopus_intelligent_slot not set correctly", had_errors=True)
 
             # Completed and planned slots
             if completed:
