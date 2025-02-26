@@ -73,7 +73,7 @@ Also can be used with Octopus Intelligent GO to map out the cars charging slots 
 **car charging energy**
 
 ```yaml
-ohme_name: 're:ohme_(.+)_target_time'
+ohme_name: 're:time.ohme_(.+)_target_time'
 car_charging_energy: 're:(sensor.ohme_{ohme_name}_energy)'
 ```
 
