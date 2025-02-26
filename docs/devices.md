@@ -73,17 +73,43 @@ Also can be used with Octopus Intelligent GO to map out the cars charging slots 
 **car charging energy**
 
 ```yaml
-ohme_name = 're:ohme_(.+)_target_time'
+ohme_name: 're:time.ohme_(.+)_target_time'
 car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
+```
+
+**Car charging planned**
+
+```yaml
+  car_charging_planned:
+    - "sensor.ohme_{ohme_name}_status"
+
+  car_charging_planned_response:
+    - "yes"
+    - "on"
+    - "true"
+    - "connected"
+    - "ev connected"
+    - "charging"
+    - "paused"
+    - "waiting for car demand"
+    - "waiting for ev"
+    - "scheduled"
+    - "enabled"
+    - "latched"
+    - "locked"
+    - "plugged in"
+    - "plugged_in"
+    - "pending_approval"
 ```
 
 **Octopus Intelligent GO**
 
 Newer Ohme Integrated into Home Assistant:
 
-The word 'epod_' seems to have been added to some Ohme sensors in the version bundled with Home Assistant:
+Replace XXX with your device ID which can be found by going to 'Developer Tools', Selecting 'Actions', Selecting 'Ohme: List Charge Slots'
+then selecting your Device from the drop down menu. Then click on Go to YAML mode and copy the long string after config_entry:
 
-Replace XXX with your target_config for Ohme which is the device ID.
+![image](https://github.com/user-attachments/assets/fce4bce1-c6f7-49fe-96bc-7d062977059b)
 
 ```yaml
   octopus_intelligent_slot: 'ohme.list_charge_slots'
@@ -97,7 +123,6 @@ Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged**
 **Using Ohme car charging plans on other tariff e.g. Agile**
 
 ```yaml
-octopus_intelligent_slot: 'binary_sensor.ohme_{ohme_name}_slot_active'
 octopus_ready_time: 'time.ohme_{ohme_name}_target_time'
 octopus_charge_limit: 'number.ohme_{ohme_name}_target_percentage'
 octopus_slot_low_rate: False

@@ -943,9 +943,10 @@ class Fetch:
                 self.log("Octopus API planned and completed slots: {} - {}".format(completed, planned))
             else:
                 entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
-                if "octopus_intelligent_slot_action_config" in self.args:
+                if entity_id and "octopus_intelligent_slot_action_config" in self.args:
                     config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
-                    result = self.call_service_wrapper(entity_id, config_entry=config_entry, return_response=True)
+                    service_name = entity_id.replace(".", "/")
+                    result = self.call_service_wrapper(service_name, config_entry=config_entry, return_response=True)
                     if result and ("slots" in result):
                         planned = result["slots"]
                     else:
