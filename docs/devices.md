@@ -73,8 +73,33 @@ Also can be used with Octopus Intelligent GO to map out the cars charging slots 
 **car charging energy**
 
 ```yaml
-ohme_name = 're:ohme_(.+)_target_time'
-car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
+ohme_name: 're:ohme_(.+)_target_time'
+car_charging_energy: 're:(sensor.ohme_{ohme_name}_energy)'
+```
+
+**Car charging planned**
+
+```yaml
+  car_charging_planned:
+    - "re:(sensor.ohme_{ohme_name}_go_status)"
+
+  car_charging_planned_response:
+    - "yes"
+    - "on"
+    - "true"
+    - "connected"
+    - "ev connected"
+    - "charging"
+    - "paused"
+    - "waiting for car demand"
+    - "waiting for ev"
+    - "scheduled"
+    - "enabled"
+    - "latched"
+    - "locked"
+    - "plugged in"
+    - "pluggin_in"
+    - "pending_approval"
 ```
 
 **Octopus Intelligent GO**
