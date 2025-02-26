@@ -74,14 +74,14 @@ Also can be used with Octopus Intelligent GO to map out the cars charging slots 
 
 ```yaml
 ohme_name: 're:time.ohme_(.+)_target_time'
-car_charging_energy: 're:(sensor.ohme_{ohme_name}_energy)'
+car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
 ```
 
 **Car charging planned**
 
 ```yaml
   car_charging_planned:
-    - "re:(sensor.ohme_{ohme_name}_go_status)"
+    - "sensor.ohme_{ohme_name}_status"
 
   car_charging_planned_response:
     - "yes"
@@ -122,7 +122,6 @@ Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged**
 **Using Ohme car charging plans on other tariff e.g. Agile**
 
 ```yaml
-octopus_intelligent_slot: 'binary_sensor.ohme_{ohme_name}_slot_active'
 octopus_ready_time: 'time.ohme_{ohme_name}_target_time'
 octopus_charge_limit: 'number.ohme_{ohme_name}_target_percentage'
 octopus_slot_low_rate: False
