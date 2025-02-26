@@ -105,8 +105,6 @@ octopus_slot_low_rate: False
 
 Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
 
-```
-
 ## Old Ohme
 
 <https://github.com/dan-r/HomeAssistant-Ohme>
