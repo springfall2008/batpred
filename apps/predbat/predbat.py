@@ -17,6 +17,9 @@ import sys
 from datetime import datetime, timedelta
 import hashlib
 import traceback
+import sys
+
+IS_COMPILED = getattr(sys, "frozen", False)
 
 IS_APPDAEMON = False
 
@@ -46,18 +49,19 @@ PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils
 
 from download import predbat_update_move, predbat_update_download, check_install
 
-# Sanity check the install and re-download if corrupted
-if not check_install():
-    print("Warn: Predbat files are not installed correctly, trying to download them")
-    files = predbat_update_download(THIS_VERSION)
-    if files:
-        print("Downloaded files, moving into place")
-        predbat_update_move(THIS_VERSION, files)
+# Only do the self-install/self-update logic if we are NOT compiled.
+if not IS_COMPILED:
+    # Sanity check the install and re-download if corrupted
+    if not check_install():
+        print("Warn: Predbat files are not installed correctly, trying to download them")
+        files = predbat_update_download(THIS_VERSION)
+        ...
+        sys.exit(1)
     else:
-        print("Warn: Failed to download predbat files for version {}, it may not exist or you may have network issues".format(THIS_VERSION))
-    sys.exit(1)
+        print("Predbat files are installed correctly for version {}".format(THIS_VERSION))
 else:
-    print("Predbat files are installed correctly for version {}".format(THIS_VERSION))
+    # In compiled mode, we skip the entire self-update logic
+    print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from config import (
     TIME_FORMAT,
