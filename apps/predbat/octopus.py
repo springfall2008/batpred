@@ -279,10 +279,11 @@ class OctopusEnergyApiClient:
 
 
 class OctopusAPI:
-    def __init__(self, api_key, account_id, log):
+    def __init__(self, api_key, account_id, base):
         self.api_key = api_key
-        self.log = log
-        self.api = OctopusEnergyApiClient(api_key, log)
+        self.base = base
+        self.log = base.log
+        self.api = OctopusEnergyApiClient(api_key, self.log)
         self.stop_api = False
         self.account_id = account_id
         self.graphql_token = None
@@ -321,6 +322,7 @@ class OctopusAPI:
             if count_seconds % (30 * 60) == 0:
                 self.now = datetime.now()
                 self.now_utc = datetime.now(timezone.utc).astimezone()
+                self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
                 token = await self.async_refresh_token()
                 self.account_data = await self.async_get_account(self.account_id)
                 self.tariffs = await self.async_find_tariffs()
@@ -540,6 +542,19 @@ class OctopusAPI:
             event_id = event.get("eventId", None)
             if start and end:
                 return_joined_events.append({"start": start, "end": end, "octopoints_per_kwh": event_reward.get(event_id, None), "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None)})
+        entity_name = "binary_sensor.predbat_octopus_" + self.account_id
+        entity_name = entity_name.lower()
+        saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
+        active_event = False
+        for event in joined_events:
+            start = event.get("start", None)
+            end = event.get("end", None)
+            if start and end:
+                if start <= self.now_utc and end > self.now_utc:
+                    active_event = True
+                    break
+        self.base.dashboard_item(entity_name + "_saving_session", "on" if active_event else "off", attributes=saving_attributes, app="octopus")
+
         return return_available_events, return_joined_events
 
     async def async_get_saving_sessions(self, account_id):
@@ -599,7 +614,21 @@ class OctopusAPI:
                 self.url_cache[url]["data"] = data
             else:
                 self.log("Warn: Unable to download Octopus data from URL {}".format(url))
+
             tariffs[tariff]["data"] = data
+
+            entity_id = "sensor.predbat_octopus_" + self.account_id + "_" + tariff
+            entity_id = entity_id.lower()
+            rates = self.base.get_octopus_direct(tariff == "import")
+            rates_stamp = {}
+            for minute in range(0, 60 * 24 * 2, 30):
+                time_now = self.midnight_utc + timedelta(minutes=minute)
+                rate_value = rates.get(minute, None)
+                rates_stamp[time_now.strftime(TIME_FORMAT_OCTOPUS)] = rate_value
+            rate_now = rates.get(self.now_utc.minute + self.now_utc.hour * 60, None)
+            self.base.dashboard_item(
+                entity_id, rate_now, attributes={"friendly_name": "Octopus Tariff " + tariff, "icon": "mdi:currency-gbp", "rates": self.base.filtered_times(rates_stamp), "product_code": product_code, "tariff_code": tariff_code}, app="octopus"
+            )
 
     async def async_read_response(self, response, url, ignore_errors=False):
         """Reads the response, logging any json errors"""
@@ -784,6 +813,20 @@ class OctopusAPI:
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
                                 completed.append(dispatch)
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
+                        entity_name = "binary_sensor.predbat_octopus_" + account_id
+                        entity_name = entity_name.lower()
+                        active_event = False
+                        for dispatch in planned:
+                            start = dispatch.get("start", None)
+                            end = dispatch.get("end", None)
+                            if start and end:
+                                start = parse_date_time(start)
+                                end = parse_date_time(end)
+                                if start <= self.now_utc and end > self.now_utc:
+                                    active_event = True
+                        dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", "planned_dispatches": planned, "completed_dispatches": completed, **intelligent_device, **device_setting_result}
+                        self.base.dashboard_item(entity_name + "_intelligent_dispatch", "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
+
         return result
 
     async def async_get_account(self, account_id):
@@ -966,7 +1009,15 @@ class Octopus:
                 tariff = self.octopus_api_direct.get_tariff("export")
 
             if tariff and "data" in tariff:
-                pdata = self.minute_data(tariff["data"], self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+                tariff_data = tariff["data"]
+                # For Octopus rate data valid to of None means forever
+                if tariff_data:
+                    for rate in tariff_data:
+                        valid_to = rate.get("valid_to", None)
+                        if valid_to is None:
+                            rate["valid_to"] = (self.midnight_utc + timedelta(days=7)).strftime(TIME_FORMAT_OCTOPUS)
+
+                pdata = self.minute_data(tariff_data, self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
                 return pdata
             self.log("Warn: Octopus API direct does not return any rates for {}".format("import" if getImport else "export"))
             return {n: 0 for n in range(-24 * 60, self.forecast_minutes)}
