@@ -890,7 +890,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
             if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
                 self.log("Starting Octopus API interface")
-                self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", ""), self.get_arg("octopus_api_account", ""), self.log)
+                self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", ""), self.get_arg("octopus_api_account", ""), self)
                 self.octopus_api_direct_task = self.create_task(self.octopus_api_direct.start())
                 if not self.octopus_api_direct.wait_api_started():
                     self.log("Error: Octopus API failed to start")
@@ -925,6 +925,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.log("Error: " + traceback.format_exc())
             self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
             raise e
+
+        # Update db
+        self.ha_interface.db_tick()
 
         # Run every N minutes aligned to the minute
         seconds_now = (now - self.midnight).seconds

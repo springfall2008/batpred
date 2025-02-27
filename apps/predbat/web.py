@@ -179,7 +179,7 @@ class WebInterface:
             if key in ["icon", "device_class", "state_class", "unit_of_measurement", "friendly_name"]:
                 continue
             value = attributes[key]
-            if len(str(value)) > 30:
+            if len(str(value)) > 256:
                 value = "(large data)"
             text += "<tr><td>{}</td><td>{}</td></tr>".format(key, value)
         text += "</table>"
@@ -222,7 +222,7 @@ class WebInterface:
 
         # Display per app
         for app in app_list:
-            text += "<h2>{} Entities</h2>\n".format(app)
+            text += "<h2>{} Entities</h2>\n".format(app[0].upper() + app[1:])
             text += "<table>\n"
             text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
             if app == "predbat":
@@ -241,7 +241,7 @@ class WebInterface:
                 if unit_of_measurement is None:
                     unit_of_measurement = ""
                 friendly_name = attributes.get("friendly_name", "")
-                if not state:
+                if state is None:
                     state = "None"
                 text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
             text += "</table>\n"
@@ -703,7 +703,7 @@ var options = {
                 else:
                     state = self.base.get_state_wrapper(entity_id=entity_id, default=None)
 
-                if state:
+                if state is not None:
                     text = "{} = {}".format(value, state)
                 else:
                     text = '<span style="background-color:#FFAAAA"> {} ? </p>'.format(value)

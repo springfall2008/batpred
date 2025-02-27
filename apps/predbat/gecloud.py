@@ -912,7 +912,7 @@ class GECloudDirect:
             for device in device_list:
                 self.log("GECloud: Found device {}".format(device))
                 serial = device.get("inverter", {}).get("serial", None)
-                batteries = device.get("inverter", {}).get("connections", {}).get("batteries", [])
+                batteries = device.get("inverter", {}).get('connections', {}).get('batteries', [])
                 if serial and batteries:
                     # Only include devices with batteries
                     serials.append(serial)

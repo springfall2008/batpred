@@ -23,6 +23,8 @@ def time_string_to_stamp(time_string):
     """
     if time_string is None:
         return None
+    if time_string == "unknown":
+        return None
 
     if isinstance(time_string, str) and len(time_string) == 5:
         time_string += ":00"
