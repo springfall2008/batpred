@@ -11,7 +11,7 @@ depending on [what type of Predbat installation method you have used](apps-yaml.
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-ons)
 to edit this file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
-There are four different ways of configuring your Energy rates in `apps.yaml`, using [Octopus Energy Direct](#octopus-energy-direct), 
+There are four different ways of configuring your Energy rates in `apps.yaml`, using [Octopus Energy Direct](#octopus-energy-direct),
 using the [Octopus Energy Integration](#octopus-energy-home-assistant-integration), using [Octopus Rates URL's](#octopus-rates-url),
 or manually [defining your rates and time periods](#rate-bands-to-manually-configure-energy-rates).
 

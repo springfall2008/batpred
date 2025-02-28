@@ -358,7 +358,6 @@ class OctopusAPI:
         gas = self.account_data.get("account", {}).get("gasAgreements", [])
         electric = self.account_data.get("account", {}).get("electricityAgreements", [])
         for agreement in electric + gas:
-
             meterpoint = agreement.get("meterPoint", {})
             meters = meterpoint.get("meters", [])
             agreements = meterpoint.get("agreements", [])
@@ -401,9 +400,9 @@ class OctopusAPI:
                 if isImport:
                     tariffs["import"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_import}
                 if isExport:
-                    tariffs["export"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_export}   
+                    tariffs["export"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_export}
                 if isGas:
-                    tariffs["gas"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_gas}         
+                    tariffs["gas"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_gas}
         return tariffs
 
     async def async_update_intelligent_device(self, account_id):
@@ -550,11 +549,10 @@ class OctopusAPI:
             end = event.get("endAt", None)
             event_id = event.get("eventId", None)
             if start and end:
-                return_joined_events.append({"start": start, "end": end, "octopoints_per_kwh": event_reward.get(event_id, None), "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None)})\
-
+                return_joined_events.append({"start": start, "end": end, "octopoints_per_kwh": event_reward.get(event_id, None), "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None)})
         entity_name = "binary_sensor.predbat_octopus_" + self.account_id
         entity_name = entity_name.lower()
-        saving_attributes = {"friendly_name" : "Octopus Intelligent Saving Sessions", "icon" : "mdi:currency-usd", "joined_events" : return_joined_events, "available_events" : return_available_events}
+        saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
         active_event = False
         for event in joined_events:
             start = event.get("start", None)
@@ -644,14 +642,19 @@ class OctopusAPI:
             standing = self.base.get_octopus_direct(tariff, standingCharge=True)
 
             rates_stamp = {}
-            for minute in range(0, 60*24*2, 30):
+            for minute in range(0, 60 * 24 * 2, 30):
                 time_now = self.midnight_utc + timedelta(minutes=minute)
                 rate_value = rates.get(minute, None)
                 rates_stamp[time_now.strftime(TIME_FORMAT_OCTOPUS)] = rate_value
             rate_now = rates.get(self.now_utc.minute + self.now_utc.hour * 60, None)
             standing_now = standing.get(self.now_utc.minute + self.now_utc.hour * 60, None)
 
-            self.base.dashboard_item(entity_id, rate_now, attributes={"friendly_name": "Octopus Tariff " + tariff, "icon": "mdi:currency-gbp", "standing_charge": standing_now, "rates": self.base.filtered_times(rates_stamp), "product_code": product_code, "tariff_code": tariff_code}, app="octopus")
+            self.base.dashboard_item(
+                entity_id,
+                rate_now,
+                attributes={"friendly_name": "Octopus Tariff " + tariff, "icon": "mdi:currency-gbp", "standing_charge": standing_now, "rates": self.base.filtered_times(rates_stamp), "product_code": product_code, "tariff_code": tariff_code},
+                app="octopus",
+            )
 
     async def async_read_response(self, response, url, ignore_errors=False):
         """Reads the response, logging any json errors"""
@@ -1035,7 +1038,6 @@ class Octopus:
         if self.octopus_api_direct:
             tariff = self.octopus_api_direct.get_tariff(tariff_type)
             if tariff and ("data" in tariff):
-
                 if standingCharge:
                     tariff_data = tariff["standing"]
                 else:
@@ -1049,7 +1051,7 @@ class Octopus:
                             rate["valid_to"] = (self.midnight_utc + timedelta(days=7)).strftime(TIME_FORMAT_OCTOPUS)
 
                 pdata = self.minute_data(tariff_data, self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
-                return pdata   
+                return pdata
             return {}
         else:
             self.log("Warn: Octopus API direct not available")
@@ -1215,7 +1217,7 @@ class Octopus:
         # The load expected is stored in chargeKwh for the period in use
         if "charge_in_kwh" in slot:
             kwh = abs(float(slot.get("charge_in_kwh", 0.0)))
-        elif 'energy' in slot:
+        elif "energy" in slot:
             kwh = abs(float(slot.get("energy", 0.0)))
         else:
             kwh = abs(float(slot.get("chargeKwh", 0.0)))
