@@ -867,8 +867,8 @@ class Fetch:
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
             self.rate_import = self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False))
         elif self.octopus_api_direct:
-            self.log("Downloading rates directly from Octopus API")
-            self.rate_import = self.get_octopus_direct(getImport=True)
+            self.log("Downloading import rates directly from Octopus API")
+            self.rate_import = self.get_octopus_direct("import")
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
@@ -890,7 +890,12 @@ class Fetch:
             self.rate_import = self.basic_rates(self.get_arg("rates_import", [], indirect=False), "rates_import")
 
         # Gas rates if set
-        if "metric_octopus_gas" in self.args:
+        if self.octopus_api_direct:
+            self.log("Downloading gas rates directly from Octopus API")
+            self.rate_gas = self.get_octopus_direct("gas")
+            self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+            self.rate_scan_gas(self.rate_gas, print=True)
+        elif "metric_octopus_gas" in self.args:
             entity_id = self.get_arg("metric_octopus_gas", None, indirect=False)
             self.rate_gas = self.fetch_octopus_rates(entity_id)
             if not self.rate_gas:
@@ -943,12 +948,12 @@ class Fetch:
                 self.log("Octopus API planned and completed slots: {} - {}".format(completed, planned))
             else:
                 entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
-                if entity_id and "octopus_intelligent_slot_action_config" in self.args:
-                    config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
-                    service_name = entity_id.replace(".", "/")
+                if entity_id and 'octopus_intelligent_slot_action_config' in self.args:
+                    config_entry = self.get_arg('octopus_intelligent_slot_action_config', None, indirect=False)
+                    service_name = entity_id.replace('.', '/')
                     result = self.call_service_wrapper(service_name, config_entry=config_entry, return_response=True)
-                    if result and ("slots" in result):
-                        planned = result["slots"]
+                    if result and ('slots' in result):
+                        planned = result['slots']
                     else:
                         self.log("Warn: Unable to get data from {} - octopus_intelligent_slot using action config {} result was {}".format(entity_id, config_entry, result))
                 else:
@@ -1051,8 +1056,8 @@ class Fetch:
             self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
             self.rate_export = self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False))
         elif self.octopus_api_direct:
-            self.log("Downloading rates directly from Octopus API")
-            self.rate_export = self.get_octopus_direct(getImport=False)
+            self.log("Downloading export rates directly from Octopus API")
+            self.rate_export = self.get_octopus_direct("export")
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
@@ -1075,8 +1080,12 @@ class Fetch:
         self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions()
 
         # Standing charge
-        self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
-        self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
+        if self.octopus_api_direct:
+            self.metric_standing_charge = self.get_standing_charge_direct()
+            self.log("Octopus Import standing charge is set to {} p".format(self.metric_standing_charge))
+        else:
+            self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
+            self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
 
         # futurerate data
         futurerate = FutureRate(self)
