@@ -46,8 +46,9 @@ pred_bat:
   pv_today:
     - sensor.solis_power_generation_today
 
+  # This should be the maximum nominal voltage and not the current voltage
   battery_voltage:
-    - sensor.solis_battery_voltage
+    - 52
 
   # This is disabled by default in the Solax integration so it must be manually enabled.
   inverter_time:
