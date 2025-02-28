@@ -16,10 +16,41 @@ or manually [defining your rates and time periods](#rate-bands-to-manually-confi
 
 At least one of these methods must be used to define your import and export rates. If you don't then Predbat will assume zero for your energy rates.
 
-## Octopus Energy integration
+## Octopus Energy direct
 
 If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information
-is to use the [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/).
+is to connect Predbat directly to Octopus.
+
+- This method will not work correctly if you have multiple import or export meters.
+- A single Octopus Intelligent GO car charger or car is supported.
+- Saving sessions are also support, including auto-enroll.
+
+You should first log into your Octopus account and go to the [Accounts](https://octopus.energy/dashboard/new/accounts/) section and copy your account number e.g. A-1234567.
+
+Then go to the [API Access page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access) where you can copy your API key e.g. sk_live_1as12355... 
+
+Put these both into your apps.yaml and you are done.
+
+```yaml
+  octopus_api_account: 'XXXXXXXX'
+  octopus_api_key: 'sk_live_yyyyyyyy'
+```
+
+Free energy sessions:
+
+Predbat can scrape directly from the Octopus Web Site, this may
+have its own issues due to a change of format. If you enable this then sessions will be considered even if you forget to sign-up so be careful!
+
+```yaml
+octopus_free_url: 'http://octopus.energy/free-electricity'
+```
+
+## Octopus Energy Home Assistant Integration
+
+### Octopus Energy integration setup
+
+Instead of using Octopus Energy Direct Predbat can also work with the [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/), 
+this bring greater configurability than the direct method.
 
 The Octopus Energy integration connects to your Octopus Energy account and retrieves the tariffs you are on, and the current tariff rates.
 If you change tariff within Octopus the integration will automatically retrieve the updated tariff information, and as tariff prices change, again they are automatically retrieved.
@@ -65,7 +96,7 @@ The gas rates are only required if you have a gas boiler, or an iBoost, and are 
 Verify that the integration is working correctly in Home Assistant by going to Developer Tools / States, and entering 'octopus' in the 'Filter entities' box.
 Confirm that the Octopus entities are being populated correctly.
 
-## Configuring Predbat to use the Octopus Energy integration
+### Configuring Predbat to use the Octopus Energy integration
 
 The following configuration items in apps.yaml are used to configure Predbat to use the Octopus Energy integration.
 They are set to a regular expression and should be auto-discovered so that Predbat automatically uses the Octopus Energy integration,
@@ -80,7 +111,7 @@ metric_octopus_gas is (as above) only required to be configured if you are using
 
 If you do not have an export rate or are not on the Octopus Go tariff, then the appropriate lines can be commented out in apps.yaml.
 
-## Standing charge
+### Standing charge
 
 Predbat can also (optionally) include the daily standing charge in cost predictions.
 The following configuration item in apps.yaml defaults to obtaining the standing charge from the Octopus Energy integration:
@@ -90,7 +121,7 @@ The following configuration item in apps.yaml defaults to obtaining the standing
 You can manually change this to a standing charge in pounds, e.g. 0.50 is 50p, or delete this line from apps.yaml, or set it to zero
 if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
 
-## Octopus Saving sessions
+### Octopus Saving sessions
 
 Predbat can automatically join you to Octopus saving sessions and plan battery activity for the saving session period to maximise your income.
 
@@ -119,7 +150,7 @@ If you do not have an export tariff then forced export will not apply and Predba
 If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
 simply delete or comment out the **octopus_saving_session** entry in apps.yaml.
 
-## Octopus free (power up) events
+### Octopus free (power up) events
 
 Predbat can automatically detect Octopus free events and adjust your battery plan according.
 
