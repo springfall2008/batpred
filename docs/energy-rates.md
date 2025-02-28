@@ -27,7 +27,7 @@ is to connect Predbat directly to Octopus.
 
 You should first log into your Octopus account and go to the [Accounts](https://octopus.energy/dashboard/new/accounts/) section and copy your account number e.g. A-1234567.
 
-Then go to the [API Access page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access) where you can copy your API key e.g. sk_live_1as12355... 
+Then go to the [API Access page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access) where you can copy your API key e.g. sk_live_1as12355...
 
 Put these both into your apps.yaml and you are done.
 
@@ -49,7 +49,7 @@ octopus_free_url: 'http://octopus.energy/free-electricity'
 
 ### Octopus Energy integration setup
 
-Instead of using Octopus Energy Direct Predbat can also work with the [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/), 
+Instead of using Octopus Energy Direct Predbat can also work with the [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/),
 this bring greater configurability than the direct method.
 
 The Octopus Energy integration connects to your Octopus Energy account and retrieves the tariffs you are on, and the current tariff rates.
