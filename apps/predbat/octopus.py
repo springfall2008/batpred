@@ -355,16 +355,19 @@ class OctopusAPI:
             return None
         tariffs = {}
 
+        gas = self.account_data.get("account", {}).get("gasAgreements", [])
         electric = self.account_data.get("account", {}).get("electricityAgreements", [])
-        for agreement in electric:
+        for agreement in electric + gas:
             meterpoint = agreement.get("meterPoint", {})
             meters = meterpoint.get("meters", [])
             agreements = meterpoint.get("agreements", [])
             isActiveMeter = False
             isImport = False
             isExport = False
+            isGas = False
             deviceID_import = None
             deviceID_export = None
+            deviceID_gas = None
             for meter in meters:
                 activeFrom = parse_date(meter.get("activeFrom", None))
                 activeTo = parse_date(meter.get("activeTo", None))
@@ -376,6 +379,9 @@ class OctopusAPI:
                     if meter.get("smartExportElectricityMeter", None):
                         isExport = True
                         deviceID_export = meter.get("smartExportElectricityMeter", {}).get("deviceId", None)
+                    if meter.get("smartGasMeter", None):
+                        isGas = True
+                        deviceID_gas = meter.get("smartGasMeter", {}).get("deviceId", None)
                     break
             isActiveAgreement = False
             tariffCode = None
@@ -395,6 +401,8 @@ class OctopusAPI:
                     tariffs["import"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_import}
                 if isExport:
                     tariffs["export"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_export}
+                if isGas:
+                    tariffs["gas"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_gas}
         return tariffs
 
     async def async_update_intelligent_device(self, account_id):
@@ -591,6 +599,27 @@ class OctopusAPI:
 
         return mdata
 
+    async def fetch_url_cached(self, url):
+        """
+        Fetch a URL from the cache or reload it
+        """
+        if url in self.url_cache:
+            stamp = self.url_cache[url]["stamp"]
+            pdata = self.url_cache[url]["data"]
+            age = datetime.now() - stamp
+            if age.seconds < (30 * 60):
+                return pdata
+
+        data = await self.async_download_octopus_url(url)
+        if data:
+            self.url_cache[url] = {}
+            self.url_cache[url]["stamp"] = datetime.now()
+            self.url_cache[url]["data"] = data
+            return data
+        else:
+            self.log("Warn: Unable to download Octopus data from URL {}".format(url))
+            return None
+
     async def fetch_tariffs(self, tariffs):
         """
         Fetch the tariff data
@@ -598,36 +627,33 @@ class OctopusAPI:
         for tariff in tariffs:
             product_code = tariffs[tariff]["productCode"]
             tariff_code = tariffs[tariff]["tariffCode"]
-            url = f"https://api.octopus.energy/v1/products/{product_code}/electricity-tariffs/{tariff_code}/standard-unit-rates/"
-            if url in self.url_cache:
-                stamp = self.url_cache[url]["stamp"]
-                pdata = self.url_cache[url]["data"]
-                age = datetime.now() - stamp
-                tariffs[tariff]["data"] = pdata
-                if age.seconds < (30 * 60):
-                    continue
 
-            data = await self.async_download_octopus_url(url)
-            if data:
-                self.url_cache[url] = {}
-                self.url_cache[url]["stamp"] = datetime.now()
-                self.url_cache[url]["data"] = data
+            if tariff == "gas":
+                tariff_type = "gas"
             else:
-                self.log("Warn: Unable to download Octopus data from URL {}".format(url))
-
-            tariffs[tariff]["data"] = data
+                tariff_type = "electricity"
+            tariffs[tariff]["data"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/")
+            tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
             entity_id = "sensor.predbat_octopus_" + self.account_id + "_" + tariff
             entity_id = entity_id.lower()
-            rates = self.base.get_octopus_direct(tariff == "import")
+
+            rates = self.base.get_octopus_direct(tariff)
+            standing = self.base.get_octopus_direct(tariff, standingCharge=True)
+
             rates_stamp = {}
             for minute in range(0, 60 * 24 * 2, 30):
                 time_now = self.midnight_utc + timedelta(minutes=minute)
                 rate_value = rates.get(minute, None)
                 rates_stamp[time_now.strftime(TIME_FORMAT_OCTOPUS)] = rate_value
             rate_now = rates.get(self.now_utc.minute + self.now_utc.hour * 60, None)
+            standing_now = standing.get(self.now_utc.minute + self.now_utc.hour * 60, None)
+
             self.base.dashboard_item(
-                entity_id, rate_now, attributes={"friendly_name": "Octopus Tariff " + tariff, "icon": "mdi:currency-gbp", "rates": self.base.filtered_times(rates_stamp), "product_code": product_code, "tariff_code": tariff_code}, app="octopus"
+                entity_id,
+                rate_now,
+                attributes={"friendly_name": "Octopus Tariff " + tariff, "icon": "mdi:currency-gbp", "standing_charge": standing_now, "rates": self.base.filtered_times(rates_stamp), "product_code": product_code, "tariff_code": tariff_code},
+                app="octopus",
             )
 
     async def async_read_response(self, response, url, ignore_errors=False):
@@ -997,19 +1023,26 @@ class Octopus:
         self.octopus_url_cache[url]["data"] = pdata
         return pdata
 
-    def get_octopus_direct(self, getImport=True):
+    def get_standing_charge_direct(self):
+        """
+        Get standing charge
+        """
+        pdata = self.get_octopus_direct("import", standingCharge=True)
+        charge_now = pdata.get(self.now_utc.minute + self.now_utc.hour * 60, 0)
+        return charge_now
+
+    def get_octopus_direct(self, tariff_type, standingCharge=False):
         """
         Get the direct import rates from Octopus
         """
         if self.octopus_api_direct:
-            self.log("Octopus api is active")
-            if getImport:
-                tariff = self.octopus_api_direct.get_tariff("import")
-            else:
-                tariff = self.octopus_api_direct.get_tariff("export")
+            tariff = self.octopus_api_direct.get_tariff(tariff_type)
+            if tariff and ("data" in tariff):
+                if standingCharge:
+                    tariff_data = tariff["standing"]
+                else:
+                    tariff_data = tariff["data"]
 
-            if tariff and "data" in tariff:
-                tariff_data = tariff["data"]
                 # For Octopus rate data valid to of None means forever
                 if tariff_data:
                     for rate in tariff_data:
@@ -1019,11 +1052,9 @@ class Octopus:
 
                 pdata = self.minute_data(tariff_data, self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
                 return pdata
-            self.log("Warn: Octopus API direct does not return any rates for {}".format("import" if getImport else "export"))
-            return {n: 0 for n in range(-24 * 60, self.forecast_minutes)}
+            return {}
         else:
             self.log("Warn: Octopus API direct not available")
-
         return {}
 
     def download_octopus_rates_func(self, url):
