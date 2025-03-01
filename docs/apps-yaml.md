@@ -217,6 +217,25 @@ forecast_hours: 48
 The template `apps.yaml` comes pre-configured with regular expressions that should auto-discover the GivTCP Home Assistant entity names.
 If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities
 
+### Givenergy cloud direct
+
+Predbat now supports direct communication with the GivEnergy cloud services, with this method you can have your inverter auto-configured. 
+Just log into the GivEnergy web site and create an API key and copy it into the key settings. The number of inverters and their settings 
+will be configured automatically.
+
+If you set **ge_cloud_automatic** to False then you can manually configure to point to Predbat's GE Cloud configuration.
+
+If you set **ge_cloud_data** to False then Predbat will use the local data for history rather than the cloud data, you will need to wait until
+you have a few days work (at least days_previous days) before this will work correctly.
+
+```yaml
+ge_cloud_data: True
+ge_cloud_serial: '{geserial}'
+ge_cloud_key: 'xxxxx'
+ge_cloud_direct: True
+ge_cloud_automatic: True
+```
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
