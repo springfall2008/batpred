@@ -230,7 +230,7 @@ This is an experimental system, please discuss it on the ticket: <https://github
 - Set your Solcast API key in apps.yaml
 - Review any other configuration settings
 
-Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL comand line shell.
+Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.
 
 ## Fox
 
