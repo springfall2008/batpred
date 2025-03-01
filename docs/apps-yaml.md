@@ -219,8 +219,8 @@ If you have more than one inverter or entity names are non-standard then you wil
 
 ### Givenergy cloud direct
 
-Predbat now supports direct communication with the GivEnergy cloud services, with this method you can have your inverter auto-configured. 
-Just log into the GivEnergy web site and create an API key and copy it into the key settings. The number of inverters and their settings 
+Predbat now supports direct communication with the GivEnergy cloud services, with this method you can have your inverter auto-configured.
+Just log into the GivEnergy web site and create an API key and copy it into the key settings. The number of inverters and their settings
 will be configured automatically.
 
 If you set **ge_cloud_automatic** to False then you can manually configure to point to Predbat's GE Cloud configuration.
