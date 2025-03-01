@@ -104,7 +104,7 @@ class WebInterface:
         results = {}
         for key in hist1:
             if key in hist2:
-                results[key] = max(hist1[key] - hist2[key], 0)
+                results[key] = hist1[key] - hist2[key]
             else:
                 results[key] = hist1[key]
         return results
