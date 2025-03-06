@@ -575,6 +575,18 @@ but if you are using the Solcast integration then the Predbat sensors mirror the
 - sensor.predbat_pv_d3 - PV forecast for two days after tomorrow
 - sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in Watts, attributes give the 10% and 90% power now forecast
 
+## Dummy inverter sensors
+
+Predbat can now manage different inverter types, some of which don't have all the same control characteristics. Predbat might create dummy entities for control aspects that your inverter doesn't natively support.
+
+For example, for each Gen 1 hybrid inverter (N=0, 1, etc if there are multiple inverters), Predbat creates the following dummy inverter entities:
+
+- sensor.predbat_ge_N_idle_end_time
+- sensor.predbat_ge_N_idle_start_time
+- sensor.predbat_ge_N_scheduled_discharge_enable
+
+These sensors can be ignored and excluded from the recorder history if you wish.
+
 ## Predbat Logfile
 
 Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so this file should be checked if **predbat.status** reports an error,
