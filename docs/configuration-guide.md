@@ -36,7 +36,7 @@ With a fixed daily rate tariff you will just be predicting the battery levels, n
 
 You should set **select.predbat_mode** to 'Monitor'.
 
-## Cheap night rate with bad export rate (e.g. Octopus Go, Economy 7 etc)
+## Cheap night rate with bad export rate (e.g. Economy 7 with SEG)
 
 In this scenario you will want to charge overnight based on the next day's solar forecast and don't want Predbat to force export (discharge) your battery.
 
@@ -57,7 +57,7 @@ If you are using expert mode then these options maybe worth reviewing:
 
 You should set **select.predbat_mode** to 'Control charge'
 
-## Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)
+## Cheap night rate, with a good export rate (e.g. Go or Intelligent Octopus Go with Octopus Outgoing)
 
 Follow the instructions from the _Cheap Night rate_ above, but also you will also want to have automatic export occurring when the export rates are profitable.
 
@@ -77,6 +77,9 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 | input_number.predbat_best_soc_min |  0 | Can be set non-zero if you want to force a minimum charge level |
 
 You should set **select.predbat_mode** to 'Control charge & discharge'
+
+With the overnight charging rate being cheaper than your export rate, you probably want to charge your EV overnight and export all your solar; and not charge the EV from Solar during the day.
+Settings for doing this vary by charger manufacturer, but for the Zappi charger, set _export margin_ to a value higher than your inverter can output (e.g. 6000W) to ensure that all solar is exported and not used to charge the EV.
 
 ## Multiple rates for import and export (e.g. Octopus Flux & Cozy)
 

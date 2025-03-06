@@ -109,9 +109,11 @@ template: True
 Predbat can speak directly to Home Assistant rather than going via AppDaemon.
 
 If you are using a standard Predbat add-on then this will be automatic and you should normally not need to set this.
-If you find you get issues where Predbat cannot communicate with Home Assistant after running for a long period of time and you get web socket errors, then creating a HA access token can resolve this.
+If you find you get issues where Predbat cannot communicate with Home Assistant after running for a long period of time and you get web socket errors, then creating a HA access key as described below can resolve this.
 
-If you run Predbat in a Docker container then you will need to set the URL or IP address of Home Assistant and an access key which is the long-lived access token you can create inside Home Assistant:
+If you run Predbat in a Docker container then you will need to set the URL or IP address of Home Assistant and an access key.
+
+The access key is a long-lived security access token you can create inside Home Assistant:
 
 - Click on your user initials (bottom left) in HA;
 - Click the Security tab
@@ -657,9 +659,15 @@ so that Predbat's battery prediction plan is not distorted by previous car charg
 - **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the daily incrementing kWh energy data for the car charger.<BR>
 Note that this must be configured to point to an 'energy today' sensor in kWh not an instantaneous power sensor (in kW) from the car charger.<BR>
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in `apps.yaml` for your charger sensor.<BR>
-This can be set to a list of car charging energy sensors, one per line if you have multiple EV car chargers.<BR>
 *TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
-e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.
+e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.<BR>
+car_charging_energy can be set to a list of energy sensors, one per line if you have multiple EV car chargers, or want to exclude multiple loads, e.g.:
+
+```yaml
+  car_charging_energy:
+    - 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+    - sensor.mixergy_ID_energy
+```
 
 - **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
 to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW).
@@ -684,7 +692,9 @@ You should not normally need to change these if you have the Octopus Intelligent
 - **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
 
-- **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed by.
+- **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed by.<BR>
+*Note:* the Octopus Integration now provides [Octopus Intelligent target time](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/#target-time-time) in two formats, either a 'select' entity or a 'time' entity.
+Predbat uses the time entity (time.octopus_energy_{{ACCOUNT_ID}}_intelligent_target_time) which is disabled by default, so you will need to enable the time entity and disable the matching select entity.
 
 - **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit.
 
@@ -721,8 +731,8 @@ Useful if you have a sensor for your car charger that isn't binary.
 
 To make planned car charging more accurate, configure the following items in `apps.yaml`:
 
-- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh. If not set, Predbat defaults to 100kWh.
-It will be used to predict when to stop car charging.
+- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh which *must* be entered with one decimal place, e.g. 50.0.
+If not set, Predbat defaults to 100.0kWh. This will be used to predict when to stop car charging.
 
 - **car_charging_limit** - You should configure this to point to a sensor that specifies the % limit the car is set to charge to.
 This could be a sensor on the EV charger integration or a Home Assistant helper entity you can set as you wish.
