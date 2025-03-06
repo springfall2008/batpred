@@ -36,7 +36,7 @@ With a fixed daily rate tariff you will just be predicting the battery levels, n
 
 You should set **select.predbat_mode** to 'Monitor'.
 
-## Cheap night rate with bad export rate (e.g. Economy 7 with SEG)
+## Cheap night rate with a bad export rate (e.g. Economy 7 with SEG)
 
 In this scenario you will want to charge overnight based on the next day's solar forecast and don't want Predbat to force export (discharge) your battery.
 

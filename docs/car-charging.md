@@ -28,7 +28,7 @@ and through that Predbat gets most of the information it needs.
     If you don't set this Predbat will default to 100%.
     - You can use **car_charging_now** as a workaround to indicate your car is charging but the Intelligent API hasn't reported it
     - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_)
-    can be used to prevent Predbat from assuming the car will be charging when the car is unplugged.
+    can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
     This will only work correctly if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in
     - Let the Octopus app control when your car charges.
 

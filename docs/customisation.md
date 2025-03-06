@@ -155,8 +155,9 @@ You can try computing your discharge curve and check recommendations for changin
 rather than from the normal GivTCP reported 'Battery Capacity kWh' size.
 If your battery size is reported wrongly maybe try turning this on and see if it helps.
 
-**input_number.predbat_load_scaling** is a percentage Scaling factor applied to historical load, increase this if you want to be more pessimistic on future consumption.
-Use 1.0 to use exactly previous load data. A value of 1.1 for example would add 10% to historical load. Note that the output data entity predbat.load_energy_h0 will be scaled accordingly.
+**input_number.predbat_load_scaling** is a percentage Scaling factor applied to the historical load, increase this if you want to be more pessimistic on future consumption.
+Use 1.0 to use exactly the previous load data. A value of 1.1 for example would add 10% to the historical load.
+Note that the output data entity predbat.load_energy_h0 will be scaled accordingly.
 
 **input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling above).
 This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
@@ -329,7 +330,7 @@ This setting is off by default.
 The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 explains how the low power charging works and shows how Predbat automatically creates it.
 
-**input_number.predbat_charge_low_power_margin** (requires switch.predbat_set_charge_low_power to be enabled) controls how many minutes before the completion time to target finishing charging, this defaults to 10
+**input_number.predbat_charge_low_power_margin** (requires switch.predbat_set_charge_low_power to be enabled) Controls how many minutes before the completion time to target finishing charging, this defaults to 10
 but can be changed between 0 and 30.
 
 **switch.predbat_set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
@@ -578,7 +579,7 @@ _CAUTION: If you leave Predbat turned off for a long period of time then the ove
 
 ## Debug
 
-**switch.predbat_debug_enable** when on will create debugging information to aid diagnosis of Predbat issues.  By default this is turned off and its recommended that its only switched on when debug logs are requested. With the switch on:
+**switch.predbat_debug_enable** When on will create lots of debugging information to aid diagnosis of Predbat issues.  By default this is turned off and its recommended that its only switched on when debug logs are requested. With the switch on:
 
 - Firstly Predbat prints lots of extra debug information in the predbat logfile which means the logfile will fill and swap to a new file more rapidly
 - Secondly Predbat will create a debug output file 'debug/predbat_debug_HH_MM_SS.yaml' in a subfolder of the Predbat installation directory.
