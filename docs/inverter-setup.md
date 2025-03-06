@@ -59,11 +59,14 @@ the Configuration tab is now no longer used and all configuration is now done vi
 - Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
 - If you have a single AIO then for Predbat to be able to communicate via REST to the AIO, it MUST be the first device configured in GivTCP.  Conversely if you have a gateway and multiple AIO's then the gateway MUST be the first device in GivTCP
-- WIth multiple inverters you may wish to change the default device prefixes that GivTCP assigns ('givtcp', 'givtcp2', 'givtcp3', etc) to make it easier to identify your devices within Home Assistant.<BR>
-For example if you have a gateway and two AIO's you could use the prefixes 'GW', 'AIO-1' and 'AIO-2'. The prefixes should be set before you start using GivTCP in anger
+- If you have multiple inverters you may wish to change the default device prefixes that GivTCP assigns ('givtcp', 'givtcp2', 'givtcp3', etc)
+to make it easier to identify your devices within Home Assistant.<BR>
+For example, if you have a gateway and two AIOs you could use the prefixes 'GW', 'AIO-1' and 'AIO-2'.
+The prefixes should be set before you start using GivTCP in anger
 as changing the prefixes later on will result in both the old and new sensor names appearing in Home Assistant with the 'old' sensors being "unavailable".<BR>
-Note that if you do change the givtcp prefixes then you will also have to edit the apps.yaml configuration file to match, and change the sensor names that predbat is looking for (by default prefixed 'givtcp_xxx') to your new sensor naming structure
-- Click Next and Next to get to the Selfrun page, and turn on Self run. The Self Run Loop Timer is how often GivTCP will retrieve data from your inverters - it's
+Note that if you do change the givtcp prefixes then you will also have to edit the apps.yaml configuration file to match,
+and change the sensor names that Predbat is looking for (by default prefixed 'givtcp_xxx') to your new sensor naming structure
+- Click Next and Next to get to the Selfrun page, and turn on Self Run. The Self Run Loop Timer is how often GivTCP will retrieve data from your inverters - it's
 recommended that set this to a value between 20 and 60, but not less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
 and won't communicate with the GivEnergy portal and app
 - GivTCP now auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant;
@@ -89,7 +92,7 @@ The rest of the [Predbat installation instructions](install.md) should now be fo
 but its worth highlighting that there are a few specific settings that should be set for certain GivEnergy equipment.
 These settings are documented in the appropriate place in the documentation, but for ease of identification, are repeated here:
 
-- If you are using GivTCP v3 and have an AIO or 3 phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number as the auto-detect doesn't work for this setup
+- If you are using GivTCP v3 and have an AIO or 3-phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number as the auto-detect doesn't work for this setup
 - If you have a single AIO then control is directly to the AIO. Ensure [geserial in apps.yaml](apps-yaml.md#geserial) is correctly picking the AIO and comment out geserial2 lines
 - If you have multiple AIO's then all control of the AIO's is done through the Gateway so [geserial in apps.yaml](apps-yaml.md#geserial) should be set to the Gateway serial number
 - If you have multiple AIO's you might want to consider setting [inverter charge and discharge limits](apps-yaml.md#inverter-control-configurations)

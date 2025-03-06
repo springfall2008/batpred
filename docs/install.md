@@ -260,8 +260,8 @@ If you don't have any solar generation then use a file editor to comment out the
 ```
 
 Note that Predbat does not update Solcast integration for you so you will need to create your own Home Assistant automation that updates the solar
-forecast a few times a day (e.g. dawn, dusk, and just before your nightly charge slot) or use the auto-update configuration option within the Solcast integration. Keep in mind that hobbyist accounts only have 10 polls per day
-so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls needs to be kept under the limit or you will experience failures.
+forecast a few times a day (e.g. dawn, dusk, and just before your nightly charge slot). Keep in mind hobbyist accounts only have 10 polls per day
+so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls need to be kept under the limit or you will experience failures.
 
 Due to the popularity of the Solcast Hobbyist service, Solcast have introduced rate limiting for Hobbyist (free) accounts. If your update gets a 429 error then this is due to rate limiting.
 Solcast recommend that you poll for updated solar forecasts at random times, i.e. don't poll at precisely X o'clock and zero seconds.

@@ -65,8 +65,8 @@ Installation steps:
 - Click the HACS icon on the left-hand side panel
 - Click 'Frontend'
 - Click the three dots in the top right corner then 'Custom Repositories'
-- Paste (or type) in the following repository name `https://github.com/RossMcMillan92/lovelace-collapsable-cards`, choose the Type 'Dashboard', and click Add
-- Close the Custom repositories dialogue
+- Paste (or type) in the following repository name `https://github.com/RossMcMillan92/lovelace-collapsable-cards`, choose Type 'Dashboard', and click Add
+- Close the Custom Repositories dialogue
 - Click 'Explore & Download Repositories'
 - Search for 'collapsable cards', click the name of it, check it's the right one, click 'Download', 'Download' again, then 'Reload'
 - Click 'Explore & Download Repositories' again, search for 'auto-entities', then 'Download', 'Download', 'Reload'
@@ -586,6 +586,10 @@ For example, for each Gen 1 hybrid inverter (N=0, 1, etc if there are multiple i
 - sensor.predbat_ge_N_scheduled_discharge_enable
 
 These sensors can be ignored and excluded from the recorder history if you wish.
+
+## Alert data
+
+- predbat.alerts - Gives you data on the currently active weather alert (if configured) and in the attributes a list of all active alerts with their details
 
 ## Predbat Logfile
 

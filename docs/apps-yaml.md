@@ -730,9 +730,8 @@ Customise for your car charger sensor if it sets sensor values that are not in t
 
 - **car_charging_now** - For some cases finding details of planned car charging is difficult to obtain.<BR>
 The car_charging_now configuration item can be set to point to a Home Assistant sensor that tells you that the car is currently charging.
-Predbat will then assume this 30 minute slot is used for charging regardless of the plan.
-
-If Octopus Intelligent Charging is enabled and car_charging_now indicates that the car is charging then Predbat will also assume that this is a
+Predbat will then assume this 30 minute slot is used for charging regardless of the plan.<BR>
+If Octopus Intelligent Charging is enabled and car_charging_now indicates the car is charging then Predbat will also assume that this is a
 low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.<BR>
 WARNING: Some cars will briefly start charging as soon as they are plugged in, which Predbat will detect and assume that this is a low rate slot even when it isn't.
 It is therefore recommended that you do NOT set car_charging_now unless you have problems with the Octopus Intelligent slots, and car_charging_now should be commented out in `apps.yaml`.
