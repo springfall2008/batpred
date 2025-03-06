@@ -162,6 +162,47 @@ pred_bat:
    - select.givtcp_{geserial}_battery_pause_end_time_slot
    - select.givtcp2_{geserial2}_battery_pause_end_time_slot
 
+  # Only gen3 supports discharge target SOC, will be ignored if not present
+  discharge_target_soc:
+    - number.givtcp_{geserial}_discharge_target_soc_1
+    - number.givtcp2_{geserial2}_discharge_target_soc_1
+
+  # Battery temperature sensor per inverter, used outside REST mode to get current temperature
+  #
+  #battery_temperature:
+  # - sensor.givtcp_battery_stack_1_bms_temperature
+  # - sensor.givtcp2_battery_stack_1_bms_temperature
+
+  # Battery temperature history, only one for modelling, used to predict future temperature
+  #
+  #battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+
+  # Battery temperature charge adjustment curve
+  # Specific in C which is a multiple of the battery capacity
+  # e.g. 0.33 C is 33% of the battery capacity
+  # values unspecified will be assumed to be 1.0 hence rate is capped by max charge rate
+  #battery_temperature_charge_curve:
+  #  19: 0.33
+  #  18: 0.33
+  #  17: 0.33
+  #  16: 0.33
+  #  15: 0.33
+  #  14: 0.33
+  #  13: 0.33
+  #  12: 0.33
+  #  11: 0.33
+  #  10: 0.25
+  #  9: 0.25
+  #  8: 0.25
+  #  7: 0.25
+  #  6: 0.25
+  #  5: 0.25
+  #  4: 0.25
+  #  3: 0.25
+  #  2: 0.25
+  #  1: 0.15
+  #  0: 0.00
+
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
@@ -264,6 +305,7 @@ pred_bat:
     - 'latched'
     - 'locked'
     - 'plugged in'
+    - 'waiting'
 
   # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
   # The car charging now can be set to a sensor to indicate the car is charging and to plan
@@ -298,7 +340,7 @@ pred_bat:
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
   # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
   octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
-  octopus_ready_time: 're:(time.octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
 
   # Example alternative configuration for Ohme integration release >=v0.6.1
@@ -348,6 +390,10 @@ pred_bat:
   # If you don't want to show the standing charge then just delete this line or set to zero
   metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
 
+  # Energy data service (https://github.com/MTrab/energidataservice)
+  #metric_energidataservice_import: 'sensor.energi_data_service_import'
+  #metric_energidataservice_export: 'sensor.energi_data_service_export'
+
   # Or set your actual rates across time for import and export
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with zero rate
@@ -365,7 +411,7 @@ pred_bat:
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
   # rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
-  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-FLEX-BB-23-02-08/electricity-tariffs/E-1R-AGILE-FLEX-BB-23-02-08-A/standard-unit-rates"
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-BB-24-10-01/electricity-tariffs/E-1R-AGILE-BB-24-10-01-A/standard-unit-rates/"
 
   # Overrides metric_octopus_export and rates_export
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-A/standard-unit-rates"
@@ -446,6 +492,68 @@ pred_bat:
   #futurerate_peak_end: "19:00:00"
   #futurerate_peak_premium_import: 14
   #futurerate_peak_premium_export: 6.5
+
+  # Tariff comparison feature
+  # Adjust this list to the tariffs you want to compare, include your current tariff also
+  # Octopus region code (https://energy-stats.uk/dno-region-codes-explained/)
+  #octopus_region: "A"
+  #compare_list:
+  #  - id: 'current'
+  #    name: 'Current Tariff'
+  #  - id: 'cap_seg'
+  #    name: 'Price cap import/Seg export'
+  #    rates_import:
+  #       - rate: 24.86
+  #    rates_export:
+  #       - rate: 4.1
+  #  - id: 'igo_fixed'
+  #    name: 'Intelligent GO import/Fixed export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-BB-VAR-23-03-01/electricity-tariffs/E-1R-INTELLI-BB-VAR-23-03-01-{octopus_region}/standard-unit-rates/'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{octopus_region}/standard-unit-rates/'
+  #  - id: 'igo_agile'
+  #    name: 'Intelligent GO import/Agile export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-BB-VAR-23-03-01/electricity-tariffs/E-1R-INTELLI-BB-VAR-23-03-01-{octopus_region}/standard-unit-rates/'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-{octopus_region}/standard-unit-rates/'
+  #  - id: 'go_fixed'
+  #    name: 'GO import/Fixed export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/GO-VAR-BB-23-02-07/electricity-tariffs/E-1R-GO-VAR-BB-23-02-07-{octopus_region}/standard-unit-rates/'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{octopus_region}/standard-unit-rates/'
+  #  - id: 'go_agile'
+  #    name: 'GO import/Agile export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/GO-VAR-BB-23-02-07/electricity-tariffs/E-1R-GO-VAR-BB-23-02-07-{octopus_region}/standard-unit-rates/'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-{octopus_region}/standard-unit-rates/'
+  #  - id: 'agile_fixed'
+  #    name: 'Agile import/Fixed export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{octopus_region}/standard-unit-rates/'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{octopus_region}/standard-unit-rates/'
+  #  - id: 'agile_agile'
+  #    name: 'Agile import/Agile export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{octopus_region}/standard-unit-rates/'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-{octopus_region}/standard-unit-rates/'
+  #  - id: 'flux'
+  #    name: 'Flux import/Export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-{octopus_region}/standard-unit-rates'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-{octopus_region}/standard-unit-rates'
+  #  - id: 'cosy_fixed'
+  #    name: 'Cosy import/Fixed export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{octopus_region}/standard-unit-rates'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{octopus_region}/standard-unit-rates/'
+  #  - id: 'cosy_agile'
+  #    name: 'Cosy import/Agile export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{octopus_region}/standard-unit-rates'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-{octopus_region}/standard-unit-rates/'
+  #  - id: 'snug_fixed'
+  #    name: 'Snug import/Fixed export'
+  #    rates_import_octopus_url: 'https://api.octopus.energy/v1/products/SNUG-24-11-07/electricity-tariffs/E-1R-SNUG-24-11-07-{octopus_region}/standard-unit-rates/'
+  #    rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{octopus_region}/standard-unit-rates/'
+
+  # Alert feeds - customise to your country and the alert types, severity and keep value
+  #alerts:
+  #  url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
+  #  event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
+  #  severity: "Moderate|Severe|Extreme"
+  #  certainty: "Possible|Likely|Expected"
+  #  keep: 40
 
   # Watch list, a list of sensors to watch for changes and then update the plan if they change
   # This is useful for things like the Octopus Intelligent Slot sensor so that the plan update as soon as you plugin in

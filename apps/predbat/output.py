@@ -527,6 +527,8 @@ class Output:
         else:
             html += "<td><b>PV kWh</b></td>"
             html += "<td><b>Load kWh</b></td>"
+        if plan_debug and self.load_forecast:
+            html += "<td><b>XLoad kWh</b></td>"
         if self.num_cars > 0:
             html += "<td><b>Car kWh</b></td>"
         if self.iboost_enable:
@@ -540,14 +542,19 @@ class Output:
         html += "</tr>"
         return html
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
         """
         Publish the current plan in HTML format
         """
         plan_debug = self.get_arg("plan_debug")
+        mode = self.predbat_mode
+        if self.set_read_only:
+            mode += " (read only)"
+        if self.debug_enable:
+            mode += " (debug)"
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} previous status: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION, self.current_status)
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} previous status: {} mode: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION, self.current_status, mode)
         config_str = f"best_soc_min {self.best_soc_min} best_soc_max {self.best_soc_max} best_soc_keep {self.best_soc_keep} carbon_metric {self.carbon_metric} metric_self_sufficiency {self.metric_self_sufficiency} metric_battery_value_scaling {self.metric_battery_value_scaling}"
         html += "</tr><tr>"
         html += "<td colspan=10> {}</td>".format(config_str)
@@ -571,6 +578,7 @@ class Output:
             rate_value_export = dp2(self.rate_export.get(minute, 0))
             charge_window_n = -1
             export_window_n = -1
+            in_alert = True if self.alert_active_keep.get(minute, 0) > 0 else False
 
             import_cost_threshold = self.rate_import_cost_threshold
             export_cost_threshold = self.rate_export_cost_threshold
@@ -624,16 +632,6 @@ class Output:
 
             if export_window_n >= 0 and not in_span:
                 export_end_minute = self.export_window_best[export_window_n]["end"]
-                charge_intersect = -1
-                for try_minute in range(minute_start, export_end_minute, PREDICT_STEP):
-                    charge_intersect = self.in_charge_window(self.charge_window_best, try_minute)
-                    if charge_intersect >= 0 and self.charge_limit_best[charge_intersect] == 0:
-                        charge_intersect = -1
-                    if charge_intersect >= 0:
-                        break
-                if charge_intersect >= 0:
-                    export_end_minute = min(export_end_minute, self.charge_window_best[charge_intersect]["start"])
-
                 rowspan = int((export_end_minute - minute) / 30)
                 start = self.export_window_best[export_window_n]["start"]
                 if start <= minute and rowspan > 1 and (charge_window_n < 0):
@@ -647,24 +645,49 @@ class Output:
             load_forecast = 0
             pv_forecast10 = 0
             load_forecast10 = 0
+            extra_forecast_array = [0 for i in range(len(self.load_forecast_array))]
             for offset in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP):
                 pv_forecast += pv_forecast_minute_step.get(offset, 0.0)
                 load_forecast += load_minutes_step.get(offset, 0.0)
                 pv_forecast10 += pv_forecast_minute_step10.get(offset, 0.0)
                 load_forecast10 += load_minutes_step10.get(offset, 0.0)
+                id = 0
+                for xload in self.load_forecast_array:
+                    for step in range(PREDICT_STEP):
+                        extra_forecast_array[id] += self.get_from_incrementing(xload, offset + self.minutes_now + step, backwards=False)
+                    id += 1
 
             pv_forecast = dp2(pv_forecast)
             load_forecast = dp2(load_forecast)
             pv_forecast10 = dp2(pv_forecast10)
             load_forecast10 = dp2(load_forecast10)
 
+            extra_forecast = ""
+            extra_forecast_total = 0
+            for value in extra_forecast_array:
+                if extra_forecast:
+                    extra_forecast += ", "
+                extra_forecast += str(dp2(value))
+                extra_forecast_total += value
+
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
             soc_percent_end_window = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
-            soc_percent_max = max(soc_percent, soc_percent_end)
-            soc_percent_min = min(soc_percent, soc_percent_end)
-            soc_percent_max_window = max(soc_percent, soc_percent_end_window)
-            soc_percent_min_window = min(soc_percent, soc_percent_end_window)
+            soc_min = self.soc_max
+            soc_max = 0
+            for minute_check in range(minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
+                soc_min = min(self.predict_soc_best.get(minute_check, 0), soc_min)
+                soc_max = max(self.predict_soc_best.get(minute_check, 0), soc_max)
+            soc_percent_min = calc_percent_limit(soc_min, self.soc_max)
+            soc_percent_max = calc_percent_limit(soc_max, self.soc_max)
+            soc_min_window = self.soc_max
+            soc_max_window = 0
+            for minute_check in range(minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
+                soc_min_window = min(self.predict_soc_best.get(minute_check, 0), soc_min_window)
+                soc_max_window = max(self.predict_soc_best.get(minute_check, 0), soc_max_window)
+            soc_percent_min_window = calc_percent_limit(soc_min_window, self.soc_max)
+            soc_percent_max_window = calc_percent_limit(soc_max_window, self.soc_max)
+
             soc_change = self.predict_soc_best.get(minute_relative_slot_end, 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
             metric_start = self.predict_metric_best.get(minute_relative_start, 0.0)
             metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
@@ -685,6 +708,7 @@ class Output:
 
             pv_color = "#BCBCBC"
             load_color = "#FFFFFF"
+            extra_color = "#FFFFFF"
             rate_color_import = "#FFFFAA"
             rate_color_export = "#FFFFFF"
             soc_color = "#3AEE85"
@@ -716,7 +740,15 @@ class Output:
             elif load_forecast > 0.0:
                 load_color = "#AAFFAA"
 
+            if extra_forecast_total >= 0.5:
+                extra_color = "#F18261"
+            elif extra_forecast_total >= 0.25:
+                extra_color = "#FFFF00"
+            elif extra_forecast_total > 0.0:
+                extra_color = "#AAFFAA"
+
             load_forecast = str(load_forecast)
+
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))
 
@@ -731,6 +763,8 @@ class Output:
                 rate_color_export = "#F18261"
             elif rate_value_export >= export_cost_threshold:
                 rate_color_export = "#FFFFAA"
+
+            had_state = False
 
             if charge_window_n >= 0:
                 limit = self.charge_limit_best[charge_window_n]
@@ -758,6 +792,9 @@ class Output:
                     elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
                         state += " &#8526;"
                     show_limit = str(limit_percent)
+                    had_state = True
+                    if plan_debug:
+                        show_limit += " ({})".format(str(calc_percent_limit(self.charge_limit_best[charge_window_n], self.soc_max)))
             else:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]
@@ -771,6 +808,7 @@ class Output:
                             state = " &rarr;"
                         state_color = "#FFFFFF"
                         show_limit = ""
+                        had_state = True
 
             if export_window_n >= 0:
                 limit = self.export_limits_best[export_window_n]
@@ -778,7 +816,7 @@ class Output:
                     limit = self.export_window_best[export_window_n]["target"]
 
                 if limit == 99:  # freeze exporting
-                    if state == soc_sym:
+                    if not had_state:
                         state = ""
                     if state:
                         state += "</td><td bgcolor=#AAAAAA>"  # charging and freeze exporting in same slot, split the state into two
@@ -788,7 +826,7 @@ class Output:
                     state += "FrzExp&rarr;"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
                 elif limit < 100:
-                    if state == soc_sym:
+                    if not had_state:
                         state = ""
                     if state:
                         state += "</td><td bgcolor=#FFFF00>"  # charging and exporting in the same slot, split the state into two
@@ -805,6 +843,10 @@ class Output:
                     state += " &#8526;"
                 elif self.export_window_best[export_window_n]["start"] in self.manual_freeze_export_times:
                     state += " &#8526;"
+
+            # Alert
+            if in_alert:
+                state = "&#9888;" + state
 
             # Import and export rates -> to string
             adjust_type = self.rate_import_replicated.get(minute, None)
@@ -940,6 +982,8 @@ class Output:
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
             html += "<td bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
             html += "<td bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
+            if plan_debug and self.load_forecast:
+                html += "<td bgcolor=" + extra_color + ">" + str(extra_forecast) + "</td>"
             if self.num_cars > 0:  # Don't display car charging data if there's no car
                 html += "<td bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
@@ -953,8 +997,12 @@ class Output:
             html += "</tr>"
         html += "</table>"
         html = html.replace("£", "&#163;")
-        self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
-        self.html_plan = html
+
+        if publish:
+            self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+            self.html_plan = html
+
+        return html
 
     def publish_rates(self, rates, export, gas=False):
         """
@@ -1987,7 +2035,7 @@ class Output:
         self.log("Yesterday basic charge window best: {} charge limit best: {}".format(charge_window_best, charge_limit_best))
 
         # Get Cost yesterday
-        cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2)
+        cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
         if not cost_today_data:
             self.log("Warn: No cost_today data for yesterday")
             return
@@ -1996,12 +2044,13 @@ class Output:
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
 
-        cost_today_car_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today_car", days=2)
+        cost_today_car_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today_car", days=2, required=False)
         if not cost_today_car_data:
             cost_today_car_data = {}
             cost_data_car = {}
             cost_yesterday_car = 0
             cost_data_car_per_kwh = 0
+            cost_car_per_kwh = 0
         else:
             cost_data_car = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             cost_data_car_per_kwh = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
@@ -2034,9 +2083,8 @@ class Output:
             )
 
         # Save step data for debug
-        if self.debug_enable:
-            self.yesterday_load_step = yesterday_load_step
-            self.yesterday_pv_step = yesterday_pv_step
+        self.yesterday_load_step = yesterday_load_step
+        self.yesterday_pv_step = yesterday_pv_step
 
         # Save state
         minutes_now = self.minutes_now
@@ -2268,13 +2316,16 @@ class Output:
         txt += " ]"
         return txt
 
-    def dashboard_item(self, entity, state, attributes):
+    def dashboard_item(self, entity, state, attributes, app=None):
         """
         Publish state and log dashboard item
         """
         self.set_state_wrapper(entity_id=entity, state=state, attributes=attributes)
-        if entity not in self.dashboard_index:
-            self.dashboard_index.append(entity)
+        if app:
+            self.dashboard_index_app[entity] = app
+        else:
+            if entity not in self.dashboard_index:
+                self.dashboard_index.append(entity)
         self.dashboard_values[entity] = {}
         self.dashboard_values[entity]["state"] = state
         self.dashboard_values[entity]["attributes"] = attributes

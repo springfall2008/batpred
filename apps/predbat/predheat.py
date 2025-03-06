@@ -75,6 +75,35 @@ class PredHeat:
     The heating prediction class itself
     """
 
+    def fill_table_gaps(self, table):
+        """
+        Fill gaps correction tables
+        """
+        if not table:
+            return table
+
+        sorted_keys = sorted(table.keys())
+        max_key = max(sorted_keys)
+        min_key = min(sorted_keys)
+        last_key = min_key
+        last_value = table[min_key]
+        new_table = {}
+
+        for key in range(min_key, max_key + 1):
+            if key not in table:
+                next_value = last_value
+                for next_key in range(key + 1, max_key + 1):
+                    if next_key in table:
+                        next_value = table[next_key]
+                        break
+                interpolated = (next_value - last_value) / (next_key - last_key) * (key - last_key) + last_value
+                new_table[key] = round(interpolated, 4)
+            else:
+                last_key = key
+                last_value = table[key]
+                new_table[key] = last_value
+        return new_table
+
     def __init__(self, base):
         self.base = base
         self.log = base.log
@@ -90,6 +119,10 @@ class PredHeat:
         self.heat_pump_efficiency = HEAT_PUMP_EFFICIENCY.copy()
         self.gas_efficiency = GAS_EFFICIENCY.copy()
         self.delta_correction = DELTA_CORRECTION.copy()
+        self.weather_compensation = {}
+        self.weather_compensation_enabled = False
+        self.hysteresis_on = abs(self.get_arg("hysteresis", 0.5, domain="predheat"))
+        self.hysteresis_off = abs(self.get_arg("hysteresis_off", 0.1, domain="predheat"))
 
         # Collect predheat settings
         heat_pump_efficiency = self.get_arg("heat_pump_efficiency", {}, domain="predheat")
@@ -104,10 +137,26 @@ class PredHeat:
         for key, value in delta_correction.items():
             self.delta_correction[key] = value
 
+        weather_compensation = self.get_arg("weather_compensation", {}, domain="predheat")
+        if weather_compensation:
+            for key, value in weather_compensation.items():
+                self.weather_compensation[key] = value
+            self.weather_compensation_enabled = True
+
+        # Fill gaps in tables
+        self.delta_correction = self.fill_table_gaps(self.delta_correction)
+        self.gas_efficiency = self.fill_table_gaps(self.gas_efficiency)
+        self.heat_pump_efficiency = self.fill_table_gaps(self.heat_pump_efficiency)
+        self.weather_compensation = self.fill_table_gaps(self.weather_compensation)
+
         self.heat_pump_efficiency_max = max(self.heat_pump_efficiency.values())
-        print("Predheat: Gas boiler efficiency {}".format(self.gas_efficiency))
-        print("Predheat: Heat pump efficiency {}".format(self.heat_pump_efficiency))
-        print("Predheat: Heat pump efficiency max {}".format(self.heat_pump_efficiency_max))
+        self.log("Predheat: Delta correction {}".format(self.delta_correction))
+        self.log("Predheat: Gas boiler efficiency {}".format(self.gas_efficiency))
+        self.log("Predheat: Heat pump efficiency {}".format(self.heat_pump_efficiency))
+        self.log("Predheat: Heat pump efficiency max {}".format(self.heat_pump_efficiency_max))
+
+        if self.weather_compensation_enabled:
+            self.log("Predheat: Weather compensation {}".format(self.weather_compensation))
 
     def minutes_to_time(self, updated, now):
         """
@@ -201,7 +250,7 @@ class PredHeat:
             index += 24 * 60
         return data.get(index, 0)
 
-    def get_historical(self, data, minute):
+    def get_historical(self, data, minute, default=0):
         """
         Get historical data across N previous days in days_previous array based on current minute
         """
@@ -226,7 +275,7 @@ class PredHeat:
 
         # Zero data?
         if total_weight == 0:
-            return 0
+            return default
         else:
             return total / total_weight
 
@@ -256,9 +305,9 @@ class PredHeat:
         # Find temperature adjustment points (thermostat turned up)
         adjust_ptr = -1
         if last_predict_minute:
-            last_target_temp = self.get_historical(self.target_temperature, 0)
+            last_target_temp = self.get_historical(self.target_temperature, 0, default=20.0)
             for minute in range(0, self.forecast_days * 24 * 60, PREDICT_STEP):
-                target_temp = self.get_historical(self.target_temperature, minute)
+                target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
                 if target_temp > last_target_temp:
                     adjust = {}
                     adjust["from"] = last_target_temp
@@ -283,7 +332,7 @@ class PredHeat:
             minute_absolute = minute + self.minutes_now
             external_temp = self.temperatures.get(minute, external_temp)
 
-            target_temp = self.get_historical(self.target_temperature, minute)
+            target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
 
             # Find the next temperature adjustment
             next_adjust = None
@@ -308,10 +357,10 @@ class PredHeat:
             # Thermostat model, override with current state also
             if minute == 0:
                 heating_on = heating_active
-            elif temp_diff_inside >= 0.1:
-                heating_on = True
-            elif temp_diff_inside <= 0:
+            elif heating_on and temp_diff_inside <= -self.hysteresis_on:
                 heating_on = False
+            elif not heating_on and temp_diff_inside >= self.hysteresis_off:
+                heating_on = True
 
             heat_loss_current = self.heat_loss_watts * temp_diff_outside * PREDICT_STEP / 60.0
             heat_loss_current -= self.heat_gain_static * PREDICT_STEP / 60.0
@@ -321,49 +370,48 @@ class PredHeat:
             heat_power_in = 0
             heat_power_out = 0
             if heating_on:
+                out_temp = int(external_temp + 0.5)
+                out_temp = min(max(out_temp, -20), 20)
                 heat_to = target_temp
-                flow_temp = self.flow_temp
+
+                if self.weather_compensation_enabled:
+                    flow_temp = self.weather_compensation.get(out_temp)
+                else:
+                    flow_temp = self.flow_temp
+
                 if volume_temp < flow_temp:
                     flow_temp_diff = min(flow_temp - volume_temp, self.flow_difference_target)
                     power_percent = flow_temp_diff / self.flow_difference_target
-                    heat_power_in = self.heat_max_power * power_percent
-                    heat_power_in = max(self.heat_min_power, heat_power_in)
-                    heat_power_in = min(self.heat_max_power, heat_power_in)
+                    heat_power_out = self.heat_max_power * power_percent
+                    heat_power_out = max(self.heat_min_power, heat_power_out)
+                    heat_power_out = min(self.heat_max_power, heat_power_out)
 
                     # self.log("Minute {} flow {} volume {} diff {} power {} kw".format(minute, flow_temp, volume_temp, flow_temp_diff, heat_power_in / 1000.0))
 
-                energy_now = heat_power_in * PREDICT_STEP / 60.0 / 1000.0
-                cost += energy_now * self.rate_import.get(minute_absolute, 0)
-
-                heat_energy += energy_now
-                heat_power_out = heat_power_in * self.heat_cop
-
                 if self.mode == "gas":
                     # Gas boiler flow temperature adjustment in efficiency based on flow temp
-                    inlet_temp = int(volume_temp / 10 + 0.5) * 10
+                    inlet_temp = int(volume_temp + 0.5)
+                    inlet_temp = min(max(inlet_temp, 0), 100)
                     condensing = self.gas_efficiency.get(inlet_temp, 0.80)
-                    heat_power_out *= condensing
+                    heat_power_in = heat_power_out / (condensing * self.heat_cop)
                 else:
                     # Heat pump efficiency based on outdoor temp
-                    out_temp = int(external_temp / 2 + 0.5) * 2
 
-                    # Filling gaps in COP table
-                    if out_temp < 0:
-                        out_temp_use = -20
-                    else:
-                        out_temp_use = 20
+                    cop_adjust = self.heat_pump_efficiency.get(out_temp, self.heat_pump_efficiency_max) / self.heat_pump_efficiency_max
+                    heat_power_in = heat_power_out / (self.heat_cop * cop_adjust)
 
-                    cop_adjust = self.heat_pump_efficiency.get(out_temp, self.heat_pump_efficiency.get(out_temp_use)) / self.heat_pump_efficiency_max
-                    heat_power_out *= cop_adjust
+                energy_now_in = heat_power_in * PREDICT_STEP / 60.0 / 1000.0
+                energy_now_out = heat_power_out * PREDICT_STEP / 60.0 / 1000.0
+
+                cost += energy_now_in * self.rate_import.get(minute_absolute, 0)
+                heat_energy += energy_now_in
 
                 # 1.16 watts required to raise water by 1 degree in 1 hour
                 volume_temp += (heat_power_out / WATTS_TO_DEGREES / self.heat_volume) * PREDICT_STEP / 60.0
 
             flow_delta = volume_temp - internal_temp
-            flow_delta_rounded = int(flow_delta / 5 + 0.5) * 5
-            flow_delta_rounded = max(flow_delta_rounded, 0)
-            flow_delta_rounded = min(flow_delta_rounded, 75)
-            correction = self.delta_correction.get(flow_delta_rounded, 0)
+            flow_delta_rounded = min(max(int(flow_delta), 0), 75)
+            correction = self.delta_correction.get(flow_delta_rounded, 1.0)
             heat_output = self.heat_output * correction
 
             # Cooling of the radiators
@@ -515,9 +563,10 @@ class PredHeat:
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
         self.next_volume_temp = self.get_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]))
 
+        self.log("Predheat: Hysteresis On {} off {} heat loss {} W heat loss {} W per degree".format(self.hysteresis_on, self.hysteresis_off, self.heat_loss_watts, self.heat_loss_degrees))
         self.log(
-            "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {} volume temp {}".format(
-                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, dp2(self.heat_energy_today), dp3(self.next_volume_temp)
+            "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {} volume temp {} internal temp {} external temp {}".format(
+                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, dp2(self.heat_energy_today), dp3(self.next_volume_temp), dp3(self.internal_temperature[0]), dp3(self.external_temperature[0])
             )
         )
         self.get_weather_data(now_utc)

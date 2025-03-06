@@ -11,13 +11,14 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | Huawei inverters | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
    | SolarEdge inverters | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
    | Givenergy with GE Cloud | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
-   | Givenergy with GE Cloud EMC | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
+   | Givenergy with GE Cloud EMC | [ge_cloud EMC](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
+   | Givenergy/Octopus No Home Assistant | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml)
    | SunSynk | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | LuxPower | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
-   | Solar Assistant | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [solar_assistant.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant.yaml) |
+   | Growatt with Solar Assistant | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [solar_assistant_growatt.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt.yaml) |
 
-Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
+Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
 NB: By default the apps.yaml template for GivTCP is installed with Predbat.
 If you are using a different inverter then you will need to copy the appropriate apps.yaml template from the above list and use it to **replace the GivTCP apps.yaml** - if
@@ -25,8 +26,8 @@ you copy but don't replace the standard template then Predbat will not function 
 
 ## GivEnergy with GivTCP
 
-Its recommended that you firstly watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=ygD9KyciX54).
-Although the video covers GivTCP v2 and v3 has been recently released, the install and setup process is very similar.
+It's recommended that you first watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=ygD9KyciX54).
+Although the video covers GivTCP v2 and v3 has been recently released, the installation and setup process are very similar.
 
 The below instructions assume you are installing GivTCP v3, with changes highlighted against GivTCP v2 as covered in the video.
 
@@ -47,14 +48,14 @@ Mosquitto broker should appear as a Discovered integration so click the blue 'CO
 '[https://github.com/britkat1980/ha-addons](https://github.com/britkat1980/ha-addons')' into the text box and click 'Add' the 'Close'<BR>
 NB: this URL is for GivTCP v3, not v2 as covered in the video.
 - Click the back button and then re-navigate to Settings / Add-ons / Add-on Store so Home Assistant picks up the GivTCP add-on from the custom repository
-- Scroll down the add-on store list, to find 'GivTCP-V3', you should see the three addon's; the production version, the latest beta and the latest dev versions.
+- Scroll down the add-on store list, to find 'GivTCP-V3', you should see the three addons; the production version, the latest beta and the latest dev versions.
 Click on the 'GivTCP' add-on, then click 'INSTALL'
 - Once GivTCP has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on
 
 3. Configure GivTCP:
 
 - The configuration process for GivTCP in v3 has changed from that shown in the video,
-the Configuration tab is now no longer used and all configuration is now done via the add-on's Web interface
+the Configuration tab is no longer used and all configuration is now done via the add-on's Web interface
 - On the GivTCP add-on, click 'START' to start the add-on
 - Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
@@ -74,7 +75,7 @@ you won't need to create a dedicated MQTT user or enter the details on the MQTT 
 - You don't need to configure the Influx page. Tariff and Palm pages can also be skipped as these functions are done by Predbat
 - (Optional) On the Web page, you can turn the Dashboard on to see a simple power flow diagram for your inverters (similar to the GivEnergy mobile app)
 - On the 'Misc' page check that 'Print Raw' is set to on for added monitoring
-- Finally click 'Save and Restart' and GivTCP should start communicating with your inverters
+- Finally, click 'Save and Restart' and GivTCP should start communicating with your inverters
 and will automatically create a set of 'givtcp_xxx' entities in Home Assistant for your inverter data, inverter controls and battery data
 - Check the GivTCP Log tab that there aren't any errors; it should end with 'Publishing Home Assistant Discovery messages'
 
@@ -94,18 +95,18 @@ These settings are documented in the appropriate place in the documentation, but
 
 - If you are using GivTCP v3 and have an AIO or 3-phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number as the auto-detect doesn't work for this setup
 - If you have a single AIO then control is directly to the AIO. Ensure [geserial in apps.yaml](apps-yaml.md#geserial) is correctly picking the AIO and comment out geserial2 lines
-- If you have multiple AIO's then all control of the AIO's is done through the Gateway so [geserial in apps.yaml](apps-yaml.md#geserial) should be set to the Gateway serial number
-- If you have multiple AIO's you might want to consider setting [inverter charge and discharge limits](apps-yaml.md#inverter-control-configurations)
+- If you have multiple AIOs then all control of the AIOs is done through the Gateway so [geserial in apps.yaml](apps-yaml.md#geserial) should be set to the Gateway serial number
+- If you have multiple AIOs you might want to consider setting [inverter charge and discharge limits](apps-yaml.md#inverter-control-configurations)
 unless you want to charge and discharge at the full 12kWh!
 - If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set [battery_scaling in apps.yaml](apps-yaml.md#battery-size-scaling)
 as the battery size is incorrectly reported to GivTCP
 - If you have an older inverter with battery pause support you may need to [comment out pause start and end time controls in apps.yaml](apps-yaml.md#home-assistant-entity-inverter-control)
 - If you have a Gen 2, Gen 3 or AIO then you may need to set [inverter_reserve_max in apps.yaml](apps-yaml.md#inverter-reserve-maximum) to 98.
-If you have a Gen 1 or a firmware version that allows reserve being set to 100 then you can change the default from 98 to 100
+If you have a Gen 1 or a firmware version that allows the reserve being set to 100 then you can change the default from 98 to 100
 - If your inverter has been wired as an EPS (Emergency Power Supply) or AIO 'whole home backup', consider setting
 [input_number.predbat_set_reserve_min](customisation.md#inverter-control-options) to reserve some battery power for use in emergencies.
 
-**NB: GivTCP and Predbat do not currently yet work together for 3 phase inverters**.
+**NB: GivTCP and Predbat do not currently yet work together for 3-phase inverters**.
 This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable to charge or discharge 3 phase inverters with predbat](https://github.com/britkat1980/giv_tcp/issues/218)
 
 ## Solis Inverters
@@ -125,9 +126,9 @@ To run PredBat with Solis hybrid inverters, follow the following steps:
    The majority of settings should be correct but please check.
    You will need to un-comment the `template` line to enable it. Save it to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
    Set **solax_modbus_new** in apps.yaml to True if you have integration version 2024.03.2 or greater
-6. Ensure that the inverter is set Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
+6. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
-   this is not fully tested. In due course these mode settings will be incorporated into the code.
+   this is not fully tested. In due course, these mode settings will be incorporated into the code.
 
 ## Solax Gen4 Inverters
 
@@ -139,7 +140,7 @@ Please see this ticket in Github for ongoing discussion: <https://github.com/spr
 
 ## Sofar Inverters
 
-For this integration the key elements are:
+For this integration, the key elements are:
 
 - Hardware - [sofar2mqtt EPS board](https://www.instructables.com/Sofar2mqtt-Remote-Control-for-Sofar-Solar-Inverter/) - Relatively easy to solder and flash, or can be bought pre-made.
 - Software - [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) - MQTT integration
@@ -156,17 +157,17 @@ Please see this ticket in Github for ongoing discussions: <https://github.com/sp
 
 ## Huawei Inverters
 
-Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684>
+The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684>
 
-- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> and modify for your system
-- Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which maybe 12%
+- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> and modify them for your system
+- Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which may be 12%
 
 ## SolarEdge Inverters
 
-Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181>
+The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181>
 
-- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> and modify for your system
-- Ensure that **number.solaredge_i1_storage_command_timeout** is set to reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled
+- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> and modify them for your system
+- Ensure that **number.solaredge_i1_storage_command_timeout** is set to a reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled
 - Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
 and switch.solaredge_i1_advanced_power_control must be on.
 
@@ -215,22 +216,31 @@ sensor:
     name: solar_panel_production_kwh
 ```
 
-## Givenergy with ge_cloud
+## GivEnergy with ge_cloud
 
-This is experimental system, please discuss on the ticket: <https://github.com/springfall2008/batpred/issues/905>
+This is an experimental system, please discuss it on the ticket: <https://github.com/springfall2008/batpred/issues/905>
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
 - Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit
     - Set geserial to your inverter serial
 - Make sure discharge down to registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled (if you have them)
 
-## Givenergy with EMC
+## GivEnergy with EMC
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
 - Now copy the template givenergy_emc.yaml from templates into your apps.yaml and edit
     - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
     - Set geseriale to the EMS inverter serial number (look in HA for entity names)
 - Turn off slots 2, 3 and 4 for charge, export and discharge as Predbat will only use 1 slot (set the start and end times to 00:00)
+
+## GivEnergy/Octopus Cloud Direct - No Home Assistant
+
+- Take the template and enter you GivEnergy API key directly into apps.yaml
+- Set your Octopus API key in apps.yaml
+- Set your Solcast API key in apps.yaml
+- Review any other configuration settings
+
+Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.
 
 ## Fox
 
@@ -239,7 +249,7 @@ This is experimental system, please discuss on the ticket: <https://github.com/s
 - I've managed to get Batpred working on my Fox ESS inverter, connected via an Elfin EW11 modbus and using Nathan's Fox ESS Modbus tool.
 See: <https://github.com/springfall2008/batpred/issues/1401>
 
-Template is in the templates area, give it a try
+The template is in the templates area, give it a try
 
 ## Lux Power
 
@@ -247,11 +257,11 @@ This requires the LuxPython component which integrates with your Lux Power inver
 
 - Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required
 
-## Solar Assistant
+## Growatt with Solar Assistant
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
 
-Copy the template solar_assistant.yaml from templates into your apps.yaml and edit inverter and battery settings as required (the template has growatt, yours might/will have different entity ids on Home Assistant)
+Copy the template solar_assistant_growatt.yaml from templates into your apps.yaml and edit inverter and battery settings as required (the template has growatt, yours might/will have different entity IDs on Home Assistant)
 
 ## Sunsynk
 
@@ -283,12 +293,12 @@ trigger:
     id: predbat_charge_off
   - platform: state
     entity_id:
-      - binary_sensor.predbat_discharging
+      - binary_sensor.predbat_exporting
     to: "on"
     id: predbat_discharge_on
   - platform: state
     entity_id:
-      - binary_sensor.predbat_discharging
+      - binary_sensor.predbat_exporting
     to: "off"
     id: predbat_discharge_off
 condition: []
@@ -382,7 +392,7 @@ template:
         * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
-#### Sunsynk Battery Max DisCharge Rate
+#### Sunsynk Battery Max Discharge Rate
 
 ```yaml
 - name: "sunsynk_max_battery_discharge_rate"
@@ -418,10 +428,10 @@ template:
 ## I want to add an unsupported inverter to Predbat
 
 - First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have
-- Create a github ticket for support and add in what you know to the ticket
+- Create a GitHub ticket for support and add what you know to the ticket
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
 - You can create a new inverter type in apps.yaml and change the options as to which controls it has
-- The easy way to integrate is to use a HA service to start charges and discharges, edit the template below
+- The easy way to integrate is to use a Home Assistant service to start charges and discharges, edit the template below
 
 ```yaml
  inverter_type: MINE
@@ -464,7 +474,7 @@ template:
 
 ## Inverter control option
 
-The follow options are supported per inverter:
+The following options are supported per inverter:
 
 ### has_rest_api
 
@@ -474,9 +484,9 @@ When True the REST API will be used to fetch data/control the inverter. This is 
 
 When True the MQTT API to Home Assistant will be used to issue control messages for the inverter
 
-The mqtt/publish service is used with the topic as defined by **mqtt_topic** in apps.yaml
+The MQTT/publish service is used with the topic as defined by **mqtt_topic** in apps.yaml
 
-Messages will be sent these controls:
+Messages will be sent through these controls:
 
 Values that are updated:
 
@@ -529,6 +539,18 @@ charge_start_service:
      entity_id: switch.tsunami_charger
 ```
 
+Note: By default the service will only be called once until things change, e.g. **charge_start_service** will be called once and then won't be called again until **charge_stop_service** stops the charge.
+If however, you want the service to be called on each Predbat run then you should set **repeat** to True for the given service e.g:
+
+```yaml
+charge_start_service:
+   - service: my_charge_start_service
+     device_id: {device_id}
+     power: {power}
+     soc: {target_soc}
+     repeat: True
+```
+
 #### charge_start_service
 
 Called to start a charge
@@ -541,7 +563,7 @@ The default options passed in are:
 
 #### charge_freeze_service
 
-If defined will be called for freeze charge, otherwise charge_start_service is used for freeze charge also.
+If defined will be called for freeze charge, otherwise, charge_start_service is used for freeze charge also.
 
 #### discharge_start_service
 
@@ -555,7 +577,7 @@ The default options passed in are:
 
 #### discharge_freeze_service
 
-If defined will be called for Discharge freeze, otherwise discharge_start_service is used for freeze discharge also.
+If defined will be called for Discharge freeze, otherwise, discharge_start_service is used for freeze discharge also.
 
 #### charge_stop_service
 
@@ -583,7 +605,7 @@ When True the inverter **timed_charge_current** or **timed_discharge_current** i
 
 ### current_dp
 
-Sets the number of decimal places when setting the current in Amps, should be 0 or 1
+Sets the number of decimal places when setting the current in Amps, which should be 0 or 1
 
 ### has_charge_enable_time
 
@@ -595,7 +617,7 @@ When True the inverter has a setting defined in apps.yaml called **scheduled_dis
 
 ### has_target_soc
 
-When True the inverter has a target soc setting in apps.yaml called **charge_limit**, when False charging must be turned on and off by Predbat rather
+When True the inverter has a target soc setting in apps.yaml called **charge_limit** when False charging must be turned on and off by Predbat rather
 than the inverter doing it based on the target %
 
 ### has_reserve_soc
@@ -667,7 +689,7 @@ When True the inverter has an idle time register which must be set to the start 
 
 ### can_span_midnight
 
-When True start and end times for charge and discharge can span midnight e.g. 23:00:00 - 01:00:00 is a 2 hour slot.
+When True start and end times for charge and discharge can span midnight e.g. 23:00:00 - 01:00:00 is a 2-hour slot.
 
 ### charge_discharge_with_rate
 

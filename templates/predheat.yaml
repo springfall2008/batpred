@@ -28,6 +28,12 @@ predbat:
     # Sensor with history that monitors the thermostat setting in the house
     target_temperature: sensor.living_room_target
 
+    # Thermostat Hysteresis turn on amount in degrees (default 0.5)
+    hysteresis: 0.5
+
+    # Thermostat Hysteresis turn off amount in degrees (default 0.1)
+    hysteresis_off: 0.1
+
     # When true models a smart thermostat that turns the heating ahead of the target temperature so it reaches it just in time
     smart_thermostat: True
 

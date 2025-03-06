@@ -9,7 +9,7 @@ There, you can create branches to develop on.
 ## Pull requests
 
 Once you've completed your work on your branch, you can create a
-pull request (PR) to merge your work back in to the `main` branch
+pull request (PR) to merge your work back into the `main` branch
 of Predbat.
 
 This PR should describe the work you've done in a way that
@@ -20,19 +20,19 @@ add comments or approve it.
 
 Note you will need to install python_matplotlib (e.g. brew install python_matplotlib or pip install matplotlib)
 
-Predbat now has some unit level tests, to run them on your local machine:
+Predbat now has some unit-level tests, to run them on your local machine:
 
 1. Create a test directory somewhere
-2. Copy apps.yaml to your test area
-3. Run python3 /path/6adb4f0d_predbat/unit_test.py
+2. Copy `apps.yaml` to your test area
+3. Run `python3 /path/6adb4f0d_predbat/unit_test.py`
 
 If the tests fail then debug them.
 
 For coverage analysis installed the 'coverage' library with Python
 
-1. python3 -m coverage run /path/6adb4f0d_predbat/unit_test.py
-2. python3 -m coverage html
-3. Open htmlcov/index.html in your web browser
+1. `python3 -m coverage run /path/6adb4f0d_predbat/unit_test.py`
+2. `python3 -m coverage html`
+3. Open `htmlcov/index.html` in your web browser
 
 ## Editing the code
 
@@ -44,10 +44,10 @@ There are at least a couple of ways of working on the code, outlined here.
 
 Especially if you don't need to have a running Home Assistant system
 to make the changes you're interested in (e.g. for documentation,
-quick fixes etc.) a really easy way to work on the code is using
+quick fixes etc.) a really easy way to work on the code is by using
 GitHub Codespaces.
 
-GitHub Codespaces gives you a full featured development environment.
+GitHub Codespaces gives you a full-featured development environment.
 This includes:
 
 - A full IDE (a code editor), Visual Studio Code, which can be:
@@ -72,7 +72,7 @@ if you need to see your changes live within HA.
 
 #### Running GitHub Codespaces
 
-You may with to first install [VS Code](https://code.visualstudio.com/download)
+You may wish to first install [VS Code](https://code.visualstudio.com/download)
 on your machine, which does offer some benefits compared to running
 Codespaces in the cloud, but this is certainly not essential, and
 you'll see the same code editor and terminal, and you'll have the
@@ -96,14 +96,14 @@ between branches in it.
 
 ![codespaces-selection](images/codespaces-selection.png)
 
-Once you start your Codespaces environment, it'll take a minute to
+Once you start your Codespaces environment, it will take a minute to
 create a VM for you, and to install the software we've asked it to
-install in there. It will also clone your repository and chosen
-branch into it for you, and the VM will be authenticated with GitHub
+install in there. It will also clone your repository and branch into
+it for you, and the VM will be authenticated with GitHub
 so you can commit and push straight back to your fork of Predbat on GitHub.
 
-You can choose between running the IDE in the browser, or having
-your local installation of VS Code connect to the environment that GitHub
+You can choose between running the IDE in the browser or having
+your local installation of VS Code connects to the environment that GitHub
 Codespaces has created for you.
 
 The Codespaces will be already set up with Python, along with various
@@ -133,7 +133,7 @@ However, if you're doing more than that, e.g. adding new sections, working
 with lists etc. we recommend you follow the instructions in
 [working locally on the documentation](#working-locally-on-the-documentation)
 below, as this will give you a live preview of what the documentation
-will look like once it's build and published. This will avoid any
+will look like once it's built and published. This will avoid any
 unexpected results appearing in the main documentation site.
 
 If you are adding a new file, please ensure you add that file to
@@ -157,13 +157,13 @@ The publishing of the documentation is triggered by a GitHub action,
 as defined in `.github/workflows/main.yml`.
 
 In short, after configuring the build environment, `mkdocs` builds the
-site, then pushes the HTML produced to the `gh-pages` branch,
+site then pushes the HTML produced to the `gh-pages` branch,
 overwriting whatever was there previously.
 
 GitHub will then detect a new commit on the `gh-pages` branch,
 and that will trigger another action to run (as defined by GitHub).
-This action will take the HTML files on the `gh-pages` branch,
-and will make it available at [https://springfall2008.github.io/batpred/](https://springfall2008.github.io/batpred/).
+This action will take the HTML files on the `gh-pages` branch
+and will make them available at [https://springfall2008.github.io/batpred/](https://springfall2008.github.io/batpred/).
 
 The documentation will be published as it is, with no further
 review process, so please ensure you check the documentation
@@ -179,14 +179,14 @@ This preview version is local to your environment, is
 temporary, and does not impact the published version in any way.
 
 It's recommended for anything other than simple changes
-like fixing spellings, adding a sentence or two. Things like
+like fixing spelling, or adding a sentence or two. Things like
 new sections, lists, new pages etc. are best previewed
 due to the complications of various Markdown standards,
 as what works on GitHub READMEs, for example, does not
 necessarily work with the published documentation site
 (which follows a more strict Markdown standard).
 
-There are a number of terminal commands that you can use in the Codespaces environment. Open a terminal window in Codespaces by choosing menu > Terminal > New Terminal.
+There are a number of terminal commands that you can use in the Codespaces environment. Open a terminal window in Codespaces by choosing Menu> Terminal > New Terminal.
 
 To run the live preview, enter `mkdocs serve` in the terminal window - this will cause `mkdocs` to build a
 local temporary version of the documentation site,
@@ -203,7 +203,7 @@ end the `mkdocs serve` command.
 *Note, accessing the site published by `mkdocs serve` is not
 possible if you are using Codespaces to run VS Code in the browser,
 but it is possible if you're using it via VS Code running locally,
-due to the way in which ports on your environment are shared.*
+due to how ports on your environment are shared.*
 
 ## Coding standards
 
@@ -221,12 +221,12 @@ the variable name.
 ### Enforced standards
 
 Certain coding standards are enforced within the repository.
-Some of them can be auto-fixed, if you do a commit that
+Some of them can be auto-fixed if you do a commit that
 fails one of those standards; other issues will need fixing
 first, as your pull request won't merge in GitHub until it passes.
 
 These standards are enforced by [pre-commit](https://pre-commit.com),
-a tool which is able to run other tools to check, and potentially fix
+a tool which can run other tools to check, and potentially fix
 (for certain types of issues) any mistakes you've made.
 
 The `.pre-commit-config.yaml` file lists all checks that are
@@ -244,10 +244,10 @@ Some of the tools have their own related config files:
 
 Additional notes on some of the standards:
 
-- CSpell - if you have the spelling check failing due to a word which is valid
-but is not in the in-built dictionary, please add that word to the end
+- CSpell - if you have the spelling check failing due to a valid word
+which is not in the in-built dictionary, please add that word to the end
 of `.cspell/custom-dictionary-workspace.txt` and stage those changes.
-The spell-check should then pass. Note, the dictionary file will get
+The spell-check should then pass. Note, that the dictionary file will get
 re-sorted alphabetically when you run `pre-commit`, so you'll need to
 re-stage the file after it's been sorted.
 
@@ -277,7 +277,7 @@ again (still unstaged).
 Running `pre-commit` automatically:
 
 - If you run `pre-commit install` in a terminal window it will install a pre-commit hook -
-this is a file which tells `git` to run some code each type you do a
+this is a file which tells `git` to run some code for each type you do a
 particular action (a pre-commit hook runs at the start of processing
 a commit, but there are other hooks e.g. pre-push).
 
@@ -301,21 +301,21 @@ to run the same checks that get run locally
 
 This will cause your commit, branch or pull request to get either a green tick
 or a red cross against it, to show whether the code passed the checks or not.
-This will happen automatically, when you push code on a branch that has a
+This will happen automatically when you push code on a branch that has a
 pull request.
 
-In addition, if `pre-commit` finds any errors that it is able to fix
+In addition, if `pre-commit` finds any errors it can fix
 (e.g. a missing blank line at the end of a file, or trailing whitespace),
-it will do a commit of its own to fix those problems, and will push that
+it will make a commit of its own to fix those problems and will push that
 commit back to your branch on GitHub. This will then trigger another run,
 which should now pass.
 
 **Note**: This means that `pre-commit` will be adding commits to
 your branch - this will need you to be pulling changes from GitHub
 so you pick up the changes that have been added by `pre-commit`
-otherwise you will hit a problem when you next try to push a commit
+otherwise, you will hit a problem when you next try to push a commit
 on your branch. You can pull in those changes by running `git pull`
-, which is the equivalent of running `git fetch` then `git merge` .
+, which is the equivalent of running `git fetch` and then `git merge`.
 This is no different to working on the same branch with another developer,
 but it will be different to the workflow most of us have when working
 on Predbat.

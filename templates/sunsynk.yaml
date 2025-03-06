@@ -66,6 +66,7 @@ pred_bat:
     service: select.select_option
     entity_id: "select.sunsynk_work_mode" # Inverter work mode
     option: "Limited to Home"
+    repeat: True
 
   charge_stop_service:
     service: select.select_option
@@ -76,6 +77,7 @@ pred_bat:
     service: select.select_option
     entity_id: "select.sunsynk_work_mode"  # Inverter work mode
     option: "Selling First"
+    repeat: True
 
   timed_charge_current:
     - number.sunsynk_battery_max_charge_current # Inverter battery max charge setting in A

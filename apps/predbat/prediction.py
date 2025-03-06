@@ -14,8 +14,8 @@ import re
 import time
 import math
 from datetime import datetime, timedelta
-from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
-from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
+from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT, MINUTE_WATT
+from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit, dp4
 
 
 # Only assign globals once to avoid re-creating them with processes are forked
@@ -116,6 +116,8 @@ class Prediction:
             self.set_discharge_during_charge = base.set_discharge_during_charge
             self.set_read_only = base.set_read_only
             self.set_charge_low_power = base.set_charge_low_power
+            self.set_charge_window = base.set_charge_window
+            self.set_export_window = base.set_export_window
             self.charge_low_power_margin = base.charge_low_power_margin
             self.car_charging_slots = base.car_charging_slots
             self.car_charging_limit = base.car_charging_limit
@@ -149,11 +151,16 @@ class Prediction:
             self.battery_rate_max_discharge_scaled = base.battery_rate_max_discharge_scaled
             self.battery_charge_power_curve = base.battery_charge_power_curve
             self.battery_discharge_power_curve = base.battery_discharge_power_curve
+            self.battery_temperature = base.battery_temperature
+            self.battery_temperature_charge_curve = base.battery_temperature_charge_curve
+            self.battery_temperature_discharge_curve = base.battery_temperature_discharge_curve
+            self.battery_temperature_prediction = base.battery_temperature_prediction
             self.battery_rate_max_scaling = base.battery_rate_max_scaling
             self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
             self.best_soc_keep = base.best_soc_keep
+            self.best_soc_keep_weight = base.best_soc_keep_weight
             self.best_soc_min = base.best_soc_min
             self.car_charging_battery_size = base.car_charging_battery_size
             self.rate_import = base.rate_import
@@ -163,6 +170,7 @@ class Prediction:
             self.load_minutes_step = load_minutes_step
             self.load_minutes_step10 = load_minutes_step10
             self.carbon_intensity = base.carbon_intensity
+            self.alert_active_keep = base.alert_active_keep
             self.iboost_running = False
             self.iboost_running_solar = False
             self.iboost_running_full = False
@@ -194,16 +202,18 @@ class Prediction:
         cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record
         )
-        min_soc = 0
-        max_soc = self.soc_max
+        min_soc = self.soc_max
+        max_soc = 0
         if not all_n:
             window = charge_window[window_n]
             predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
             predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
-            if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                min_soc = min(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
-            if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                max_soc = max(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
+            for minute in range(predict_minute_start, predict_minute_end + 5, 5):
+                if minute in self.predict_soc:
+                    min_soc = min(self.predict_soc[minute], min_soc)
+                    max_soc = max(self.predict_soc[minute], max_soc)
+            max_soc = max(max_soc, min_soc)
+            min_soc = min(min_soc, max_soc)
 
         return (
             cost,
@@ -406,14 +416,25 @@ class Prediction:
             prev_soc = soc
             reserve_expected = self.reserve
 
+            # Alert?
+            alert_keep = self.alert_active_keep.get(minute_absolute, 0)
+
+            # Project battery temperature
+            battery_temperature = self.battery_temperature_prediction.get(minute, self.battery_temperature)
+
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
-                if minute < 4 * 60:
-                    keep_minute_scaling = 0
-                else:
-                    keep_minute_scaling = min(((minute - 4 * 60) / (2 * 60)), 1.0) * 0.5
+                keep_minute_scaling = min((minute / (4 * 60)), 1.0) * self.best_soc_keep_weight
             else:
-                keep_minute_scaling = 0.5
+                keep_minute_scaling = self.best_soc_keep_weight
+
+            # Get soc keep value
+            best_soc_keep = self.best_soc_keep
+
+            # Alert keep - force scaling to 1 and set new keep value
+            if alert_keep > 0:
+                keep_minute_scaling = max(keep_minute_scaling, 2.0)
+                best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * self.soc_max, self.soc_max))
 
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
@@ -428,12 +449,12 @@ class Prediction:
                 else:
                     if self.set_charge_freeze and (charge_limit_n == self.reserve):
                         # Charge freeze via reserve
-                        charge_limit_n = soc
+                        charge_limit_n = max(soc, self.reserve)
 
                     # When set reserve enable is on pretend the reserve is the charge limit minus the
                     # minimum battery rate modelled as it can leak a little
-                    if self.set_reserve_enable:
-                        reserve_expected = max(charge_limit_n - self.battery_rate_min * step, self.reserve)
+                    if self.set_reserve_enable and (soc >= charge_limit_n):
+                        reserve_expected = max(charge_limit_n, self.reserve)
 
             # Outside the recording window?
             if minute >= end_record and record:
@@ -460,7 +481,7 @@ class Prediction:
 
             # Save Soc prediction data as minutes for later use
             self.predict_soc[minute] = round(soc, 3)
-            if save and (save in ["best", "test"]):
+            if save and (save in ["best", "test", "compare"]):
                 self.predict_soc_best[minute] = round(soc, 3)
                 self.predict_metric_best[minute] = round(metric, 3)
                 self.predict_iboost_best[minute] = round(iboost_today_kwh, 2)
@@ -482,6 +503,11 @@ class Prediction:
             if record:
                 final_pv_kwh = pv_kwh
 
+            # Modelling reset of charge/discharge rate
+            if self.set_charge_window or self.set_export_window:
+                charge_rate_now = self.battery_rate_max_charge
+                discharge_rate_now = self.battery_rate_max_discharge
+
             # Simulate car charging
             car_load = self.in_car_slot(minute_absolute)
 
@@ -495,7 +521,7 @@ class Prediction:
                     car_soc[car_n] = car_soc[car_n] + car_load_scale
                     load_yesterday += car_load_scale / self.car_charging_loss
                     # Model not allowing the car to charge from the battery
-                    if not self.car_charging_from_battery:
+                    if (car_load_scale > 0) and (not self.car_charging_from_battery) and self.set_charge_window:
                         discharge_rate_now = self.battery_rate_min  # 0
                         car_freeze = True
 
@@ -541,7 +567,7 @@ class Prediction:
                         iboost_amount = min(self.iboost_max_power * step, max(self.iboost_max_energy - iboost_today_kwh, 0))
 
                 # Freeze discharge on iboost
-                if iboost_amount > 0 and self.iboost_prevent_discharge:
+                if iboost_amount > 0 and self.iboost_prevent_discharge and self.set_charge_window:
                     iboost_freeze = True
                     discharge_rate_now = self.battery_rate_min  # 0
 
@@ -557,26 +583,27 @@ class Prediction:
             if record:
                 final_load_kwh = load_kwh
 
-            # Reset modelled discharge rate if no car is charging
-            if not self.car_charging_from_battery and not car_freeze and not iboost_freeze:
-                discharge_rate_now = self.battery_rate_max_discharge
-
             # discharge freeze, reset charge rate by default
             if self.set_export_freeze:
-                charge_rate_now = self.battery_rate_max_charge
                 # Freeze mode
-                if (export_window_n >= 0) and (export_limits[export_window_n] == 99.0 or self.set_export_freeze_only):
+                if (export_window_n >= 0) and (self.set_export_freeze and (export_limits[export_window_n] == 99.0 or self.set_export_freeze_only)):
                     charge_rate_now = self.battery_rate_min  # 0
 
             # Set discharge during charge?
             if charge_window_n >= 0:
                 if not self.set_discharge_during_charge:
                     discharge_rate_now = self.battery_rate_min
-                elif abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0:
+                elif self.set_charge_window and soc >= charge_limit_n and (abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0):
                     discharge_rate_now = self.battery_rate_min
 
-            charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling
-            discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling_discharge
+            # Current real charge rate
+            charge_rate_now_curve = (
+                get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_charge_curve) * self.battery_rate_max_scaling
+            )
+            discharge_rate_now_curve = (
+                get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
+                * self.battery_rate_max_scaling_discharge
+            )
             battery_to_min = max(soc - reserve_expected, 0) * self.battery_loss_discharge
             battery_to_max = max(self.soc_max - soc, 0) * self.battery_loss
             inverter_limit = self.inverter_limit * step
@@ -586,10 +613,13 @@ class Prediction:
             if export_window_n >= 0:
                 discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, self.best_soc_min)
 
-            if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc - step * self.battery_rate_max_discharge_scaled) >= discharge_min:
+            if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc > discharge_min):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
-                discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling_discharge
+                discharge_rate_now_curve = (
+                    get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
+                    * self.battery_rate_max_scaling_discharge
+                )
 
                 battery_draw = min(discharge_rate_now_curve * step, battery_to_min)
 
@@ -642,28 +672,25 @@ class Prediction:
                 four_hour_rule = False
             elif (charge_window_n >= 0) and soc < charge_limit_n:
                 # Charge enable
-                if save in ["best", "best10", "test"]:
-                    # Only tune charge rate on final plan not every simulation
-                    charge_rate_now = find_charge_rate(
-                        minute_absolute,
-                        soc,
-                        charge_window[charge_window_n],
-                        charge_limit_n,
-                        self.battery_rate_max_charge,
-                        self.soc_max,
-                        self.battery_charge_power_curve,
-                        self.set_charge_low_power,
-                        self.charge_low_power_margin,
-                        self.battery_rate_min,
-                        self.battery_rate_max_scaling,
-                        self.battery_loss,
-                        None,
-                    )
-                else:
-                    charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here
-
-                # Apply the charging curve
-                charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling
+                set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
+                # Only tune charge rate on final plan not every simulation
+                charge_rate_now, charge_rate_now_curve = find_charge_rate(
+                    minute_absolute,
+                    soc,
+                    charge_window[charge_window_n],
+                    charge_limit_n,
+                    self.battery_rate_max_charge,
+                    self.soc_max,
+                    self.battery_charge_power_curve,
+                    set_charge_low_power,
+                    self.charge_low_power_margin,
+                    self.battery_rate_min,
+                    self.battery_rate_max_scaling,
+                    self.battery_loss,
+                    None,
+                    battery_temperature,
+                    self.battery_temperature_charge_curve,
+                )
 
                 battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0, -battery_to_max)
                 battery_state = "f+"
@@ -675,7 +702,7 @@ class Prediction:
                     pv_dc = 0
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
-                if save == "test":
+                if save == "test" and (minute % 30) == 0:
                     print("minute {} charge_limit {} soc {} pv_now {} charge left {} pv_ac {} pv_dc {} max charge {} pv_compare {}".format(minute, charge_limit_n, soc, pv_now, charge_limit_n - soc, pv_ac, pv_dc, charge_limit_n - soc, pv_ac + pv_dc))
 
                 if (charge_limit_n - soc) < (charge_rate_now_curve * step):
@@ -684,8 +711,10 @@ class Prediction:
                     # won't cover it and it will likely create an import.
                     pv_compare = pv_dc + pv_ac
                     if pv_dc >= (charge_limit_n - soc) and (pv_compare < (charge_rate_now_curve * step)):
-                        potential_import = min((charge_rate_now_curve * step) - pv_compare, (charge_limit_n - soc))
-                        metric_keep += potential_import * rate_import.get(minute_absolute, 0)
+                        charge_time_remains = (charge_limit_n - soc) / charge_rate_now_curve  # Time in minute periods left
+                        pv_in_period = pv_compare / step * charge_time_remains
+                        potential_import = min((charge_rate_now_curve * charge_time_remains) - pv_in_period, (charge_limit_n - soc))
+                        metric_keep += max(potential_import * rate_import.get(minute_absolute, 0), 0)
             else:
                 # ECO Mode
                 pv_ac = pv_now * inverter_loss_ac
@@ -808,12 +837,8 @@ class Prediction:
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if soc < self.best_soc_keep and battery_draw > 0:
-                # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
-                # Weight to 50% chance of the scenario
-                # keep_diff = max(get_diff(0, 0, pv_now, load_yesterday, inverter_loss), battery_draw)
-                # if keep_diff > 0:
-                metric_keep += rate_import[minute_absolute] * battery_draw * keep_minute_scaling
+            if best_soc_keep > 0 and soc <= best_soc_keep:
+                metric_keep += (best_soc_keep - soc) * rate_import[minute_absolute] * keep_minute_scaling * step / 60.0
             if diff > 0:
                 # Import
                 # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)

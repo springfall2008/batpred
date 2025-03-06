@@ -1,3 +1,3 @@
 # To-do list
 
-- See [Github issues](https://github.com/springfall2008/batpred/issues)
+- See [GitHub issues](https://github.com/springfall2008/batpred/issues)

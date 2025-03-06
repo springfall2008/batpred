@@ -4,6 +4,7 @@ adbase
 AIO
 AIO's
 aiohttp
+Alertfeed
 Anson
 apexcharts
 appdaemon
@@ -29,6 +30,7 @@ Chrg
 citem
 Codespaces
 collapsable
+compareform
 configform
 coro
 crosscharge
@@ -39,6 +41,7 @@ Daeamon
 darkgreen
 darkred
 darray
+datain
 datap
 datapoints
 dayname
@@ -61,6 +64,12 @@ emszzzz
 enctype
 endfor
 endt
+Energi
+Energidata
+Energidataservice
+energydataservice
+epod
+euids
 evse
 feedin
 fentry
@@ -68,6 +77,7 @@ Fingerbot
 firstparty
 fline
 FLOMASTA
+Forestfire
 foxess
 futurerate
 gecloud
@@ -97,7 +107,9 @@ hypervolt
 iboost
 idag
 idetails
+iflux
 inday
+intelligentdevice
 invbatpower
 invname
 isort
@@ -105,6 +117,8 @@ itemtype
 ivtime
 kopt
 Krakenflex
+kvar
+kvarh
 kwhb
 linebreak
 localfolder
@@ -116,6 +130,10 @@ markdownlint
 matplotlib
 maximise
 mdlrc
+measurand
+Meteo
+Meteoalarm
+meterpoint
 metricb
 metricmid
 minb
@@ -126,6 +144,8 @@ mkdocs
 Modbus
 mogons
 Mosquitto
+mpan
+mprn
 mqtt
 mult
 myenergi
@@ -139,6 +159,7 @@ nord
 Nordpool
 nosc
 nrgheat
+octo
 octoplus
 octopoints
 Ohme
@@ -151,6 +172,7 @@ perc
 pitem
 pkwh
 postdata
+powerline
 ppdetails
 ppkwh
 Pred
@@ -194,6 +216,7 @@ sunsynk
 tasmota
 tdata
 tdiff
+testname
 thirdparty
 timea
 timeb
@@ -209,12 +232,15 @@ treforsiphone
 unstaged
 useid
 userinterface
+varh
 venv
 Wallbox
 weblink
 welink
+writeonly
 xaxis
 xlabel
+xload
 xticks
 yaxis
 ylabel

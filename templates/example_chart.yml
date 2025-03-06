@@ -855,3 +855,34 @@ series:
       legend_value: true
       in_header: true
       in_chart: false
+###############################################
+# Battery temperature chart
+###############################################
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Battery Temperature
+  show_states: true
+  colorize_states: true
+graph_span: 5d
+span:
+  start: day
+  offset: "-3day"
+now:
+  show: true
+series:
+  - entity: predbat.battery_temperature
+    name: temperature
+    stroke_width: 1
+    type: area
+    opacity: 0.2
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: sensor.givtcp_battery_stack_1_bms_temperature
+    name: Temperature history
+    curve: stepline
+    stroke_width: 2
+    extend_to: now

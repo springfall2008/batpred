@@ -17,6 +17,9 @@ import sys
 from datetime import datetime, timedelta
 import hashlib
 import traceback
+import sys
+
+IS_COMPILED = getattr(sys, "frozen", False)
 
 IS_APPDAEMON = False
 
@@ -38,26 +41,27 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.8.6"
+THIS_VERSION = "v8.16.0"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
 
-# Sanity check the install and re-download if corrupted
-if not check_install():
-    print("Warn: Predbat files are not installed correctly, trying to download them")
-    files = predbat_update_download(THIS_VERSION)
-    if files:
-        print("Downloaded files, moving into place")
-        predbat_update_move(THIS_VERSION, files)
+# Only do the self-install/self-update logic if we are NOT compiled.
+if not IS_COMPILED:
+    # Sanity check the install and re-download if corrupted
+    if not check_install():
+        print("Warn: Predbat files are not installed correctly, trying to download them")
+        files = predbat_update_download(THIS_VERSION)
+        ...
+        sys.exit(1)
     else:
-        print("Warn: Failed to download predbat files for version {}, it may not exist or you may have network issues".format(THIS_VERSION))
-    sys.exit(1)
+        print("Predbat files are installed correctly for version {}".format(THIS_VERSION))
 else:
-    print("Predbat files are installed correctly for version {}".format(THIS_VERSION))
+    # In compiled mode, we skip the entire self-update logic
+    print("Running in compiled mode; skipping local file checks and auto-update.")
 
 from config import (
     TIME_FORMAT,
@@ -66,23 +70,27 @@ from config import (
     INVERTER_TEST,
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
+    CONFIG_ITEMS,
 )
 from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3, dp4
 from ha import HAInterface
 from web import WebInterface
 from predheat import PredHeat
-from octopus import Octopus
+from octopus import Octopus, OctopusAPI
+from energydataservice import Energidataservice
 from solcast import Solcast
-from gecloud import GECloud
+from gecloud import GECloud, GECloudDirect
 from execute import Execute
 from plan import Plan
 from fetch import Fetch
 from output import Output
 from userinterface import UserInterface
+from alertfeed import Alertfeed
+from compare import Compare
 
 
-class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
     """
@@ -214,30 +222,46 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         """
         Wrapper function to get state from HA
         """
+        if not self.ha_interface:
+            self.log("Error: get_state_wrapper - No HA interface available")
+            return None
         return self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
 
     def set_state_wrapper(self, entity_id, state, attributes={}):
         """
         Wrapper function to get state from HA
         """
+        if not self.ha_interface:
+            self.log("Error: set_state_wrapper - No HA interface available")
+            return False
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
 
     def call_service_wrapper(self, service, **kwargs):
         """
         Wrapper function to call a HA service
         """
+        if not self.ha_interface:
+            self.log("Error: call_service_wrapper - No HA interface available")
+            return False
         return self.ha_interface.call_service(service, **kwargs)
 
     def get_services_wrapper(self):
         """
         Wrapper function to get services from HA
         """
+        if not self.ha_interface:
+            self.log("Error: get_services_wrapper - No HA interface available")
+            return False
         return self.ha_interface.get_services()
 
     def get_history_wrapper(self, entity_id, days=30, required=True):
         """
         Wrapper function to get history from HA
         """
+        if not self.ha_interface:
+            self.log("Error: get_history_wrapper - No HA interface available")
+            return False
+
         history = self.ha_interface.get_history(entity_id, days=days, now=self.now_utc)
 
         if required and (history is None):
@@ -263,7 +287,16 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         Init stub
         """
         reset_prediction_globals()
+        self.ha_interface = None
+        self.fatal_error = False
+        self.ge_cloud_direct = None
+        self.ge_cloud_direct_task = None
+        self.octopus_api_direct = None
+        self.octopus_api_direct_task = None
+        self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
+        self.comparison = None
         self.predheat = None
+        self.predbat_mode = "Monitor"
         self.soc_kwh_history = {}
         self.html_plan = "<body><h1>Please wait calculating...</h1></body>"
         self.unmatched_args = {}
@@ -277,6 +310,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.restart_active = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
+        self.inverters = []
         self.manual_charge_times = []
         self.manual_export_times = []
         self.manual_freeze_charge_times = []
@@ -286,12 +320,12 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.manual_api = []
         self.config_index = {}
         self.dashboard_index = []
+        self.dashboard_index_app = {}
         self.dashboard_values = {}
         self.prefix = self.args.get("prefix", "predbat")
         self.current_status = None
         self.previous_status = None
         self.had_errors = False
-        self.expert_mode = False
         self.plan_valid = False
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
@@ -306,7 +340,9 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.forecast_days = 0
         self.forecast_minutes = 0
         self.soc_kw = 0
+        self.soc_percent = 0
         self.soc_max = 10.0
+        self.battery_temperature = 20
         self.end_record = 24 * 60 * 2
         self.predict_soc = {}
         self.predict_soc_best = {}
@@ -344,6 +380,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.best_soc_max = 0
         self.best_soc_margin = 0
         self.best_soc_keep = 0
+        self.best_soc_keep_weight = 0.5
         self.rate_min = 0
         self.rate_min_minute = 0
         self.rate_min_forward = {}
@@ -406,6 +443,9 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.car_charging_manual_soc = False
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
+        self.octopus_intelligent_charging = False
+        self.octopus_intelligent_ignore_unplugged = False
+        self.octopus_intelligent_consider_full = False
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.futurerate_url_cache = {}
@@ -435,7 +475,9 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.computed_charge_curve = False
         self.computed_discharge_curve = False
         self.isCharging = False
+        self.isCharging_Target = 0
         self.isExporting = False
+        self.isExporting_Target = 0
         self.savings_today_predbat = 0.0
         self.savings_today_predbat_soc = 0.0
         self.savings_today_pvbat = 0.0
@@ -461,15 +503,18 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.load_minutes = {}
         self.load_minutes_age = 0
         self.load_forecast = {}
+        self.load_forecast_array = []
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
+        self.carbon_enable = False
         self.iboost_enable = False
         self.iboost_gas = False
         self.iboost_gas_export = False
         self.iboost_smart = False
+        self.iboost_smart_min_length = 30
         self.iboost_on_export = False
         self.iboost_prevent_discharge = False
         self.iboost_smart_threshold = 0
@@ -482,7 +527,27 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.iboost_running_solar = False
         self.last_service_hash = {}
         self.count_inverter_writes = {}
-
+        self.web_interface = None
+        self.web_interface_task = None
+        self.rate_slots = []
+        self.io_adjusted = {}
+        self.low_rates = []
+        self.high_export_rates = []
+        self.octopus_slots = []
+        self.cost_today_sofar = 0
+        self.carbon_today_sofar = 0
+        self.import_today = {}
+        self.export_today = {}
+        self.pv_today = {}
+        self.load_minutes = {}
+        self.load_minutes_age = 0
+        self.battery_temperature_charge_curve = {}
+        self.battery_temperature_discharge_curve = {}
+        self.battery_temperature_history = {}
+        self.battery_temperature_prediction = {}
+        self.alerts = []
+        self.alert_active_keep = {}
+        self.alert_cache = {}
         self.config_root = "./"
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -526,11 +591,15 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.update_time()
         self.save_current_config()
 
-        self.expose_config("active", True)
-
         # Check our version
         self.download_predbat_releases()
 
+        if self.get_arg("template", False):
+            self.log("Error: Template Configuration, please edit apps.yaml")
+            self.record_status("Error: Template Configuration, please edit apps.yaml", had_errors=True)
+            return
+
+        self.expose_config("active", True)
         self.fetch_config_options()
         self.fetch_sensor_data()
         self.fetch_inverter_data()
@@ -729,6 +798,18 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.expose_config("active", False)
         self.save_current_config()
 
+        if self.comparison:
+            if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
+                # Compare tariffs either when triggered or daily at midnight
+                self.expose_config("compare_active", True)
+                self.comparison.run_all()
+                self.expose_config("compare_active", False)
+            else:
+                # Otherwise just update HA sensors to prevent then expiring
+                self.comparison.publish_only()
+        else:
+            self.expose_config("compare_active", False)
+
     async def async_download_predbat_version(self, version):
         """
         Sync wrapper for async download_predbat_version
@@ -787,13 +868,16 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         Setup the app, called once each time the app starts
         """
         self.pool = None
-        self.log("Predbat: Startup {}".format(__name__))
+        if "hass_api_version" not in self.__dict__:
+            self.hass_api_version = 1
+        self.log("Predbat: Startup {} hass version {}".format(__name__, self.hass_api_version))
         self.update_time(print=False)
         run_every = RUN_EVERY * 60
         now = self.now
 
         try:
             self.reset()
+            self.update_time(print=False)
             self.log("Starting HA interface")
             try:
                 self.ha_interface = HAInterface(self)
@@ -808,6 +892,25 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             self.web_interface = WebInterface(self)
             self.web_interface_task = self.create_task(self.web_interface.start())
 
+            if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
+                self.log("Starting Octopus API interface")
+                self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", ""), self.get_arg("octopus_api_account", ""), self)
+                self.octopus_api_direct_task = self.create_task(self.octopus_api_direct.start())
+                if not self.octopus_api_direct.wait_api_started():
+                    self.log("Error: Octopus API failed to start")
+                    self.record_status("Error: Octopus API failed to start")
+                    raise ValueError("Octopus API failed to start")
+
+            if self.get_arg("ge_cloud_direct", False):
+                self.log("Starting GE cloud direct interface")
+                self.ge_cloud_direct = GECloudDirect(self)
+                self.ge_cloud_direct_task = self.create_task(self.ge_cloud_direct.start())
+                # Allow GE Cloud API to start
+                if not self.ge_cloud_direct.wait_api_started():
+                    self.log("Error: GE Cloud API failed to start")
+                    self.record_status("Error: GE Cloud API failed to start")
+                    raise ValueError("GE Cloud API failed to start")
+
             # Printable config root
             self.config_root_p = self.config_root
             slug = self.ha_interface.get_slug()
@@ -820,27 +923,15 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             self.ha_interface.update_states()
             self.auto_config()
             self.load_user_config(quiet=False, register=True)
+            self.comparison = Compare(self)
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
             self.log("Error: " + traceback.format_exc())
             self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
             raise e
 
-        # Catch template configurations and exit
-        if self.get_arg("template", False):
-            self.log("Error: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
-            self.record_status("Error: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
-
-            # before terminating, create predbat dashboard for new users
-            try:
-                self.create_entity_list()
-            except Exception as e:
-                self.log("Error: Exception raised {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
-                raise e
-
-            return
+        # Update db
+        self.ha_interface.db_tick()
 
         # Run every N minutes aligned to the minute
         seconds_now = (now - self.midnight).seconds
@@ -884,6 +975,10 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.stop_thread = True
         if self.web_interface:
             await self.web_interface.stop()
+        if self.ge_cloud_direct:
+            await self.ge_cloud_direct.stop()
+        if self.octopus_api_direct:
+            self.octopus_api_direct.stop()
 
         await asyncio.sleep(0)
         if hasattr(self, "pool"):
@@ -901,6 +996,11 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         """
         Called every 15 seconds
         """
+        if not self.ha_interface or (not self.ha_interface.websocket_active and not self.ha_interface.db_primary):
+            self.log("Error: HA interface not active and db_primary is {}".format(self.ha_interface.db_primary))
+            self.fatal_error = True
+            raise Exception("HA interface not active")
+
         self.check_entity_refresh()
         if self.update_pending and not self.prediction_started:
             self.prediction_started = True
@@ -950,6 +1050,11 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         """
         Called every N minutes
         """
+        if not self.ha_interface or (not self.ha_interface.websocket_active and not self.ha_interface.db_primary):
+            self.log("Error: HA interface not active")
+            self.fatal_error = True
+            raise Exception("HA interface not active")
+
         if not self.prediction_started:
             config_changed = False
             self.prediction_started = True
@@ -978,6 +1083,9 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         """
         Called every N second for balance inverters
         """
+        if self.get_arg("template", False):
+            return
+
         if not self.prediction_started and self.balance_inverters_enable and not self.set_read_only:
             try:
                 self.balance_inverters()

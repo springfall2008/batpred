@@ -23,6 +23,8 @@ import sqlite3
 import threading
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_SECONDS
 
+from db_manager import DatabaseManager  # database functions have been refactored to DatabaseManager
+
 TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
 
 
@@ -68,7 +70,6 @@ class HAInterface:
         self.db_mirror_list = {}
         self.db = None
         self.db_cursor = None
-        self.db_mirror_updates = []
         self.websocket_active = False
 
         self.base = base
@@ -101,13 +102,12 @@ class HAInterface:
                 self.websocket_active = True
                 self.log("Info: Web Socket task started")
 
-                if self.db_enable:
-                    # Open the SQL Lite database called predbat.db
-                    self.log("Info: Opening database")
-                    self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
-                    self.db_cursor = self.db.cursor()
-                    self.log("Info: Clean data older than {} days".format(self.db_days))
-                    self.cleanup_db()
+        if self.db_enable:
+            # Open the SQL Lite database called predbat.db using the DatabaseManager
+            self.log("Info: Opening database")
+            self.db_manager = DatabaseManager(self.base, self.db_days)
+            self.log("Info: Clean data older than {} days".format(self.db_days))
+            self.db_manager.cleanup_db()
 
     def get_slug(self):
         """
@@ -154,7 +154,7 @@ class HAInterface:
                                         response = data.get("result", {}).get("response", None)
                                         success = data.get("success", False)
                                         if not success:
-                                            self.log("Warn: Service call {}/{} failed with response {}".format(domain, service, response))
+                                            self.log("Warn: Service call {}/{} data {} failed with response {}".format(domain, service, service_data, response))
                                         break
 
                             except Exception as e:
@@ -172,9 +172,14 @@ class HAInterface:
         """
         Web socket loop for HA interface
         """
+        error_count = 0
+
         while True:
-            if self.base.stop_thread:
+            if self.base.stop_thread or self.base.fatal_error:
                 self.log("Info: Web socket stopping")
+                break
+            if self.base.hass_api_version >= 2 and error_count >= 10:
+                self.log("Error: Web socket failed 10 times, stopping")
                 break
 
             url = "{}/api/websocket".format(self.ha_url)
@@ -184,6 +189,9 @@ class HAInterface:
                     async with session.ws_connect(url) as websocket:
                         await websocket.send_json({"type": "auth", "access_token": self.ha_key})
                         sid = 1
+
+                        # Connected okay, reset error count
+                        error_count = 0
 
                         # Subscribe to all state changes
                         await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "state_changed"})
@@ -257,20 +265,29 @@ class HAInterface:
                                 except Exception as e:
                                     self.log("Error: Web Socket exception in update loop: {}".format(e))
                                     self.log("Error: " + traceback.format_exc())
+                                    error_count += 1
                                     break
 
                             elif message.type == WSMsgType.CLOSED:
+                                error_count += 1
                                 break
                             elif message.type == WSMsgType.ERROR:
+                                error_count += 1
                                 break
 
                 except Exception as e:
                     self.log("Error: Web Socket exception in startup: {}".format(e))
                     self.log("Error: " + traceback.format_exc())
+                    error_count += 1
 
             if not self.base.stop_thread:
-                self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds")
+                self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds - error count {}".format(error_count))
                 await asyncio.sleep(5)
+
+        if not self.base.stop_thread:
+            self.log("Error: Web Socket failed to reconnect, stopping....")
+            self.websocket_active = False
+            raise Exception("Web Socket failed to reconnect")
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
@@ -300,7 +317,7 @@ class HAInterface:
         Update state for entity_id from the SQLLite database
         """
         self.db_mirror_list[entity_id.lower()] = True
-        item = self.get_state_db(entity_id)
+        item = self.db_manager.get_state_db(entity_id)
         if item:
             self.update_state_item(item, entity_id, nodb=True)
 
@@ -321,42 +338,19 @@ class HAInterface:
         if item:
             self.update_state_item(item, entity_id)
 
-    def get_state_db(self, entity_id):
-        """
-        Get entity current state from the SQLLite database
-        """
-        if not self.db_enable:
-            return None
-
-        entity_id = entity_id.lower()
-        entity_index = self.get_entity_index_db(entity_id)
-        if not entity_index:
-            return None
-
-        self.db_cursor.execute("SELECT datetime, state, attributes FROM latest WHERE entity_index=?", (entity_index,))
-        res = self.db_cursor.fetchone()
-        if res:
-            state = res[1]
-            attributes = {}
-            try:
-                attributes = json.loads(res[2])
-            except json.JSONDecodeError:
-                pass
-            return {"last_updated": res[0] + "Z", "state": state, "attributes": attributes}
-        else:
-            return None
-
     def update_state_item(self, item, entity_id, nodb=False):
         """
         Update state table for item
         """
         entity_id = entity_id.lower()
-        attributes = item["attributes"]
+        attributes = item.get("attributes", {})
         last_changed = item.get("last_changed", item.get("last_updated", None))
-        state = item["state"]
-        self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
-        if not nodb and self.db_mirror_ha and (entity_id in self.db_mirror_list):
-            self.db_mirror_updates.append({"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": self.base.now_utc_real})
+        if "state" in item:
+            state = item["state"]
+            self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
+            if not nodb and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
+                # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
+                self.db_manager.mirror_updates.append({"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": self.base.now_utc_real})
 
     def db_tick(self):
         """
@@ -365,11 +359,7 @@ class HAInterface:
         if not self.db_enable:
             return
 
-        if self.db_mirror_updates:
-            mirror_list = self.db_mirror_updates[:]
-            self.db_mirror_updates = []
-            for item in mirror_list:
-                self.set_state_db(item["entity_id"], item["state"], item["attributes"], timestamp=item["timestamp"])
+        self.db_manager.db_tick()
 
     def update_states_db(self):
         """
@@ -378,10 +368,8 @@ class HAInterface:
         if not self.db_enable:
             return
 
-        self.db_cursor.execute("SELECT entity_name FROM entities")
-        tables = self.db_cursor.fetchall()
-        for table in tables:
-            entity_name = table[0]
+        entities = self.db_manager.get_all_entities()
+        for entity_name in entities:
             self.update_state_db(entity_name)
 
     def update_states(self):
@@ -408,53 +396,6 @@ class HAInterface:
         else:
             self.log("Warn: Failed to update state data from HA")
 
-    def get_history_db(self, sensor, now, days=30):
-        """
-        Get the history for a sensor from the SQLLite database.
-        """
-        if not self.db_enable:
-            return None
-
-        self.db_mirror_list[sensor.lower()] = True
-
-        start = now - timedelta(days=days)
-
-        entity_index = self.get_entity_index_db(sensor)
-        if not entity_index:
-            self.log("Warn: Entity {} does not exist".format(sensor))
-            return None
-
-        # Get the history for the sensor, sorted by datetime
-        self.db_cursor.execute(
-            "SELECT datetime, state, attributes FROM states WHERE entity_index = ? AND datetime >= ? ORDER BY datetime",
-            (
-                entity_index,
-                start.strftime(TIME_FORMAT_DB),
-            ),
-        )
-        res = self.db_cursor.fetchall()
-        history = []
-        for item in res:
-            state = item[1]
-            attributes = {}
-            try:
-                attributes = json.loads(item[2])
-            except json.JSONDecodeError:
-                pass
-
-            history.append({"last_updated": item[0] + "Z", "state": state, "attributes": attributes})
-        return [history]
-
-    def get_services(self):
-        """
-        Get the list of services from Home Assistant.
-        """
-        res = self.api_call("/api/services")
-        if res:
-            return res
-        else:
-            return None
-
     def get_history(self, sensor, now, days=30, force_db=False):
         """
         Get the history for a sensor from Home Assistant.
@@ -468,164 +409,12 @@ class HAInterface:
         self.db_mirror_list[sensor.lower()] = True
 
         if (self.db_primary or force_db) and self.db_enable:
-            return self.get_history_db(sensor, now, days=days)
+            return self.db_manager.get_history_db(sensor, now, days=days)
 
         start = now - timedelta(days=days)
         end = now
         res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res
-
-    def get_entity_index_db(self, entity_id):
-        """
-        Get the entity index from the SQLLite database
-        """
-        if not self.db_enable:
-            return None
-
-        self.db_cursor.execute("SELECT entity_index FROM entities WHERE entity_name=?", (entity_id,))
-        res = self.db_cursor.fetchone()
-        if res:
-            return res[0]
-        else:
-            return None
-
-    def set_state_db_later(self, entity_id, state, attributes, timestamp=None):
-        if not self.db_enable:
-            return
-
-        if timestamp:
-            now_utc = timestamp
-        else:
-            now_utc = self.base.now_utc_real
-
-        # Convert time to GMT+0
-        now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)
-        now_utc_txt = now_utc.strftime(TIME_FORMAT_DB)
-
-        item = {"last_changed": now_utc_txt, "state": state, "attributes": attributes}
-        self.update_state_item(item=item, entity_id=entity_id, nodb=True)
-        return
-
-    def set_state_db(self, entity_id, state, attributes, timestamp=None):
-        """
-        Records the state of a predbat entity into the SQLLite database
-        There is one table per Entity created with history recorded
-        """
-        if not self.db_enable:
-            return
-
-        state = str(state)
-
-        # Put the entity_id into entities table if its not in already
-        self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
-        self.db.commit()
-        entity_index = self.get_entity_index_db(entity_id)
-
-        # Use of last_changed allows the state to be recorded at a different time
-        if timestamp:
-            now_utc = timestamp
-        else:
-            now_utc = self.base.now_utc_real
-
-        # Convert time to GMT+0
-        now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)
-        now_utc_txt = now_utc.strftime(TIME_FORMAT_DB)
-
-        system = {}
-
-        attributes_record = {}
-        attributes_record_full = {}
-        for key in attributes:
-            value = attributes[key]
-            # Ignore large fields which will increase the database size
-            if len(str(value)) < 128:
-                attributes_record[key] = attributes[key]
-            attributes_record_full[key] = attributes[key]
-        attributes_record_json = json.dumps(attributes_record)
-        attributes_record_full_json = json.dumps(attributes_record_full)
-        system_json = json.dumps(system)
-
-        # Record the state of the entity
-        # If the entity value and attributes are unchanged then don't record the new state
-        self.db_cursor.execute("SELECT datetime, state, attributes, system, keep FROM states WHERE entity_index=? ORDER BY datetime DESC LIMIT 1", (entity_index,))
-        last_record = self.db_cursor.fetchone()
-        keep = "D"
-        if last_record:
-            last_datetime = datetime.strptime(last_record[0], TIME_FORMAT_DB)
-            last_state = last_record[1]
-            last_attributes = last_record[2]
-            last_system = last_record[3]
-            last_keep = last_record[4]
-            if last_state == state and last_attributes == attributes_record_json and last_system == system_json:
-                return
-
-            # Compute keep value
-            last_datetime_datestr = last_datetime.strftime("%Y-%m-%d")
-            now_datetime_datestr = now_utc.strftime("%Y-%m-%d")
-            if last_datetime_datestr == now_datetime_datestr:
-                if last_datetime.hour == now_utc.hour:
-                    keep = "I"
-                else:
-                    keep = "H"
-
-        # Insert the new state record
-        try:
-            self.db_cursor.execute(
-                "DELETE FROM states WHERE entity_index = ? AND datetime = ?".format(entity_id),
-                (
-                    entity_index,
-                    now_utc_txt,
-                ),
-            )
-            self.db_cursor.execute(
-                "INSERT INTO states (datetime, entity_index, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    now_utc_txt,
-                    entity_index,
-                    state,
-                    attributes_record_json,
-                    system_json,
-                    keep,
-                ),
-            )
-            # Also update the latest table
-            self.db_cursor.execute(
-                "DELETE FROM latest WHERE entity_index = ?".format(entity_id),
-                (entity_index,),
-            )
-            self.db_cursor.execute(
-                "INSERT INTO latest (entity_index, datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    entity_index,
-                    now_utc_txt,
-                    state,
-                    attributes_record_full_json,
-                    system_json,
-                    keep,
-                ),
-            )
-            self.db.commit()
-        except sqlite3.IntegrityError:
-            self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
-
-    def cleanup_db(self):
-        """
-        This searches all tables for data older than N days and deletes it
-        """
-        if not self.db_enable:
-            return
-
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS entities (entity_index INTEGER PRIMARY KEY AUTOINCREMENT, entity_name TEXT KEY UNIQUE)")
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
-        self.db_cursor.execute(
-            "DELETE FROM states WHERE datetime < ? AND keep != ?",
-            (
-                self.base.now_utc_real - timedelta(days=self.db_days),
-                "D",
-            ),
-        )
-        self.db.commit()
 
     def set_state(self, entity_id, state, attributes={}):
         """
@@ -634,7 +423,7 @@ class HAInterface:
         self.db_mirror_list[entity_id] = True
 
         if self.db_mirror_ha or self.db_primary:
-            self.set_state_db_later(entity_id, state, attributes)
+            self.db_manager.set_state_db_later(entity_id, state, attributes)
 
         if self.ha_key:
             data = {"state": state}
@@ -647,12 +436,18 @@ class HAInterface:
     def call_service(self, service, **kwargs):
         """
         Call a service in Home Assistant via Websocket
+        or loopback to Predbat in standalone mode
         """
         data = {}
         for key in kwargs:
             data[key] = kwargs[key]
         domain, service = service.split("/")
-        return self.call_service_websocket_command(domain, service, data)
+        if self.websocket_active:
+            return self.call_service_websocket_command(domain, service, data)
+        else:
+            # Loopback with no home assistant
+            data_frame = {"domain": domain, "service": service, "service_data": data}
+            return run_async(self.base.trigger_callback(data_frame))
 
     def api_call(self, endpoint, data_in=None, post=False, core=True):
         """
