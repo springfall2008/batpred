@@ -268,7 +268,7 @@ inverter_type defaults to 'GE' (GivEnergy) if not set in apps.yaml, or should be
 
 If you have multiple inverters, then set inverter_type to a list of the inverter types.
 
-If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in apps.yaml then inverter_type must be set to the same code as has been used in the custom inverter defintion.
+If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in apps.yaml then inverter_type must be set to the same code as has been used in the custom inverter definition.
 
 ### geserial
 
