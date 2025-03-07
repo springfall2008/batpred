@@ -220,8 +220,9 @@ forecast_hours: 48
 
 ## Inverter information
 
-The template `apps.yaml` comes pre-configured with regular expressions that should auto-discover the GivTCP Home Assistant entity names.
-If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities
+The template `apps.yaml` for each inverter type comes pre-configured with regular expressions that should auto-discover the Home Assistant entity names for that inverter type.
+
+If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
 
 ### Givenergy cloud direct
 
@@ -249,6 +250,25 @@ The number of inverters you have. If you increase this above 1 you must provide 
 ```yaml
 num_inverters: 1
 ```
+
+### inverter_type
+
+inverter_type defaults to 'GE' (GivEnergy) if not set in apps.yaml, or should be set to one of the inverter types that are already pre-programmed into Predbat:
+
+  GE: GivEnergy
+  GEC: GivEnergy Cloud
+  GEE: GivEnergy EMC
+  GS: Ginlong Solis
+  SE: SolarEdge
+  SX4: Solax Gen4 (Modbus Power Control)
+  SF: Sofar HYD
+  HU: Huawei Solar
+  SK: Sunsynk
+  SA: Solar Assistant
+
+If you have multiple inverters, then set inverter_type to a list of the inverter types.
+
+If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in apps.yaml then inverter_type must be set to the same code as has been used in the custom inverter defintion.
 
 ### geserial
 

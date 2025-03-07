@@ -12,7 +12,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | SolarEdge inverters | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
    | Givenergy with GE Cloud | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
    | Givenergy with GE Cloud EMC | [ge_cloud EMC](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
-   | Givenergy/Octopus No Home Assistant | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml)
+   | Givenergy/Octopus No Home Assistant | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
    | SunSynk | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | LuxPower | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
@@ -431,7 +431,8 @@ template:
 - Create a GitHub ticket for support and add what you know to the ticket
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
 - You can create a new inverter type in apps.yaml and change the options as to which controls it has
-- The easy way to integrate is to use a Home Assistant service to start charges and discharges, edit the template below
+- Set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) to match the custom inverter definition
+- The easy way to integrate using Home Assistant services to start charges and discharges, edit the template below:
 
 ```yaml
  inverter_type: MINE
