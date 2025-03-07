@@ -100,7 +100,7 @@ These settings are documented in the appropriate place in the documentation, but
 unless you want to charge and discharge at the full 12kWh!
 - If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set [battery_scaling in apps.yaml](apps-yaml.md#battery-size-scaling)
 as the battery size is incorrectly reported to GivTCP
-- If you have an older inverter with battery pause support you may need to [comment out pause start and end time controls in apps.yaml](apps-yaml.md#home-assistant-entity-inverter-control)
+- If you have an older inverter (AC3 or Gen 1 hybrid) with firmware that has battery pause support you may need to [comment out pause start and end time controls in apps.yaml](apps-yaml.md#schedule)
 - If you have a Gen 2, Gen 3 or AIO then you may need to set [inverter_reserve_max in apps.yaml](apps-yaml.md#inverter-reserve-maximum) to 98.
 If you have a Gen 1 or a firmware version that allows the reserve being set to 100 then you can change the default from 98 to 100
 - If your inverter has been wired as an EPS (Emergency Power Supply) or AIO 'whole home backup', consider setting

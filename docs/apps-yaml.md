@@ -450,7 +450,7 @@ or
 - **charge_rate_percent** - Battery charge rate entity in percent of maximum rate (0-100)
 - **discharge_rate_percent** - Battery discharge max rate entity in percent of maximum rate (0-100)
 
-#### battery information
+#### Battery Information
 
 - **battery_power** - Current battery power in watts
 - **battery_voltage** - Current battery voltage (only needed for inverters controlled via amps)
@@ -460,12 +460,12 @@ or
 - **reserve** - sensor name for the reserve setting in %
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set)
 
-#### Power data
+#### Power Data
 
 - **pv_power** - Current PV power in watts
 - **load_power** - Current load power in watts
 
-#### Battery soc
+#### Battery SoC
 
 - **soc_kw** - Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
 
@@ -473,7 +473,7 @@ or
 
 - **soc_percent** Entity name of the battery SOC in percent of the maximum battery size, should be the inverter one not an individual battery
 
-#### Inverter info  
+#### Inverter Info  
 
 - **inverter_reserve_max** - When set defines the maximum reserve setting in % (default is 100)
 - **inverter_mode** - Givenergy inverter mode control
