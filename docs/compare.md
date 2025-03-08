@@ -97,7 +97,7 @@ By default, the comparison will be run at Midnight every night and saved for the
 
 You can view the comparison on the Predbat web interface under the 'Compare' tab and also manually trigger a new comparison by hitting the 'Run' button or by turning on **switch.predbat_compare_active**.
 
-When a compare is running **switch.predbat_compare_active** will be turned off, otherwise it will be off.
+When a compare is running **switch.predbat_compare_active** will be turned on, otherwise it will be off.
 
 Predbat will highlight which tariff may be the best cost-wise for the next 24-hour period based on the plan optimisation metric you have defined. The metric
 includes the value of the contents of your battery and iBoost that has been diverted during this period.
