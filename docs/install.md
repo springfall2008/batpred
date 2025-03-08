@@ -497,3 +497,25 @@ If you create a new Google account specifically for your Home Assistant backups 
 
 As well as the full Home Assistant backup you manually copy the contents of Predbat's `apps.yaml` configuration file to somewhere safe so that if you accidentally mis-edit it,
 you can get Predbat working quickly again by copying it back again.
+
+## Uninstalling Predbat
+
+Incredible though it may be to imagine, its possible you may want to uninstall Predbat.
+
+Removing the Predbat (or AppDaemon) add-on is easy, System / Add-ons / Predbat then select 'Uninstall'.
+
+Its recommended that you do a full restart of Home Assistant and all add-on's after removing Predbat.
+
+You will find that entities created by Predbat unfortunately don't get removed when you remove the Predbat add-on, and as they do not have unique Home Assistant id's, they can't be removed from the Devices & Services / Entities list.
+
+To remove the Predbat entities you will need to use a different mechanism and purge them from Home Assistant:
+
+- Developer Tools / Actions
+- Search for 'Recorder: Purge Entities'
+- Tick 'Domains to remove' and enter 'predbat' as the domain
+- Tick 'Entity globs to remove' and enter '*.predbat_*'
+- Tick 'Days to keep' and set to zero days
+
+Then click 'Perform Action'
+
+This will remove the Predbat entities.  Then do another full reboot of Home Assistant all the add-on's.

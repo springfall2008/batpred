@@ -181,6 +181,7 @@ logger:
       - "State attributes for predbat.export_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
       - "State attributes for predbat.grid_power exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
       - "State attributes for predbat.grid_power_best exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
+      - "State attributes for predbat.import_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
       - "State attributes for predbat.load_energy exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
       - "State attributes for predbat.load_energy_actual exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
       - "State attributes for predbat.load_energy_adjusted exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"

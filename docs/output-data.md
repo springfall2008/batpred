@@ -65,7 +65,7 @@ Installation steps:
 - Click the HACS icon on the left-hand side panel
 - Click 'Frontend'
 - Click the three dots in the top right corner then 'Custom Repositories'
-- Paste (or type) in the following repository name `https://github.com/RossMcMillan92/lovelace-collapsable-cards`, choose Category of 'Lovelace', and click Add
+- Paste (or type) in the following repository name `https://github.com/RossMcMillan92/lovelace-collapsable-cards`, choose Type 'Dashboard', and click Add
 - Close the Custom Repositories dialogue
 - Click 'Explore & Download Repositories'
 - Search for 'collapsable cards', click the name of it, check it's the right one, click 'Download', 'Download' again, then 'Reload'
@@ -405,7 +405,8 @@ They mirror input sensors fed into Predbat in apps.yaml and are used in the data
 
 - predbat.export_energy_h0 - Mirrors the export_today sensor configured in apps.yaml and gives today's total kWh of export energy
 - predbat.import_energy_h0 - Mirrors the import_today sensor configured in apps.yaml and gives today's total kWh of import energy
-- predbat.load_energy_h0 - Mirrors the load_today sensor configured in apps.yaml and gives today's total kWh of house load energy
+- predbat.load_energy_h0 - Mirrors the load_today sensor configured in apps.yaml and gives today's total kWh of house load energy.
+Note that if you have configured [load scaling](customisation.md#scaling-and-weight-options) then load_energy_h0 will have been scaled by the scaling factor.
 - predbat.pv_energy_h0 - Mirrors the pv_today sensor configured in apps.yaml and gives today's total kWh of generated PV energy
 - predbat.soc_kw_h0 - Mirrors the soc_kwh sensor configured in apps.yaml and gives today's total kWh of battery state of charge (SoC).
 Note that if you have configured [battery scaling](apps-yaml.md#battery-size-scaling) then soc_kw_h0 will have been scaled by the configured scaling factor
@@ -461,6 +462,40 @@ These are useful for automations if for example, you want to turn off car chargi
 - predbat.ppkwh_today - The cost in pence/kWh of the house load today accounting for the change in battery level
 - predbat.ppkwh_hour - The cost in pence/kWh of the house load averaged over the last hour, accounting for the change in battery level
 
+## Inverter data
+
+Some inverters store inverter settings in [flash memory that can have a limited number of write cycles](caution.md#flash-memory) so Predbat counts the commands that it sends to the inverter so you can keep track of this:
+
+- predbat.inverter_register_writes is the incrementing total number of writes across all inverters
+
+If you want to create a utility meter to record daily inverter register writes, add the following to your `configuration.yaml` (NB: the utility meter has to be defined in YAML, it cannot be configured via the HA User Interface):
+
+```yaml
+utility_meter:
+  # Predbat daily inverter writes utility meter
+  predbat_daily_inverter_writes:
+    source: predbat.inverter_register_writes
+    name: Predbat Daily Inverter Writes
+    unique_id: predbat_daily_inverter_writes
+    cycle: daily
+```
+
+Add a card of type 'markdown' to your dashboard to display a simple dashboard of inverter writes:
+
+```yaml
+type: markdown
+content: >-
+  {% set dd = (as_timestamp(now()) - as_timestamp("2024-12-22 17:20:00")) | timestamp_custom("%j")| int %}
+  {% set tw = (states('predbat.inverter_register_writes') | int) %}
+  {{ dd }} days, total {{ tw }} inverter writes
+
+  {{ states('sensor.predbat_daily_inverter_writes')|int }} writes today
+
+  Average {{ (tw / dd ) | int }} writes per day
+```
+
+You'll need to change the hard-coded timestamp "2024-12-12..." to the date/time you first started counting Predbat inverter writes from to get the number of days and average writes per day correct.
+
 ## Car data
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
@@ -479,17 +514,41 @@ can be used for automations to trigger the immersion heater boost
 increments during the day and is reset to zero at 11:30pm each night
 - predbat.iboost_best - Predicted energy in kWh going into the iBoost solar diverter under the best plan
 
+You can use the iboost_best sensor to create a custom template sensor that gives the time to next planned iBoost:
+
+```yaml
+{% set iboost_times = state_attr("predbat.iboost_best","results") %}
+{% set times =  iboost_times.keys()|list %}
+{% set iboost_energy =  iboost_times.values()|list  %}
+{% set ni = namespace(x=0) %}
+{% set data = namespace(h_bool=False) %}
+{% set iboost_starts = "" %}
+{% for ni in range(0,times|count()-1) if data.h_bool == false  %}
+{% if iboost_energy[ni+1]-iboost_energy[ni] > 0 %}
+{% set data.h_bool = true %}{{ (as_timestamp (times[ni])-as_timestamp (now()) ) / 3600 | round (0) }}
+{% else %}
+{% endif %}
+{% endfor %}
+{% if data.h_bool == false %}
+{{100}}
+{% endif %}
+```
+
+If no iBoost is imminent then the sensor is set to 100h, and if currently boosting it will produce a small negative answer.
+
+Thanks to @mogons57 for the template sensor code.
+
 ## Carbon data
 
 The following sensors output by Predbat give historic and predicted carbon data.
-They are used in the carbon chart - see [creating the Predbat charts](creating-charts.md):
+They are used in the carbon chart - see [creating the Predbat charts](creating-charts.md).
 
-predbat.carbon - Predicted Carbon energy in g at the end of the plan with attributes giving the breakdown of predicted Carbon impact by half hour time slots
-predbat.carbon_best - Predicted Carbon intensity in g for your home under the best plan based on grid imports, grid exports and the grid's projected carbon intensity
-predbat.carbon_now - A sensor that gives the current Grid Carbon intensity in g/kWh
-predbat.carbon_today - A sensor that tracks your home's Carbon impact today in g based on your grid import minus your grid export
+- predbat.carbon - Predicted Carbon energy in g at the end of the plan with attributes giving the breakdown of predicted Carbon impact by half hour time slots
+- predbat.carbon_best - Predicted Carbon intensity in g for your home under the best plan based on grid imports, grid exports and the grid's projected carbon intensity
+- predbat.carbon_now - A sensor that gives the current Grid Carbon intensity in g/kWh
+- predbat.carbon_today - A sensor that tracks your home's Carbon impact today in g based on your grid import minus your grid export
 
-## Energy saving data
+## Cost saving data
 
 The following sensors output by Predbat give cost-saving data that Predbat achieved, i.e. the financial benefits of using Predbat.
 They are used in the daily cost-saving and total cost-savings charts - see [creating the Predbat charts](creating-charts.md):
@@ -515,6 +574,18 @@ but if you are using the Solcast integration then the Predbat sensors mirror the
 - sensor.predbat_pv_d2 - Similar to the above, but tracking the PV forecast for the day after tomorrow
 - sensor.predbat_pv_d3 - PV forecast for two days after tomorrow
 - sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in Watts, attributes give the 10% and 90% power now forecast
+
+## Dummy inverter sensors
+
+Predbat can now manage different inverter types, some of which don't have all the same control characteristics. Predbat might create dummy entities for control aspects that your inverter doesn't natively support.
+
+For example, for each Gen 1 hybrid inverter (N=0, 1, etc if there are multiple inverters), Predbat creates the following dummy inverter entities:
+
+- sensor.predbat_ge_N_idle_end_time
+- sensor.predbat_ge_N_idle_start_time
+- sensor.predbat_ge_N_scheduled_discharge_enable
+
+These sensors can be ignored and excluded from the recorder history if you wish.
 
 ## Alert data
 

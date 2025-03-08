@@ -104,14 +104,22 @@ Once you have made all other required changes to apps.yaml this line should be d
 template: True
 ```
 
-### Home assistant connection
+### Home Assistant connection
 
 Predbat can speak directly to Home Assistant rather than going via AppDaemon.
 
-If you are using a standard add-on then this will be automatic and you do not need to set this.
+If you are using a standard Predbat add-on then this will be automatic and you should normally not need to set this.
+If you find you get issues where Predbat cannot communicate with Home Assistant after running for a long period of time and you get web socket errors, then creating a HA access key as described below can resolve this.
 
-If you run AppDaemon/Predbat in a Docker then you will need to set the URL or IP address of Home Assistant and the access key which is the long
-lived access token you can create inside Home Assistant.
+If you run Predbat in a Docker container then you will need to set the URL or IP address of Home Assistant and an access key.
+
+The access key is a long-lived security access token you can create inside Home Assistant:
+
+- Click on your user initials (bottom left) in HA;
+- Click the Security tab
+- Scroll to the bottom of the security screen and under 'Long-lived Access tokens', click 'Create Token' then copy the generated access token into ha_key in apps.yaml
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/da5916ce-4630-49b4-a265-81e8e010ff86)
 
 Currently, if this communication is not established Predbat will fall back to AppDaemon, however, some users have experienced failures due to a 10-second timeout set by AppDaemon.
 
@@ -121,8 +129,6 @@ In future versions of Predbat, AppDaemon will be removed.
 ha_url: 'http://homeassistant.local:8123'
 ha_key: 'xxxxxxxxxxx'
 ```
-
-![image](https://github.com/springfall2008/batpred/assets/48591903/da5916ce-4630-49b4-a265-81e8e010ff86)
 
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
 This will remove the need for a DNS lookup of the IP address every time Predbat talks to Home Assistant and may improve reliability as a result.
@@ -214,8 +220,9 @@ forecast_hours: 48
 
 ## Inverter information
 
-The template `apps.yaml` comes pre-configured with regular expressions that should auto-discover the GivTCP Home Assistant entity names.
-If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities
+The template `apps.yaml` for each inverter type comes pre-configured with regular expressions that should auto-discover the Home Assistant entity names for that inverter type.
+
+If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
 
 ### Givenergy cloud direct
 
@@ -243,6 +250,25 @@ The number of inverters you have. If you increase this above 1 you must provide 
 ```yaml
 num_inverters: 1
 ```
+
+### inverter_type
+
+inverter_type defaults to 'GE' (GivEnergy) if not set in apps.yaml, or should be set to one of the inverter types that are already pre-programmed into Predbat:
+
+  GE: GivEnergy
+  GEC: GivEnergy Cloud
+  GEE: GivEnergy EMC
+  GS: Ginlong Solis
+  SE: SolarEdge
+  SX4: Solax Gen4 (Modbus Power Control)
+  SF: Sofar HYD
+  HU: Huawei Solar
+  SK: Sunsynk
+  SA: Solar Assistant
+
+If you have multiple inverters, then set inverter_type to a list of the inverter types.
+
+If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in apps.yaml then inverter_type must be set to the same code as has been used in the custom inverter definition.
 
 ### geserial
 
@@ -300,15 +326,30 @@ See the [Workarounds](#workarounds) section below for configuration settings for
 
 If you have multiple inverters then you may find that the load_today figures are incorrect as the inverters share the house load between them.
 In this circumstance, one solution is to create a Home Assistant template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.
+The example below is defined in configuration.yaml (not the HA user interface) so it only updates every 5 minutes rather than on every underlying sensor state change:
 
 e.g.
 
 ```yaml
-{{ ( states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
-  + states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
-  - states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
-  + states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
-  - states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) ) | round(1) }}
+# Home consumption sensor, updated every 5 minutes instead of the default of every sensor state change
+template:
+  - trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    sensor:
+      - name: "House Load Today"
+        unique_id: "house_load_today"
+        unit_of_measurement: kWh
+        state_class: total
+        device_class: energy
+        state: >
+          {% set x=( states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
+            + states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
+            - states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
+            + states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
+            - states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) )
+          %}
+          {{ max(x,0)|round(1) }}
 ```
 
 ### GivEnergy Cloud Data
@@ -316,10 +357,19 @@ e.g.
 If you have an issue with the GivTCP data, Predbat can get the required historical data from the GivEnergy cloud instead. This data is updated every 30 minutes.
 Connecting to the cloud is less efficient and means that Predbat will be dependent upon your internet connection and the GivEnergy cloud to operate.
 
-- **ge_cloud_data** - When True Predbat will use the [GE Cloud integration](https://github.com/springfall2008/ge_cloud)
-for inverter data rather than GivTCP sensors for load_today, import_today and export_today
+- **ge_cloud_data** - When True Predbat will connect to the GivEnergy cloud rather than GivTCP sensors for historical load_today, import_today and export_today inverter data
 - **ge_cloud_serial** - Set the inverter serial number to use for the cloud data
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
+
+If you need to create a ge_cloud_key, in the GivEnergy cloud portal:
+
+- Click 'account settings' in the menu bar (icon of a person overlaid with a cogwheel)
+- Click 'Manage Account Security' then 'Manage API Tokens' then 'Create API Token'
+- Enter a name for the token e.g. 'Predbat'
+- Select 'No expiry' for the token expiry duration, or choose a fixed duration but remember to create a new token before it expires as Predbat's access will stop once the token expires
+- Ensure that 'api:inverter' is ticked
+- Create token
+- Finally, copy/paste the token created into ge_cloud_key within apps.yaml
 
 ### GivEnergy Cloud controls
 
@@ -400,7 +450,7 @@ or
 - **charge_rate_percent** - Battery charge rate entity in percent of maximum rate (0-100)
 - **discharge_rate_percent** - Battery discharge max rate entity in percent of maximum rate (0-100)
 
-#### battery information
+#### Battery Information
 
 - **battery_power** - Current battery power in watts
 - **battery_voltage** - Current battery voltage (only needed for inverters controlled via amps)
@@ -410,12 +460,12 @@ or
 - **reserve** - sensor name for the reserve setting in %
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set)
 
-#### Power data
+#### Power Data
 
 - **pv_power** - Current PV power in watts
 - **load_power** - Current load power in watts
 
-#### Battery soc
+#### Battery SoC
 
 - **soc_kw** - Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
 
@@ -423,7 +473,7 @@ or
 
 - **soc_percent** Entity name of the battery SOC in percent of the maximum battery size, should be the inverter one not an individual battery
 
-#### Inverter info  
+#### Inverter Info  
 
 - **inverter_reserve_max** - When set defines the maximum reserve setting in % (default is 100)
 - **inverter_mode** - Givenergy inverter mode control
@@ -445,6 +495,11 @@ or
 - **pause_end_time** - scheduled pause start time (only if supported by your inverter)
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
+
+*TIP:* Some older GivEnergy inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
+GivTCP does not recognise this and so still provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
+Predbat can report an error trying to set them, or they revert back to 00:00:00 after being changed by Predbat and there will also be errors setting these controls reported in the GivTCP log.<BR>
+For these inverters the pause_start_time and pause_end_time entries should be commented out in apps.yaml to stop Predbat trying to use them.
 
 See section below on [creating the battery charge power curve](#workarounds).
 
@@ -582,7 +637,7 @@ solcast_sites:
    - 'xxxx'
 ```
 
-If you have more than 2 array orientations and thus more than one Solcast API key, enter each key in a list, i.e.:
+If you have more than 2 array orientations and thus more than one Solcast API key, enter each key in a list:
 
 ```yaml
 api_key:
@@ -591,8 +646,10 @@ api_key:
 ```
 
 Keep in mind hobbyist accounts only have 10 polls per day so you need to ensure that the solcast_poll_hours refresh period is set so that you do not exceed the 10 poll limit.
-If you have two arrays then each Solcast refresh will consume 2 polls.
+If you have two arrays then each Solcast refresh will consume 2 polls so its suggested that you set solcast_poll_hours to 4.8 to maximise your polls over a 24 hour period (5 polls a day, 24/5=poll every 4.8 hours).
 If you use the same Solcast account for other automations the total polls need to be kept under the limit or you will experience failures.
+
+If you use the same Solcast account for other automations the poll frequency will need to be reduced to ensure the total polls is kept under your account daily poll limit or you will experience failures.
 
 If you have multiple PV arrays connected to hybrid inverters or you have AC-coupled inverters, then ensure your PV configuration in Solcast covers all arrays.
 
@@ -674,24 +731,33 @@ car_charging_exclusive:
 
 ### Car Charging Filtering
 
-You might want to remove your electric car charging data from the historical house load data so as to not bias the calculations, otherwise you will get
+Depending upon how the CT clamps and your inverter and electric car charger have been wired, your inverter may 'see' your EV charging as being part of the house load.  This means your house load is artificially raised whenever you charge your car.
+In this circumstance you might want to remove your electric car charging data from the historical house load data so as to not bias the calculations, otherwise you will get
 high battery charge levels when the car was charged previously (e.g. last week).
+
+*TIP:* Check the house load being reported by your inverter when your car is charging. If it doesn't include the car charging load then there is no need to follow these steps below (and if you do, you'll artificially deflate your house load).
 
 - **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from your historical house load
 so that Predbat's battery prediction plan is not distorted by previous car charging.
 
-- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
+- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the daily incrementing kWh data for the car charger.
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
 or edit as necessary in `apps.yaml` for your charger sensor.<BR>
-This can be set to a list of car charging energy sensors, one per line if you have multiple EV car chargers.<BR>
+Note that this must be configured to point to an 'energy today' sensor in kWh not an instantaneous power sensor (in kW) from the car charger.<BR>
 *TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
-e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.
+e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.<BR>
+car_charging_energy can be set to a list of energy sensors, one per line if you have multiple EV car chargers, or want to exclude multiple loads, e.g.:
+
+```yaml
+  car_charging_energy:
+    - 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+    - sensor.mixergy_ID_energy
+```
 
 - **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range of 0.1 to 1.0)
 to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW).
 
-If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml`
-and configure the following Home Assistant entity:
+If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure the following Home Assistant entity:
 
 - **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
 and **input_number.predbat_car_charging_rate** will be subtracted from the historical load data.
@@ -711,7 +777,9 @@ You should not normally need to change these if you have the Octopus Intelligent
 - **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
 
-- **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed.
+- **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed.<BR>
+*Note:* the Octopus Integration now provides [Octopus Intelligent target time](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/#target-time-time) in two formats, either a 'select' entity or a 'time' entity.
+Predbat uses the time entity (time.octopus_energy_{{ACCOUNT_ID}}_intelligent_target_time) which is disabled by default, so you will need to enable the time entity and disable the matching select entity.
 
 - **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit.
 
@@ -735,7 +803,9 @@ Customise for your car charger sensor if it sets sensor values that are not in t
 The car_charging_now configuration item can be set to point to a Home Assistant sensor that tells you that the car is currently charging.
 Predbat will then assume this 30-minute slot is used for charging regardless of the plan.<BR>
 If Octopus Intelligent Charging is enabled and car_charging_now indicates the car is charging then Predbat will also assume that this is a
-low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.
+low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.<BR>
+WARNING: Some cars will briefly start charging as soon as they are plugged in, which Predbat will detect and assume that this is a low rate slot even when it isn't.
+It is therefore recommended that you do NOT set car_charging_now unless you have problems with the Octopus Intelligent slots, and car_charging_now should be commented out in `apps.yaml`.
 
 **CAUTION:** Do not use car_charging_now with Predbat led charging or you will create an infinite loop. Do you use car_charging_now with Octopus intelligent
 unless you can't make it work any other way as it will assume all car charging is at a low rate.
@@ -745,8 +815,8 @@ Useful if you have a sensor for your car charger that isn't binary.
 
 To make planned car charging more accurate, configure the following items in `apps.yaml`:
 
-- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh. If not set, Predbat defaults to 100kWh.
-It will be used to predict when to stop car charging.
+- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh which *must* be entered with one decimal place, e.g. 50.0.
+If not set, Predbat defaults to 100.0kWh. This will be used to predict when to stop car charging.
 
 - **car_charging_limit** - You should configure this to point to a sensor that specifies the % limit the car is set to charge to.
 This could be a sensor on the EV charger integration or a Home Assistant helper entity you can set as you wish.
@@ -874,7 +944,7 @@ so set battery_scaling to 0.8 to report the correct usable capacity figure to Pr
 *TIP:* Likewise, if you have one or multiple GivEnergy All-in-Ones (AIOs),
 it will incorrectly report the 13.5kWh usable capacity of each AIO as 15.9kWh, so set battery_scaling to 0.85 to correct this.
 
-If you are going to chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC
+If you are going to chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC (as this will be scaled)
 rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lines up.
 
 ### Import export scaling

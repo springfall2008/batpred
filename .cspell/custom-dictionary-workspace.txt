@@ -62,6 +62,7 @@ Eddi
 elif
 emszzzz
 enctype
+endfor
 endt
 Energi
 Energidata
@@ -141,6 +142,7 @@ minuteb
 Mixergy
 mkdocs
 Modbus
+mogons
 Mosquitto
 mpan
 mprn

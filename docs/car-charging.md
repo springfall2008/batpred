@@ -37,6 +37,10 @@ and through that, Predbat gets most of the information it needs.
     This will only work correctly if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in
     - Let the Octopus app control when your car charges.
 
+    _TIP:_ If you have a Zappi EV charger then you have to set it to Eco+ mode for IOG to control it.
+    If Predbat starts exporting your battery (e.g. prior to the IOG cheap overnight period) then the Zappi can treat the exported energy as excess solar and start charging the EV battery with it!<BR>
+    To prevent this happening, in the Zappi configuration set the Export Margin to 8000W so that the Zappi will only charge the EV from excess solar when more than 8000W is being exported (which should never happen).
+
 - Predbat-led charging - Here Predbat plans and can initiate the car charging based on the upcoming low import rate slots
     - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml` to point to the appropriate sensors from your EV (see [Car charging config in apps.yaml](apps-yaml.md#car-charging-integration))
     - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned
@@ -126,14 +130,13 @@ A good setting is 0.08 which is 8%.
 
 Sample setup and Predbat automation to use the cheapest charging slots with no/limited Home Assistant Integration.
 
-MG4 EV Vehicle with a Hypervolt Car Charger. There is no 3rd party integration with the MG, and the Hypervolt car charger doesn't understand when an EV is plugged in.
+MG4 EV Vehicle with a Hypervolt Car Charger. There is no 3rd party integration with the MG (so no idea of the car's current SoC), and the Hypervolt car charger doesn't understand when an EV is plugged in.
 
 Yet it can be stopped and started with a 3rd party integration.
 
-In Home Assistant, create two helper entities (Settings / Devices & Services / Helpers) of type 'Number', and for each set 'Unit of Measurement' to 'kWh':
+In Home Assistant, create a helper entity (Settings / Devices & Services / Helpers) of type 'Number' and set 'Unit of Measurement' to 'kWh':
 
 - Car Max Charge - input_number.car_max_charge
-- Car Manual SoC - input_number.car_manual_soc
 
 Create a 'Dropdown' helper entity that has two options 'true' and 'false' (in lowercase):
 
@@ -249,7 +252,7 @@ mode: single
 Finally, for simplicity, add the below entities to your HA Dashboard so you can set them when needed:
 
 - Car Max Charge - input_number.car_max_charge
-- Car Manual SoC - input_number.car_manual_soc
+- Car Manual SoC - input_number.predbat_car_charging_manual_soc_kwh
 - Car Charger Plugged in - input_select.car_charger_plugged_in
 
 Annoyingly, you have to calculate the kWh your vehicle has in total by taking the Percentage left in the car / 100 * Total Car Battery capacity.<BR>

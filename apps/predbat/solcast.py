@@ -336,7 +336,7 @@ class Solcast:
                     "sensor." + self.prefix + "_pv_today",
                     state=dp2(total_day[day]),
                     attributes={
-                        "friendly_name": "PV Today",
+                        "friendly_name": "PV Forecast Today",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "icon": "mdi:solar-power",
@@ -374,7 +374,7 @@ class Solcast:
                     "sensor." + self.prefix + "_pv_" + day_name,
                     state=dp2(total_day[day]),
                     attributes={
-                        "friendly_name": "PV " + day_name_long,
+                        "friendly_name": "PV Forecast " + day_name_long,
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "icon": "mdi:solar-power",

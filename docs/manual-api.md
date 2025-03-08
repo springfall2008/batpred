@@ -44,11 +44,13 @@ Commands are disabled again by putting them in square brackets e.g:
 
 Below is an example of setting a rate override, you can clear all overrides by calling 'off' or this specific one only by calling the same thing again but in square brackets []
 
-For the rates you can use **rates_export_override** or **rates_import_override** with all the same options as apps.yaml but in a URL type format
+For the rates you can use **rates_export_override** or **rates_import_override** with all the same options as [apps.yaml](energy-rates.md#manually-over-riding-energy-rates) but in a URL type format:
 
 ```text
 rates_export_override?start=17:00:00&end=19:00:00&rate=0
 ```
+
+See below for an [example of using the API to over-ride predicted house load]
 
 If you override a single value item in a list with something like:
 
@@ -91,3 +93,64 @@ The following settings can be overridden with this method:
 - import_export_scaling
 - inverter_limit_charge
 - inverter_limit_discharge
+
+## Example solution to over-ride predicted house load
+
+One common feedback is there is no mechanism in Predbat to alter the predicted house load, for example ignoring the effects of extra washing load in the past, or to take account of planned extra load such as cooking a big Sunday dinner.
+
+The Predbat manual API provides a mechanism to meet this need by setting an export (or import) rates override.
+
+1. Control variables
+
+Create a date/time helper called predbat_override_date of type date, another called predbat_override_start_time of type time, and a third called predbat_override_end_time also of type time.
+
+Create an input number helper called predbat_override_load_percent. I made it an input field and with a maximum value of 5.
+
+These will hold the date, start time, end time and load adjustment percentage.
+
+2. Create an automation script to send the event details to Predbat:
+
+```yaml
+alias: Send Load Adjustment details to Predbat manual API
+sequence:
+  - action: select.select_option
+    data:
+      option: >-
+        rates_export_override?date={{
+        states('input_datetime.predbat_override_date')| as_timestamp |
+        timestamp_custom('%Y-%m-%d') }}&start={{
+        states('input_datetime.predbat_override_start_time')
+        }}&end={{
+        states('input_datetime.predbat_override_end_time')
+        }}&load_scaling={{
+        states('input_number.predbat_override_load_percent')|float }}
+    target:
+      entity_id: select.predbat_manual_api
+mode: single
+description: ""
+```
+
+The script collects the above input variables, and sends these to Predbat as an export rate override.
+
+3. Dashboard:
+
+On an existing Home Assistant dashboard, or on a new one, create a control of type 'entities' and paste the following in:
+
+```yaml
+type: entities
+entities:
+  - entity: input_datetime.predbat_override_session_date
+  - entity: input_datetime.predbat_override_start_time
+  - entity: input_datetime.predbat_override_end_time
+  - entity: input_number.predbat_override_load_percent
+  - type: button
+    name: Send Load Adjustment details to Predbat
+    icon: mdi:script-text-play-outline
+    action_name: Execute
+    tap_action:
+      action: perform-action
+      perform_action: script.send_load_adjustment_details_to_predbat_manual_api
+```
+
+You simply enter the date, start time, end time and load percentage adjustment (e.g. 0.5=50%), then click the 'Execute' button.
+The load adjustment details will be sent to the Predbat manual API and you will see the load change and a small +/- symbol against the export rate in the Predbat plan.

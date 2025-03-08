@@ -12,7 +12,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | SolarEdge inverters | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
    | Givenergy with GE Cloud | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
    | Givenergy with GE Cloud EMC | [ge_cloud EMC](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
-   | Givenergy/Octopus No Home Assistant | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml)
+   | Givenergy/Octopus No Home Assistant | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
    | SunSynk | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | LuxPower | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
@@ -59,6 +59,7 @@ the Configuration tab is no longer used and all configuration is now done via th
 - On the GivTCP add-on, click 'START' to start the add-on
 - Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
+- If you have a single AIO then for Predbat to be able to communicate via REST to the AIO, it MUST be the first device configured in GivTCP.  Conversely if you have a gateway and multiple AIO's then the gateway MUST be the first device in GivTCP
 - If you have multiple inverters you may wish to change the default device prefixes that GivTCP assigns ('givtcp', 'givtcp2', 'givtcp3', etc)
 to make it easier to identify your devices within Home Assistant.<BR>
 For example, if you have a gateway and two AIOs you could use the prefixes 'GW', 'AIO-1' and 'AIO-2'.
@@ -78,19 +79,28 @@ you won't need to create a dedicated MQTT user or enter the details on the MQTT 
 and will automatically create a set of 'givtcp_xxx' entities in Home Assistant for your inverter data, inverter controls and battery data
 - Check the GivTCP Log tab that there aren't any errors; it should end with 'Publishing Home Assistant Discovery messages'
 
-4. Specific Predbat configuration requirements for certain GivEnergy equipment
+4. Before you start using GivTCP to control your inverter
+
+Verify in the GivEnergy portal settings the following inverter settings are set correctly as these are settings that Predbat doesn't control, and if not set correctly could affect your battery activity:
+
+- "Inverter Charge Power Percentage" is set to 100 (Predbat has its own low-rate charge control you can use if you wish)
+- "Inverter Discharge Power Percentage" is set to 100. If you do wish to set a lower discharge rate then its recommended that instead you set [inverter_limit_discharge in apps.yaml](apps-yaml.md#inverter-control-configurations) to the rate
+- "Battery Cutoff % Limit" is set to 4
+
+5. Specific Predbat configuration requirements for certain GivEnergy equipment
 
 The rest of the [Predbat installation instructions](install.md) should now be followed,
 but its worth highlighting that there are a few specific settings that should be set for certain GivEnergy equipment.
 These settings are documented in the appropriate place in the documentation, but for ease of identification, are repeated here:
 
-- If you are using GivTCP v3 and have an AIO or 3-phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number
+- If you are using GivTCP v3 and have an AIO or 3-phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number as the auto-detect doesn't work for this setup
 - If you have a single AIO then control is directly to the AIO. Ensure [geserial in apps.yaml](apps-yaml.md#geserial) is correctly picking the AIO and comment out geserial2 lines
 - If you have multiple AIOs then all control of the AIOs is done through the Gateway so [geserial in apps.yaml](apps-yaml.md#geserial) should be set to the Gateway serial number
 - If you have multiple AIOs you might want to consider setting [inverter charge and discharge limits](apps-yaml.md#inverter-control-configurations)
 unless you want to charge and discharge at the full 12kWh!
 - If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set [battery_scaling in apps.yaml](apps-yaml.md#battery-size-scaling)
 as the battery size is incorrectly reported to GivTCP
+- If you have an older inverter (AC3 or Gen 1 hybrid) with firmware that has battery pause support you may need to [comment out pause start and end time controls in apps.yaml](apps-yaml.md#schedule)
 - If you have a Gen 2, Gen 3 or AIO then you may need to set [inverter_reserve_max in apps.yaml](apps-yaml.md#inverter-reserve-maximum) to 98.
 If you have a Gen 1 or a firmware version that allows the reserve being set to 100 then you can change the default from 98 to 100
 - If your inverter has been wired as an EPS (Emergency Power Supply) or AIO 'whole home backup', consider setting
@@ -421,7 +431,8 @@ template:
 - Create a GitHub ticket for support and add what you know to the ticket
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
 - You can create a new inverter type in apps.yaml and change the options as to which controls it has
-- The easy way to integrate is to use a Home Assistant service to start charges and discharges, edit the template below
+- Set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) to match the custom inverter definition
+- The easy way to integrate using Home Assistant services to start charges and discharges, edit the template below:
 
 ```yaml
  inverter_type: MINE

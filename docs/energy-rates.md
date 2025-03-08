@@ -133,6 +133,9 @@ Like the electricity rates, this is set in the apps.yaml template to a regular e
 
 When a saving session is available it will be automatically joined by Predbat and should then appear as a joined session within the next 30 minutes.
 
+NOTE: Predbat automatically joining the saving session relies upon the event being enabled and Predbat being able to find the saving session event as 'event.octopus_energy_ACCOUNT_ID_octoplus_saving_session_events' - there have been occasions
+with some Octopus Integration installations where the event name is different.  If this is the case then the event must be renamed to the correct format that Predbat can function correctly.
+
 In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
 The assumed rate will be taken from the Octopus Energy integration and converted into pence
 using the **octopus_saving_session_octopoints_per_penny** configuration item in apps.yaml (default is 8).
@@ -246,7 +249,7 @@ rates_gas:
     rate: pence
 ```
 
-**start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30-minute slots normally.
+**start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally, i.e. end with ":30:00" or ":00:00".
 **rate** is in pence e.g. 4.2
 
 **day_of_week** Can also be used to control rates on specific days. You can specify one day or multiple days split by a comma.
@@ -275,8 +278,8 @@ You can also override the import or export energy rates (regardless of whether t
 Rate override is used to set the specific date and time period where your rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two),
 or the British Gas half-price electricity on Sundays.
 
-Unfortunately, there aren't any API's available to feed this information automatically into Predbat so you will have to edit `apps.yaml` manually
-to set the appropriate rate over-ride dates and times:
+Unfortunately, there aren't any API's available to feed this information automatically into Predbat so you will have to define your own input controls and use the [Predbat manual API](manual-api.md#example-solution-to-over-ride-predicted-house-load),
+or edit `apps.yaml` manually to set the appropriate rate over-ride dates and times:
 
 ```yaml
 rates_import_override:
@@ -331,7 +334,7 @@ rates_export_override:
     rate_increment: 10
 ```
 
-You can also use rate_increment with load_scaling, e.g. a rate_increment of 0 can be used to just apply load scaling to certain defined periods.
+You can also define an import_rate_override with start and end times and only load_scaling (without a rate_increment or rate), e.g. if you just want to apply load scaling to certain defined periods.
 
 - **date** is optional and if specified must be in the date format of "YYYY-MM-DD" e.g. "2023-09-09".
 If a date is specified then the rate override applies to that specific date, otherwise, it applies to all dates
