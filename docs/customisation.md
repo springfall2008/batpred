@@ -256,7 +256,8 @@ you want to export as late in the day as you can.
 This is a soft constraint only that's used for longer-term planning and is ignored for the forthcoming first 4 hours of the plan.
 As this is not used for short-term planning your SoC can drop below this - use **input_number.predbat_best_soc_min**
 if you want to force all charges to be above a set level.
-It's usually good to have best_soc_keep set to a value above 0 to allow some margin in case you use more energy than planned between charge slots.
+It's usually good to have best_soc_keep set to 0 to use your entire battery, values above zero will end up costing more money but will ensure you
+have some spare battery kept back for emergency use.
 
 **input_number.predbat_best_soc_keep_weight** (_expert_mode_) Is used to tune how strongly you want the keep metric to apply.
 A value of 0 would essentially ignore keep while higher values will make it more important to always stay above your keep threshold even if it costs
@@ -289,7 +290,7 @@ Do not use it if you have multiple charge windows in a given period as it won't 
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
 
 **input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced export for.
-A value of 5 is the default which prevents any marginal exports as they must be worth at least 5 pence for a 30-minute slot (less for shorter slots.
+A value of 3 is the default which prevents any marginal exports as they must be worth at least 3 pence for a 30-minute slot (less for shorter slots).
 If you increase this value (e.g. you only want to force export if very profitable), then exports will become less common.
 The value is in pence per 30 minutes of export time.
 
