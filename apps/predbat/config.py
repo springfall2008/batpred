@@ -303,7 +303,7 @@ CONFIG_ITEMS = [
         "step": 0.10,
         "unit": "kWh",
         "icon": "mdi:battery-50",
-        "default": 0.5,
+        "default": 0.0,
     },
     {
         "name": "best_soc_keep_weight",
