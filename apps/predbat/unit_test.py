@@ -129,7 +129,7 @@ class TestHAInterface:
         return None
 
     def set_state(self, entity_id, state, attributes=None):
-        # print("Setting state: {} to {} attributes {}".format(entity_id, state, str(attributes)))
+        #print("Setting state: {} to {} attributes {}".format(entity_id, state, str(attributes)))
         self.dummy_items[entity_id] = state
         return None
 
@@ -2889,14 +2889,14 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     if not expected_file:
         my_predbat.args["plan_debug"] = True
         # my_predbat.set_discharge_during_charge = True
-        # my_predbat.calculate_export_oncharge = True
-        # my_predbat.combine_charge_slots = False
+        #my_predbat.calculate_export_oncharge = True
+        #my_predbat.combine_charge_slots = False
         my_predbat.metric_min_improvement_export = 3
         my_predbat.set_reserve_min = 0
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        # my_predbat.best_soc_keep = 0
+        #my_predbat.best_soc_keep = 0
         # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
         # my_predbat.metric_min_improvement_export = 5
@@ -8024,9 +8024,10 @@ def run_test_octopus_api(my_predbat, octopus_api, octopus_account):
     print("Test Octopus API")
     failed = False
 
-    octopus_api = OctopusAPI(octopus_api, octopus_account, my_predbat.log)
+    octopus_api = OctopusAPI(octopus_api, octopus_account, my_predbat)
+    my_predbat.octopus_api_direct = octopus_api
     my_predbat.create_task(octopus_api.start())
-    time.sleep(3)
+    octopus_api.wait_api_started()
 
     planned_dispatches = octopus_api.get_intelligent_planned_dispatches()
     completed_dispatches = octopus_api.get_intelligent_completed_dispatches()
