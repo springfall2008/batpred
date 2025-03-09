@@ -428,9 +428,14 @@ class OctopusAPI:
         sessions_to_join = self.saving_sessions_to_join
         self.saving_sessions_to_join = []
 
+        # Join the saving sessions
         for event_code in sessions_to_join:
             self.log("Octopus API: Joining saving session event {}".format(event_code))
             await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False)
+
+        # Re-fetch the saving sessions if we have joined any
+        if sessions_to_join:
+            self.saving_sessions = await self.async_get_saving_sessions(account_id)
 
     def get_intelligent_device(self):
         """
@@ -550,7 +555,7 @@ class OctopusAPI:
             event_id = event.get("eventId", None)
             if start and end:
                 return_joined_events.append({"start": start, "end": end, "octopoints_per_kwh": event_reward.get(event_id, None), "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None)})
-        entity_name = "binary_sensor.predbat_octopus_" + self.account_id.replace("-", "_")
+        entity_name = "binary_sensor.predbat_octopus_" + self.account_id.replace('-', '_')
         entity_name = entity_name.lower()
         saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
         active_event = False
@@ -840,7 +845,7 @@ class OctopusAPI:
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
                                 completed.append(dispatch)
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
-                        entity_name = "binary_sensor.predbat_octopus_" + account_id.replace("-", "_")
+                        entity_name = "binary_sensor.predbat_octopus_" + account_id.replace('-', '_')
                         entity_name = entity_name.lower()
                         active_event = False
                         for dispatch in planned:
@@ -1054,9 +1059,9 @@ class Octopus:
                 pdata = self.minute_data(tariff_data, self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
                 return pdata
             else:
-                # No tariff
+                # No tariff 
                 self.log("Warn: Octopus API direct tariff {} not available, using zero".format(tariff_type))
-                return {n: 0 for n in range(0, 60 * 24)}
+                return {n : 0 for n in range(0, 60 * 24)}
 
         self.log("Warn: Octopus API direct not available")
         return {}
