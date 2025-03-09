@@ -1220,19 +1220,20 @@ class Inverter:
         """
         Get the current charge rate in watts
         """
-        if self.rest_data:
+        if self.rest_data and "Control" in self.rest_data and "Battery_Charge_Rate" in self.rest_data["Control"]:
             current_rate = int(self.rest_data["Control"]["Battery_Charge_Rate"])
         else:
             if "charge_rate_percent" in self.base.args:
                 current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100
             else:
                 current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
-
         try:
             current_rate = int(current_rate)
         except (ValueError, TypeError) as e:
             self.base.log("Error: Inverter {} charge rate {} is not a number, setting to 2600W".format(current_rate, self.id))
             current_rate = 2600
+
+        print("Current charge rate is {}".format(current_rate))
 
         return current_rate
 
@@ -2120,10 +2121,11 @@ class Inverter:
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
         if target_soc > 0:
+            current_rate = self.get_current_charge_rate()
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
                 "target_soc": target_soc,
-                "power": int(self.battery_rate_max_charge * MINUTE_WATT),
+                "power": int(current_rate),
             }
 
             # Stop discharge
