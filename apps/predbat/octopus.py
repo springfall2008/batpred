@@ -428,9 +428,14 @@ class OctopusAPI:
         sessions_to_join = self.saving_sessions_to_join
         self.saving_sessions_to_join = []
 
+        # Join the saving sessions
         for event_code in sessions_to_join:
             self.log("Octopus API: Joining saving session event {}".format(event_code))
             await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False)
+
+        # Re-fetch the saving sessions if we have joined any
+        if sessions_to_join:
+            self.saving_sessions = await self.async_get_saving_sessions(account_id)
 
     def get_intelligent_device(self):
         """

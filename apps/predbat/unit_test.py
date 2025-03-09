@@ -8024,9 +8024,10 @@ def run_test_octopus_api(my_predbat, octopus_api, octopus_account):
     print("Test Octopus API")
     failed = False
 
-    octopus_api = OctopusAPI(octopus_api, octopus_account, my_predbat.log)
+    octopus_api = OctopusAPI(octopus_api, octopus_account, my_predbat)
+    my_predbat.octopus_api_direct = octopus_api
     my_predbat.create_task(octopus_api.start())
-    time.sleep(3)
+    octopus_api.wait_api_started()
 
     planned_dispatches = octopus_api.get_intelligent_planned_dispatches()
     completed_dispatches = octopus_api.get_intelligent_completed_dispatches()
