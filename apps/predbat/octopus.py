@@ -550,7 +550,7 @@ class OctopusAPI:
             event_id = event.get("eventId", None)
             if start and end:
                 return_joined_events.append({"start": start, "end": end, "octopoints_per_kwh": event_reward.get(event_id, None), "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None), "id": event_id, "code": event_code.get(event_id, None)})
-        entity_name = "binary_sensor.predbat_octopus_" + self.account_id
+        entity_name = "binary_sensor.predbat_octopus_" + self.account_id.replace("-", "_")
         entity_name = entity_name.lower()
         saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
         active_event = False
@@ -635,7 +635,7 @@ class OctopusAPI:
             tariffs[tariff]["data"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/")
             tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
-            entity_id = "sensor.predbat_octopus_" + self.account_id + "_" + tariff
+            entity_id = "sensor.predbat_octopus_" + self.account_id.replace("-", "_") + "_" + tariff
             entity_id = entity_id.lower()
 
             rates = self.base.get_octopus_direct(tariff)
@@ -645,7 +645,8 @@ class OctopusAPI:
             for minute in range(0, 60 * 24 * 2, 30):
                 time_now = self.midnight_utc + timedelta(minutes=minute)
                 rate_value = rates.get(minute, None)
-                rates_stamp[time_now.strftime(TIME_FORMAT_OCTOPUS)] = rate_value
+                if rate_value is not None:
+                    rates_stamp[time_now.strftime(TIME_FORMAT_OCTOPUS)] = rate_value
             rate_now = rates.get(self.now_utc.minute + self.now_utc.hour * 60, None)
             standing_now = standing.get(self.now_utc.minute + self.now_utc.hour * 60, None)
 
@@ -839,7 +840,7 @@ class OctopusAPI:
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
                                 completed.append(dispatch)
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
-                        entity_name = "binary_sensor.predbat_octopus_" + account_id
+                        entity_name = "binary_sensor.predbat_octopus_" + account_id.replace("-", "_")
                         entity_name = entity_name.lower()
                         active_event = False
                         for dispatch in planned:
@@ -1052,9 +1053,12 @@ class Octopus:
 
                 pdata = self.minute_data(tariff_data, self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
                 return pdata
-            return {}
-        else:
-            self.log("Warn: Octopus API direct not available")
+            else:
+                # No tariff
+                self.log("Warn: Octopus API direct tariff {} not available, using zero".format(tariff_type))
+                return {n: 0 for n in range(0, 60 * 24)}
+
+        self.log("Warn: Octopus API direct not available")
         return {}
 
     def download_octopus_rates_func(self, url):
