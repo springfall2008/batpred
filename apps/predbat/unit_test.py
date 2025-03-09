@@ -129,7 +129,7 @@ class TestHAInterface:
         return None
 
     def set_state(self, entity_id, state, attributes=None):
-        print("Setting state: {} to {} attributes {}".format(entity_id, state, attributes))
+        #print("Setting state: {} to {} attributes {}".format(entity_id, state, str(attributes)))
         self.dummy_items[entity_id] = state
         return None
 
@@ -2268,6 +2268,7 @@ def simple_scenario(
     set_charge_low_power=False,
     set_charge_window=True,
     battery_temperature=20,
+    set_export_freeze_only=False,
 ):
     """
     No PV, No Load
@@ -2333,6 +2334,7 @@ def simple_scenario(
     my_predbat.car_charging_from_battery = car_charging_from_battery
     my_predbat.set_charge_low_power = set_charge_low_power
     my_predbat.set_charge_window = set_charge_window
+    my_predbat.set_export_freeze_only = set_export_freeze_only
 
     my_predbat.iboost_enable = iboost_enable
     my_predbat.iboost_gas = iboost_gas
@@ -2887,15 +2889,19 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     if not expected_file:
         my_predbat.args["plan_debug"] = True
         # my_predbat.set_discharge_during_charge = True
+        #my_predbat.calculate_export_oncharge = True
+        #my_predbat.combine_charge_slots = False
+        my_predbat.metric_min_improvement_export = 3
+        my_predbat.set_reserve_min = 0
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        # my_predbat.best_soc_keep = 2
+        #my_predbat.best_soc_keep = 0
         # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
         # my_predbat.metric_min_improvement_export = 5
         # my_predbat.inverter_loss = 0.97
-        my_predbat.calculate_tweak_plan = False
+        # my_predbat.calculate_tweak_plan = False
 
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_second_pass = False
@@ -6235,6 +6241,9 @@ def run_model_tests(my_predbat):
         inverter_loss=0.5,
     )
     failed |= simple_scenario("battery_discharge_freeze", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10)
+    failed |= simple_scenario("battery_discharge_freeze2", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10, set_export_freeze_only=True)
+    failed |= simple_scenario("battery_discharge_freeze_only", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=0, battery_soc=10, set_export_freeze_only=True)
+
     failed |= simple_scenario("battery_discharge_hold", my_predbat, 0, 0.5, assert_final_metric=-0, assert_final_soc=10 + 24 * 0.5, with_battery=True, discharge=98, battery_soc=10)
     failed |= simple_scenario(
         "battery_discharge_export_limit_ac",
