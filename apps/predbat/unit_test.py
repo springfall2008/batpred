@@ -1242,12 +1242,16 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     my_predbat.args["discharge_start_service"] = "discharge_start"
     my_predbat.args["discharge_stop_service"] = "discharge_stop"
     my_predbat.args["discharge_freeze_service"] = "discharge_freeze"
+    my_predbat.args["charge_rate"] = "number.charge_rate"
     my_predbat.args["device_id"] = "DID0"
+    if "charge_rate_percent" in my_predbat.args:
+        del my_predbat.args["charge_rate_percent"]
 
     dummy_items["select.charge_start_time"] = charge_start_time
     dummy_items["select.charge_end_time"] = charge_end_time
+    dummy_items["number.charge_rate"] = 1101
 
-    power = int(inv.battery_rate_max_charge * MINUTE_WATT)
+    power = 1101
 
     inv.adjust_charge_immediate(soc, freeze=freeze)
     result = ha.get_service_store()
