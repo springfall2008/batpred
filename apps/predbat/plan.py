@@ -1873,6 +1873,12 @@ class Plan:
             typ = window_index[key]["type"]
             window_n = window_index[key]["id"]
             if typ == "c":
+                # Don't optimise a charge window that hits an export window if this is disallowed
+                if not self.calculate_export_oncharge:
+                    hit_export = self.hit_charge_window(self.export_window_best, self.charge_window_best[window_n]["start"], self.charge_window_best[window_n]["end"])
+                    if hit_export >= 0 and self.export_limits_best[hit_export] < 100:
+                        continue
+
                 window_start = self.charge_window_best[window_n]["start"]
                 if self.calculate_best_charge and (window_start not in self.manual_all_times):
                     best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
@@ -2140,7 +2146,7 @@ class Plan:
                         # For start at high only tune down excess high slots
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
                             if self.debug_enable:
-                                self.log("Skip start at high window {} best limit {}".format(window_n, (self.charge_limit_best[window_n])))
+                                self.log("Skip start at high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
                             continue
 
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
@@ -2161,6 +2167,12 @@ class Plan:
                                 )
                                 printed_set = True
                             average = self.charge_window_best[window_n]["average"]
+
+                            # Don't optimise a charge window that hits an export window if this is disallowed
+                            if not self.calculate_export_oncharge:
+                                hit_export = self.hit_charge_window(self.export_window_best, self.charge_window_best[window_n]["start"], self.charge_window_best[window_n]["end"])
+                                if hit_export >= 0 and self.export_limits_best[hit_export] < 100:
+                                    continue
 
                             best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
                                 window_n,
@@ -2322,6 +2334,12 @@ class Plan:
                 if typ == "c":
                     window_start = self.charge_window_best[window_n]["start"]
                     if self.calculate_best_charge and (window_start not in self.manual_all_times):
+                        # Don't optimise a charge window that hits an export window if this is disallowed
+                        if not self.calculate_export_oncharge:
+                            hit_export = self.hit_charge_window(self.export_window_best, self.charge_window_best[window_n]["start"], self.charge_window_best[window_n]["end"])
+                            if hit_export >= 0 and self.export_limits_best[hit_export] < 100:
+                                continue
+
                         best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
                             window_n,
                             record_charge_windows,
