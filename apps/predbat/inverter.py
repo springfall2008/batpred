@@ -1233,8 +1233,6 @@ class Inverter:
             self.base.log("Error: Inverter {} charge rate {} is not a number, setting to 2600W".format(current_rate, self.id))
             current_rate = 2600
 
-        print("Current charge rate is {}".format(current_rate))
-
         return current_rate
 
     def adjust_charge_rate(self, new_rate, notify=True):
