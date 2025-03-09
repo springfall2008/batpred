@@ -1053,9 +1053,9 @@ class Octopus:
                 pdata = self.minute_data(tariff_data, self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
                 return pdata
             else:
-                # No tariff 
+                # No tariff
                 self.log("Warn: Octopus API direct tariff {} not available, using zero".format(tariff_type))
-                return {n : 0 for n in range(0, 60 * 24)}
+                return {n: 0 for n in range(0, 60 * 24)}
 
         self.log("Warn: Octopus API direct not available")
         return {}
