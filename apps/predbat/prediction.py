@@ -236,6 +236,8 @@ class Prediction:
         Run prediction in a thread
         """
         # Store try value into the window
+        export_limits = export_limits.copy()
+
         if all_n:
             for window_id in all_n:
                 export_limits[window_id] = this_export_limit
@@ -586,7 +588,7 @@ class Prediction:
             # discharge freeze, reset charge rate by default
             if self.set_export_freeze:
                 # Freeze mode
-                if (export_window_n >= 0) and (self.set_export_freeze and (export_limits[export_window_n] == 99.0 or self.set_export_freeze_only)):
+                if (export_window_n >= 0) and export_limits[export_window_n] < 100.0 and (self.set_export_freeze and (export_limits[export_window_n] == 99.0 or self.set_export_freeze_only)):
                     charge_rate_now = self.battery_rate_min  # 0
 
             # Set discharge during charge?
