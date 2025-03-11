@@ -908,14 +908,16 @@ class GECloudDirect:
         """
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICES)
         serials = []
-        if device_list is not None:
-            for device in device_list:
-                self.log("GECloud: Found device {}".format(device))
-                serial = device.get("inverter", {}).get("serial", None)
-                batteries = device.get("inverter", {}).get("connections", {}).get("batteries", [])
-                if serial and batteries:
-                    # Only include devices with batteries
-                    serials.append(serial)
+        if device_list is None:
+            return serials
+
+        for device in device_list:
+            self.log("GECloud: Found device {}".format(device))
+            serial = device.get("inverter", {}).get("serial", None)
+            batteries = device.get("inverter", {}).get("connections", {}).get("batteries", [])
+            if serial and batteries:
+                # Only include devices with batteries
+                serials.append(serial)
 
         return serials
 
