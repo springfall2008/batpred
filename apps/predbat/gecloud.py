@@ -1,7 +1,5 @@
 import requests
-from datetime import timedelta
-from datetime import datetime
-from datetime import timezone
+from datetime import timedelta, datetime, timezone
 from utils import str2time, dp1
 import requests
 import json
@@ -529,42 +527,64 @@ class GECloudDirect:
 
     async def async_automatic_config(self, devices):
         """
-        Configure predbat devices
+        Automatically configure predbat using GE Cloud auto-detected devices.
+        'devices' is a dict with keys:
+          - "ems": the EMS device serial
+          - "battery": list of battery inverter serials (for battery-specific sensors)
         """
-        if not devices:
-            self.log("GECloud: No devices found, cannot configure")
+        if not devices or not devices["battery"]:
+            self.log("GECloud: No battery devices found, cannot configure")
             return
 
-        num_inverters = len(devices)
-        self.base.args["num_inverters"] = num_inverters
+        batteries = devices["battery"]
+        num_inverters = len(batteries)
+
         self.base.args["inverter_type"] = ["GEC" for _ in range(num_inverters)]
-        self.base.args["load_today"] = ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in devices]
-        self.base.args["import_today"] = ["sensor.predbat_gecloud_" + device + "_grid_import_today" for device in devices]
-        self.base.args["export_today"] = ["sensor.predbat_gecloud_" + device + "_grid_export_today" for device in devices]
-        self.base.args["pv_today"] = ["sensor.predbat_gecloud_" + device + "_solar_today" for device in devices]
-        self.base.args["charge_rate"] = ["number.predbat_gecloud_" + device + "_battery_charge_power" for device in devices]
-        self.base.args["battery_rate_max"] = ["sensor.predbat_gecloud_" + device + "_max_charge_rate" for device in devices]
-        self.base.args["discharge_rate"] = ["number.predbat_gecloud_" + device + "_battery_discharge_power" for device in devices]
-        self.base.args["battery_power"] = ["sensor.predbat_gecloud_" + device + "_battery_power" for device in devices]
-        self.base.args["pv_power"] = ["sensor.predbat_gecloud_" + device + "_solar_power" for device in devices]
-        self.base.args["load_power"] = ["sensor.predbat_gecloud_" + device + "_consumption_power" for device in devices]
-        self.base.args["soc_percent"] = ["sensor.predbat_gecloud_" + device + "_battery_percent" for device in devices]
-        self.base.args["soc_max"] = ["sensor.predbat_gecloud_" + device + "_battery_size" for device in devices]
-        self.base.args["battery_scaling"] = ["sensor.predbat_gecloud_" + device + "_battery_dod" for device in devices]
-        self.base.args["reserve"] = ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in devices]
-        self.base.args["inverter_time"] = ["sensor.predbat_gecloud_" + device + "_time" for device in devices]
-        self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + device + "_ac_charge_1_start_time" for device in devices]
-        self.base.args["charge_end_time"] = ["select.predbat_gecloud_" + device + "_ac_charge_1_end_time" for device in devices]
-        self.base.args["charge_limit"] = ["number.predbat_gecloud_" + device + "_ac_charge_upper_percent_limit" for device in devices]
-        self.base.args["discharge_start_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_start_time" for device in devices]
-        self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in devices]
-        self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in devices]
-        self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in devices]
-        self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in devices]
-        self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in devices]
-        self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in devices]
+        self.base.args["load_today"] = ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in batteries]
+        self.base.args["import_today"] = ["sensor.predbat_gecloud_" + device + "_grid_import_today" for device in batteries]
+        self.base.args["export_today"] = ["sensor.predbat_gecloud_" + device + "_grid_export_today" for device in batteries]
+        self.base.args["pv_today"] = ["sensor.predbat_gecloud_" + device + "_solar_today" for device in batteries]
+        self.base.args["charge_rate"] = ["number.predbat_gecloud_" + device + "_battery_charge_power" for device in batteries]
+        self.base.args["battery_rate_max"] = ["sensor.predbat_gecloud_" + device + "_max_charge_rate" for device in batteries]
+        self.base.args["discharge_rate"] = ["number.predbat_gecloud_" + device + "_battery_discharge_power" for device in batteries]
+        self.base.args["battery_power"] = ["sensor.predbat_gecloud_" + device + "_battery_power" for device in batteries]
+        self.base.args["pv_power"] = ["sensor.predbat_gecloud_" + device + "_solar_power" for device in batteries]
+        self.base.args["load_power"] = ["sensor.predbat_gecloud_" + device + "_consumption_power" for device in batteries]
+        self.base.args["soc_percent"] = ["sensor.predbat_gecloud_" + device + "_battery_percent" for device in batteries]
+        self.base.args["soc_max"] = ["sensor.predbat_gecloud_" + device + "_battery_size" for device in batteries]
+        self.base.args["reserve"] = ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in batteries]
+        self.base.args["inverter_time"] = ["sensor.predbat_gecloud_" + device + "_time" for device in batteries]
+        self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + device + "_ac_charge_1_start_time" for device in batteries]
+        self.base.args["charge_end_time"] = ["select.predbat_gecloud_" + device + "_ac_charge_1_end_time" for device in batteries]
+        self.base.args["charge_limit"] = ["number.predbat_gecloud_" + device + "_ac_charge_upper_percent_limit" for device in batteries]
+        self.base.args["discharge_start_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_start_time" for device in batteries]
+        self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in batteries]
+        self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries]
+        self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries]
+        self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
+        self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries]
+        self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries]
         self.base.args["givtcp_rest"] = {}
-        self.base.args["ge_cloud_serial"] = devices[0]
+        self.base.args["ge_cloud_serial"] = batteries[0]
+
+        # reconfigure for EMS
+        if devices["ems"]:
+            self.log("GECloud: EMS detected")
+            ems = devices["ems"]
+            self.base.args["inverter_type"] = ["GEE"  for _ in range(num_inverters)]
+            self.base.args["ge_cloud_serial"] = ems
+            self.base.args["load_today"] = ["sensor.predbat_gecloud_" + ems + "_consumption_today" ]
+            self.base.args["import_today"] = ["sensor.predbat_gecloud_" + ems + "_grid_import_today"]
+            self.base.args["export_today"] = ["sensor.predbat_gecloud_" + ems + "_grid_export_today" ]
+            self.base.args["pv_today"] = ["sensor.predbat_gecloud_" + ems + "_solar_today" ]
+            self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + ems + "_charge_start_time_slot_1" for _ in range(num_inverters)]
+            self.base.args["charge_end_time"] = ["select.predbat_gecloud_" + ems + "_charge_end_time_slot_1" for _ in range(num_inverters)]
+            self.base.args["idle_start_time"] = ["select.predbat_gecloud_" + ems + "_discharge_start_time_slot_1" for _ in range(num_inverters)]
+            self.base.args["idle_end_time"] = ["select.predbat_gecloud_" + ems + "_discharge_end_time_slot_1" for _ in range(num_inverters)]
+            self.base.args["charge_limit"] = ["select.predbat_gecloud_" + ems + "_charge_soc_limit_1" for _ in range(num_inverters)]
+            self.base.args["discharge_start_time"] = ["select.predbat_gecloud_" + ems + "_export_start_time_slot_1" for _ in range(num_inverters)]
+            self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + ems + "_export_end_time_slot_1" for _ in range(num_inverters)]
+
         self.log("GECloud: Automatic configuration complete")
 
     async def start(self):
@@ -573,17 +593,25 @@ class GECloudDirect:
         """
         self.stop_cloud = False
         self.api_started = False
-        self.devices = await self.async_get_devices()
-        self.log("GECloud: Starting up, found devices {}".format(self.devices))
+        # Get devices using the modified auto-detection (returns dict)
+        devices_dict = await self.async_get_devices()
+
+        # Build a list of devices to poll:
+        # Use all battery inverter serials and also add the EMS device if it's distinct.
+        device_list = devices_dict["battery"][:]
+        if devices_dict["ems"] and devices_dict["ems"] not in device_list:
+            device_list.append(devices_dict["ems"])
+        devices = device_list
+        self.log("GECloud: Starting up, found devices {}".format(devices))
 
         if self.automatic:
-            await self.async_automatic_config(self.devices)
+            await self.async_automatic_config(devices_dict)
 
         seconds = 0
         while not self.stop_cloud and not self.base.fatal_error:
             try:
                 if seconds % 60 == 0:
-                    for device in self.devices:
+                    for device in devices:
                         self.status[device] = await self.async_get_inverter_status(device)
                         await self.publish_status(device, self.status[device])
                         self.meter[device] = await self.async_get_inverter_meter(device)
@@ -591,7 +619,7 @@ class GECloudDirect:
                         self.info[device] = await self.async_get_device_info(device)
                         await self.publish_info(device, self.info[device])
                 if seconds % 300 == 0:
-                    for device in self.devices:
+                    for device in devices:
                         self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                         await self.publish_registers(device, self.settings[device])
             except Exception as e:
@@ -904,22 +932,29 @@ class GECloudDirect:
 
     async def async_get_devices(self):
         """
-        Get list of inverters
+        Get list of inverters from GE Cloud.
+        Returns a dict with:
+          "ems": serial (lowercase) of the EMS device (model "Plant EMS") if found
+          "battery": list of serials (lowercase) for battery inverters (devices with non-empty batteries)
         """
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICES)
-        serials = []
+        result = {"ems": None, "battery": []}
         if device_list is None:
-            return serials
+            return result
 
         for device in device_list:
             self.log("GECloud: Found device {}".format(device))
-            serial = device.get("inverter", {}).get("serial", None)
-            batteries = device.get("inverter", {}).get("connections", {}).get("batteries", [])
-            if serial and batteries:
-                # Only include devices with batteries
-                serials.append(serial)
-
-        return serials
+            inverter = device.get("inverter", {})
+            serial = inverter.get("serial", None)
+            model = inverter.get("info", {}).get("model", "").lower()
+            batteries = inverter.get("connections", {}).get("batteries", [])
+            if serial:
+                serial = serial.lower()
+                if "plant ems" in model:
+                    result["ems"] = serial
+                elif batteries:
+                    result["battery"].append(serial)
+        return result
 
     async def async_get_inverter_status(self, serial):
         """
