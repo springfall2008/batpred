@@ -308,7 +308,7 @@ class OctopusAPI:
             time.sleep(1)
             count += 1
         if not self.api_started:
-            self.log("Warn:Octopus API: Failed to start")
+            self.log("Warn: Octopus API: Failed to start")
             return False
         return True
 
@@ -319,21 +319,25 @@ class OctopusAPI:
         count_seconds = 0
         while not self.stop_api:
             # 30 minute update
-            if count_seconds % (30 * 60) == 0:
-                self.now = datetime.now()
-                self.now_utc = datetime.now(timezone.utc).astimezone()
-                self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-                token = await self.async_refresh_token()
-                self.account_data = await self.async_get_account(self.account_id)
-                self.tariffs = await self.async_find_tariffs()
-            if count_seconds % (10 * 60) == 0:
-                await self.async_update_intelligent_device(self.account_id)
-                await self.fetch_tariffs(self.tariffs)
-                self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
-            await self.async_join_saving_session_events(self.account_id)
-            if not self.api_started:
-                print("Octopus API: Started")
-                self.api_started = True
+            try:
+                if count_seconds % (30 * 60) == 0:
+                    self.now = datetime.now()
+                    self.now_utc = datetime.now(timezone.utc).astimezone()
+                    self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+                    token = await self.async_refresh_token()
+                    self.account_data = await self.async_get_account(self.account_id)
+                    self.tariffs = await self.async_find_tariffs()
+                if count_seconds % (10 * 60) == 0:
+                    await self.async_update_intelligent_device(self.account_id)
+                    await self.fetch_tariffs(self.tariffs)
+                    self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
+                await self.async_join_saving_session_events(self.account_id)
+                if not self.api_started:
+                    print("Octopus API: Started")
+                    self.api_started = True
+            except Exception as e:
+                self.log("Error: Octopus API: {}".format(e))
+
             await asyncio.sleep(5)
             count_seconds += 5
         await self.api.async_close()
@@ -351,6 +355,7 @@ class OctopusAPI:
         """
         Find the tariffs for the account
         """
+        self.log("Find tariffs account data {}".format(self.account_data))
         if not self.account_data:
             return None
         tariffs = {}
@@ -413,7 +418,8 @@ class OctopusAPI:
         deviceID = import_tariff.get("deviceID", None)
         if deviceID:
             device = await self.async_get_intelligent_device(account_id, deviceID)
-            self.tariffs["import"]["intelligent_device"] = device
+            if device:
+                self.tariffs["import"]["intelligent_device"] = device
 
     def join_saving_session_event(self, event_code):
         """
@@ -1063,7 +1069,7 @@ class Octopus:
                 self.log("Warn: Octopus API direct tariff {} not available, using zero".format(tariff_type))
                 return {n: 0 for n in range(0, 60 * 24)}
 
-        self.log("Warn: Octopus API direct not available")
+        self.log("Warn: Octopus API direct not available (get_octopus_direct tariff {})".format(tariff_type))
         return {}
 
     def download_octopus_rates_func(self, url):
