@@ -869,6 +869,10 @@ class Fetch:
         elif self.octopus_api_direct:
             self.log("Downloading import rates directly from Octopus API")
             self.rate_import = self.get_octopus_direct("import")
+            if not self.rate_import:
+                self.log("Error: Unable to download rates from Octopus API")
+                self.record_status(message="Error: Unable to download rates from Octopus API", had_errors=True)
+                raise ValueError
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
@@ -1385,7 +1389,7 @@ class Fetch:
 
         midnight = time_string_to_stamp("00:00:00")
         for this_rate in info + manual_items:
-            if this_rate:
+            if this_rate and isinstance(this_rate, dict):
                 start_str = this_rate.get("start", "00:00:00")
                 start_str = self.resolve_arg("start", start_str, "00:00:00")
                 end_str = this_rate.get("end", "00:00:00")
@@ -1515,6 +1519,8 @@ class Fetch:
                                 rates[minute_mod + max_minute] = rate
                                 if load_scaling is not None:
                                     self.load_scaling_dynamic[minute_mod + max_minute] = load_scaling
+            else:
+                self.log("Warn: Bad rate data provided in energy rates type {} {}".format(rtype, this_rate))
 
         return rates
 
