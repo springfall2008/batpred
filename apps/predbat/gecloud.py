@@ -571,12 +571,12 @@ class GECloudDirect:
         if devices["ems"]:
             self.log("GECloud: EMS detected")
             ems = devices["ems"]
-            self.base.args["inverter_type"] = ["GEE"  for _ in range(num_inverters)]
+            self.base.args["inverter_type"] = ["GEE" for _ in range(num_inverters)]
             self.base.args["ge_cloud_serial"] = ems
-            self.base.args["load_today"] = ["sensor.predbat_gecloud_" + ems + "_consumption_today" ]
+            self.base.args["load_today"] = ["sensor.predbat_gecloud_" + ems + "_consumption_today"]
             self.base.args["import_today"] = ["sensor.predbat_gecloud_" + ems + "_grid_import_today"]
-            self.base.args["export_today"] = ["sensor.predbat_gecloud_" + ems + "_grid_export_today" ]
-            self.base.args["pv_today"] = ["sensor.predbat_gecloud_" + ems + "_solar_today" ]
+            self.base.args["export_today"] = ["sensor.predbat_gecloud_" + ems + "_grid_export_today"]
+            self.base.args["pv_today"] = ["sensor.predbat_gecloud_" + ems + "_solar_today"]
             self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + ems + "_charge_start_time_slot_1" for _ in range(num_inverters)]
             self.base.args["charge_end_time"] = ["select.predbat_gecloud_" + ems + "_charge_end_time_slot_1" for _ in range(num_inverters)]
             self.base.args["idle_start_time"] = ["select.predbat_gecloud_" + ems + "_discharge_start_time_slot_1" for _ in range(num_inverters)]
