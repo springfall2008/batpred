@@ -153,6 +153,8 @@ class HAInterface:
                                     if message_type == "result":
                                         response = data.get("result", {}).get("response", None)
                                         success = data.get("success", False)
+                                        self.api_errors = 0
+
                                         if not success:
                                             self.log("Warn: Service call {}/{} data {} failed with response {}".format(domain, service, service_data, response))
                                         break
@@ -160,11 +162,17 @@ class HAInterface:
                             except Exception as e:
                                 self.log("Error: Web Socket exception in update loop: {}".format(e))
                                 self.log("Error: " + traceback.format_exc())
+                                self.api_errors += 1
                                 break
 
             except Exception as e:
                 self.log("Error: Web Socket exception in startup: {}".format(e))
                 self.log("Error: " + traceback.format_exc())
+                self.api_errors += 1
+
+        if self.api_errors >= 10:
+            self.log("Error: Too many API errors, stopping")
+            self.base.fatal_error = True
 
         return response
 
@@ -180,6 +188,7 @@ class HAInterface:
                 break
             if self.base.hass_api_version >= 2 and error_count >= 10:
                 self.log("Error: Web socket failed 10 times, stopping")
+                self.fatal_error = True
                 break
 
             url = "{}/api/websocket".format(self.ha_url)
@@ -480,10 +489,17 @@ class HAInterface:
                 response = requests.get(url, headers=headers, timeout=TIMEOUT)
         try:
             data = response.json()
+            self.api_errors = 0
         except requests.exceptions.JSONDecodeError:
             self.log("Warn: Failed to decode response {} from {}".format(response, url))
+            self.api_errors += 1
             data = None
         except (requests.Timeout, requests.exceptions.ReadTimeout):
             self.log("Warn: Timeout from {}".format(url))
+            self.api_errors += 1
             data = None
+
+        if self.api_errors >= 10:
+            self.log("Error: Too many API errors, stopping")
+            self.base.fatal_error = True
         return data

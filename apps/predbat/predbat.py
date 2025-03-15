@@ -287,6 +287,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Init stub
         """
         reset_prediction_globals()
+        self.api_errors = 0
         self.ha_interface = None
         self.fatal_error = False
         self.ge_cloud_direct = None
