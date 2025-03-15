@@ -777,12 +777,9 @@ class Output:
                         state = "FrzChrg&rarr;"
                         state_color = "#EEEEEE"
                         limit_percent = soc_percent
-                    elif limit_percent == soc_percent_min_window:
+                    elif limit_percent <= soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
-                    elif limit_percent < soc_percent_min_window:
-                        state = "NoChrg&searr;"
-                        state_color = "#FFFFFF"
                     else:
                         state = "Chrg&nearr;"
                         state_color = "#3AEE85"
