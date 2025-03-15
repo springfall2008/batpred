@@ -704,8 +704,12 @@ class Prediction:
                     pv_dc = 0
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
-                if save == "test" and (minute>=180 and minute <=240):
-                    print("charge minute {} pv_now {} load {} pv_ac {} pv_dc {} battery_draw {} charge_rate_now {} battery_to_max {} soc {} charge_limit_n {}".format(minute, pv_now, load_yesterday, pv_ac, pv_dc, battery_draw, charge_rate_now_curve*step, battery_to_max, soc, charge_limit_n))
+                if save == "test" and (minute >= 180 and minute <= 240):
+                    print(
+                        "charge minute {} pv_now {} load {} pv_ac {} pv_dc {} battery_draw {} charge_rate_now {} battery_to_max {} soc {} charge_limit_n {}".format(
+                            minute, pv_now, load_yesterday, pv_ac, pv_dc, battery_draw, charge_rate_now_curve * step, battery_to_max, soc, charge_limit_n
+                        )
+                    )
 
                 if (charge_limit_n - soc) < (charge_rate_now_curve * step):
                     # The battery will hit the charge limit in this period, so if the charge was spread over the period
@@ -747,9 +751,12 @@ class Prediction:
                         pv_dc = 0
                     pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
-                if save == "test" and (minute>=180 and minute <=240):
-                    print("eco minute {} diff {} load {} soc {} battery_draw {} pv_now {} pv_ac {} pv_dc {} charge_rate {} discharge_rate {} battery_to_min {} battery_to_max {}".format(minute, diff, load_yesterday, soc, battery_draw, pv_now, pv_ac, pv_dc, charge_rate_now_curve*step, discharge_rate_now_curve*step, battery_to_min, battery_to_max))
-
+                if save == "test" and (minute >= 180 and minute <= 240):
+                    print(
+                        "eco minute {} diff {} load {} soc {} battery_draw {} pv_now {} pv_ac {} pv_dc {} charge_rate {} discharge_rate {} battery_to_min {} battery_to_max {}".format(
+                            minute, diff, load_yesterday, soc, battery_draw, pv_now, pv_ac, pv_dc, charge_rate_now_curve * step, discharge_rate_now_curve * step, battery_to_min, battery_to_max
+                        )
+                    )
 
             # Clamp at inverter limit
             if inverter_hybrid:
@@ -846,9 +853,9 @@ class Prediction:
             if best_soc_keep > 0 and soc <= best_soc_keep:
                 metric_keep += (best_soc_keep - soc) * rate_import[minute_absolute] * keep_minute_scaling * step / 60.0
 
-            if save == "test" and (minute>=180 and minute <=240):
+            if save == "test" and (minute >= 180 and minute <= 240):
                 print("minute {} diff {} soc {} battery_draw {} pv_now {} pv_ac {} pv_dc {}".format(minute, diff, soc, battery_draw, pv_now, pv_ac, pv_dc))
-    
+
             if diff > 0:
                 # Import
                 # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
