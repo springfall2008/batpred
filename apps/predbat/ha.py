@@ -173,7 +173,7 @@ class HAInterface:
         if self.api_errors >= 10:
             self.log("Error: Too many API errors, stopping")
             self.base.fatal_error = True
-            
+
         return response
 
     async def socketLoop(self):
@@ -488,7 +488,7 @@ class HAInterface:
                 response = requests.get(url, headers=headers, timeout=TIMEOUT)
         try:
             data = response.json()
-            self.api_errors = 0            
+            self.api_errors = 0
         except requests.exceptions.JSONDecodeError:
             self.log("Warn: Failed to decode response {} from {}".format(response, url))
             self.api_errors += 1
@@ -497,7 +497,7 @@ class HAInterface:
             self.log("Warn: Timeout from {}".format(url))
             self.api_errors += 1
             data = None
-    
+
         if self.api_errors >= 10:
             self.log("Error: Too many API errors, stopping")
             self.base.fatal_error = True
