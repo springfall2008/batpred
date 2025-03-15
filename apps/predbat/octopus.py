@@ -837,9 +837,6 @@ class OctopusAPI:
                             "vehicle_battery_size_in_kwh": vehicleBatterySizeInKwh,
                             "device_id": IntelligentdeviceID,
                         }
-                        self.intelligent_info = {}
-                        self.intelligent_info["device"] = intelligent_device
-                        self.intelligent_info["dispatch_result"] = dispatch_result
                         if dispatch_result:
                             plannedDispatches = dispatch_result.get("plannedDispatches", [])
                             completedDispatches = dispatch_result.get("completedDispatches", [])
