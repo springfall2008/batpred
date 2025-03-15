@@ -120,6 +120,7 @@ class Plan:
                         all_n = []
                         all_d = []
                         divide_count_d = 0
+                        divide_count_c = 0
                         highest_price_charge = price_set[-1]
                         lowest_price_export = price_set[0]
                         for price in price_set:
@@ -133,7 +134,12 @@ class Plan:
                                             pass
                                         else:
                                             window_prices[window_n] = price
-                                            all_n.append(window_n)
+                                            if loop_price == price:
+                                                if (int(divide_count_c / divide) % modulo) == 0:
+                                                    all_n.append(window_n)
+                                                divide_count_c += 1
+                                            else:
+                                                all_n.append(window_n)
                             elif export_enable:
                                 # For prices above threshold try export
                                 for key in links:
@@ -204,6 +210,9 @@ class Plan:
                             if self.debug_enable and 0:
                                 self.log("Skip this optimisation with divide {} windows {} export windows {} export_enable {} as it's the same as previous ones hash {}".format(divide, all_n, all_d, export_enable, try_hash))
                             continue
+
+                        if self.debug_enable and 0:
+                            self.log("Try this optimisation with divide {} windows {} export windows {} export_enable {}".format(divide, all_n, all_d, export_enable))
 
                         tried_list[try_hash] = True
 
@@ -1985,7 +1994,7 @@ class Plan:
 
             if debug_mode:
                 metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-                    self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
+                    self.charge_limit_best, self.charge_window_best, self.export_window_best, ignore_export_limits, False, end_record=self.end_record, save="best"
                 )
                 self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                 self.update_target_values()
@@ -2052,7 +2061,7 @@ class Plan:
 
                     if debug_mode:
                         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-                            self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
+                            self.charge_limit_best, self.charge_window_best, self.export_window_best, ignore_export_limits, False, end_record=self.end_record, save="best"
                         )
                         self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                         self.update_target_values()
