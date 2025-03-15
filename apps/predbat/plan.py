@@ -1993,15 +1993,15 @@ class Plan:
             )
 
             if debug_mode:
-                org_export_limits = self.export_limits
-                self.export_limits = ignore_export_limits
+                org_export_limits = self.export_limits_best
+                self.export_limits_best = ignore_export_limits
                 metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-                    self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits, False, end_record=self.end_record, save="best"
+                    self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
                 )
                 self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                 self.update_target_values()
                 self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
-                self.export_limits = org_export_limits
+                self.export_limits_best = org_export_limits
                 open("plan_pre_levels.html", "w").write(self.html_plan)
                 print("Wrote plan to plan_pre_levels.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency))
 
@@ -2063,15 +2063,16 @@ class Plan:
                             break
 
                     if debug_mode:
-                        org_export_limits = self.export_limits
-                        self.export_limits = ignore_export_limits
+                        print("Best export now {}".format(ignore_export_limits))
+                        org_export_limits = self.export_limits_best
+                        self.export_limits_best = ignore_export_limits
                         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-                            self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits, False, end_record=self.end_record, save="best"
+                            self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
                         )
                         self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                         self.update_target_values()
                         self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
-                        self.export_limits = org_export_limits
+                        self.export_limits_best = org_export_limits
                         open("plan_levels_{}.html".format(region_size), "w").write(self.html_plan)
                         print(
                             "Wrote plan to plan_levels_{}.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(
@@ -2087,12 +2088,15 @@ class Plan:
                     self.export_limits_best[window_n] = 99.0
 
         if debug_mode:
+            org_export_limits = self.export_limits_best
+            self.export_limits_best = ignore_export_limits
             metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
             )
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+            self.export_limits_best = org_export_limits
             open("plan_levels.html", "w").write(self.html_plan)
             print("Wrote plan to plan_levels.html")
 
