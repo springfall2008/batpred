@@ -331,6 +331,10 @@ class OctopusAPI:
                     await self.async_update_intelligent_device(self.account_id)
                     await self.fetch_tariffs(self.tariffs)
                     self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
+
+                if count_seconds % (2 * 60) == 0:
+                    await self.async_intelligent_update_sensor(self.account_id)
+
                 await self.async_join_saving_session_events(self.account_id)
                 if not self.api_started:
                     print("Octopus API: Started")
@@ -833,6 +837,9 @@ class OctopusAPI:
                             "vehicle_battery_size_in_kwh": vehicleBatterySizeInKwh,
                             "device_id": IntelligentdeviceID,
                         }
+                        self.intelligent_info = {}
+                        self.intelligent_info["device"] = intelligent_device
+                        self.intelligent_info["dispatch_result"] = dispatch_result
                         if dispatch_result:
                             plannedDispatches = dispatch_result.get("plannedDispatches", [])
                             completedDispatches = dispatch_result.get("completedDispatches", [])
@@ -851,21 +858,31 @@ class OctopusAPI:
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
                                 completed.append(dispatch)
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
-                        entity_name = "binary_sensor.predbat_octopus_" + account_id.replace("-", "_")
-                        entity_name = entity_name.lower()
-                        active_event = False
-                        for dispatch in planned:
-                            start = dispatch.get("start", None)
-                            end = dispatch.get("end", None)
-                            if start and end:
-                                start = parse_date_time(start)
-                                end = parse_date_time(end)
-                                if start <= self.now_utc and end > self.now_utc:
-                                    active_event = True
-                        dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", "planned_dispatches": planned, "completed_dispatches": completed, **intelligent_device, **device_setting_result}
-                        self.base.dashboard_item(entity_name + "_intelligent_dispatch", "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
-
         return result
+
+    async def async_intelligent_update_sensor(self, account_id):
+        """
+        Update the intelligent device sensor
+        """
+        intelligent_device = self.tariffs.get("import", {}).get("intelligent_device", None)
+        if not intelligent_device:
+            return
+        planned = intelligent_device.get("planned_dispatches", [])
+        completed = intelligent_device.get("completed_dispatches", [])
+
+        entity_name = "binary_sensor.predbat_octopus_" + account_id.replace("-", "_")
+        entity_name = entity_name.lower()
+        active_event = False
+        for dispatch in planned:
+            start = dispatch.get("start", None)
+            end = dispatch.get("end", None)
+            if start and end:
+                start = parse_date_time(start)
+                end = parse_date_time(end)
+                if start <= self.now_utc and end > self.now_utc:
+                    active_event = True
+        dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", **intelligent_device}
+        self.base.dashboard_item(entity_name + "_intelligent_dispatch", "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
 
     async def async_get_account(self, account_id):
         """
