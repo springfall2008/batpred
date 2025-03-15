@@ -539,6 +539,8 @@ class GECloudDirect:
         batteries = devices["battery"]
         num_inverters = len(batteries)
 
+        print("Batteries found: ", batteries)
+
         self.base.args["inverter_type"] = ["GEC" for _ in range(num_inverters)]
         self.base.args["load_today"] = ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in batteries]
         self.base.args["import_today"] = ["sensor.predbat_gecloud_" + device + "_grid_import_today" for device in batteries]

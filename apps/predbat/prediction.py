@@ -731,6 +731,7 @@ class Prediction:
 
                 diff = required_for_load - potential_to_charge
 
+
                 if diff > 0:
                     battery_draw = min(diff, discharge_rate_now_curve * step, self.inverter_limit * step, battery_to_min)
                     battery_state = "e-"
