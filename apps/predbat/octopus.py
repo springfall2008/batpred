@@ -14,6 +14,8 @@ import asyncio
 import json
 from datetime import timezone
 import time
+import os
+import yaml
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -293,10 +295,14 @@ class OctopusAPI:
         self.url_cache = {}
         self.tariffs = {}
         self.account_data = {}
-        self.intelligent_dispatches = {}
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.api_started = False
+        self.cache_path = self.base.config_root + "/cache"
+        if not os.path.exists(self.cache_path):
+            os.makedirs(self.cache_path)
+        self.cache_file = self.cache_path + "/octopus.yaml"
+        self.octopus_cache = {}
 
     def wait_api_started(self):
         """
@@ -317,6 +323,10 @@ class OctopusAPI:
         Main run loop
         """
         count_seconds = 0
+
+        # Load cached data
+        await self.load_octopus_cache()
+
         while not self.stop_api:
             # 30 minute update
             try:
@@ -336,16 +346,48 @@ class OctopusAPI:
                     await self.async_intelligent_update_sensor(self.account_id)
 
                 await self.async_join_saving_session_events(self.account_id)
+                await self.save_octopus_cache()
+
                 if not self.api_started:
                     print("Octopus API: Started")
                     self.api_started = True
+
             except Exception as e:
                 self.log("Error: Octopus API: {}".format(e))
-
             await asyncio.sleep(5)
             count_seconds += 5
         await self.api.async_close()
         print("Octopus API: Stopped")
+
+    async def load_octopus_cache(self):
+        """
+        Load the octopus cache
+        """
+        data = {}
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, "r") as f:
+                    data = yaml.safe_load(f)
+            except Exception as e:
+                self.log("Warn: Octopus API: Failed to load cache from {} - {}".format(self.cache_file, e))
+
+            self.octopus_cache = data
+            self.account_data = data.get("account_data", {})
+            self.tariffs = data.get("tariffs", {})
+            self.saving_sessions = data.get("saving_sessions", {})
+            self.url_cache = data.get("url_cache", {})
+
+    async def save_octopus_cache(self):
+        """
+        Save the octopus cache
+        """
+        self.octopus_cache["account_data"] = self.account_data
+        self.octopus_cache["tariffs"] = self.tariffs
+        self.octopus_cache["saving_sessions"] = self.saving_sessions
+        self.octopus_cache["url_cache"] = self.url_cache
+        with open(self.cache_file, "w") as f:
+            yaml.dump(self.octopus_cache, f)
+            self.log("Octopus API: Saved cache to {}".format(self.cache_file))
 
     def stop(self):
         self.stop_api = True
@@ -420,8 +462,9 @@ class OctopusAPI:
         """
         import_tariff = self.tariffs.get("import", {})
         deviceID = import_tariff.get("deviceID", None)
+        completed_dispatches = self.get_intelligent_completed_dispatches()
         if deviceID:
-            device = await self.async_get_intelligent_device(account_id, deviceID)
+            device = await self.async_get_intelligent_device(account_id, deviceID, completed_dispatches)
             if device:
                 self.tariffs["import"]["intelligent_device"] = device
 
@@ -770,7 +813,7 @@ class OctopusAPI:
 
         return None
 
-    async def async_get_intelligent_device(self, account_id, device_id):
+    async def async_get_intelligent_device(self, account_id, device_id, completed):
         """
         Get the intelligent dispatches/device
         """
@@ -779,8 +822,8 @@ class OctopusAPI:
             self.log("Octopus API: Fetching intelligent dispatches for device {}".format(device_id))
             device_result = await self.async_graphql_query(intelligent_device_query.format(account_id=account_id), "get-intelligent-devices", ignore_errors=True)
             intelligent_device = {}
+
             planned = []
-            completed = []
             if device_result:
                 dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=device_id), "get-intelligent-dispatches", ignore_errors=True)
                 chargePointVariants = device_result.get("chargePointVariants", [])
@@ -853,7 +896,17 @@ class OctopusAPI:
                                 delta = completedDispatch.get("delta", None)
                                 meta = completedDispatch.get("meta", {})
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
-                                completed.append(dispatch)
+                                # Check if the dispatch is already in the completed list, if its already there then don't add it again
+                                found = False
+                                for cached in completed:
+                                    if cached["start"] == start:
+                                        found = True
+                                        break
+                                if not found:
+                                    completed.append(dispatch)
+                        # Prune completed dispatches for results older than 5 days
+                        completed = [x for x in completed if parse_date_time(x["start"]) > self.now_utc - timedelta(days=5)]
+                        # Store results
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
         return result
 
