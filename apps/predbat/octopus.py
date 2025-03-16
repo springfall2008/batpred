@@ -897,7 +897,7 @@ class OctopusAPI:
                                 meta = completedDispatch.get("meta", {})
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
                                 # Check if the dispatch is already in the completed list, if its already there then don't add it again
-                                found = False                               
+                                found = False
                                 for cached in completed:
                                     if cached["start"] == start:
                                         found = True
