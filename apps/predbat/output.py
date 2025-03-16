@@ -841,7 +841,6 @@ class Output:
                     if plan_debug:
                         show_limit += " ({})".format(str(int(limit)))
 
-
                 if self.export_window_best[export_window_n]["start"] in self.manual_export_times:
                     state += " &#8526;"
                 elif self.export_window_best[export_window_n]["start"] in self.manual_freeze_export_times:
