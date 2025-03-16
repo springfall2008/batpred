@@ -337,6 +337,7 @@ class OctopusAPI:
                     token = await self.async_refresh_token()
                     self.account_data = await self.async_get_account(self.account_id)
                     self.tariffs = await self.async_find_tariffs()
+
                 if count_seconds % (10 * 60) == 0:
                     await self.async_update_intelligent_device(self.account_id)
                     await self.fetch_tariffs(self.tariffs)
@@ -344,9 +345,9 @@ class OctopusAPI:
 
                 if count_seconds % (2 * 60) == 0:
                     await self.async_intelligent_update_sensor(self.account_id)
+                    await self.save_octopus_cache()
 
                 await self.async_join_saving_session_events(self.account_id)
-                await self.save_octopus_cache()
 
                 if not self.api_started:
                     print("Octopus API: Started")
@@ -387,7 +388,6 @@ class OctopusAPI:
         self.octopus_cache["url_cache"] = self.url_cache
         with open(self.cache_file, "w") as f:
             yaml.dump(self.octopus_cache, f)
-            self.log("Octopus API: Saved cache to {}".format(self.cache_file))
 
     def stop(self):
         self.stop_api = True

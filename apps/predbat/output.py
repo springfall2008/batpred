@@ -768,10 +768,11 @@ class Output:
 
             if charge_window_n >= 0:
                 limit = self.charge_limit_best[charge_window_n]
+                target = limit
                 if "target" in self.charge_window_best[charge_window_n]:
-                    limit = self.charge_window_best[charge_window_n]["target"]
+                    target = self.charge_window_best[charge_window_n]["target"]
 
-                limit_percent = calc_percent_limit(limit, self.soc_max)
+                limit_percent = calc_percent_limit(target, self.soc_max)
                 if limit > 0.0:
                     if limit == self.reserve:
                         state = "FrzChrg&rarr;"
@@ -791,7 +792,7 @@ class Output:
                     show_limit = str(limit_percent)
                     had_state = True
                     if plan_debug:
-                        show_limit += " ({})".format(str(calc_percent_limit(self.charge_limit_best[charge_window_n], self.soc_max)))
+                        show_limit += " ({})".format(str(calc_percent_limit(limit, self.soc_max)))
             else:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]
@@ -809,8 +810,9 @@ class Output:
 
             if export_window_n >= 0:
                 limit = self.export_limits_best[export_window_n]
+                target = limit
                 if "target" in self.export_window_best[export_window_n]:
-                    limit = self.export_window_best[export_window_n]["target"]
+                    target = self.export_window_best[export_window_n]["target"]
 
                 if limit == 99:  # freeze exporting
                     if not had_state:
@@ -834,7 +836,10 @@ class Output:
                         state += "HoldExp&searr;"
                     else:
                         state += "Exp&searr;"
-                    show_limit = str(int(limit))
+                    show_limit = str(int(target))
+
+                    if plan_debug:
+                        show_limit += " ({})".format(str(int(limit)))
 
                 if self.export_window_best[export_window_n]["start"] in self.manual_export_times:
                     state += " &#8526;"

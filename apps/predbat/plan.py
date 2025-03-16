@@ -704,6 +704,9 @@ class Plan:
             if self.calculate_tweak_plan:
                 self.tweak_plan(self.end_record, metric, metric_keep)
 
+            # Update target values, will be refined via clipping
+            self.update_target_values()
+
             # Remove charge windows that overlap with export windows
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
 
@@ -1999,7 +2002,6 @@ class Plan:
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
                 )
                 self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
-                self.update_target_values()
                 self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
                 self.export_limits_best = org_export_limits
                 open("plan_pre_levels.html", "w").write(self.html_plan)
