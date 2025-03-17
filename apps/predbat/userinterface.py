@@ -580,6 +580,9 @@ class UserInterface:
                             current["value"] = item_value
 
     def save_current_config(self):
+        if self.ha_interface.db_primary:
+            return
+
         """
         Saves the currently defined configuration to a json file
         """
@@ -852,9 +855,13 @@ class UserInterface:
                 continue
 
             # Get from current state, if not from HA directly
-            ha_value = item.get("value", None)
-            if ha_value is None:
+            if self.ha_interface.db_primary:
                 ha_value = self.load_previous_value_from_ha(entity)
+            else:
+                ha_value = item.get("value", None)
+                if ha_value is None:
+                    ha_value = self.load_previous_value_from_ha(entity)
+
 
             # Update drop down menu
             if name == "update":
