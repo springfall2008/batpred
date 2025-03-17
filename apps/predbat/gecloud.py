@@ -593,14 +593,22 @@ class GECloudDirect:
         """
         self.stop_cloud = False
         self.api_started = False
+        self.polling_mode = True
         # Get devices using the modified auto-detection (returns dict)
         devices_dict = await self.async_get_devices()
 
         # Build a list of devices to poll:
         # Use all battery inverter serials and also add the EMS device if it's distinct.
         device_list = devices_dict["battery"][:]
-        if devices_dict["ems"] and devices_dict["ems"] not in device_list:
-            device_list.append(devices_dict["ems"])
+
+        ems_device = None
+        if devices_dict["ems"]:
+            ems_device = devices_dict["ems"]
+            self.polling_mode = False
+            self.log("GECloud: Found EMS device {} and disabled polling on inverters".format(ems_device))
+            if ems_device not in device_list:
+                device_list.append(ems_device)
+
         devices = device_list
         self.log("GECloud: Starting up, found devices {}".format(devices))
 
@@ -620,8 +628,10 @@ class GECloudDirect:
                         await self.publish_info(device, self.info[device])
                 if seconds % 300 == 0:
                     for device in devices:
-                        self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
-                        await self.publish_registers(device, self.settings[device])
+                        if seconds == 0 or self.polling_mode or (device == ems_device):
+                            self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
+                            await self.publish_registers(device, self.settings[device])
+
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
 
@@ -802,7 +812,7 @@ class GECloudDirect:
         data = await self.async_get_inverter_data_retry(GE_API_EVC_SESSIONS, uuid=uuid, start_time=start_time, end_time=end_time)
         if isinstance(data, list):
             return data
-        return None
+        return []
 
     async def async_get_evc_device_data(self, uuid):
         """

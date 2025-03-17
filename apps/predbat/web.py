@@ -179,7 +179,7 @@ class WebInterface:
             if key in ["icon", "device_class", "state_class", "unit_of_measurement", "friendly_name"]:
                 continue
             value = attributes[key]
-            if len(str(value)) > 256:
+            if len(str(value)) > 1024:
                 value = "(large data)"
             text += "<tr><td>{}</td><td>{}</td></tr>".format(key, value)
         text += "</table>"
