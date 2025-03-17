@@ -862,7 +862,6 @@ class UserInterface:
                 if ha_value is None:
                     ha_value = self.load_previous_value_from_ha(entity)
 
-
             # Update drop down menu
             if name == "update":
                 if not ha_value:

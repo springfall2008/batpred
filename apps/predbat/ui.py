@@ -332,7 +332,7 @@ class UI:
         Load the current configuration from a json file
         """
         if self.ha_interface.db_primary:
-          return
+            return
 
         filepath = self.config_root + "/predbat_config.json"
         if os.path.exists(filepath):
@@ -362,7 +362,7 @@ class UI:
         """
 
         if self.ha_interface.db_primary:
-          return
+            return
 
         filepath = self.config_root + "/predbat_config.json"
 
