@@ -331,6 +331,9 @@ class UI:
         """
         Load the current configuration from a json file
         """
+        if self.ha_interface.db_primary:
+            return
+
         filepath = self.config_root + "/predbat_config.json"
         if os.path.exists(filepath):
             with open(filepath, "r") as file:
@@ -357,6 +360,10 @@ class UI:
         """
         Saves the currently defined configuration to a json file
         """
+
+        if self.ha_interface.db_primary:
+            return
+
         filepath = self.config_root + "/predbat_config.json"
 
         # Create full hierarchical version of filepath to write to the logfile
