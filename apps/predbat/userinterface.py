@@ -557,6 +557,10 @@ class UserInterface:
         """
         Load the current configuration from a json file
         """
+        if self.ha_interface.db_primary:
+            # No need to save/restore config from a file if we are using the database
+            return
+
         filepath = self.config_root + "/predbat_config.json"
         if os.path.exists(filepath):
             with open(filepath, "r") as file:
@@ -580,12 +584,13 @@ class UserInterface:
                             current["value"] = item_value
 
     def save_current_config(self):
-        if self.ha_interface.db_primary:
-            return
-
         """
         Saves the currently defined configuration to a json file
         """
+        if self.ha_interface.db_primary:
+            # No need to save/restore config from a file if we are using the database
+            return
+
         filepath = self.config_root + "/predbat_config.json"
 
         # Create full hierarchical version of filepath to write to the logfile
@@ -855,12 +860,9 @@ class UserInterface:
                 continue
 
             # Get from current state, if not from HA directly
-            if self.ha_interface.db_primary:
+            ha_value = item.get("value", None)
+            if ha_value is None:
                 ha_value = self.load_previous_value_from_ha(entity)
-            else:
-                ha_value = item.get("value", None)
-                if ha_value is None:
-                    ha_value = self.load_previous_value_from_ha(entity)
 
             # Update drop down menu
             if name == "update":
