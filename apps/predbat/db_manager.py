@@ -88,6 +88,7 @@ class DatabaseManager:
 
         item = {"last_changed": now_utc_txt, "state": state, "attributes": attributes}
         self.mirror_updates.append({"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": self.base.now_utc_real})
+        return item
 
     def set_state_db(self, entity_id, state, attributes, timestamp=None):
         """
