@@ -432,7 +432,9 @@ class HAInterface:
         self.db_mirror_list[entity_id] = True
 
         if self.db_mirror_ha or self.db_primary:
-            self.db_manager.set_state_db_later(entity_id, state, attributes)
+            item = self.db_manager.set_state_db_later(entity_id, state, attributes)
+            # Locally cache state until DB update happens
+            self.update_state_item(item, entity_id, nodb=True)
 
         if self.ha_key:
             data = {"state": state}
