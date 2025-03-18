@@ -825,7 +825,7 @@ class OctopusAPI:
         """
         result = {}
         if device_id:
-            self.log("Octopus API: Fetching intelligent dispatches for device {} - previous completed dispatches {}".format(device_id, completed))
+            self.log("Octopus API: Fetching intelligent dispatches for device {}".format(device_id))
             device_result = await self.async_graphql_query(intelligent_device_query.format(account_id=account_id), "get-intelligent-devices", ignore_errors=True)
             intelligent_device = {}
 
@@ -903,21 +903,20 @@ class OctopusAPI:
                                 meta = completedDispatch.get("meta", {})
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
                                 # Check if the dispatch is already in the completed list, if its already there then don't add it again
-                                found = False
+                                found = False                               
                                 for cached in completed:
                                     if cached["start"] == start:
                                         found = True
                                         break
                                 if not found:
                                     completed.append(dispatch)
-                        self.log("Octopus API: Completed dispatches for device {} - {}".format(device_id, completed))
+
                         # Sort by start time
                         planned = sorted(planned, key=lambda x: parse_date_time(x["start"]))
                         completed = sorted(completed, key=lambda x: parse_date_time(x["start"]))
 
                         # Prune completed dispatches for results older than 5 days
                         completed = [x for x in completed if parse_date_time(x["start"]) > self.now_utc - timedelta(days=5)]
-                        self.log("Octopus API: Completed dispatches (filtered) for device {} - {}".format(device_id, completed))
                         # Store results
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
         return result
