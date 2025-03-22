@@ -228,8 +228,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             return None
 
         # Entity with coded attribute
-        if entity_id and '$' in entity_id:
-            entity_id, attribute = entity_id.split('$')
+        if entity_id and "$" in entity_id:
+            entity_id, attribute = entity_id.split("$")
 
         return self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
 
@@ -955,13 +955,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a string".format(name, sensor))
                                     errors += 1
                                     break
-                                if '.' not in sensor:
+                                if "." not in sensor:
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid entity_id".format(name, sensor))
                                     errors += 1
                                     break
                                 if spec.get("modify", False):
                                     prefix = sensor.split(".")[0]
-                                    if prefix not in ['switch', 'select', 'input_number', 'number']:
+                                    if prefix not in ["switch", "select", "input_number", "number"]:
                                         self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} can not be modified".format(name, sensor))
                                         errors += 1
                                         break

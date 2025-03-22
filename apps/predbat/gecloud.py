@@ -564,8 +564,8 @@ class GECloudDirect:
         self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
         self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries]
         self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries]
-        if 'givtcp_rest' in self.base.args:
-            del self.base.args['givtcp_rest']
+        if "givtcp_rest" in self.base.args:
+            del self.base.args["givtcp_rest"]
         self.base.args["ge_cloud_serial"] = batteries[0]
 
         # reconfigure for EMS
