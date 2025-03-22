@@ -469,7 +469,7 @@ class HAInterface:
 
             # Only trigger on value change or you get too many updates
             if (old_value is None) or (new_value != old_value):
-                await self.trigger_watch_list(entity_id, attributes, old_state, new_state) 
+                await self.trigger_watch_list(entity_id, attributes, old_state, new_state)
 
     def set_state(self, entity_id, state, attributes={}):
         """
