@@ -1,4 +1,7 @@
 # Custom Dictionary Words
+SFMB
+solarman
+activepower
 adata
 adbase
 AIO
