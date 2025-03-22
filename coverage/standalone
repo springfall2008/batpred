@@ -1,0 +1,7 @@
+rm predbat.log
+#rm -rf predbat_standalone
+mkdir -p predbat_standalone
+cp /Volumes/addon_configs/6adb4f0d_predbat/*.py predbat_standalone
+cp /Volumes/addon_configs/6adb4f0d_predbat/apps_direct.yaml predbat_standalone/apps.yaml
+cd predbat_standalone
+python3 hass.py

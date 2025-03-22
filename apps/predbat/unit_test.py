@@ -57,6 +57,7 @@ class TestHAInterface:
         self.dummy_items = {}
         self.service_store_enable = False
         self.service_store = []
+        self.db_primary = False
 
     def get_service_store(self):
         stored_service = self.service_store
