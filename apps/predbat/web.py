@@ -19,6 +19,7 @@ import json
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
+from predbat import THIS_VERSION
 
 TIME_FORMAT_DAILY = "%Y-%m-%d"
 
@@ -190,7 +191,7 @@ class WebInterface:
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
-    def get_status_html(self, level, status, debug_enable, read_only, mode):
+    def get_status_html(self, level, status, debug_enable, read_only, mode, version):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -199,6 +200,7 @@ class WebInterface:
         text += "<h2>Status</h2>\n"
         text += "<table>\n"
         text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+        text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
         text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
         text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
@@ -734,7 +736,7 @@ var options = {
         text = self.get_header("Predbat Dashboard", refresh=60)
         text += "<body>\n"
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-        text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode)
+        text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode, THIS_VERSION)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
