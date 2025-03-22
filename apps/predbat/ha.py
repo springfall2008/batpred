@@ -425,6 +425,52 @@ class HAInterface:
         res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res
 
+    async def set_state_external(self, entity_id, state, attributes={}):
+        """
+        Used for external changes to Predbat state data
+        """
+        new_value = state
+        new_state = {"entity_id": entity_id, "state": state, "attributes": attributes}
+        old_value = self.get_state(entity_id)
+        old_state = self.state_data.get(entity_id.lower(), None)
+        found = False
+
+        # See if the modified entity is in the CONFIG_ITEMS list
+        for item in self.base.CONFIG_ITEMS:
+            if item.get("entity") == entity_id:
+                old_value = item.get("value", "")
+                step = item.get("step", 1)
+                itemtype = item.get("type", "")
+                if old_value is None:
+                    old_value = item.get("default", "")
+                if itemtype == "input_number" and step == 1:
+                    old_value = int(old_value)
+                if old_value != new_value:
+                    service_data = {}
+                    service_data["domain"] = itemtype
+                    if itemtype == "switch":
+                        service_data["service"] = "turn_on" if new_value else "turn_off"
+                        service_data["service_data"] = {"entity_id": entity_id}
+                    elif itemtype == "input_number":
+                        service_data["service"] = "set_value"
+                        service_data["service_data"] = {"entity_id": entity_id, "value": new_value}
+                    elif itemtype == "select":
+                        service_data["service"] = "select_option"
+                        service_data["service_data"] = {"entity_id": entity_id, "option": new_value}
+                    else:
+                        continue
+
+                    await self.base.trigger_callback(service_data)
+                    return
+
+        if not found:
+            # If its not found then its a sensor and we can set the state directly
+            self.set_state(entity_id, state, attributes)
+
+            # Only trigger on value change or you get too many updates
+            if (old_value is None) or (new_value != old_value):
+                await self.trigger_watch_list(entity_id, attributes, old_state, new_state) 
+
     def set_state(self, entity_id, state, attributes={}):
         """
         Set the state of an entity in Home Assistant.

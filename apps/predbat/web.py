@@ -646,30 +646,8 @@ var options = {
             elif pitem.startswith("input_number"):
                 new_value = float(new_value)
 
-            for item in self.base.CONFIG_ITEMS:
-                if item.get("entity") == pitem:
-                    old_value = item.get("value", "")
-                    step = item.get("step", 1)
-                    itemtype = item.get("type", "")
-                    if old_value is None:
-                        old_value = item.get("default", "")
-                    if itemtype == "input_number" and step == 1:
-                        old_value = int(old_value)
-                    if old_value != new_value:
-                        service_data = {}
-                        service_data["domain"] = itemtype
-                        if itemtype == "switch":
-                            service_data["service"] = "turn_on" if new_value else "turn_off"
-                            service_data["service_data"] = {"entity_id": pitem}
-                        elif itemtype == "input_number":
-                            service_data["service"] = "set_value"
-                            service_data["service_data"] = {"entity_id": pitem, "value": new_value}
-                        elif itemtype == "select":
-                            service_data["service"] = "select_option"
-                            service_data["service_data"] = {"entity_id": pitem, "option": new_value}
-                        else:
-                            continue
-                        await self.base.trigger_callback(service_data)
+            await self.base.ha_interface.set_state_external(pitem, new_value)
+
         raise web.HTTPFound("./config")
 
     def render_type(self, arg, value):
