@@ -262,6 +262,7 @@ inverter_type defaults to 'GE' (GivEnergy) if not set in apps.yaml, or should be
   SE: SolarEdge
   SX4: Solax Gen4 (Modbus Power Control)
   SF: Sofar HYD
+  SFMB: Sofar HYD with solarman modbus
   HU: Huawei Solar
   SK: Sunsynk
   SA: Solar Assistant
