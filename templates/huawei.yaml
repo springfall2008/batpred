@@ -99,7 +99,9 @@ pred_bat:
   discharge_start_service: huawei_solar/forcible_discharge_soc
   discharge_stop_service: huawei_solar/stop_forcible_charge
 
-  # Device_ID for the Huawei inverter device in home-assistant
+  # Device_ID for the Huawei Batteries device in home-assistant
+  # Click on Developer Tools /Action and choose "Huawei Solar: Forcible Charge" or other battery related action.
+  # Click on "Go to YAML Mode" and you will find the device_id copy and paste the long numbers/letters.
   device_id: XXXXXX
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
