@@ -1423,7 +1423,7 @@ class Plan:
                 min_improvement_scaled = self.metric_min_improvement_export
             else:
                 min_improvement_scaled = self.metric_min_improvement_export * window_size / 30.0
- 
+
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             if ((metric + min_improvement_scaled) <= off_metric) and (metric <= best_metric):
                 best_metric = metric
