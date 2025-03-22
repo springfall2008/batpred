@@ -115,7 +115,7 @@ pred_bat:
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
-#   inverter_reserve_max : 98
+  #   inverter_reserve_max : 98
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
@@ -231,9 +231,9 @@ pred_bat:
   # Will automatically disable if not found, or comment out to disable fully
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
   # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
-#   octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
-#   octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
-#   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
+  #   octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  #   octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
+  #   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
 
   # Example alternative configuration for Ohme integration release >=v0.6.1
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
@@ -266,8 +266,8 @@ pred_bat:
   #       event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
   #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
   # Predbat will automatically find the event. entities from the link below to the sensors
-#   metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
-#   metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+  #   metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #   metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
   metric_octopus_import: 'sensor.nordpool_kwh_import_with_additional_costs_and_vat'
   metric_octopus_export: 'sensor.nordpool_kwh_export_subtracting_sales_margin'
 
