@@ -1416,14 +1416,13 @@ class Plan:
             window_results[window_key] = [metric, cost]
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
-            if all_n:
+            # Scale back in the case of freeze export as improvements will be smaller
+            if this_export_limit == 99:
+                min_improvement_scaled = 0.1
+            elif all_n:
                 min_improvement_scaled = self.metric_min_improvement_export
             else:
                 min_improvement_scaled = self.metric_min_improvement_export * window_size / 30.0
-
-            # Scale back in the case of freeze export as improvements will be smaller
-            if this_export_limit == 99:
-                min_improvement_scaled *= 0.2
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             if ((metric + min_improvement_scaled) <= off_metric) and (metric <= best_metric):
