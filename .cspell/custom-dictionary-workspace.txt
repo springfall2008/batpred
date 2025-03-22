@@ -1,4 +1,5 @@
 # Custom Dictionary Words
+activepower
 adata
 adbase
 AIO
@@ -198,10 +199,12 @@ saverestore
 searr
 Selfrun
 Selfuse
+SFMB
 socb
 socs
 sofar
 SolarEdge
+solarman
 Solax
 solaxmodbus
 Solcast
