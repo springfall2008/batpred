@@ -93,7 +93,7 @@ pred_bat:
   discharge_start_service:
     service: automation.trigger
     entity_id: automation.sofar_passive_force_discharge
-    
+
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
