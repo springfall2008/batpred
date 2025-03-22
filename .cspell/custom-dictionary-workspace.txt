@@ -1,6 +1,4 @@
 # Custom Dictionary Words
-SFMB
-solarman
 activepower
 adata
 adbase
@@ -201,10 +199,12 @@ saverestore
 searr
 Selfrun
 Selfuse
+SFMB
 socb
 socs
 sofar
 SolarEdge
+solarman
 Solax
 solaxmodbus
 Solcast
