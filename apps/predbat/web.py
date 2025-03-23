@@ -925,7 +925,7 @@ var options = {
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
             if arg_errors:
-                text += "<tr><td bgcolor=#FF7777><span title=\"{}\">&#9888;{}</span></td><td>{}</td></tr>\n".format(arg_errors, arg, self.render_type(arg, value))
+                text += '<tr><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td></tr>\n'.format(arg_errors, arg, self.render_type(arg, value))
             else:
                 text += "<tr><td>{}</td><td>{}</td></tr>\n".format(arg, self.render_type(arg, value))
         args = self.base.unmatched_args

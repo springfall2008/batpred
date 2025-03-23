@@ -1460,47 +1460,41 @@ SOLAX_SOLIS_MODES_NEW = {
 # Apps.yaml validation schema
 APPS_SCHEMA = {
     "currency_symbols": {"type": "string|string_list"},
-    "db_enable" : {"type": "boolean"},
-    "db_days" : {"type": "integer"},
-    "db_mirror_ha" : {"type": "boolean"},
-    "db_primary" : {"type": "boolean"},
-    "threads" : {"type": "string|integer", "allowed": ["auto", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]},
-    "ha_url" : {"type": "string", "empty": False},
-    "ha_key" : {"type": "string", "empty": False},
-    "load_filter_threshold" : {"type": "integer"},
-    "web_port" : {"type": "integer"},
-    "load_today" : {
-        "type": "sensor|sensor_list",
-        "sensor_type": "float",
-        "required": True
-    },
-    "import_today" : {
+    "db_enable": {"type": "boolean"},
+    "db_days": {"type": "integer"},
+    "db_mirror_ha": {"type": "boolean"},
+    "db_primary": {"type": "boolean"},
+    "threads": {"type": "string|integer", "allowed": ["auto", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]},
+    "ha_url": {"type": "string", "empty": False},
+    "ha_key": {"type": "string", "empty": False},
+    "load_filter_threshold": {"type": "integer"},
+    "web_port": {"type": "integer"},
+    "load_today": {"type": "sensor|sensor_list", "sensor_type": "float", "required": True},
+    "import_today": {
         "type": "sensor|sensor_list",
         "sensor_type": "float",
     },
-    "export_today" : {
+    "export_today": {
         "type": "sensor|sensor_list",
         "sensor_type": "float",
     },
-    "pv_today" : {
+    "pv_today": {
         "type": "sensor|sensor_list",
         "sensor_type": "float",
     },
-    "load_forecast_only" : {
-        "type": "boolean"
-    },
-    "load_forecast" : {
+    "load_forecast_only": {"type": "boolean"},
+    "load_forecast": {
         "type": "sensor|sensor_list",
         "sensor_type": "dict",
     },
-    "ge_cloud_data" : {"type": "boolean"},
-    "ge_cloud_serial" : {"type": "string", "empty": False},
-    "ge_cloud_key" : {"type": "string", "empty": False},
-    "ge_cloud_direct" : {"type": "boolean"},
-    "ge_cloud_automatic" : {"type": "boolean"},
-    "num_inverters" : {"type": "integer", "zero": False},
-    "balance_inverters_seconds" : {"type": "integer", "zero": False},
-    "givtcp_rest" : {"type": "string_list"},
+    "ge_cloud_data": {"type": "boolean"},
+    "ge_cloud_serial": {"type": "string", "empty": False},
+    "ge_cloud_key": {"type": "string", "empty": False},
+    "ge_cloud_direct": {"type": "boolean"},
+    "ge_cloud_automatic": {"type": "boolean"},
+    "num_inverters": {"type": "integer", "zero": False},
+    "balance_inverters_seconds": {"type": "integer", "zero": False},
+    "givtcp_rest": {"type": "string_list"},
     "charge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True},
     "discharge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True},
     "battery_power": {"type": "sensor_list", "sensor_type": "float"},
@@ -1592,8 +1586,4 @@ APPS_SCHEMA = {
     "discharge_freeze_service": {"type": "dict_list"},
     "device_id": {"type": "string", "empty": False},
     "predheat": {"type": "dict"},
-
 }
-
-
-
