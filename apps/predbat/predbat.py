@@ -228,8 +228,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             return None
 
         # Entity with coded attribute
-        if entity_id and '$' in entity_id:
-            entity_id, attribute = entity_id.split('$')
+        if entity_id and "$" in entity_id:
+            entity_id, attribute = entity_id.split("$")
 
         return self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
 
@@ -917,7 +917,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                             value = [value]
                         elif expected_type == "float_list":
                             value = self.get_arg(name, [], indirect=False)
-                        
+
                         if isinstance(value, list):
                             matches = True
                             for item in value:
@@ -975,7 +975,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                         if isinstance(value, list):
                             matches = True
                             for item in value:
-
                                 if not isinstance(item, int):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer".format(name, item))
                                     self.arg_errors[name] = "Invalid type, expected integer item {}".format(item)
@@ -1031,7 +1030,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                 if sensor_type == "float" and isinstance(sensor, float) and not spec.get("modify", False):
                                     # Allow fixed float values
                                     continue
-                                if sensor_type == "string" and isinstance(sensor, str) and not spec.get("modify", False) and not '.' in sensor:
+                                if sensor_type == "string" and isinstance(sensor, str) and not spec.get("modify", False) and not "." in sensor:
                                     # Allow fixed string values
                                     continue
 
@@ -1040,14 +1039,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
                                     errors += 1
                                     break
-                                if '.' not in sensor:
+                                if "." not in sensor:
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid entity_id (must contain a dot)".format(name, sensor))
                                     self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
                                     errors += 1
                                     break
                                 if spec.get("modify", False):
                                     prefix = sensor.split(".")[0]
-                                    if prefix not in ['switch', 'select', 'input_number', 'number']:
+                                    if prefix not in ["switch", "select", "input_number", "number"]:
                                         if sensor.startswith("sensor.predbat_"):
                                             # We can ignore predbat generated sensors as they are control placeholders
                                             pass
