@@ -1100,7 +1100,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         if errors:
             self.log("Error: Validation of apps.yaml found {} configuration errors".format(errors))
         else:
-            self.log("Validation of apps.yaml completed with no errors")
+            self.log("Validation of apps.yaml was successful")
 
         return errors
 
