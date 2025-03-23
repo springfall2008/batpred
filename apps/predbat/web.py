@@ -199,12 +199,20 @@ class WebInterface:
 
         text += "<h2>Status</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+        if ('Warn:' in status) or ('Error:' in status):
+            text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
+        else:
+            text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
         text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
         text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
         text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
+        if self.base.arg_errors:
+            count_errors = len(self.base.arg_errors)
+            text += "<tr><td>Config</td><td bgcolor=#ff7777>apps.yaml has {} errors</td></tr>\n".format(count_errors)
+        else:
+            text += "<tr><td>Config</td><td>OK</td></tr>\n"
         text += "</table>\n"
         text += "<table>\n"
         text += "<h2>Debug</h2>\n"
@@ -914,7 +922,10 @@ var options = {
         self.default_page = "./apps"
         text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
         text += "<body>\n"
-        text += "<a href='./debug_apps'>apps.yaml</a><br>\n"
+        warning = ""
+        if self.base.arg_errors:
+            warning = "&#9888;"
+        text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><td>\n"
 
@@ -925,7 +936,7 @@ var options = {
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
             if arg_errors:
-                text += '<tr><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td></tr>\n'.format(arg_errors, arg, self.render_type(arg, value))
+                text += "<tr><td bgcolor=#FF7777><span title=\"{}\">&#9888;{}</span></td><td>{}</td></tr>\n".format(arg_errors, arg, self.render_type(arg, value))
             else:
                 text += "<tr><td>{}</td><td>{}</td></tr>\n".format(arg, self.render_type(arg, value))
         args = self.base.unmatched_args
@@ -1168,7 +1179,10 @@ var options = {
         text += '<td><a href="./plan" target="main_frame">Plan</a></td>\n'
         text += '<td><a href="./charts" target="main_frame">Charts</a></td>\n'
         text += '<td><a href="./config" target="main_frame">Config</a></td>\n'
-        text += '<td><a href="./apps" target="main_frame">apps.yaml</a></td>\n'
+        warning = ""
+        if self.base.arg_errors:
+            warning = "&#9888;&nbsp;"
+        text += '<td>{}<a href="./apps" target="main_frame">apps.yaml</a></td>\n'.format(warning)
         text += '<td><a href="./log?warnings" target="main_frame">Log</a></td>\n'
         text += '<td><a href="./compare" target="main_frame">Compare</a></td>\n'
         text += '<td><a href="https://springfall2008.github.io/batpred/" target="main_frame">Docs</a></td>\n'
