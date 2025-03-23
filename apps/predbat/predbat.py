@@ -228,8 +228,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             return None
 
         # Entity with coded attribute
-        if entity_id and "$" in entity_id:
-            entity_id, attribute = entity_id.split("$")
+        if entity_id and '$' in entity_id:
+            entity_id, attribute = entity_id.split('$')
 
         return self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
 
@@ -896,6 +896,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                     if expected_type == "integer" or expected_type == "integer_list":
                         if expected_type == "integer" and isinstance(value, int):
                             value = [value]
+                        elif expected_type == "integer_list":
+                            value = self.get_arg(name, [], indirect=False)
+
                         if isinstance(value, list):
                             matches = True
                             for item in value:
@@ -912,6 +915,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                     elif expected_type == "float" or expected_type == "float_list":
                         if expected_type == "float" and (isinstance(value, float) or isinstance(value, int)):
                             value = [value]
+                        elif expected_type == "float_list":
+                            value = self.get_arg(name, [], indirect=False)
+                        
                         if isinstance(value, list):
                             matches = True
                             for item in value:
@@ -920,16 +926,38 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     self.arg_errors[name] = "Invalid type, expected float item {}".format(item)
                                     errors += 1
                                     break
-                    elif expected_type == "string":
-                        matches = isinstance(value, str)
-                        if matches and spec.get("empty", False) and not value:
-                            self.log("Warn: Validation of apps.yaml found configuration item '{}' is empty".format(name))
-                            self.arg_errors[name] = "Invalid value, expected non-empty string"
-                            errors += 1
-                            break
+                    elif expected_type == "string" or expected_type == "string_list":
+                        if expected_type == "string" and isinstance(value, str):
+                            value = [value]
+                        elif expected_type == "string_list":
+                            value = self.get_arg(name, [], indirect=False)
+
+                        if isinstance(value, list):
+                            matches = True
+                            for item in value:
+                                if not isinstance(item, str):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a string".format(name, item))
+                                    self.arg_errors[name] = "Invalid type, expected string item {}".format(item)
+                                    errors += 1
+                                    break
+
+                                if spec.get("empty", False) and not item:
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' is empty".format(name))
+                                    self.arg_errors[name] = "Invalid value, expected non-empty string"
+                                    errors += 1
+                                    break
+
+                                if allowed and item not in allowed:
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' value {} is not in allowed list {}".format(name, item, allowed))
+                                    self.arg_errors[name] = "Invalid value {}, expected one of {}".format(item, allowed)
+                                    errors += 1
+                                    break
                     elif expected_type == "boolean" or expected_type == "boolean_list":
                         if expected_type == "boolean" and isinstance(value, bool):
                             value = [value]
+                        elif expected_type == "boolean_list":
+                            value = self.get_arg(name, [], indirect=False)
+
                         if isinstance(value, list):
                             matches = True
                             for item in value:
@@ -941,17 +969,30 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                     elif expected_type == "integer" or expected_type == "integer_list":
                         if expected_type == "integer" and isinstance(value, int):
                             value = [value]
+                        elif expected_type == "integer_list":
+                            value = self.get_arg(name, [], indirect=False)
+
                         if isinstance(value, list):
                             matches = True
                             for item in value:
-                                if not isinstance(item, bool):
+
+                                if not isinstance(item, int):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer".format(name, item))
                                     self.arg_errors[name] = "Invalid type, expected integer item {}".format(item)
                                     errors += 1
                                     break
+
+                                if allowed and item not in allowed:
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' value {} is not in allowed list {}".format(name, item, allowed))
+                                    self.arg_errors[name] = "Invalid value {}, expected one of {}".format(item, allowed)
+                                    errors += 1
+                                    break
+
                     elif expected_type == "dict" or expected_type == "dict_list":
                         if expected_type == "dict" and isinstance(value, dict):
                             value = [value]
+                        elif expected_type == "dict_list":
+                            value = self.get_arg(name, [], indirect=False)
                         if isinstance(value, list):
                             matches = True
                             for item in value:
@@ -974,18 +1015,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     self.arg_errors[name] = "Invalid element key {} value {}, expected int => float".format(key, value[key])
                                     errors += 1
                                     break
-                    elif expected_type == "string_list":
-                        if isinstance(value, list):
-                            matches = True
-                            for item in value:
-                                if not isinstance(item, str):
-                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a string".format(name, item))
-                                    self.arg_errors[name] = "Invalid type, expected string"
-                                    errors += 1
-                                    break
                     elif expected_type == "sensor_list" or expected_type == "sensor":
                         if expected_type == "sensor" and isinstance(value, str):
                             value = [value]
+                        elif expected_type == "sensor_list":
+                            value = self.get_arg(name, [], indirect=False)
+
                         if isinstance(value, list):
                             matches = True
                             for sensor in value:
@@ -996,7 +1031,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                 if sensor_type == "float" and isinstance(sensor, float) and not spec.get("modify", False):
                                     # Allow fixed float values
                                     continue
-                                if sensor_type == "string" and isinstance(sensor, str) and not spec.get("modify", False) and not "." in sensor:
+                                if sensor_type == "string" and isinstance(sensor, str) and not spec.get("modify", False) and not '.' in sensor:
                                     # Allow fixed string values
                                     continue
 
@@ -1005,14 +1040,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
                                     errors += 1
                                     break
-                                if "." not in sensor:
+                                if '.' not in sensor:
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid entity_id (must contain a dot)".format(name, sensor))
                                     self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
                                     errors += 1
                                     break
                                 if spec.get("modify", False):
                                     prefix = sensor.split(".")[0]
-                                    if prefix not in ["switch", "select", "input_number", "number"]:
+                                    if prefix not in ['switch', 'select', 'input_number', 'number']:
                                         if sensor.startswith("sensor.predbat_"):
                                             # We can ignore predbat generated sensors as they are control placeholders
                                             pass
@@ -1063,11 +1098,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                     self.log("Warn: Validation of apps.yaml found configuration item '{}' is not of type '{}' value was {}".format(name, expected_type, value))
                     self.arg_errors[name] = "Invalid type, expected {}".format(expected_type)
                     errors += 1
-                elif allowed:
-                    if value not in allowed:
-                        self.log("Warn: Validation of apps.yaml found configuration item '{}' value {} is not in allowed list {}".format(name, value, allowed))
-                        self.arg_errors[name] = "Invalid value, expected one of {}".format(allowed)
-                        errors += 1
         if errors:
             self.log("Error: Validation of apps.yaml found {} configuration errors".format(errors))
         else:
