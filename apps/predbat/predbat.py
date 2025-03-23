@@ -71,6 +71,7 @@ from config import (
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
     CONFIG_ITEMS,
+    APPS_SCHEMA,
 )
 from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3, dp4
@@ -225,6 +226,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         if not self.ha_interface:
             self.log("Error: get_state_wrapper - No HA interface available")
             return None
+
+        # Entity with coded attribute
+        if entity_id and "$" in entity_id:
+            entity_id, attribute = entity_id.split("$")
+
         return self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
 
     def set_state_wrapper(self, entity_id, state, attributes={}):
@@ -288,6 +294,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         reset_prediction_globals()
         self.api_errors = 0
+        self.arg_errors = {}
         self.ha_interface = None
         self.fatal_error = False
         self.ge_cloud_direct = None
@@ -864,6 +871,210 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.log("Warn: Predbat update failed to download Predbat version {}".format(version))
         return False
 
+    def validate_config(self):
+        """
+        Uses APPS_SCHEMA to validate the self.args configuration read from apps.yaml
+        """
+        errors = 0
+        self.arg_errors = {}
+        for name in APPS_SCHEMA:
+            spec = APPS_SCHEMA[name]
+            required = spec.get("required", False)
+            expected_type = spec.get("type", "string")
+
+            # Check required
+            if required and name not in self.args:
+                self.log("Warn: Validation of apps.yaml found missing configuration item '{}'".format(name))
+
+            # Check type
+            if name in self.args:
+                value = self.get_arg(name, indirect=False)
+                expected_types = expected_type.split("|")
+                allowed = spec.get("allowed", None)
+                matches = False
+                for expected_type in expected_types:
+                    if expected_type == "integer" or expected_type == "integer_list":
+                        if expected_type == "integer" and isinstance(value, int):
+                            value = [value]
+                        if isinstance(value, list):
+                            matches = True
+                            for item in value:
+                                if not isinstance(item, int):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer".format(name, item))
+                                    self.arg_errors[name] = "Invalid type, expected integer item {}".format(item)
+                                    errors += 1
+                                    break
+                                if spec.get("zero", False) and value == 0:
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' is zero".format(name))
+                                    self.arg_errors[name] = "Invalid value, expected non-zero integer item {}".format(item)
+                                    errors += 1
+                                    break
+                    elif expected_type == "float" or expected_type == "float_list":
+                        if expected_type == "float" and (isinstance(value, float) or isinstance(value, int)):
+                            value = [value]
+                        if isinstance(value, list):
+                            matches = True
+                            for item in value:
+                                if not isinstance(item, float) and not isinstance(item, int):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a float".format(name, item))
+                                    self.arg_errors[name] = "Invalid type, expected float item {}".format(item)
+                                    errors += 1
+                                    break
+                    elif expected_type == "string":
+                        matches = isinstance(value, str)
+                        if matches and spec.get("empty", False) and not value:
+                            self.log("Warn: Validation of apps.yaml found configuration item '{}' is empty".format(name))
+                            self.arg_errors[name] = "Invalid value, expected non-empty string"
+                            errors += 1
+                            break
+                    elif expected_type == "boolean" or expected_type == "boolean_list":
+                        if expected_type == "boolean" and isinstance(value, bool):
+                            value = [value]
+                        if isinstance(value, list):
+                            matches = True
+                            for item in value:
+                                if not isinstance(item, bool):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a boolean".format(name, item))
+                                    self.arg_errors[name] = "Invalid type, expected boolean item {}".format(item)
+                                    errors += 1
+                                    break
+                    elif expected_type == "integer" or expected_type == "integer_list":
+                        if expected_type == "integer" and isinstance(value, int):
+                            value = [value]
+                        if isinstance(value, list):
+                            matches = True
+                            for item in value:
+                                if not isinstance(item, bool):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer".format(name, item))
+                                    self.arg_errors[name] = "Invalid type, expected integer item {}".format(item)
+                                    errors += 1
+                                    break
+                    elif expected_type == "dict" or expected_type == "dict_list":
+                        if expected_type == "dict" and isinstance(value, dict):
+                            value = [value]
+                        if isinstance(value, list):
+                            matches = True
+                            for item in value:
+                                if not isinstance(item, dict):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an dict".format(name, item))
+                                    self.arg_errors[name] = "Invalid type, element {} expected dict".format(item)
+                                    errors += 1
+                                    break
+                    elif expected_type == "int_float_dict":
+                        if instance(value, dict):
+                            matches = True
+                            for key in value:
+                                if not isinstance(key, int):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} value {} is not a int => float".format(name, key, value))
+                                    self.arg_errors[name] = "Invalid element key {} expected int".format(key)
+                                    errors += 1
+                                    break
+                                if not isinstance(value[key], float) and not isinstance(value[key], int):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} value {} is not a int => float".format(name, key, value))
+                                    self.arg_errors[name] = "Invalid element key {} value {}, expected int => float".format(key, value[key])
+                                    errors += 1
+                                    break
+                    elif expected_type == "string_list":
+                        if isinstance(value, list):
+                            matches = True
+                            for item in value:
+                                if not isinstance(item, str):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a string".format(name, item))
+                                    self.arg_errors[name] = "Invalid type, expected string"
+                                    errors += 1
+                                    break
+                    elif expected_type == "sensor_list" or expected_type == "sensor":
+                        if expected_type == "sensor" and isinstance(value, str):
+                            value = [value]
+                        if isinstance(value, list):
+                            matches = True
+                            for sensor in value:
+                                sensor_type = spec.get("sensor_type", None)
+                                if sensor_type in ["integer", "float"] and isinstance(sensor, int) and not spec.get("modify", False):
+                                    # Allow fixed integer values
+                                    continue
+                                if sensor_type == "float" and isinstance(sensor, float) and not spec.get("modify", False):
+                                    # Allow fixed float values
+                                    continue
+                                if sensor_type == "string" and isinstance(sensor, str) and not spec.get("modify", False) and not "." in sensor:
+                                    # Allow fixed string values
+                                    continue
+
+                                if not isinstance(sensor, str):
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid entity_id (must be a string)".format(name, sensor))
+                                    self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
+                                    errors += 1
+                                    break
+                                if "." not in sensor:
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid entity_id (must contain a dot)".format(name, sensor))
+                                    self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
+                                    errors += 1
+                                    break
+                                if spec.get("modify", False):
+                                    prefix = sensor.split(".")[0]
+                                    if prefix not in ["switch", "select", "input_number", "number"]:
+                                        if sensor.startswith("sensor.predbat_"):
+                                            # We can ignore predbat generated sensors as they are control placeholders
+                                            pass
+                                        else:
+                                            self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} can not be modified".format(name, sensor))
+                                            self.arg_errors[name] = "Invalid entity_id in element {}, can not be modified".format(sensor)
+                                            errors += 1
+                                            break
+
+                                state = self.get_state_wrapper(sensor)
+                                if state is None:
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} returned value None".format(name, sensor))
+                                    self.arg_errors[name] = "Invalid value None in element {}".format(sensor)
+                                    errors += 1
+                                    break
+                                if sensor_type and sensor_type == "float":
+                                    try:
+                                        float(state)
+                                    except (ValueError, TypeError) as e:
+                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a float got {}".format(name, sensor, state))
+                                        self.arg_errors[name] = "Invalid value in element {}, expected float".format(sensor)
+                                        errors += 1
+                                        break
+                                elif sensor_type and sensor_type == "integer":
+                                    try:
+                                        int(state)
+                                    except (ValueError, TypeError) as e:
+                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer got {}".format(name, sensor, state))
+                                        self.arg_errors[name] = "Invalid value in element {}, expected integer".format(sensor)
+                                        errors += 1
+                                        break
+                                elif sensor_type and sensor_type == "switch":
+                                    if state not in ["on", "off", True, False]:
+                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a switch got {}".format(name, sensor, state))
+                                        self.arg_errors[name] = "Invalid value in element {}, expected switch".format(sensor)
+                                        errors += 1
+                                        break
+                                elif sensor_type and sensor_type == "dict":
+                                    if not isinstance(state, dict):
+                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a dict got {}".format(name, sensor, state))
+                                        self.arg_errors[name] = "Invalid type in element {}, expected dict".format(sensor)
+                                        errors += 1
+                                        break
+
+                    if matches:
+                        break
+                if not matches:
+                    self.log("Warn: Validation of apps.yaml found configuration item '{}' is not of type '{}' value was {}".format(name, expected_type, value))
+                    self.arg_errors[name] = "Invalid type, expected {}".format(expected_type)
+                    errors += 1
+                elif allowed:
+                    if value not in allowed:
+                        self.log("Warn: Validation of apps.yaml found configuration item '{}' value {} is not in allowed list {}".format(name, value, allowed))
+                        self.arg_errors[name] = "Invalid value, expected one of {}".format(allowed)
+                        errors += 1
+        if errors:
+            self.log("Error: Validation of apps.yaml found {} configuration errors".format(errors))
+        else:
+            self.log("Validation of apps.yaml completed with no errors")
+
+        return errors
+
     def initialize(self):
         """
         Setup the app, called once each time the app starts
@@ -924,6 +1135,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.ha_interface.update_states()
             self.auto_config()
             self.load_user_config(quiet=False, register=True)
+            self.validate_config()
             self.comparison = Compare(self)
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
@@ -1007,6 +1219,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.prediction_started = True
             self.ha_interface.update_states()
             self.load_user_config()
+            self.validate_config()
             self.update_pending = False
             try:
                 self.update_pred(scheduled=False)
@@ -1064,6 +1277,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
             if self.update_pending:
                 self.load_user_config()
+                self.validate_config()
                 config_changed = True
 
             self.update_pending = False
