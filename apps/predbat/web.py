@@ -199,7 +199,7 @@ class WebInterface:
 
         text += "<h2>Status</h2>\n"
         text += "<table>\n"
-        if ("Warn:" in status) or ("Error:" in status):
+        if status and (("Warn:" in status) or ("Error:" in status)):
             text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
         else:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
