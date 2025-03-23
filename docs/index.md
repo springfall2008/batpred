@@ -31,7 +31,7 @@ Some inverters have their own groups e.g.:
 - [GivTCP](https://www.facebook.com/groups/615579009972782)
 - [Solis](https://www.facebook.com/groups/288045168816481)
 
-If you want to buy me a beer then please use Paypal - [tdlj@tdlj.net](mailto:tdlj@tdlj.net)
+If you want to buy me a beer then please use [Paypal](https://paypal.me/predbat?country.x=GB&locale.x=en_GB) or [Github sponsor](https://github.com/springfall2008)
 ![image](https://github.com/springfall2008/batpred/assets/48591903/b3a533ef-0862-4e0b-b272-30e254f58467)
 
 ## Taster
