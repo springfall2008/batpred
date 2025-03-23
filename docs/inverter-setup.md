@@ -86,6 +86,9 @@ Verify in the GivEnergy portal settings the following inverter settings are set 
 - "Inverter Charge Power Percentage" is set to 100 (Predbat has its own low-rate charge control you can use if you wish)
 - "Inverter Discharge Power Percentage" is set to 100. If you do wish to set a lower discharge rate then its recommended that instead you set [inverter_limit_discharge in apps.yaml](apps-yaml.md#inverter-control-configurations) to the rate
 - "Battery Cutoff % Limit" is set to 4
+- "Enable AC Charge Upper Limit' is enabled (if you have this option)
+- That charge slot 2 (or more) are disabled (as Predbat only uses slot1)
+- That discharge slot 2 (or more) are disabled  (as Predbat only uses slot1)
 
 5. Specific Predbat configuration requirements for certain GivEnergy equipment
 
