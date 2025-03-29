@@ -322,29 +322,30 @@ class OctopusAPI:
         """
         Main run loop
         """
-        count_seconds = 0
-
         # Load cached data
         await self.load_octopus_cache()
 
+        first = True
         while not self.stop_api:
             try:
+                # Update time every minute
                 self.now = datetime.now()
                 self.now_utc = datetime.now(timezone.utc).astimezone()
+                count_minutes = self.now_utc.minute + self.now_utc.hour * 60
 
-                if count_seconds % (30 * 60) == 0:
+                if first or (count_minutes % 30) == 0:
                     # 30-minute update for tariff
                     self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
                     self.account_data = await self.async_get_account(self.account_id)
                     self.tariffs = await self.async_find_tariffs()
 
-                if count_seconds % (10 * 60) == 0:
+                if first or (count_minutes % 10) == 0:
                     # 10-minute update for intelligent device
                     await self.async_update_intelligent_device(self.account_id)
                     await self.fetch_tariffs(self.tariffs)
                     self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
 
-                if count_seconds % (2 * 60) == 0:
+                if first or (count_minutes % 2) == 0:
                     # 2-minute update for intelligent device sensor
                     await self.async_intelligent_update_sensor(self.account_id)
                     await self.save_octopus_cache()
@@ -354,11 +355,12 @@ class OctopusAPI:
                 if not self.api_started:
                     print("Octopus API: Started")
                     self.api_started = True
+                first = False
 
             except Exception as e:
                 self.log("Error: Octopus API: {}".format(e))
-            await asyncio.sleep(5)
-            count_seconds += 5
+
+            await asyncio.sleep(60)
         await self.api.async_close()
         print("Octopus API: Stopped")
 
