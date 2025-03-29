@@ -328,22 +328,24 @@ class OctopusAPI:
         await self.load_octopus_cache()
 
         while not self.stop_api:
-            # 30 minute update
             try:
+                self.now = datetime.now()
+                self.now_utc = datetime.now(timezone.utc).astimezone()
+
                 if count_seconds % (30 * 60) == 0:
-                    self.now = datetime.now()
-                    self.now_utc = datetime.now(timezone.utc).astimezone()
+                    # 30-minute update for tariff
                     self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-                    token = await self.async_refresh_token()
                     self.account_data = await self.async_get_account(self.account_id)
                     self.tariffs = await self.async_find_tariffs()
 
                 if count_seconds % (10 * 60) == 0:
-                    self.intelligent_device = await self.async_update_intelligent_device(self.account_id)
+                    # 10-minute update for intelligent device
+                    await self.async_update_intelligent_device(self.account_id)
                     await self.fetch_tariffs(self.tariffs)
                     self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
 
                 if count_seconds % (2 * 60) == 0:
+                    # 2-minute update for intelligent device sensor
                     await self.async_intelligent_update_sensor(self.account_id)
                     await self.save_octopus_cache()
 
@@ -465,11 +467,10 @@ class OctopusAPI:
         """
         import_tariff = self.tariffs.get("import", {})
         deviceID = import_tariff.get("deviceID", None)
-        completed_dispatches = self.get_intelligent_completed_dispatches()
-        device = {}
         if deviceID:
-            device = await self.async_get_intelligent_device(account_id, deviceID, completed_dispatches)
-        return device
+            completed_dispatches = self.get_intelligent_completed_dispatches()
+            self.intelligent_device = await self.async_get_intelligent_device(account_id, deviceID, completed_dispatches)
+        return self.intelligent_device
 
     def join_saving_session_event(self, event_code):
         """
