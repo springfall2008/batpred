@@ -41,7 +41,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.17.0"
+THIS_VERSION = "v8.17.1"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py"]
@@ -870,6 +870,26 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.log("Warn: Predbat update failed to download Predbat version {}".format(version))
         return False
 
+    def validate_is_int(self, value):
+        """
+        Validate that a value is an integer
+        """
+        try:
+            value = int(value)
+        except (ValueError, TypeError):
+            return False
+        return True
+
+    def validate_is_float(self, value):
+        """
+        Validate that a value is a float
+        """
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            return False
+        return True
+
     def validate_config(self):
         """
         Uses APPS_SCHEMA to validate the self.args configuration read from apps.yaml
@@ -901,12 +921,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                         if isinstance(value, list):
                             matches = True
                             for item in value:
-                                if not isinstance(item, int):
+                                if not self.validate_is_int(item):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer".format(name, item))
                                     self.arg_errors[name] = "Invalid type, expected integer item {}".format(item)
                                     errors += 1
                                     break
-                                if spec.get("zero", False) and value == 0:
+                                if spec.get("zero", False) and int(item) == 0:
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' is zero".format(name))
                                     self.arg_errors[name] = "Invalid value, expected non-zero integer item {}".format(item)
                                     errors += 1
@@ -920,7 +940,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                         if isinstance(value, list):
                             matches = True
                             for item in value:
-                                if not isinstance(item, float) and not isinstance(item, int):
+                                if not self.validate_is_float(item):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a float".format(name, item))
                                     self.arg_errors[name] = "Invalid type, expected float item {}".format(item)
                                     errors += 1
@@ -974,7 +994,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                         if isinstance(value, list):
                             matches = True
                             for item in value:
-                                if not isinstance(item, int):
+                                if not self.validate_is_int(item):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer".format(name, item))
                                     self.arg_errors[name] = "Invalid type, expected integer item {}".format(item)
                                     errors += 1
@@ -1003,12 +1023,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                         if instance(value, dict):
                             matches = True
                             for key in value:
-                                if not isinstance(key, int):
+                                if not self.validate_is_int(key):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} value {} is not a int => float".format(name, key, value))
                                     self.arg_errors[name] = "Invalid element key {} expected int".format(key)
                                     errors += 1
                                     break
-                                if not isinstance(value[key], float) and not isinstance(value[key], int):
+                                if not self.validate_is_float(value[key]):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} value {} is not a int => float".format(name, key, value))
                                     self.arg_errors[name] = "Invalid element key {} value {}, expected int => float".format(key, value[key])
                                     errors += 1
@@ -1062,17 +1082,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     errors += 1
                                     break
                                 if sensor_type and sensor_type == "float":
-                                    try:
-                                        float(state)
-                                    except (ValueError, TypeError) as e:
+                                    if not self.validate_is_float(state):
                                         self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a float got {}".format(name, sensor, state))
                                         self.arg_errors[name] = "Invalid value in element {}, expected float".format(sensor)
                                         errors += 1
                                         break
                                 elif sensor_type and sensor_type == "integer":
-                                    try:
-                                        int(state)
-                                    except (ValueError, TypeError) as e:
+                                    if not self.validate_is_int(state):
                                         self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer got {}".format(name, sensor, state))
                                         self.arg_errors[name] = "Invalid value in element {}, expected integer".format(sensor)
                                         errors += 1
