@@ -71,6 +71,7 @@ class HAInterface:
         self.db = None
         self.db_cursor = None
         self.websocket_active = False
+        self.api_errors = 0
 
         self.base = base
         self.log = base.log
@@ -153,7 +154,7 @@ class HAInterface:
                                     if message_type == "result":
                                         response = data.get("result", {}).get("response", None)
                                         success = data.get("success", False)
-                                        self.base.api_errors = 0
+                                        self.api_errors = 0
 
                                         if not success:
                                             self.log("Warn: Service call {}/{} data {} failed with response {}".format(domain, service, service_data, response))
@@ -162,15 +163,15 @@ class HAInterface:
                             except Exception as e:
                                 self.log("Error: Web Socket exception in update loop: {}".format(e))
                                 self.log("Error: " + traceback.format_exc())
-                                self.base.api_errors += 1
+                                self.api_errors += 1
                                 break
 
             except Exception as e:
                 self.log("Error: Web Socket exception in startup: {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.base.api_errors += 1
+                self.api_errors += 1
 
-        if self.base.api_errors >= 10:
+        if self.api_errors >= 10:
             self.log("Error: Too many API errors, stopping")
             self.base.fatal_error = True
 
