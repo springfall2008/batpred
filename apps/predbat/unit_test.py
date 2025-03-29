@@ -2897,7 +2897,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
         my_predbat.metric_min_improvement_export = 3
-        #my_predbat.set_reserve_min = 0
+        # my_predbat.set_reserve_min = 0
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
@@ -2910,8 +2910,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_second_pass = False
         my_predbat.metric_battery_cycle = 0
-        #my_predbat.carbon_enable = False
-        #my_predbat.metric_battery_value_scaling = 0.90
+        # my_predbat.carbon_enable = False
+        # my_predbat.metric_battery_value_scaling = 0.90
         pass
 
     if re_do_rates:
