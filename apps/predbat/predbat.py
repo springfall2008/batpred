@@ -910,7 +910,27 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 value = self.get_arg(name, indirect=False)
                 expected_types = expected_type.split("|")
                 allowed = spec.get("allowed", None)
+                entries = spec.get("entries", None)
+                required_entries = None
                 matches = False
+                if entries is not None:
+                    if isinstance(entries, str):
+                        required_entries = self.get_arg(entries, 0, indirect=False)
+                    else:
+                        required_entries = int(entries)
+
+                    if isinstance(value, list):
+                        if len(value) < required_entries:
+                            self.log("Warn: Validation of apps.yaml found configuration item '{}' has {} entries, expected {} based on {}".format(name, len(value), required_entries, entries))
+                            self.arg_errors[name] = "Invalid number of entries, expected {}".format(required_entries)
+                            errors += 1
+                            continue
+                    elif required_entries > 1:
+                        self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list but requires {} entries based on {}".format(name, required_entries, entries))
+                        self.arg_errors[name] = "Invalid type, expected list"
+                        errors += 1
+                        continue
+
                 for expected_type in expected_types:
                     if expected_type == "integer" or expected_type == "integer_list":
                         if expected_type == "integer" and isinstance(value, int):
@@ -920,13 +940,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
                         if isinstance(value, list):
                             matches = True
+                            if required_entries is not None and len(value) > required_entries:
+                                value = value[:required_entries]
                             for item in value:
                                 if not self.validate_is_int(item):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer".format(name, item))
                                     self.arg_errors[name] = "Invalid type, expected integer item {}".format(item)
                                     errors += 1
                                     break
-                                if spec.get("zero", False) and int(item) == 0:
+                                if not spec.get("zero", True) and int(item) == 0:
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' is zero".format(name))
                                     self.arg_errors[name] = "Invalid value, expected non-zero integer item {}".format(item)
                                     errors += 1
@@ -939,6 +961,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
                         if isinstance(value, list):
                             matches = True
+                            if required_entries is not None and len(value) > required_entries:
+                                value = value[:required_entries]
                             for item in value:
                                 if not self.validate_is_float(item):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a float".format(name, item))
@@ -953,6 +977,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
                         if isinstance(value, list):
                             matches = True
+                            if required_entries is not None and len(value) > required_entries:
+                                value = value[:required_entries]
                             for item in value:
                                 if not isinstance(item, str):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a string".format(name, item))
@@ -978,6 +1004,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                             value = self.get_arg(name, [], indirect=False)
 
                         if isinstance(value, list):
+                            if required_entries is not None and len(value) > required_entries:
+                                value = value[:required_entries]
                             matches = True
                             for item in value:
                                 if not isinstance(item, bool):
@@ -992,6 +1020,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                             value = self.get_arg(name, [], indirect=False)
 
                         if isinstance(value, list):
+                            if required_entries is not None and len(value) > required_entries:
+                                value = value[:required_entries]
+
                             matches = True
                             for item in value:
                                 if not self.validate_is_int(item):
@@ -1012,6 +1043,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                         elif expected_type == "dict_list":
                             value = self.get_arg(name, [], indirect=False)
                         if isinstance(value, list):
+                            if required_entries is not None and len(value) > required_entries:
+                                value = value[:required_entries]
+
                             matches = True
                             for item in value:
                                 if not isinstance(item, dict):
@@ -1040,6 +1074,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                             value = self.get_arg(name, [], indirect=False)
 
                         if isinstance(value, list):
+                            # Auto trim to length
+                            if required_entries is not None and len(value) > required_entries:
+                                value = value[:required_entries]
+
                             matches = True
                             for sensor in value:
                                 sensor_type = spec.get("sensor_type", None)
