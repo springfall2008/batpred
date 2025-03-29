@@ -1657,6 +1657,7 @@ class Plan:
                 new_window_best
                 and (start == new_window_best[-1]["end"])
                 and (limit >= new_limit_best[-1])
+                and not (limit != self.reserve and new_limit_best[-1] == self.reserve)
                 and (start not in self.manual_all_times)
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
                 and new_window_best[-1]["average"] == window["average"]
