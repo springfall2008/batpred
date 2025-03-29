@@ -1493,7 +1493,7 @@ APPS_SCHEMA = {
     "ge_cloud_direct": {"type": "boolean"},
     "ge_cloud_automatic": {"type": "boolean"},
     "num_inverters": {"type": "integer", "zero": False},
-    "balance_inverters_seconds": {"type": "integer", "zero": False},
+    "balance_inverters_seconds": {"type": "integer", "zero": True},
     "givtcp_rest": {"type": "string_list", "entries": "num_inverters"},
     "charge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True, "entries": "num_inverters"},
     "discharge_rate": {"type": "sensor_list", "sensor_type": "float", "modify": True, "entries": "num_inverters"},
