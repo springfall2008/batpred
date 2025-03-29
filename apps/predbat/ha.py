@@ -71,6 +71,7 @@ class HAInterface:
         self.db = None
         self.db_cursor = None
         self.websocket_active = False
+        self.api_errors = 0
 
         self.base = base
         self.log = base.log
