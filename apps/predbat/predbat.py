@@ -879,7 +879,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         except (ValueError, TypeError):
             return False
         return True
-    
+
     def validate_is_float(self, value):
         """
         Validate that a value is a float
