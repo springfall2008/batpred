@@ -1519,7 +1519,7 @@ APPS_SCHEMA = {
     "pause_end_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "inverter_limit": {"type": "integer_list", "zero": False, "entries": "num_inverters"},
     "inverter_limit_charge": {"type": "integer_list", "zero": False, "entries": "num_inverters"},
-    "export_limit": {"type": "integer_list", "entries": "num_inverters", "entries": "num_inverters"},
+    "export_limit": {"type": "integer_list", "entries": "num_inverters"},
     "inverter_battery_rate_min": {"type": "integer", "zero": False, "entries": "num_inverters"},
     "inverter_reserve_max": {"type": "integer", "zero": False, "entries": "num_inverters"},
     "battery_charge_power_curve: ": {"type": "int_float_dict"},
