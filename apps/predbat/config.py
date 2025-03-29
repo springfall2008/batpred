@@ -432,7 +432,7 @@ CONFIG_ITEMS = [
         "name": "set_reserve_min",
         "friendly_name": "Set Reserve Min",
         "type": "input_number",
-        "min": 4,
+        "min": 0,
         "max": 100,
         "step": 1,
         "unit": "%",
