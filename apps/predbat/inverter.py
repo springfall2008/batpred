@@ -409,7 +409,7 @@ class Inverter:
         self.reserve_min = self.base.get_arg("set_reserve_min")
 
         # Min soc setting
-        battery_min_soc = self.base.get_arg("battery_min_soc", default=self.reserve_min, index=self.id)
+        battery_min_soc = self.base.get_arg("battery_min_soc", default=max(self.reserve_min, 4), index=self.id)
 
         # Get current reserve value
         if self.rest_data:
