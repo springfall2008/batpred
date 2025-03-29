@@ -879,7 +879,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         except (ValueError, TypeError):
             return False
         return True
-
+    
     def validate_is_float(self, value):
         """
         Validate that a value is a float
@@ -926,7 +926,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     self.arg_errors[name] = "Invalid type, expected integer item {}".format(item)
                                     errors += 1
                                     break
-                                if spec.get("zero", False) and int(item) == 0:
+                                if not spec.get("zero", True) and int(item) == 0:
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' is zero".format(name))
                                     self.arg_errors[name] = "Invalid value, expected non-zero integer item {}".format(item)
                                     errors += 1
