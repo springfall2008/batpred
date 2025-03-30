@@ -148,32 +148,64 @@ class UserInterface:
                 value = self.get_state_wrapper(entity_id=value, default=default)
         return value
 
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None):
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True):
         """
         Argument getter that can use HA state as well as fixed values
         """
         value = None
-        can_override = CONFIG_API_OVERRIDE.get(arg, False)
+        if can_override:
+            can_override = CONFIG_API_OVERRIDE.get(arg, False)
 
         if can_override:
             overrides = self.get_manual_api(arg)
-            for override in overrides:
-                if index is None:
-                    if isinstance(default, list):
-                        value = override
+            if isinstance(default, list):
+                value = self.get_arg(arg, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, domain=domain, can_override=False)
+                for override in overrides:
+                    override_index = override.get("index", 0)
+                    if override_index is None:
+                        override_index = 0
+                    for idx in range(max(len(value), override_index + 1)):
+                        if override_index == idx:
+                            if len(value) <= idx:
+                                # Extend length of value list to match index
+                                value.extend([default] * (idx - len(value) + 1))
+                            org_value = value[idx]
+                            value[idx] = override.get("value", None)
+                            if isinstance(org_value, float):
+                                try:
+                                    value[idx] = float(value[idx])
+                                except (ValueError, TypeError):
+                                    self.log("Warn: Return bad float value {} from {} override using default {}".format(value[idx], arg, default))
+                                    self.record_status("Warn: Return bad float value {} from arg override {}".format(value[idx], arg), had_errors=True)
+                                    value[idx] = default
+                            elif isinstance(org_value, int) and not isinstance(org_value, bool):
+                                try:
+                                    value[idx] = int(float(value[idx]))
+                                except (ValueError, TypeError):
+                                    self.log("Warn: Return bad int value {} from {} override using default {}".format(value[idx], arg, default))
+                                    self.record_status("Warn: Return bad int value {} from arg override {}".format(value[idx], arg), had_errors=True)
+                                    value[idx] = default
+                            elif isinstance(org_value, bool) and isinstance(value[idx], str):
+                                # Convert to Boolean
+                                if value[idx].lower() in ["on", "true", "yes", "enabled", "enable", "connected"]:
+                                    value[idx] = True
+                                else:
+                                    value[idx] = False
+                            self.log("Note: API Overridden arg {} value {} index {}".format(arg, value, idx))
+                if index:
+                    if index < len(value):
+                        value = value[index]
                     else:
-                        value = override.get("value", None)
-                    break
-                    self.log("Note: API Overridden arg {} value {}".format(arg, value))
-                else:
-                    override_index = override.get("index", None)
-                    if (override_index is None) or (override_index == index):
-                        if isinstance(default, list):
-                            value = override
-                        else:
-                            value = override.get("value", None)
-
-                        self.log("Note: API Overridden arg {} index {} value {}".format(arg, index, value))
+                        self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
+                        value = None
+            elif overrides:
+                for override in overrides:
+                    override_index = override.get("index", 0)
+                    if override_index is None:
+                        override_index = 0
+                    if override_index == 0:
+                        value = override.get("value", value)
+                        self.log("Note: API Overridden arg {} value {}".format(arg, value))
                         break
 
         # Get From HA config (not for domain specific which are apps.yaml options only)
@@ -1030,12 +1062,14 @@ class UserInterface:
                 command_args = command_split[1].split("&")
                 args_dict = {}
                 args_dict["index"] = command_index
+                value = {}
                 for arg in command_args:
                     arg_split = arg.split("=")
                     if len(arg_split) > 1:
-                        args_dict[arg_split[0]] = arg_split[1]
+                        value[arg_split[0]] = arg_split[1]
                     else:
-                        args_dict[arg_split[0]] = True
+                        value[arg_split[0]] = True
+                args_dict["value"] = value
                 if command == command_type:
                     apply_commands.append(args_dict)
             else:
@@ -1162,6 +1196,7 @@ class UserInterface:
             values = new_value
         else:
             values = item.get("value", "")
+
         values = values.replace("+", "")
         values_list = []
         if values:
@@ -1170,6 +1205,17 @@ class UserInterface:
         for value in values_list:
             if value == "off":
                 continue
+            for prev in time_overrides[:]:
+                if "=" in prev:
+                    prev_no_eq = prev.split("=")[0]
+                elif "?" in prev:
+                    prev_no_eq = prev.split("?")[0]
+                if "=" in value:
+                    value_no_eq = value.split("=")[0]
+                elif "?" in value:
+                    value_no_eq = value.split("?")[0]
+                if prev_no_eq == value_no_eq:
+                    time_overrides.remove(prev)
             time_overrides.append(value)
 
         values = ",".join(time_overrides)
