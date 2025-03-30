@@ -2897,7 +2897,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
         my_predbat.metric_min_improvement_export = 3
-        #my_predbat.set_reserve_min = 0
+        # my_predbat.set_reserve_min = 0
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
@@ -2910,8 +2910,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_second_pass = False
         my_predbat.metric_battery_cycle = 0
-        #my_predbat.carbon_enable = False
-        #my_predbat.metric_battery_value_scaling = 0.90
+        # my_predbat.carbon_enable = False
+        # my_predbat.metric_battery_value_scaling = 0.90
         pass
 
     if re_do_rates:
@@ -7926,7 +7926,7 @@ next_joined_event_duration_in_minutes: null
 icon: mdi:leaf
 friendly_name: Octoplus Saving Session (A-4DD6C5EE)
 """.format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday,tz_offset=tz_offset
+        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset
     )
 
     session_sensor = f"""
@@ -8060,6 +8060,7 @@ def run_test_octopus_api(my_predbat, octopus_api, octopus_account):
     failed = 1
     return failed
 
+
 def run_test_manual_api(my_predbat):
     failed = 0
     print("Test manual API")
@@ -8112,7 +8113,6 @@ def run_test_manual_api(my_predbat):
         print("ERROR: T7 Expecting inverter limit to be {} got {}".format(expected, limits))
         failed = 1
 
-
     my_predbat.api_select("manual_api", "inverter_limit(1)=1000")
     my_predbat.manual_api = my_predbat.api_select_update("manual_api")
     limits = my_predbat.get_arg("inverter_limit", [])
@@ -8146,7 +8146,7 @@ def run_test_manual_api(my_predbat):
         failed = 1
 
     my_predbat.args["inverter_limit"] = original_limit
-    my_predbat.args['rates_export_override'] = []
+    my_predbat.args["rates_export_override"] = []
 
     export_override = my_predbat.get_arg("rates_export_override", [])
     if export_override != []:
@@ -8156,7 +8156,7 @@ def run_test_manual_api(my_predbat):
     my_predbat.api_select("manual_api", "rates_export_override?start=17:00:00&end=19:00:00&rate=0")
     my_predbat.manual_api = my_predbat.api_select_update("manual_api")
     export_override = my_predbat.get_arg("rates_export_override", [])
-    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": '0'}]
+    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": "0"}]
     if export_override != expected:
         print("ERROR: T11 Expecting rate export override to be {} got {}".format(expected, export_override))
         failed = 1
@@ -8164,7 +8164,7 @@ def run_test_manual_api(my_predbat):
     my_predbat.api_select("manual_api", "rates_export_override(1)?start=12:00:00&end=13:00:00&rate=2")
     my_predbat.manual_api = my_predbat.api_select_update("manual_api")
     export_override = my_predbat.get_arg("rates_export_override", [])
-    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": '0'}, {"start": "12:00:00", "end": "13:00:00", "rate": '2'}]
+    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": "0"}, {"start": "12:00:00", "end": "13:00:00", "rate": "2"}]
     if export_override != expected:
         print("ERROR: T12 Expecting rate export override to be {} got {}".format(expected, export_override))
         failed = 1
@@ -8178,6 +8178,7 @@ def run_test_manual_api(my_predbat):
         failed = 1
 
     return failed
+
 
 def main():
     # Parse command line arguments
