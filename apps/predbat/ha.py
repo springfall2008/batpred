@@ -193,7 +193,7 @@ class HAInterface:
                 break
 
             url = "{}/api/websocket".format(self.ha_url)
-            self.log("Info: Start socket for url {} key {}".format(url, self.ha_key))
+            self.log("Info: Start socket for url {}".format(url))
             async with ClientSession() as session:
                 try:
                     async with session.ws_connect(url) as websocket:
