@@ -1124,6 +1124,8 @@ CONFIG_API_OVERRIDE = {
     "import_export_scaling": True,
     "inverter_limit_charge": True,
     "inverter_limit_discharge": True,
+    "rates_import_override": True,
+    "rates_export_override": True,
 }
 
 """
@@ -1484,7 +1486,7 @@ APPS_SCHEMA = {
     },
     "load_forecast_only": {"type": "boolean"},
     "load_forecast": {
-        "type": "sensor|sensor_list",
+        "type": "sensor_list",
         "sensor_type": "dict",
     },
     "ge_cloud_data": {"type": "boolean"},
