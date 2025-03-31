@@ -85,7 +85,7 @@ class HAInterface:
             else:
                 self.log("Info: Using SQL Lite database as primary data source, no HA interface available")
         else:
-            check = self.api_call("/api/")
+            check = self.api_call("/api/services")
             if not check:
                 self.log("Warn: Unable to connect directly to Home Assistant at {}, please check your configuration of ha_url/ha_key".format(self.ha_url))
                 self.ha_key = None
@@ -193,7 +193,7 @@ class HAInterface:
                 break
 
             url = "{}/api/websocket".format(self.ha_url)
-            self.log("Info: Start socket for url {}".format(url))
+            self.log("Info: Start socket for url {} key {}".format(url, self.ha_key))
             async with ClientSession() as session:
                 try:
                     async with session.ws_connect(url) as websocket:
