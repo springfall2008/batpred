@@ -25,6 +25,12 @@ pred_bat:
   threads: auto
 
   #
+  # Controls/status - must by 1 per inverter
+  #
+  num_inverters: 1
+  inverter_type: "SE"
+
+  #
   # Sensors, currently more than one can be specified and they will be summed up automatically
   # however if you have two inverters only set one of them as they will both read the same.
   #
@@ -35,12 +41,7 @@ pred_bat:
   export_today:
     - sensor.solaredge_m1_exported_kwh
   pv_today:
-    - sensor.solar_panel_production_kwh   # This is a custom sensor - see Readme on how to create or comment out
-  #
-  # Controls/status - must by 1 per inverter
-  #
-  num_inverters: 1
-  inverter_type: "SE"
+    - sensor.solar_panel_production_kwh   # This is a custom template sensor - see SolarEdge section of 'Inverter Setup' documentation for how to create
 
   # If you have a backup interface then the following lines can be enabled (uncommented out)
   #
@@ -58,26 +59,14 @@ pred_bat:
   battery_power:
     - sensor.solaredge_b1_dc_power
   pv_power:
-    - sensor.solar_panel_production_w # This is a custom sensor - see Readme on how to create or comment out
+    - sensor.solar_panel_production_w # This is a custom template sensor - see SolarEdge section of 'Inverter Setup' for details
   load_power:
-    - sensor.solar_house_consumption_w # This is a custom sensor - see Readme on how to create or comment out
+    - sensor.solar_house_consumption_w # This is a custom template sensor - see SolarEdge section of 'Inverter Setup' for details
   soc_percent:
     - sensor.solaredge_b1_state_of_energy
   soc_max:
     - sensor.solaredge_b1_maximum_energy
-  
-  #
-  # if your SolarEdge inverter integration supports start and end times for charging and discharging,
-  # then uncomment the following lines and specify the entity name. Otherwise leave commented out
-  #charge_start_time:
-  #  - sensor.solaredge_xxxx_charge_start_time
-  #charge_end_time:
-  #  - sensor.solaredge_xxxx_charge_end_time
-  #discharge_start_time:
-  #  - sensor.solaredge_xxxx_discharge_start_time
-  #discharge_end_time:
-  #  - sensor.solaredge_xxxx_discharge_end_time
-  
+
   charge_limit:
     - sensor.solaredge_i1_ac_charge_limit
   scheduled_charge_enable:
