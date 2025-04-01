@@ -1754,6 +1754,7 @@ class Output:
         self.current_status = message + extra
         if notify and self.previous_status != message and self.set_status_notify:
             self.call_notify("Predbat status change to: " + message + extra)
+            self.previous_status = message
 
         self.dashboard_item(
             self.prefix + ".status",
@@ -1774,7 +1775,6 @@ class Output:
         else:
             self.log("Info: record_status {}".format(message + extra))
 
-        self.previous_status = message
         if had_errors:
             self.had_errors = True
 

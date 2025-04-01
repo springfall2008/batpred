@@ -1,2 +1,2 @@
-python3 -m coverage run predbat_debug/unit_test.py
+python3 -m coverage run predbat_debug/unit_test.py --quick
 python3 -m coverage html

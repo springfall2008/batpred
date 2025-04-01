@@ -57,6 +57,7 @@ class TestHAInterface:
         self.dummy_items = {}
         self.service_store_enable = False
         self.service_store = []
+        self.db_primary = False
 
     def get_service_store(self):
         stored_service = self.service_store
@@ -1749,7 +1750,7 @@ def run_inverter_tests():
     print("**** Running Inverter tests ****")
     ha = my_predbat.ha_interface
 
-    time_now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    time_now = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
     dummy_items = {
         "number.charge_rate": 1100,
         "number.discharge_rate": 1500,
@@ -2896,20 +2897,21 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
         my_predbat.metric_min_improvement_export = 3
-        my_predbat.set_reserve_min = 0
+        # my_predbat.set_reserve_min = 0
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        # my_predbat.best_soc_keep = 0
+        my_predbat.best_soc_keep = 0
         # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
-        # my_predbat.metric_min_improvement_export = 5
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_tweak_plan = False
 
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_second_pass = False
-        # my_predbat.metric_battery_cycle = 0
+        my_predbat.metric_battery_cycle = 0
+        # my_predbat.carbon_enable = False
+        # my_predbat.metric_battery_value_scaling = 0.90
         pass
 
     if re_do_rates:
@@ -5083,7 +5085,7 @@ def run_optimise_all_windows_tests(my_predbat):
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 10.0}]
 
     failed |= run_optimise_all_windows(
-        "single",
+        "single_windows",
         my_predbat,
         charge_window_best=charge_window_best,
         expect_charge_limit=[0],
@@ -5101,17 +5103,17 @@ def run_optimise_all_windows_tests(my_predbat):
     for n in range(0, 48):
         price = 16 - n % 16
         charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
-        expect_charge_limit.append(10 if price <= 5.0 else 0)
-    expect_charge_limit[26] = 0.5  # freeze
-    expect_charge_limit[42] = 0.5  # freeze
+        expect_charge_limit.append(10 if price < 5.0 else 0)
+    expect_charge_limit[27] = 0.5  # freeze
+    expect_charge_limit[43] = 0.5  # freeze
     failed |= run_optimise_all_windows(
-        "created2",
+        "created2_windows",
         my_predbat,
         charge_window_best=charge_window_best,
         expect_charge_limit=expect_charge_limit,
         load_amount=0.2,
         pv_amount=0,
-        expect_best_price=40.3,
+        expect_best_price=31.6,
         inverter_loss=0.9,
         best_soc_keep=0.0,
         battery_size=10,
@@ -5123,14 +5125,15 @@ def run_optimise_all_windows_tests(my_predbat):
     # One extra charge as we will fall below keep otherwise
     expect_charge_limit[9] = 0.5
     expect_charge_limit[10] = 0.5
+    expect_charge_limit[11] = 0.5
     failed |= run_optimise_all_windows(
-        "created3",
+        "created3_windows",
         my_predbat,
         charge_window_best=charge_window_best,
         expect_charge_limit=expect_charge_limit,
         load_amount=0.2,
         pv_amount=0,
-        expect_best_price=29.5,
+        expect_best_price=20.8,
         inverter_loss=0.9,
         best_soc_keep=1,
         battery_soc=2,
@@ -5148,19 +5151,19 @@ def run_optimise_all_windows_tests(my_predbat):
     for n in range(0, 48):
         price = n % 16
         charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
-        expect_charge_limit.append(10 if price <= 5.0 else 0)
+        expect_charge_limit.append(10 if price <= 5.0 * 0.9 else 0)
 
-    expect_charge_limit[6] = 0.5
-    expect_charge_limit[22] = 0.5
-    expect_charge_limit[38] = 0.5
+    expect_charge_limit[5] = 0.5
+    expect_charge_limit[21] = 0.5
+    expect_charge_limit[37] = 0.5
     failed |= run_optimise_all_windows(
-        "created4",
+        "created4_windows",
         my_predbat,
         charge_window_best=charge_window_best,
         expect_charge_limit=expect_charge_limit,
         load_amount=0.2,
         pv_amount=0,
-        expect_best_price=28.8,
+        expect_best_price=19.5,
         inverter_loss=0.9,
         best_soc_keep=1,
         battery_soc=2,
@@ -5183,8 +5186,8 @@ def run_optimise_all_windows_tests(my_predbat):
     if (before_best_metric - best_metric) < 0.099:
         print("ERROR: Expected best metric to have 0.1 skew for charging but got {} vs {} skew was {}".format(best_metric, before_best_metric, before_best_metric - best_metric))
         failed = True
-    if best_cost != 28.8:
-        print("ERROR: Expected best cost to be 28.8 but got {}".format(best_cost))
+    if best_cost != 19.5:
+        print("ERROR: Expected best cost to be 19.5 but got {}".format(best_cost))
         failed = True
     my_predbat.isCharging = False
 
@@ -5200,7 +5203,7 @@ def run_optimise_all_windows_tests(my_predbat):
         charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
         expect_charge_limit.append(10 if off_peak else 0)
     failed |= run_optimise_all_windows(
-        "off_peak",
+        "off_peak_windows",
         my_predbat,
         charge_window_best=charge_window_best,
         expect_charge_limit=expect_charge_limit,
@@ -5359,7 +5362,7 @@ def run_optimise_levels_tests(my_predbat):
     for n in range(0, 48):
         price = n % 8
         charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
-        expect_charge_limit.append(100 if (price * 0.9) <= 5.0 else 0)
+        expect_charge_limit.append(100 if price <= 5.0 * 0.9 else 0)
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
         "created1",
         my_predbat,
@@ -5369,7 +5372,7 @@ def run_optimise_levels_tests(my_predbat):
         expect_export_limit=expect_export_limit,
         load_amount=0.5,
         pv_amount=0,
-        expect_best_price=5.0 / 0.9,
+        expect_best_price=4.0 / 0.9,
         inverter_loss=0.9,
     )
     failed |= this_failed
@@ -5384,7 +5387,7 @@ def run_optimise_levels_tests(my_predbat):
     for n in range(0, 48):
         price = 16 - n % 16
         charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
-        expect_charge_limit.append(100 if (price * 0.9) <= 5.0 else 0)
+        expect_charge_limit.append(100 if price <= 5.0 * 0.9 else 0)
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
         "created2",
         my_predbat,
@@ -5394,7 +5397,7 @@ def run_optimise_levels_tests(my_predbat):
         expect_export_limit=expect_export_limit,
         load_amount=0.2,
         pv_amount=0,
-        expect_best_price=5.0 / 0.9,
+        expect_best_price=4.0 / 0.9,
         inverter_loss=0.9,
         best_soc_keep=0.5,
     )
@@ -6986,6 +6989,8 @@ def test_energydataservice(my_predbat):
     date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     today = datetime.now().strftime("%Y-%m-%d")
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
 
     data_example = f"""
 state: 1.34
@@ -7000,115 +7005,115 @@ next_data_update: 13:39:54
 today: 1.242, 1.242, 1.242, 1.242, 1.243, 1.243, 1.243, 1.243, 1.243, 1.243, 1.244, 1.245, 1.246, 1.246, 1.261, 1.271, 1.286, 1.295, 1.295, 1.288, 1.296, 1.284, 1.273, 1.289
 tomorrow: 1.284, 1.273, 1.263, 1.283, 1.309, 1.333, 1.385, 1.389, 1.366, 1.336, 1.323, 1.316, 1.318, 1.338, 1.338, 1.314, 1.299, 1.299, 1.297, 1.286, 1.281, 1.277, 1.268
 raw_today:
-    - hour: '{today}T00:00:00+00:00'
+    - hour: '{today}T00:00:00+{tz_offset}:00'
       price: 1.242
-    - hour: '{today}T01:00:00+00:00'
+    - hour: '{today}T01:00:00+{tz_offset}:00'
       price: 1.242
-    - hour: '{today}T02:00:00+00:00'
+    - hour: '{today}T02:00:00+{tz_offset}:00'
       price: 1.242
-    - hour: '{today}T03:00:00+00:00'
+    - hour: '{today}T03:00:00+{tz_offset}:00'
       price: 1.242
-    - hour: '{today}T04:00:00+00:00'
+    - hour: '{today}T04:00:00+{tz_offset}:00'
       price: 1.243
-    - hour: '{today}T05:00:00+00:00'
+    - hour: '{today}T05:00:00+{tz_offset}:00'
       price: 1.243
-    - hour: '{today}T06:00:00+00:00'
+    - hour: '{today}T06:00:00+{tz_offset}:00'
       price: 1.243
-    - hour: '{today}T07:00:00+00:00'
+    - hour: '{today}T07:00:00+{tz_offset}:00'
       price: 1.243
-    - hour: '{today}T08:00:00+00:00'
+    - hour: '{today}T08:00:00+{tz_offset}:00'
       price: 1.243
-    - hour: '{today}T09:00:00+00:00'
+    - hour: '{today}T09:00:00+{tz_offset}:00'
       price: 1.243
-    - hour: '{today}T10:00:00+00:00'
+    - hour: '{today}T10:00:00+{tz_offset}:00'
       price: 1.244
-    - hour: '{today}T11:00:00+00:00'
+    - hour: '{today}T11:00:00+{tz_offset}:00'
       price: 1.245
-    - hour: '{today}T12:00:00+00:00'
+    - hour: '{today}T12:00:00+{tz_offset}:00'
       price: 1.246
-    - hour: '{today}T13:00:00+00:00'
+    - hour: '{today}T13:00:00+{tz_offset}:00'
       price: 1.246
-    - hour: '{today}T14:00:00+00:00'
+    - hour: '{today}T14:00:00+{tz_offset}:00'
       price: 1.261
-    - hour: '{today}T15:00:00+00:00'
+    - hour: '{today}T15:00:00+{tz_offset}:00'
       price: 1.271
-    - hour: '{today}T16:00:00+00:00'
+    - hour: '{today}T16:00:00+{tz_offset}:00'
       price: 1.286
-    - hour: '{today}T17:00:00+00:00'
+    - hour: '{today}T17:00:00+{tz_offset}:00'
       price: 1.295
-    - hour: '{today}T18:00:00+00:00'
+    - hour: '{today}T18:00:00+{tz_offset}:00'
       price: 1.295
-    - hour: '{today}T19:00:00+00:00'
+    - hour: '{today}T19:00:00+{tz_offset}:00'
       price: 1.288
-    - hour: '{today}T20:00:00+00:00'
+    - hour: '{today}T20:00:00+{tz_offset}:00'
       price: 1.296
-    - hour: '{today}T21:00:00+00:00'
+    - hour: '{today}T21:00:00+{tz_offset}:00'
       price: 1.284
-    - hour: '{today}T22:00:00+00:00'
+    - hour: '{today}T22:00:00+{tz_offset}:00'
       price: 1.273
-    - hour: '{today}T23:00:00+00:00'
+    - hour: '{today}T23:00:00+{tz_offset}:00'
       price: 1.289
 raw_tomorrow:
-    - hour: '{tomorrow}T00:00:00+00:00'
+    - hour: '{tomorrow}T00:00:00+{tz_offset}:00'
       price: 1.284
-    - hour: '{tomorrow}T01:00:00+00:00'
+    - hour: '{tomorrow}T01:00:00+{tz_offset}:00'
       price: 1.273
-    - hour: '{tomorrow}T02:00:00+00:00'
+    - hour: '{tomorrow}T02:00:00+{tz_offset}:00'
       price: 1.263
-    - hour: '{tomorrow}T03:00:00+00:00'
+    - hour: '{tomorrow}T03:00:00+{tz_offset}:00'
       price: 1.283
-    - hour: '{tomorrow}T04:00:00+00:00'
+    - hour: '{tomorrow}T04:00:00+{tz_offset}:00'
       price: 1.309
-    - hour: '{tomorrow}T05:00:00+00:00'
+    - hour: '{tomorrow}T05:00:00+{tz_offset}:00'
       price: 1.333
-    - hour: '{tomorrow}T06:00:00+00:00'
+    - hour: '{tomorrow}T06:00:00+{tz_offset}:00'
       price: 1.385
-    - hour: '{tomorrow}T07:00:00+00:00'
+    - hour: '{tomorrow}T07:00:00+{tz_offset}:00'
       price: 1.389
-    - hour: '{tomorrow}T08:00:00+00:00'
+    - hour: '{tomorrow}T08:00:00+{tz_offset}:00'
       price: 1.366
-    - hour: '{tomorrow}T09:00:00+00:00'
+    - hour: '{tomorrow}T09:00:00+{tz_offset}:00'
       price: 1.336
-    - hour: '{tomorrow}T10:00:00+00:00'
+    - hour: '{tomorrow}T10:00:00+{tz_offset}:00'
       price: 1.323
-    - hour: '{tomorrow}T11:00:00+00:00'
+    - hour: '{tomorrow}T11:00:00+{tz_offset}:00'
       price: 1.316
-    - hour: '{tomorrow}T12:00:00+00:00'
+    - hour: '{tomorrow}T12:00:00+{tz_offset}:00'
       price: 1.318
-    - hour: '{tomorrow}T13:00:00+00:00'
+    - hour: '{tomorrow}T13:00:00+{tz_offset}:00'
       price: 1.338
-    - hour: '{tomorrow}T14:00:00+00:00'
+    - hour: '{tomorrow}T14:00:00+{tz_offset}:00'
       price: 1.338
-    - hour: '{tomorrow}T15:00:00+00:00'
+    - hour: '{tomorrow}T15:00:00+{tz_offset}:00'
       price: 1.314
-    - hour: '{tomorrow}T16:00:00+00:00'
+    - hour: '{tomorrow}T16:00:00+{tz_offset}:00'
       price: 1.299
-    - hour: '{tomorrow}T17:00:00+00:00'
+    - hour: '{tomorrow}T17:00:00+{tz_offset}:00'
       price: 1.299
-    - hour: '{tomorrow}T18:00:00+00:00'
+    - hour: '{tomorrow}T18:00:00+{tz_offset}:00'
       price: 1.297
-    - hour: '{tomorrow}T19:00:00+00:00'
+    - hour: '{tomorrow}T19:00:00+{tz_offset}:00'
       price: 1.286
-    - hour: '{tomorrow}T20:00:00+00:00'
+    - hour: '{tomorrow}T20:00:00+{tz_offset}:00'
       price: 1.281
-    - hour: '{tomorrow}T21:00:00+00:00'
+    - hour: '{tomorrow}T21:00:00+{tz_offset}:00'
       price: 1.277
-    - hour: '{tomorrow}T22:00:00+00:00'
+    - hour: '{tomorrow}T22:00:00+{tz_offset}:00'
       price: 1.268
-    - hour: '{tomorrow}T23:00:00+00:00'
+    - hour: '{tomorrow}T23:00:00+{tz_offset}:00'
       price: 1.268
 today_min:
-    hour: '{today}T00:00:00+00:00'
+    hour: '{today}T00:00:00+{tz_offset}:00'
     price: 1.242
 today_max:
-    hour: '{today}T20:00:00+00:00'
+    hour: '{today}T20:00:00+{tz_offset}:00'
     price: 1.296
 today_mean: 1.26
 tomorrow_min:
-    hour: '{tomorrow}T02:00:00+00:00'
+    hour: '{tomorrow}T02:00:00+{tz_offset}:00'
     price: 1.263
 tomorrow_max:
-    hour: '{tomorrow}T07:00:00+00:00'
+    hour: '{tomorrow}T07:00:00+{tz_offset}:00'
     price: 1.389
 tomorrow_mean: 1.312
 use_cent: false
@@ -7339,6 +7344,8 @@ def test_alert_feed(my_predbat):
     today = datetime.now().strftime("%Y-%m-%d")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
 
     birmingham = [52.4823, -1.8900]
     bristol = [51.4545, -2.5879]
@@ -7366,10 +7373,10 @@ def test_alert_feed(my_predbat):
     <link href="https://meteoalarm.org?polygon=3ec5a08b-995f-45fc-88eb-d364b1613e41,0,0,0" hreflang="en" title="Central, Tayside &amp; Fife | Grampian | Highlands &amp; Eilean Siar | North East England | North West England | Northern Ireland | Orkney &amp; Shetland | Strathclyde | SW Scotland, Lothian Borders | Yorkshire &amp; Humber"/>
     <cap:areaDesc>Central, Tayside &amp; Fife | Grampian | Highlands &amp; Eilean Siar | North East England | North West England | Northern Ireland | Orkney &amp; Shetland | Strathclyde | SW Scotland, Lothian Borders | Yorkshire &amp; Humber</cap:areaDesc>
     <cap:event>Yellow wind warning</cap:event>
-    <cap:sent>2025-01-24T18:01:26+00:00</cap:sent>
-    <cap:expires>{today}T23:59:59+00:00</cap:expires>
-    <cap:effective>{yesterday}T10:40:36+00:00</cap:effective>
-    <cap:onset>{today}T00:00:00+00:00</cap:onset>
+    <cap:sent>2025-01-24T18:01:26+{tz_offset}:00</cap:sent>
+    <cap:expires>{today}T23:59:59+{tz_offset}:00</cap:expires>
+    <cap:effective>{yesterday}T10:40:36+{tz_offset}:00</cap:effective>
+    <cap:onset>{today}T00:00:00+{tz_offset}:00</cap:onset>
     <cap:certainty>Possible</cap:certainty>
     <cap:severity>Moderate</cap:severity>
     <cap:urgency>Immediate</cap:urgency>
@@ -7393,10 +7400,10 @@ def test_alert_feed(my_predbat):
     <link href="https://meteoalarm.org?polygon=05f2a1ec-58ec-4b6e-b05b-21ddac714680,0,0,0" hreflang="en" title="Central, Tayside &amp; Fife | Grampian | Highlands &amp; Eilean Siar | Orkney &amp; Shetland | Strathclyde"/>
     <cap:areaDesc>Central, Tayside &amp; Fife | Grampian | Highlands &amp; Eilean Siar | Orkney &amp; Shetland | Strathclyde</cap:areaDesc>
     <cap:event>Amber wind warning</cap:event>
-    <cap:sent>2025-01-23T10:42:05+00:00</cap:sent>
-    <cap:expires>{tomorrow}T06:00:00+00:00</cap:expires>
-    <cap:effective>{yesterday}T10:42:05+00:00</cap:effective>
-    <cap:onset>{today}T13:00:00+00:00</cap:onset>
+    <cap:sent>2025-01-23T10:42:05+{tz_offset}:00</cap:sent>
+    <cap:expires>{tomorrow}T06:00:00+{tz_offset}:00</cap:expires>
+    <cap:effective>{yesterday}T10:42:05+{tz_offset}:00</cap:effective>
+    <cap:onset>{today}T13:00:00+{tz_offset}:00</cap:onset>
     <cap:certainty>Likely</cap:certainty>
     <cap:severity>Severe</cap:severity>
     <cap:urgency>Future</cap:urgency>
@@ -7886,7 +7893,7 @@ def test_alert_feed(my_predbat):
         failed = 1
 
     alert_text = ha.get_state(my_predbat.prefix + ".alerts")
-    expect_text = "Yellow wind warning until " + today + " 23:59:59+00:00"
+    expect_text = "Yellow wind warning until " + today + " 23:59:59+{}:00".format(tz_offset)
     if alert_text != expect_text:
         print("ERROR: Expecting alert text to be '{}' got '{}'".format(expect_text, alert_text))
         failed = 1
@@ -7905,10 +7912,13 @@ def test_saving_session(my_predbat):
     date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     date_before_yesterday = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
     date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
     session_binary = f"""
+
 state: off
-current_joined_event_start: '{date_today}T16:30:00+00:00'
-current_joined_event_end: '{date_today}T17:30:00+00:00'
+current_joined_event_start: '{date_today}T16:30:00+{tz_offset}:00'
+current_joined_event_end: '{date_today}T17:30:00+{tz_offset}:00'
 current_joined_event_duration_in_minutes: 60
 next_joined_event_start: null
 next_joined_event_end: null
@@ -7916,50 +7926,50 @@ next_joined_event_duration_in_minutes: null
 icon: mdi:leaf
 friendly_name: Octoplus Saving Session (A-4DD6C5EE)
 """.format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday
+        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset
     )
 
     session_sensor = f"""
-state: '2025-01-23T12:10:11.108+00:00'
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
 event_types: octopus_energy_all_octoplus_saving_sessions
 event_type: octopus_energy_all_octoplus_saving_sessions
 account_id: A-4DD6C5EE
 available_events:
     - id: 1336
-      start: '{date_today}T18:30:00+00:00'
-      end: '{date_today}T19:30:00+00:00'
+      start: '{date_today}T18:30:00+{tz_offset}:00'
+      end: '{date_today}T19:30:00+{tz_offset}:00'
       duration_in_minutes: 60
       rewarded_octopoints: null
       octopoints_per_kwh: 500
       code: 987654
 joined_events:
     - id: 1327
-      start: '{date_last_year}T17:00:00+00:00'
-      end: '{date_last_year}T18:00:00+00:00'
+      start: '{date_last_year}T17:00:00+{tz_offset}:00'
+      end: '{date_last_year}T18:00:00+{tz_offset}:00'
       duration_in_minutes: 60
       rewarded_octopoints: 936
       octopoints_per_kwh: 576
     - id: 1334
-      start: '{date_yesterday}T17:30:00+00:00'
-      end: '{date_yesterday}T18:30:00+00:00'
+      start: '{date_yesterday}T17:30:00+{tz_offset}:00'
+      end: '{date_yesterday}T18:30:00+{tz_offset}:00'
       duration_in_minutes: 60
       rewarded_octopoints: null
       octopoints_per_kwh: 192
     - id: 1335
-      start: '{date_today}T16:30:00+00:00'
-      end: '{date_today}T17:30:00+00:00'
+      start: '{date_today}T16:30:00+{tz_offset}:00'
+      end: '{date_today}T17:30:00+{tz_offset}:00'
       duration_in_minutes: 60
       rewarded_octopoints: null
       octopoints_per_kwh: 448
     - id: 1336
-      start: '{date_before_yesterday}T23:30:00+00:00'
-      end: '{date_yesterday}T10:30:00+00:00'
+      start: '{date_before_yesterday}T23:30:00+{tz_offset}:00'
+      end: '{date_yesterday}T10:30:00+{tz_offset}:00'
       duration_in_minutes: 60
       rewarded_octopoints: null
       octopoints_per_kwh: 448
 friendly_name: Octoplus Saving Session Events (A-12345678)
 """.format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today
+        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, tz_offset=tz_offset
     )
     ha.dummy_items["binary_sensor.octopus_energy_a_12345678_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
     ha.dummy_items["event.octopus_energy_a_12345678_octoplus_saving_session_events"] = yaml.safe_load(session_sensor)
@@ -7976,9 +7986,9 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
     ha.service_store_enable = False
 
     expected_saving = [
-        {"start": "{}T17:30:00+00:00".format(date_yesterday), "end": "{}T18:30:00+00:00".format(date_yesterday), "rate": 19.2, "state": False},
-        {"start": "{}T16:30:00+00:00".format(date_today), "end": "{}T17:30:00+00:00".format(date_today), "rate": 44.8, "state": False},
-        {"start": "{}T23:30:00+00:00".format(date_before_yesterday), "end": "{}T10:30:00+00:00".format(date_yesterday), "rate": 44.8, "state": False},
+        {"start": "{}T17:30:00+{}:00".format(date_yesterday, tz_offset), "end": "{}T18:30:00+{}:00".format(date_yesterday, tz_offset), "rate": 19.2, "state": False},
+        {"start": "{}T16:30:00+{}:00".format(date_today, tz_offset), "end": "{}T17:30:00+{}:00".format(date_today, tz_offset), "rate": 44.8, "state": False},
+        {"start": "{}T23:30:00+{}:00".format(date_before_yesterday, tz_offset), "end": "{}T10:30:00+{}:00".format(date_yesterday, tz_offset), "rate": 44.8, "state": False},
     ]
 
     # Example format Sat 25/01
@@ -8051,6 +8061,125 @@ def run_test_octopus_api(my_predbat, octopus_api, octopus_account):
     return failed
 
 
+def run_test_manual_api(my_predbat):
+    failed = 0
+    print("Test manual API")
+
+    # Reset
+    my_predbat.api_select("manual_api", "")
+    original_limit = my_predbat.args["inverter_limit"]
+
+    my_predbat.args["inverter_limit"] = [3600, 3500]
+    limit = my_predbat.get_arg("inverter_limit", 0, index=0)
+    if limit != 3600:
+        print("ERROR: T1 Expecting inverter limit 0 to be 3600 got {}".format(limit))
+        failed = 1
+    limit = my_predbat.get_arg("inverter_limit", 0, index=1)
+    if limit != 3500:
+        print("ERROR: T2 Expecting inverter limit 0 to be 3500 got {}".format(limit))
+        failed = 1
+    limits = my_predbat.get_arg("inverter_limit", [])
+    expected = [3600, 3500]
+    if limits != expected:
+        print("ERROR: T3 Expecting inverter limit to be {} got {}".format(expected, limits))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "inverter_limit=1000")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+
+    limit = my_predbat.get_arg("inverter_limit", 0, index=0)
+    expected = 1000
+    if limit != expected:
+        print("ERROR: T4 Expecting inverter limit 0 to be {} got {}".format(expected, limit))
+        failed = 1
+
+    limit = my_predbat.get_arg("inverter_limit", 0, index=1)
+    expected = 1000
+    if limit != expected:
+        print("ERROR: T5 Expecting inverter limit 0 to be {} got {}".format(expected, limit))
+        failed = 1
+
+    limits = my_predbat.get_arg("inverter_limit", [])
+    expected = [1000, 3500]
+    if limits != expected:
+        print("ERROR: T6 Expecting inverter limit to be {} got {}".format(expected, limits))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "[inverter_limit=1000]")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    limits = my_predbat.get_arg("inverter_limit", [])
+    expected = [3600, 3500]
+    if limits != expected:
+        print("ERROR: T7 Expecting inverter limit to be {} got {}".format(expected, limits))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "inverter_limit(1)=1000")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    limits = my_predbat.get_arg("inverter_limit", [])
+    expected = [3600, 1000]
+    if limits != expected:
+        print("ERROR: T8 Expecting inverter limit to be {} got {}".format(expected, limits))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "inverter_limit(0)=900")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    limits = my_predbat.get_arg("inverter_limit", [])
+    expected = [900, 1000]
+    if limits != expected:
+        print("ERROR: T8 Expecting inverter limit to be {} got {}".format(expected, limits))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "inverter_limit(0)=800")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    limits = my_predbat.get_arg("inverter_limit", [])
+    expected = [800, 1000]
+    if limits != expected:
+        print("ERROR: T9 Expecting inverter limit to be {} got {}".format(expected, limits))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    limits = my_predbat.get_arg("inverter_limit", [])
+    expected = [3600, 3500]
+    if limits != expected:
+        print("ERROR: T3 Expecting inverter limit to be {} got {}".format(expected, limits))
+        failed = 1
+
+    my_predbat.args["inverter_limit"] = original_limit
+    my_predbat.args["rates_export_override"] = []
+
+    export_override = my_predbat.get_arg("rates_export_override", [])
+    if export_override != []:
+        print("ERROR: T10 Expecting rate export override to be {} got {}".format([], export_override))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "rates_export_override?start=17:00:00&end=19:00:00&rate=0")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    export_override = my_predbat.get_arg("rates_export_override", [])
+    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": "0"}]
+    if export_override != expected:
+        print("ERROR: T11 Expecting rate export override to be {} got {}".format(expected, export_override))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "rates_export_override(1)?start=12:00:00&end=13:00:00&rate=2")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    export_override = my_predbat.get_arg("rates_export_override", [])
+    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": "0"}, {"start": "12:00:00", "end": "13:00:00", "rate": "2"}]
+    if export_override != expected:
+        print("ERROR: T12 Expecting rate export override to be {} got {}".format(expected, export_override))
+        failed = 1
+
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    export_override = my_predbat.get_arg("rates_export_override", [])
+    expected = []
+    if export_override != expected:
+        print("ERROR: T13 Expecting rate export override to be {} got {}".format(expected, export_override))
+        failed = 1
+
+    return failed
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
@@ -8090,6 +8219,8 @@ def main():
         failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
 
+    if not failed:
+        failed |= run_test_manual_api(my_predbat)
     if not failed:
         failed |= run_test_web_if(my_predbat)
     if not failed:

@@ -540,6 +540,7 @@ class GECloudDirect:
         num_inverters = len(batteries)
 
         self.base.args["inverter_type"] = ["GEC" for _ in range(num_inverters)]
+        self.base.args["num_inverters"] = num_inverters
         self.base.args["load_today"] = ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in batteries]
         self.base.args["import_today"] = ["sensor.predbat_gecloud_" + device + "_grid_import_today" for device in batteries]
         self.base.args["export_today"] = ["sensor.predbat_gecloud_" + device + "_grid_export_today" for device in batteries]
@@ -564,7 +565,8 @@ class GECloudDirect:
         self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
         self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries]
         self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries]
-        self.base.args["givtcp_rest"] = {}
+        if "givtcp_rest" in self.base.args:
+            del self.base.args["givtcp_rest"]
         self.base.args["ge_cloud_serial"] = batteries[0]
 
         # reconfigure for EMS

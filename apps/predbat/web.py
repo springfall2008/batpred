@@ -19,6 +19,7 @@ import json
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
+from predbat import THIS_VERSION
 
 TIME_FORMAT_DAILY = "%Y-%m-%d"
 
@@ -190,7 +191,7 @@ class WebInterface:
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
-    def get_status_html(self, level, status, debug_enable, read_only, mode):
+    def get_status_html(self, level, status, debug_enable, read_only, mode, version):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -198,11 +199,20 @@ class WebInterface:
 
         text += "<h2>Status</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+        if status and (("Warn:" in status) or ("Error:" in status)):
+            text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
+        else:
+            text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+        text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
         text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
         text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
         text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
+        if self.base.arg_errors:
+            count_errors = len(self.base.arg_errors)
+            text += "<tr><td>Config</td><td bgcolor=#ff7777>apps.yaml has {} errors</td></tr>\n".format(count_errors)
+        else:
+            text += "<tr><td>Config</td><td>OK</td></tr>\n"
         text += "</table>\n"
         text += "<table>\n"
         text += "<h2>Debug</h2>\n"
@@ -646,30 +656,8 @@ var options = {
             elif pitem.startswith("input_number"):
                 new_value = float(new_value)
 
-            for item in self.base.CONFIG_ITEMS:
-                if item.get("entity") == pitem:
-                    old_value = item.get("value", "")
-                    step = item.get("step", 1)
-                    itemtype = item.get("type", "")
-                    if old_value is None:
-                        old_value = item.get("default", "")
-                    if itemtype == "input_number" and step == 1:
-                        old_value = int(old_value)
-                    if old_value != new_value:
-                        service_data = {}
-                        service_data["domain"] = itemtype
-                        if itemtype == "switch":
-                            service_data["service"] = "turn_on" if new_value else "turn_off"
-                            service_data["service_data"] = {"entity_id": pitem}
-                        elif itemtype == "input_number":
-                            service_data["service"] = "set_value"
-                            service_data["service_data"] = {"entity_id": pitem, "value": new_value}
-                        elif itemtype == "select":
-                            service_data["service"] = "select_option"
-                            service_data["service_data"] = {"entity_id": pitem, "option": new_value}
-                        else:
-                            continue
-                        await self.base.trigger_callback(service_data)
+            await self.base.ha_interface.set_state_external(pitem, new_value)
+
         raise web.HTTPFound("./config")
 
     def render_type(self, arg, value):
@@ -756,7 +744,7 @@ var options = {
         text = self.get_header("Predbat Dashboard", refresh=60)
         text += "<body>\n"
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-        text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode)
+        text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode, THIS_VERSION)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -934,7 +922,10 @@ var options = {
         self.default_page = "./apps"
         text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
         text += "<body>\n"
-        text += "<a href='./debug_apps'>apps.yaml</a><br>\n"
+        warning = ""
+        if self.base.arg_errors:
+            warning = "&#9888;"
+        text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><td>\n"
 
@@ -943,7 +934,11 @@ var options = {
             value = args[arg]
             if "api_key" in arg or "cloud_key" in arg:
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
-            text += "<tr><td>{}</td><td>{}</td></tr>\n".format(arg, self.render_type(arg, value))
+            arg_errors = self.base.arg_errors.get(arg, "")
+            if arg_errors:
+                text += '<tr><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td></tr>\n'.format(arg_errors, arg, self.render_type(arg, value))
+            else:
+                text += "<tr><td>{}</td><td>{}</td></tr>\n".format(arg, self.render_type(arg, value))
         args = self.base.unmatched_args
         for arg in args:
             value = args[arg]
@@ -1184,7 +1179,10 @@ var options = {
         text += '<td><a href="./plan" target="main_frame">Plan</a></td>\n'
         text += '<td><a href="./charts" target="main_frame">Charts</a></td>\n'
         text += '<td><a href="./config" target="main_frame">Config</a></td>\n'
-        text += '<td><a href="./apps" target="main_frame">apps.yaml</a></td>\n'
+        warning = ""
+        if self.base.arg_errors:
+            warning = "&#9888;&nbsp;"
+        text += '<td>{}<a href="./apps" target="main_frame">apps.yaml</a></td>\n'.format(warning)
         text += '<td><a href="./log?warnings" target="main_frame">Log</a></td>\n'
         text += '<td><a href="./compare" target="main_frame">Compare</a></td>\n'
         text += '<td><a href="https://springfall2008.github.io/batpred/" target="main_frame">Docs</a></td>\n'

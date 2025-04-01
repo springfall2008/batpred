@@ -24,15 +24,17 @@ Predbat now has some unit-level tests, to run them on your local machine:
 
 1. Create a test directory somewhere
 2. Copy `apps.yaml` to your test area
-3. Run `python3 /path/6adb4f0d_predbat/unit_test.py`
+3. Copy the files from github <https://github.com/springfall2008/batpred/tree/main/coverage> to this area
+4. Extract cases.tgz
+5. Have /Volumes/add_configs/6adb4f0d_predbat point to your Predbat add-on directory or edit run_all to change the path
+6. Run run_all
 
 If the tests fail then debug them.
 
 For coverage analysis installed the 'coverage' library with Python
 
-1. `python3 -m coverage run /path/6adb4f0d_predbat/unit_test.py`
-2. `python3 -m coverage html`
-3. Open `htmlcov/index.html` in your web browser
+1. run run_cov
+2. Open `htmlcov/index.html` in your web browser
 
 ## Editing the code
 
