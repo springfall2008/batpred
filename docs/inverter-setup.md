@@ -234,16 +234,16 @@ This is an experimental system, please discuss it on the ticket: <https://github
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
 - Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit
-    - Set geserial to your inverter serial
-- Make sure discharge down to registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled (if you have them)
+    - Set geserial to your inverter serial number
+- Make sure that the 'discharge down to' registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled in the portal (if you have them)
 
 ## GivEnergy with EMC
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
 - Now copy the template givenergy_emc.yaml from templates into your apps.yaml and edit
     - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
-    - Set geseriale to the EMS inverter serial number (look in HA for entity names)
-- Turn off slots 2, 3 and 4 for charge, export and discharge as Predbat will only use 1 slot (set the start and end times to 00:00)
+    - Set geseriale to the EMS inverter serial number (look in HA for the entity names)
+- Turn off charge, export and discharge slots 2, 3 and 4 as Predbat will only use slot 1 - set the start and end times for these to 00:00
 
 ## GivEnergy/Octopus Cloud Direct - No Home Assistant
 

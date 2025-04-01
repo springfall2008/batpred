@@ -274,7 +274,8 @@ If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-
 ### geserial
 
 Only for GE inverters, this is a helper regular expression to find your inverter serial number, if it doesn't work edit it manually or change individual entities to match.
-If you  have more than one inverter you will need one per inverter to be used in the later configuration lines
+
+If you  have more than one GivEnergy inverter you will need one per inverter to be used in the later configuration lines.  If you only have a single GivEnergy inverter then comment out all lines that refer to geserial2 in apps.yaml.
 
 ```yaml
 geserial: 're:sensor.givtcp_(.+)_soc_kwh'
