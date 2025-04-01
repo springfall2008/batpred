@@ -219,6 +219,15 @@ sensor:
     name: solar_panel_production_kwh
 ```
 
+If you have multiple batteries connected to your SolarEdge inverter and are using the SolarEdge Modbus Multi integration, this enumerates the multiple batteries as b1, b2, b3, etc with separate entities per battery.
+
+You will need to make a number of changes to apps.yaml:
+
+- set battery_rate_max to the maximum value of the SolarEdge battery, e.g. 5000
+- set charge_rate and discharge_rate to the SolarEdge battery values, e.g. 5000
+- set soc_max to the combined kWh maximum value of all the batteries
+- create a template sensor to calculate the average SoC of the batteries, and set soc_percent to point to that template sensor
+
 ## GivEnergy with ge_cloud
 
 This is an experimental system, please discuss it on the ticket: <https://github.com/springfall2008/batpred/issues/905>

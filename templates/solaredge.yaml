@@ -42,7 +42,10 @@ pred_bat:
   num_inverters: 1
   inverter_type: "SE"
 
-  # Can be enabled if you have a backup interface
+  # If you have a backup interface then the following lines can be enabled (uncommented out)
+  #
+  #reserve:
+  #  - number.solaredge_i1_backup_reserve
   #inverter:
   #  has_reserve_soc: True
 
@@ -62,24 +65,26 @@ pred_bat:
     - sensor.solaredge_b1_state_of_energy
   soc_max:
     - sensor.solaredge_b1_maximum_energy
-  # Can be enabled you have a backup interface
-  #reserve:
-  #  - number.solaredge_i1_backup_reserve
-  charge_start_time:
-    - "00:00:00"
-  charge_end_time:
-    - "00:01:00"
+  
+  #
+  # if your SolarEdge inverter integration supports start and end times for charging and discharging,
+  # then uncomment the following lines and specify the entity name. Otherwise leave commented out
+  #charge_start_time:
+  #  - sensor.solaredge_xxxx_charge_start_time
+  #charge_end_time:
+  #  - sensor.solaredge_xxxx_charge_end_time
+  #discharge_start_time:
+  #  - sensor.solaredge_xxxx_discharge_start_time
+  #discharge_end_time:
+  #  - sensor.solaredge_xxxx_discharge_end_time
+  
   charge_limit:
-    - number.solaredge_i1_ac_charge_limit
+    - sensor.solaredge_i1_ac_charge_limit
   scheduled_charge_enable:
     - off
   scheduled_discharge_enable:
     - off
-  discharge_start_time:
-    - "00:00:00"
-  discharge_end_time:
-    - "00:01:00"
-
+  
   # Services to control charging/discharging
   charge_start_service:
     service: select.select_option
