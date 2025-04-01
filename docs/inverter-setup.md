@@ -223,8 +223,8 @@ If you have multiple batteries connected to your SolarEdge inverter and are usin
 
 You will need to make a number of changes to apps.yaml:
 
-- set battery_rate_max to the maximum value of the SolarEdge battery, e.g. 5000
-- set charge_rate and discharge_rate to the SolarEdge battery values, e.g. 5000
+- set battery_rate_max to the maximum value of the SolarEdge inverter, e.g. 5000
+- set charge_rate and discharge_rate to the SolarEdge inverter values, e.g. 5000
 - set soc_max to the combined kWh maximum value of all the batteries
 - create a template sensor to calculate the average SoC of the batteries, and set soc_percent to point to that template sensor
 
