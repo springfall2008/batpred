@@ -616,8 +616,10 @@ They are unlikely to need changing although a few people have reported their ent
 
 - **pv_forecast_today** - Entity name for today's Solcast forecast
 - **pv_forecast_tomorrow** - Entity name for tomorrow's Solcast's forecast
-- **pv_forecast_d3** - Entity name for Solcast's forecast for day 3
-- **pv_forecast_d4** - Entity name for Solcast's forecast for day 4 (also d5, d6 & d7 are supported, but not that useful)
+- **pv_forecast_d3** - Entity name for Solcast's forecast for the day after tomorrow
+- **pv_forecast_d4** - Entity name for Solcast's forecast for two days after tomorrow
+
+Sensors for d5, d6 & d7 are supported, but not that useful so are not pre-defined in the template.
 
 If you do not have a PV array then comment out or delete these Solcast lines from `apps.yaml`.
 
