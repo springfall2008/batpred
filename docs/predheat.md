@@ -130,11 +130,12 @@ temperature difference your house can maintain without any heating and multiply 
 
 If your heat source makes use of weather compensation then add the following to the configuration to map out your heat curve. The example has a flow temp of 45C at -3C outside and 25C at 15C outside:
 
-```yaml   weather_compensation:
-      -20: 45.0
-      -3: 45.0
-      15: 25.0
-      20: 25.0
+```yaml
+  weather_compensation:
+    -20: 45.0
+    -3: 45.0
+    15: 25.0
+    20: 25.0
 ```
 
 Predheat will fill in the gaps between the points provided.

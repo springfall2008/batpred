@@ -109,9 +109,9 @@ car may charge at once (the first car reporting as plugged in will be considered
 can charge independently and hence two or more could charge at once
 
 ```yaml
-car_charging_exclusive:
-  - True
-  - True
+  car_charging_exclusive:
+    - True
+    - True
 ```
 
 See [Car charging filtering](apps-yaml.md#car-charging-filtering) and [Planned car charging](apps-yaml.md#planned-car-charging)

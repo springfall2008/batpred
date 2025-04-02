@@ -43,7 +43,7 @@ Predbat can scrape directly from the Octopus Web Site, this may
 have its own issues due to a change of format. If you enable this then sessions will be considered even if you forget to sign-up so be careful!
 
 ```yaml
-octopus_free_url: 'http://octopus.energy/free-electricity'
+  octopus_free_url: 'http://octopus.energy/free-electricity'
 ```
 
 ## Octopus Energy Home Assistant Integration
@@ -182,7 +182,7 @@ Note: If the above is not working due to a lack of data (via a 3rd party service
 have its own issues due to a change of format. If you enable this then sessions will be considered even if you forget to sign-up so be careful!
 
 ```yaml
-octopus_free_url: 'http://octopus.energy/free-electricity'
+  octopus_free_url: 'http://octopus.energy/free-electricity'
 ```
 
 ## Octopus Rates URL
@@ -235,18 +235,18 @@ If you are not an Octopus Energy customer, or you are but your energy rates repe
 Add the following entries to apps.yaml to define the pattern of rates over 24 hours:
 
 ```yaml
-rates_import:
-  - start: "HH:MM:SS"
-    end: "HH:MM:SS"
-    rate: pence
-rates_export:
-  - start: "HH:MM:SS"
-    end: "HH:MM:SS"
-    rate: pence
-rates_gas:
-  - start: "HH:MM:SS"
-    end: "HH:MM:SS"
-    rate: pence
+  rates_import:
+    - start: "HH:MM:SS"
+      end: "HH:MM:SS"
+      rate: pence
+  rates_export:
+    - start: "HH:MM:SS"
+      end: "HH:MM:SS"
+      rate: pence
+  rates_gas:
+    - start: "HH:MM:SS"
+      end: "HH:MM:SS"
+      rate: pence
 ```
 
 **start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally, i.e. end with ":30:00" or ":00:00".
@@ -258,11 +258,11 @@ Note: Day 1 = Monday, 2 = Tuesday .... 7 = Sunday
 e.g:
 
 ```yaml
-rates_import:
-  - rate: 15
-    day_of_week: "1,2,3,4,5"
-  - rate: 10
-    day_of_week: "6,7"
+  rates_import:
+    - rate: 15
+      day_of_week: "1,2,3,4,5"
+    - rate: 10
+      day_of_week: "6,7"
 ```
 
 start and end can be omitted and Predbat will assume that you are on a single flat-rate tariff.
@@ -282,27 +282,27 @@ Unfortunately, there aren't any API's available to feed this information automat
 or edit `apps.yaml` manually to set the appropriate rate over-ride dates and times:
 
 ```yaml
-rates_import_override:
-  - date: "YYYY-MM-DD"
-    start: "HH:MM:SS"
-    end: "HH:MM:SS"
-    rate: pence
-rates_export_override:
-  - date: "YYYY-MM-DD"
-    start: "HH:MM:SS"
-    end: "HH:MM:SS"
-    rate: pence
+  rates_import_override:
+    - date: "YYYY-MM-DD"
+      start: "HH:MM:SS"
+      end: "HH:MM:SS"
+      rate: pence
+  rates_export_override:
+    - date: "YYYY-MM-DD"
+      start: "HH:MM:SS"
+      end: "HH:MM:SS"
+      rate: pence
 ```
 
 Optionally you can add a predicted load scaling factor for these periods using **load_scaling**, for example:
 
 ```yaml
-rates_import_override:
-  - date: '2024-01-21'
-    start: '17:30:00'
-    end: '18:30:00'
-    rate: 150
-    load_scaling: 0.8
+  rates_import_override:
+    - date: '2024-01-21'
+      start: '17:30:00'
+      end: '18:30:00'
+      rate: 150
+      load_scaling: 0.8
 ```
 
 This instructs Predbat that during a 1-hour period at 5:30-6:30pm on 21st of Jan set the import rate to 150p and assume our load will be 80% of normal (20% lower).
@@ -315,10 +315,10 @@ In this example we subtract 10p from our export rate during the period that savi
 force exporting during that time. The saving session will still work correctly as a 10p adjustment on rates >100p will have little/no impact.
 
 ```yaml
-rates_export_override:
-  - start: '17:00:00'
-    end: '19:00:00'
-    rate_increment: -10
+  rates_export_override:
+    - start: '17:00:00'
+      end: '19:00:00'
+      rate_increment: -10
 ```
 
 You can also use a similar but opposite approach of setting a positive export rate_increment to encourage Predbat to discharge the battery at certain time periods.
@@ -328,10 +328,10 @@ but you don't want to risk the battery running out too early (and importing at a
 you can add a rate export override for the period you want to discharge just before the low rate period:
 
 ```yaml
-rates_export_override:
-  - start: '22:30:00'
-    end: '23:30:00'
-    rate_increment: 10
+  rates_export_override:
+    - start: '22:30:00'
+      end: '23:30:00'
+      rate_increment: 10
 ```
 
 You can also define an import_rate_override with start and end times and only load_scaling (without a rate_increment or rate), e.g. if you just want to apply load scaling to certain defined periods.
@@ -367,11 +367,11 @@ Predbat accepts no responsibility for any violations:
 <https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/>
 
 ```yaml
-futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
-futurerate_adjust_import: True
-futurerate_adjust_export: False
-futurerate_peak_start: "16:00:00"
-futurerate_peak_end: "19:00:00"
+  futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+  futurerate_adjust_import: True
+  futurerate_adjust_export: False
+  futurerate_peak_start: "16:00:00"
+  futurerate_peak_end: "19:00:00"
 ```
 
 ## Grid Carbon intensity
@@ -385,8 +385,8 @@ The National Grid provides this data, please install this integration: <https://
 Once it is active update apps.yaml to link Predbat to the Sensor (if it's not already in your template):
 
 ```yaml
-# Carbon Intensity data from National grid
-carbon_intensity: 're:(sensor.carbon_intensity_uk)'
+  # Carbon Intensity data from National grid
+  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 ```
 
 By enabling **switch.predbat_carbon_enable** you can view Carbon Intensity [in the predbat plan](predbat-plan-card.md).

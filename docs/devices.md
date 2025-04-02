@@ -172,8 +172,8 @@ Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged**
 Normally not recommended if you are on Intelligent GO, but can be useful for ad-hoc charging not planned via Predbat
 
 ```yaml
-car_charging_now:
-  - 'binary_sensor.ohme_car_charging'
+  car_charging_now:
+    - 'binary_sensor.ohme_car_charging'
 ```
 
 ## PodPoint

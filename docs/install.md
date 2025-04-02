@@ -232,9 +232,9 @@ First, get your API key from the Solcast website, then as described in the [Solc
 uncomment the Solcast cloud interface settings in `apps.yaml` and set the API key correctly:
 
 ```yaml
-solcast_host: 'https://api.solcast.com.au/'
-solcast_api_key: 'xxxx'
-solcast_poll_hours: 8
+  solcast_host: 'https://api.solcast.com.au/'
+  solcast_api_key: 'xxxx'
+  solcast_poll_hours: 8
 ```
 
 NB: If you use Predbat to obtain your Solcast solar forecast then you can't

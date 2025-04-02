@@ -443,13 +443,13 @@ template:
 - Create a GitHub ticket for support and add what you know to the ticket
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
 - You can create a new inverter type in apps.yaml and change the options as to which controls it has
-- Set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) to match the custom inverter definition
+- Set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) to match the custom inverter definition ('MINE' in the example below)
 - The easy way to integrate using Home Assistant services to start charges and discharges, edit the template below:
 
 ```yaml
- inverter_type: MINE
- inverter:
-    name : "My Shiny new Inverter"
+  inverter_type: MINE
+  inverter:
+    name: "My Shiny new Inverter"
     has_rest_api: False
     has_mqtt_api: False
     output_charge_control: "power"
@@ -523,7 +523,7 @@ For each service you wish to use it must be defined in apps.yaml.
 There are two ways to define a service, the basic mode:
 
 ```yaml
-charge_start_service: my_service_name_charge
+  charge_start_service: my_service_name_charge
 ```
 
 Will call my_service_name_charge for the charge start service.
@@ -531,11 +531,11 @@ Will call my_service_name_charge for the charge start service.
 Or the custom method:
 
 ```yaml
-charge_start_service:
-   - service: my_charge_start_service
-     device_id: {device_id}
-     power: {power}
-     soc: {target_soc}
+  charge_start_service:
+    - service: my_charge_start_service
+      device_id: {device_id}
+      power: {power}
+      soc: {target_soc}
 ```
 
 Here you can define all the values passed to the service and use the default values from the template or define your own.
@@ -543,25 +543,25 @@ Here you can define all the values passed to the service and use the default val
 You can also call more than one service e.g:
 
 ```yaml
-charge_start_service:
-   - service: my_charge_start_service
-     device_id: {device_id}
-     power: {power}
-     soc: {target_soc}
-   - service: switch.turn_off
-     entity_id: switch.tsunami_charger
+  charge_start_service:
+    - service: my_charge_start_service
+      device_id: {device_id}
+      power: {power}
+      soc: {target_soc}
+    - service: switch.turn_off
+      entity_id: switch.tsunami_charger
 ```
 
 Note: By default the service will only be called once until things change, e.g. **charge_start_service** will be called once and then won't be called again until **charge_stop_service** stops the charge.
 If however, you want the service to be called on each Predbat run then you should set **repeat** to True for the given service e.g:
 
 ```yaml
-charge_start_service:
-   - service: my_charge_start_service
-     device_id: {device_id}
-     power: {power}
-     soc: {target_soc}
-     repeat: True
+  charge_start_service:
+    - service: my_charge_start_service
+      device_id: {device_id}
+      power: {power}
+      soc: {target_soc}
+      repeat: True
 ```
 
 #### charge_start_service

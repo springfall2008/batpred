@@ -18,7 +18,7 @@ Also known by some as Batpred or Batman!
 ![icon](https://github.com/springfall2008/batpred/assets/48591903/7c207423-1423-4f88-beb2-d1da5cfbfeeb) ![image](https://github.com/springfall2008/batpred/assets/48591903/e98a0720-d2cf-4b71-94ab-97fe09b3cee1)
 
 ```text
-Copyright (c) Trefor Southwell April 2024 - All rights reserved
+Copyright (c) Trefor Southwell April 2025 - All rights reserved
 This software may be used at no cost for personal use only
 No warranty is given, either expressed or implied
 ```
