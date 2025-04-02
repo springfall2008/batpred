@@ -50,8 +50,11 @@ pred_bat:
   #inverter:
   #  has_reserve_soc: True
 
+  # maximum battery charge rate. If you have a single battery then can use the b1_max_charge_power sensor directly
   battery_rate_max:
     - sensor.solaredge_b1_max_charge_power
+  # For multiple SolarEdge batteries, use a custom template sensor (see SolarEdge section of inverter setup doc)
+  # - sensor.semodbus_power_batteries_max_charge_power
   charge_rate:
     - number.solaredge_i1_storage_charge_limit
   discharge_rate:

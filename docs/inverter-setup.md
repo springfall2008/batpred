@@ -211,6 +211,21 @@ template:
         availability: >
           {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
 
+      # Template sensor for Max Battery Charge rate
+      # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (8k) when charging from AC+Solar
+      # Always at least 5000W, the inverter limit
+      - name: "SEModbus Power - Batteries Max Charge Power"
+        unique_id: semodbus_power_batteries_max_charge_power
+        unit_of_measurement: "W"
+        device_class: "power"
+        state_class: "measurement"
+        state: >
+          {% set myB1 = float(states('sensor.solaredgemodbus_b1_max_charge_power'),0) %}
+          {% set myB2 = float(states('sensor.solaredgemodbus_b2_max_charge_power'),0) %}
+          {% set myB3 = float(states('sensor.solaredgemodbus_b3_max_charge_power'),0) %}
+          {% set myvalue = ((myB1 + myB2 + myB3)) | int %}
+          {{ (myvalue if (myvalue) > 5000 else 5000) }}
+
 sensor:
   - platform: integration
     source: sensor.solar_panel_production_w
@@ -223,7 +238,7 @@ If you have multiple batteries connected to your SolarEdge inverter and are usin
 
 You will need to make a number of changes to apps.yaml:
 
-- set battery_rate_max to the maximum value of the SolarEdge inverter, e.g. 5000
+- set battery_rate_max to sensor.semodbus_power_batteries_max_charge_power (template sensor above)
 - set charge_rate and discharge_rate to the SolarEdge inverter values, e.g. 5000
 - set soc_max to the combined kWh maximum value of all the batteries
 - create a template sensor to calculate the average SoC of the batteries, and set soc_percent to point to that template sensor
