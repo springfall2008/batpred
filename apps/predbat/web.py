@@ -82,7 +82,9 @@ class WebInterface:
             except (ValueError, TypeError):
                 continue
 
-            day_stamp = last_updated_stamp.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_stamp = last_updated_stamp.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+            if offset_days:
+                day_stamp += timedelta(days=offset_days)
 
             if first and daily and day_stamp == last_day_stamp:
                 continue
@@ -90,8 +92,7 @@ class WebInterface:
 
             # Add the state to the result
             if daily:
-                if offset_days:
-                    day_stamp += timedelta(days=offset_days)
+                # Convert day stamp from UTC into localtime
                 results[day_stamp.strftime(TIME_FORMAT_DAILY)] = state
             else:
                 results[last_updated_time] = state
