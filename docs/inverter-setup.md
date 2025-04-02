@@ -291,8 +291,8 @@ template:
   {{ (states("sensor.lux_battery_capacity_ah") |float) *
      (states("sensor.lux_battery_voltage_live") | float) / 1000}}
 unit of measurement: kWh
-device class: Power
-state class: Measurement
+device class: Energy
+state class: Total
 ```
 
 ```text
@@ -302,8 +302,8 @@ template:
      (states("sensor.lux_battery_voltage_live") | float) * 
      (states("sensor.lux_battery") | float) / 100000}}
 unit of measurement: kWh
-device class: Power
-state class: Measurement
+device class: Energy
+state class: Total
 ```
 
 ## Growatt with Solar Assistant
