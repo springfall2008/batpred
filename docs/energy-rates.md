@@ -250,6 +250,7 @@ Add the following entries to apps.yaml to define the pattern of rates over 24 ho
 ```
 
 **start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally, i.e. end with ":30:00" or ":00:00".
+Make sure the start and end times for the different rates cover the whole 24 hour period with no gaps!
 **rate** is in pence e.g. 4.2
 
 **day_of_week** Can also be used to control rates on specific days. You can specify one day or multiple days split by a comma.

@@ -489,7 +489,7 @@ which could cause additional imports due to passing clouds.
 
 These can be useful if you have the choice to heat your hot water by immersion heater or by gas boiler.
 
-Note: Gas rates have to be configured in `apps.yaml` using **metric_octopus_gas**.
+Note: Gas rates have to be configured in `apps.yaml` using **metric_octopus_gas** or **rates_gas** depending upon whether you are using the Octopus Integration or not.
 
 - **input_number.predbat_iboost_gas_scale** Sets the scaling of the gas rates (set in `apps.yaml`)used before comparing with electric rates, to account for gas boiler losses and efficiency.
 
