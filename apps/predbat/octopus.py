@@ -336,8 +336,8 @@ class OctopusAPI:
                 if first or (count_minutes % 30) == 0:
                     # 30-minute update for tariff
                     self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-                    self.account_data = await self.async_get_account(self.account_id)
-                    self.tariffs = await self.async_find_tariffs()
+                    await self.async_get_account(self.account_id)                    
+                    await self.async_find_tariffs()
 
                 if first or (count_minutes % 10) == 0:
                     # 10-minute update for intelligent device
@@ -411,8 +411,8 @@ class OctopusAPI:
         self.log("Find tariffs account data {}".format(self.account_data))
         if not self.account_data:
             return self.tariffs
+ 
         tariffs = {}
-
         gas = self.account_data.get("account", {}).get("gasAgreements", [])
         electric = self.account_data.get("account", {}).get("electricityAgreements", [])
         for agreement in electric + gas:
@@ -457,11 +457,18 @@ class OctopusAPI:
                 self.log("Octopus API: Found tariff code {} product {} device_id {}".format(tariffCode, productCode, deviceID_import))
                 if isImport:
                     tariffs["import"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_import}
+                    tariffs["import"]["data"] = self.tariffs.get("import", {}).get("data", None)
+                    tariffs["import"]["standing"] = self.tariffs.get("import", {}).get("standing", None)
                 if isExport:
                     tariffs["export"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_export}
+                    tariffs["export"]["data"] = self.tariffs.get("export", {}).get("data", None)
+                    tariffs["export"]["standing"] = self.tariffs.get("export", {}).get("standing", None)
                 if isGas:
                     tariffs["gas"] = {"tariffCode": tariffCode, "productCode": productCode, "deviceID": deviceID_gas}
-        return tariffs
+                    tariffs["gas"]["data"] = self.tariffs.get("gas", {}).get("data", None)
+                    tariffs["gas"]["standing"] = self.tariffs.get("gas", {}).get("standing", None)
+        self.tariffs = tariffs
+        return self.tariffs
 
     async def async_update_intelligent_device(self, account_id):
         """
@@ -471,7 +478,9 @@ class OctopusAPI:
         deviceID = import_tariff.get("deviceID", None)
         if deviceID:
             completed_dispatches = self.get_intelligent_completed_dispatches()
-            self.intelligent_device = await self.async_get_intelligent_device(account_id, deviceID, completed_dispatches)
+            intelligent_device = await self.async_get_intelligent_device(account_id, deviceID, completed_dispatches)
+            if intelligent_device is not None:
+                self.intelligent_device = intelligent_device
         return self.intelligent_device
 
     def join_saving_session_event(self, event_code):
@@ -826,7 +835,7 @@ class OctopusAPI:
         """
         Get the intelligent dispatches/device
         """
-        result = {}
+        result = None
         if device_id:
             self.log("Octopus API: Fetching intelligent dispatches for device {}".format(device_id))
             device_result = await self.async_graphql_query(intelligent_device_query.format(account_id=account_id), "get-intelligent-devices", ignore_errors=True)
@@ -834,6 +843,7 @@ class OctopusAPI:
 
             planned = []
             if device_result:
+                result = {}
                 dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=device_id), "get-intelligent-dispatches", ignore_errors=True)
                 chargePointVariants = device_result.get("chargePointVariants", [])
                 electricVehicles = device_result.get("electricVehicles", [])
@@ -956,16 +966,15 @@ class OctopusAPI:
         response_data = await self.async_graphql_query(account_query.format(account_id=account_id), "get-account")
         if response_data is None:
             self.log("Error: OctopusAPI: Failed to retrieve account")
-            return None
+            return self.account_data
 
         response_account = response_data.get("account", {})
-
         if response_account:
-            return response_data
+            self.account_data = response_data
         else:
             self.log("Error: OctopusAPI: Failed to retrieve account data for account {}".format(account_id))
 
-        return None
+        return self.account_data
 
 
 class Octopus:
