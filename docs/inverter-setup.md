@@ -268,6 +268,28 @@ The template is in the templates area, give it a try
 This requires the LuxPython component which integrates with your Lux Power inverter
 
 - Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required
+- LuxPower does not have any SoC max or state of charge entities in kWh or percentage that Predbat requires, so create the following template helper sensors:
+
+```text
+name: lux_soc_max_kwh
+template: 
+  {{ (states("sensor.lux_battery_capacity_ah") |float) *
+     (states("sensor.lux_battery_voltage_live") | float) / 1000}}
+unit of measurement: kWh
+device class: Power
+state class: Measurement
+```
+
+```text
+name: lux_soc_kwh
+template: 
+  {{ (states("sensor.lux_battery_capacity_ah") |float) *
+     (states("sensor.lux_battery_voltage_live") | float) * 
+     (states("sensor.lux_battery") | float) / 100000}}
+unit of measurement: kWh
+device class: Power
+state class: Measurement
+```
 
 ## Growatt with Solar Assistant
 

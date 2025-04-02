@@ -101,27 +101,14 @@ pred_bat:
   balance_inverters_seconds: 60
   #
 
-  # When enabled automatic restart will restart the add-on if communication fails
-  # Example below is auto-restart for GivTCP add-on itself
-  #auto_restart:
-  #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-  #  - service: hassio/addon_restart
-  #    addon: a6a2857d_givtcp
-
-  #  Example on how to restart the inverter via GivTCP
-  #  - service: switch.turn_on
-  #    entity_id: switch.givtcp_{geserial}_reboot_invertor
-
-  # If not using REST then instead set the Control here (one for each inverter)
-  # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
   timed_charge_current:
     - number.lux_charge_current_limit
   timed_discharge_current:
     - number.lux_discharge_current_limit
-  # charge_rate:
-  #   - input_number.lux_target_charge_current_w
-  # discharge_rate:
-  #   - input_number.lux_target_discharge_current_w
+  charge_rate:
+    - input_number.lux_target_charge_current_w
+  discharge_rate:
+    - input_number.lux_target_discharge_current_w
   battery_power:
     - sensor.lux_battery_discharge_live
   pv_power:
@@ -130,28 +117,16 @@ pred_bat:
     - sensor.lux_home_consumption_live
   soc_percent:
     - sensor.lux_battery
-  # soc_kw:
-  #   - sensor.givtcp_{geserial}_soc_kwh
-  #   - sensor.givtcp2_{geserial2}_soc_kwh
+  soc_kw:
+    - sensor.lux_soc_kwh  # This is a custom template sensor - see LuxPower section of 'Inverter Setup' documentation for how to create
   soc_max:
-    - 9.5
+    - sensor.lux_soc_max_kwh  # Custom template sensor - see LuxPower inverter setup for details
   battery_rate_max:
     - 5130
   battery_min_soc:
     - 5
   battery_voltage:
     - sensor.lux_battery_voltage_live
-  #   - sensor.givtcp_{geserial}_battery_capacity_kwh
-  #   - sensor.givtcp2_{geserial2}_battery_capacity_kwh
-  # reserve:
-  #   - number.givtcp_{geserial}_battery_power_reserve
-  #   - number.givtcp2_{geserial2}_battery_power_reserve
-  # inverter_mode:
-  #   - select.givtcp_{geserial}_mode
-  #   - select.givtcp2_{geserial2}_mode
-  # inverter_time:
-  #   - sensor.givtcp_{geserial}_invertor_time
-  #   - sensor.givtcp2_{geserial2}_invertor_time
   charge_start_time:
     - input_text.lux_batpred_charge_start
   charge_end_time:
@@ -166,20 +141,6 @@ pred_bat:
     - input_text.lux_batpred_discharge_start
   discharge_end_time:
     - input_text.lux_batpred_discharge_end
-
-  # Pause mode is not supported by all firmware's and will be ignored if not present
-  # pause_mode:
-  #  - select.givtcp_{geserial}_battery_pause_mode
-  #  - select.givtcp_{geserial2}_battery_pause_mode
-
-  # Not all firmwares support pause start/end time, delete these if not supported
-  # to avoid spurious writes/warnings
-  # pause_start_time:
-  #  - select.givtcp_{geserial}_battery_pause_start_time_slot
-  #  - select.givtcp2_{geserial2}_battery_pause_start_time_slot
-  # pause_end_time:
-  #  - select.givtcp_{geserial}_battery_pause_end_time_slot
-  #  - select.givtcp2_{geserial2}_battery_pause_end_time_slot
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
@@ -204,7 +165,6 @@ pred_bat:
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
   # the default is 1.0 (full power)
-  # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
   #
   # Predbat can compute this curve automatically if you have enough data, restart the add-on and look in the logfile for the data
   # once set here Predbat will no longer re-compute the curve.
@@ -224,10 +184,10 @@ pred_bat:
   inverter_clock_skew_discharge_start: 0
   inverter_clock_skew_discharge_end: 0
 
-  # Clock skew adjusts the Appdaemon time
+  # Clock skew adjusts the Predbat computer reported time
   # This is the time that Predbat takes actions like starting discharge/charging
   # Only use this for workarounds if your inverter time is correct but Predbat is somehow wrong (AppDaemon issue)
-  # 1 means add 1 minute to AppDaemon time, -1 takes it away
+  # 1 means add 1 minute to Predbat computer time, -1 takes it away
   clock_skew: 0
 
   # Solcast cloud interface, set this or the local interface below
@@ -426,13 +386,13 @@ pred_bat:
   # Multiple triggers can be set at once so in total you could use too much energy if all run
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger
-  export_triggers:
-     - name: 'large'
-       minutes: 60
-       energy: 1.0
-     - name: 'small'
-       minutes: 15
-       energy: 0.25
+  # export_triggers:
+  #    - name: 'large'
+  #      minutes: 60
+  #      energy: 1.0
+  #    - name: 'small'
+  #      minutes: 15
+  #      energy: 0.25
 
   # If you have a sensor that gives the energy consumed by your solar diverter then add it here
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not
