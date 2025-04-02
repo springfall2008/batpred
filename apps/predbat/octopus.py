@@ -336,7 +336,7 @@ class OctopusAPI:
                 if first or (count_minutes % 30) == 0:
                     # 30-minute update for tariff
                     self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-                    await self.async_get_account(self.account_id)                    
+                    await self.async_get_account(self.account_id)
                     await self.async_find_tariffs()
 
                 if first or (count_minutes % 10) == 0:
@@ -411,7 +411,7 @@ class OctopusAPI:
         self.log("Find tariffs account data {}".format(self.account_data))
         if not self.account_data:
             return self.tariffs
- 
+
         tariffs = {}
         gas = self.account_data.get("account", {}).get("gasAgreements", [])
         electric = self.account_data.get("account", {}).get("electricityAgreements", [])
