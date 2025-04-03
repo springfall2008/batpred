@@ -100,7 +100,7 @@ actions:
 mode: single
 ```
 
-NOTE: Multiple cars can be planned with Predbat.
+NOTE: [Multiple cars](apps-yaml.md#multiple-electric-cars) can be planned with Predbat.
 
 ## Additional Car charging configurations
 

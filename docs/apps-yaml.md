@@ -586,14 +586,14 @@ The **mqtt_topic** in apps.yaml set in the root of the MQTT topic (shown as **to
 
 #### Set reserve
 
-Called when the reserve is changed
+Called when the reserve (discharge-to %) is changed
 
 topic: **topic**/set/reserve
 payload: reserve
 
 #### Set target soc
 
-Called when the target (charge %) SOC is set.
+Called when the target (charge-to %) SoC is changed
 
 topic: **topic**/set/target_soc
 payload: soc
@@ -859,9 +859,17 @@ If you don't specify a sensor Predbat will default to 100% - i.e. fill the car t
 expressed as a percentage - it must NOT be set to a sensor that gives the car's current kWh value as this will cause Predbat to charge the car to an incorrect level.
 If you don't specify a sensor, Predbat will default to 0%.
 
+If you have [multiple electric cars](#multiple-electric-cars) then car_charging_soc should be set to a list of sensors, e.g.:
+
+```yaml
+  car_charging_soc:
+    - 'sensor.tsunami_battery'
+    - 'sensor.toyota_XXX_battery_level'
+```
+
 ### Multiple Electric Cars
 
-Multiple cars can be planned with Predbat, in which case you should set **num_cars** in `apps.yaml` to the number of cars you want to plan
+Multiple cars can be planned with Predbat, in which case you should set **num_cars** in `apps.yaml` to the number of cars you want to plan.
 
 - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
 
@@ -869,6 +877,32 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+
+## Watch List - automatically start Predbat execution
+
+By default Predbat will run automatically every 5 minute and to execute the plan, and re-evaluate the plan automatically every 10 minutes.
+
+You can manually force Predbat to start executing by turning **switch.predbat_active** on - see [Predbat's output data](output-data.md#basic-status).
+
+Additionally Predbat can 'watch' a number of Home Assistant entities and if one of those changes, Predbat will automatically start executing.
+
+This can be useful for EV owners such as to detect when you have plugged the EV in (for Predbat to stop the battery discharging), and with Intelligent Octopus Go if Octopus gives you additional charge slots.
+
+In `apps.yaml`, uncomment (or add) the following lines, customising to the list of configuration items you have setup in apps.yaml and want Predbat to watch for changes for:
+
+```yaml
+  watch_list:
+    - '{octopus_intelligent_slot}'
+    - '{octopus_ready_time}'
+    - '{octopus_charge_limit}'
+    - '{octopus_saving_session}'
+    - '+[car_charging_planned]'
+    - '+[car_charging_soc]'
+    - '{car_charging_now}'
+```
+
+Note the notation for watch_list, a single value apps.yaml configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
+but for apps.yaml configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
 
 ## Load Forecast
 
