@@ -306,6 +306,29 @@ device class: Energy
 state class: Total
 ```
 
+- Add the following automation to set the LuxPower discharge SoC when Predbat is exporting:
+
+```yaml
+alias: Lux Set Discharge Target SOC (predbat)
+description: ""
+triggers:
+  - entity_id:
+      - binary_sensor.predbat_exporting
+      - number.lux_ac_battery_charge_level
+    trigger: state
+conditions:
+  - condition: state
+    entity_id: binary_sensor.predbat_exporting
+    state: "on"
+actions:
+  - action: number.set_value
+    data:
+      value: "{{ states('number.lux_ac_battery_charge_level') }}"
+    target:
+      entity_id: number.lux_forced_discharge_battery_level
+mode: single
+```
+
 ## Growatt with Solar Assistant
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
@@ -315,20 +338,11 @@ Copy the template solar_assistant_growatt.yaml from templates into your apps.yam
 ## Sunsynk
 
 - Copy the Sunsynk apps.yaml template and edit for your system.
-- Create the automations below
-- Create the value templates below
-
-See: <https://github.com/springfall2008/batpred/issues/1331>
-
-### SunSynk automations
-
-Copy into your HA automations
-
-#### Predbat Charge/Discharge Control
+- Create the following Home Assistant automations:
 
 ```yaml
 alias: Predbat Charge / Discharge Control
-description: ""
+description: "Turn SunSynk charge/discharge on/off to mirror Predbat"
 trigger:
   - platform: state
     entity_id:
@@ -359,7 +373,6 @@ action:
               - predbat_charge_on
         sequence:
           - service: switch.turn_on
-            metadata: {}
             data: {}
             target:
               entity_id: switch.sunsynk_grid_charge_timezone1
@@ -379,7 +392,6 @@ action:
               - predbat_discharge_on
         sequence:
           - service: switch.turn_on
-            metadata: {}
             data: {}
             target:
               entity_id: switch.sunsynk_solar_sell
@@ -396,11 +408,9 @@ action:
 mode: single
 ```
 
-#### Update the charge limits across all timezone's
-
 ```yaml
 alias: PredBat - Copy Charge Limit
-description: Copy Battery SOC to all time slots
+description: Copy Battery SOC to all timezone (time) slots
 trigger:
   - platform: state
     entity_id:
@@ -420,57 +430,37 @@ action:
 mode: single
 ```
 
-### SunSynk Value templates
-
-Copy into your template/sensor area of configuration.yaml
+- Create the following templates sensors in your configuration.yaml:
 
 ```yaml
 template:
   sensor:
-    xxxxx
-```
-
-#### Sunsynk Battery Max Charge Rate
-
-```yaml
-- name: "sunsynk_max_battery_charge_rate"
-  unit_of_measurement: "w"
-  state_class: measurement
-  state: >
-    {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+    - name: "sunsynk_max_battery_charge_rate"
+      unit_of_measurement: "w"
+      state_class: measurement
+      state: >
+        {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
         * states('sensor.sunsynk_battery_voltage')|float]|min }}
-```
 
-#### Sunsynk Battery Max Discharge Rate
-
-```yaml
-- name: "sunsynk_max_battery_discharge_rate"
-  unit_of_measurement: "w"
-  state_class: measurement
-  state: >
-    {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+    - name: "sunsynk_max_battery_discharge_rate"
+      unit_of_measurement: "w"
+      state_class: measurement
+      state: >
+        {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
         * states('sensor.sunsynk_battery_voltage')|float]|min }}
-```
 
-#### Sunsynk Charge Rate Calc
+    - name: "sunsynk_charge_rate_calc"
+      unit_of_measurement: "w"
+      state_class: measurement
+      state: >
+        {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+        * states('sensor.sunsynk_battery_voltage')|float]|min }}
 
-```yaml
-- name: "sunsynk_charge_rate_calc"
-  unit_of_measurement: "w"
-  state_class: measurement
-  state: >
-     {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
-         * states('sensor.sunsynk_battery_voltage')|float]|min }}
-```
-
-#### Sunsynk Discharge Rate Calc
-
-```yaml
-- name: "sunsynk_discharge_rate_calc"
-  unit_of_measurement: "w"
-  state_class: measurement
-  state: >
-     {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+    - name: "sunsynk_discharge_rate_calc"
+      unit_of_measurement: "w"
+      state_class: measurement
+      state: >
+        {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
          * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 

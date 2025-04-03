@@ -66,8 +66,8 @@ pred_bat:
     has_service_api: True
     output_charge_control: "current"
     current_dp: 0
-    has_charge_enable_time: False
-    has_discharge_enable_time: False
+    has_charge_enable_time: True
+    has_discharge_enable_time: True
     has_target_soc: True
     has_reserve_soc: False
     has_timed_pause: False
@@ -96,10 +96,8 @@ pred_bat:
     service: switch.turn_off
     entity_id: "switch.lux_force_discharge_enable"
 
-  #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 60
-  #
+  # balance_inverters_seconds: 60
 
   timed_charge_current:
     - number.lux_charge_current_limit
@@ -127,21 +125,21 @@ pred_bat:
     - 5
   battery_voltage:
     - sensor.lux_battery_voltage_live
-  charge_start_time:
-    - input_text.lux_batpred_charge_start
-  charge_end_time:
-    - input_text.lux_batpred_charge_end
-  charge_limit:
-    - number.lux_ac_battery_charge_level
   scheduled_charge_enable:
     - switch.lux_ac_charge_enable
+  charge_start_time:
+    - time.lux_ac_charge_start1
+  charge_end_time:
+    - time.lux_ac_charge_end1
+  charge_limit:
+    - number.lux_ac_battery_charge_level
   scheduled_discharge_enable:
     - switch.lux_force_discharge_enable
   discharge_start_time:
-    - input_text.lux_batpred_discharge_start
+    - time.lux_force_discharge_start1
   discharge_end_time:
-    - input_text.lux_batpred_discharge_end
-
+    - time.lux_force_discharge_end1
+  
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
