@@ -662,12 +662,13 @@ When True the inverter has a setting defined in apps.yaml called **scheduled_dis
 
 ### has_target_soc
 
-When True the inverter has a target soc setting in apps.yaml called **charge_limit** when False charging must be turned on and off by Predbat rather
-than the inverter doing it based on the target %
+When True the inverter has a target charge SoC setting in apps.yaml called **charge_limit**.
+When False charging must be turned on and off by Predbat rather than the inverter doing it based on the target SoC %.
 
 ### has_reserve_soc
 
-When True the inverter has a reserve soc setting in apps.yaml called **reserve**
+When True the inverter has a discharge reserve SoC setting in apps.yaml called **reserve** which is the target % to discharge the battery down to.
+When False discharging must be turned on and off by Predbat rather than the inverter doing it based on discharge Soc %.
 
 ### has_timed_pause
 
