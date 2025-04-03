@@ -207,7 +207,6 @@ sofar
 SolarEdge
 solarman
 Solax
-solaredgemodbus
 solaxmodbus
 Solcast
 solisx

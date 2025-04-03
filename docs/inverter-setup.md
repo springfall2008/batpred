@@ -170,6 +170,7 @@ The discussion ticket is here: <https://github.com/springfall2008/batpred/issues
 The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181>
 
 - Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> and modify them for your system
+- The default entity name prefix for the integration is 'solaredge' but if you have changed this on installation then you will need to amend the apps.yaml template and the template sensors to match your new prefix
 - Ensure that **number.solaredge_i1_storage_command_timeout** is set to a reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled
 - Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
 and switch.solaredge_i1_advanced_power_control must be on.
@@ -214,15 +215,15 @@ template:
       # Template sensor for Max Battery Charge rate
       # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (8k) when charging from AC+Solar
       # Always at least 5000W, the inverter limit
-      - name: "SEModbus Power - Batteries Max Charge Power"
-        unique_id: semodbus_power_batteries_max_charge_power
+      - name: "SolarEdge Power - Batteries Max Charge Power"
+        unique_id: solaredge_power_batteries_max_charge_power
         unit_of_measurement: "W"
         device_class: "power"
         state_class: "measurement"
         state: >
-          {% set myB1 = float(states('sensor.solaredgemodbus_b1_max_charge_power'),0) %}
-          {% set myB2 = float(states('sensor.solaredgemodbus_b2_max_charge_power'),0) %}
-          {% set myB3 = float(states('sensor.solaredgemodbus_b3_max_charge_power'),0) %}
+          {% set myB1 = float(states('sensor.solaredge_b1_max_charge_power'),0) %}
+          {% set myB2 = float(states('sensor.solaredge_b2_max_charge_power'),0) %}
+          {% set myB3 = float(states('sensor.solaredge_b3_max_charge_power'),0) %}
           {% set x = ((myB1 + myB2 + myB3)) | int %}
           {{ (x if (x) > 5000 else 5000) }}
 
