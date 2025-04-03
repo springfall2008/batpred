@@ -223,8 +223,8 @@ template:
           {% set myB1 = float(states('sensor.solaredgemodbus_b1_max_charge_power'),0) %}
           {% set myB2 = float(states('sensor.solaredgemodbus_b2_max_charge_power'),0) %}
           {% set myB3 = float(states('sensor.solaredgemodbus_b3_max_charge_power'),0) %}
-          {% set myvalue = ((myB1 + myB2 + myB3)) | int %}
-          {{ (myvalue if (myvalue) > 5000 else 5000) }}
+          {% set x = ((myB1 + myB2 + myB3)) | int %}
+          {{ (x if (x) > 5000 else 5000) }}
 
 sensor:
   - platform: integration
@@ -283,11 +283,11 @@ The template is in the templates area, give it a try
 This requires the LuxPython component which integrates with your Lux Power inverter
 
 - Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required
-- LuxPower does not have any SoC max or state of charge entities in kWh or percentage that Predbat requires, so create the following template helper sensors:
+- LuxPower does not have a SoC max entity in kWh and the SoC percentage entity never reports the battery reaching 100%, so create the following template helper sensors:
 
 ```text
-name: lux_soc_max_kwh
-template: 
+name: Lux SoC Max kWh
+template:
   {{ (states("sensor.lux_battery_capacity_ah") |float) *
      (states("sensor.lux_battery_voltage_live") | float) / 1000}}
 unit of measurement: kWh
@@ -296,14 +296,18 @@ state class: Total
 ```
 
 ```text
-name: lux_soc_kwh
-template: 
-  {{ (states("sensor.lux_battery_capacity_ah") |float) *
-     (states("sensor.lux_battery_voltage_live") | float) * 
-     (states("sensor.lux_battery") | float) / 100000}}
-unit of measurement: kWh
-device class: Energy
-state class: Total
+name: Lux Battery SoC Corrected
+template:
+  {% set soc = states('sensor.lux_battery')|int %}
+  {% set charging_stopped = states('sensor.lux_bms_limit_charge_live')|float == 0 %}
+  {% if charging_stopped and soc > 97 %}
+    100
+  {% else %}
+    {{ soc }}
+  {% endif %}
+unit of measurement: %
+device class: Battery
+state class: Measurement
 ```
 
 - Add the following automation to set the LuxPower discharge SoC when Predbat is exporting:

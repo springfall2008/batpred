@@ -197,6 +197,7 @@ rstart
 rtype
 saverestore
 searr
+semodbus
 Selfrun
 Selfuse
 SFMB
@@ -206,6 +207,7 @@ sofar
 SolarEdge
 solarman
 Solax
+solaredgemodbus
 solaxmodbus
 Solcast
 solisx

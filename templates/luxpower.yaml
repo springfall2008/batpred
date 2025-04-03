@@ -114,9 +114,7 @@ pred_bat:
   load_power:
     - sensor.lux_home_consumption_live
   soc_percent:
-    - sensor.lux_battery
-  soc_kw:
-    - sensor.lux_soc_kwh  # This is a custom template sensor - see LuxPower section of 'Inverter Setup' documentation for how to create
+    - sensor.lux_battery_soc_corrected  # This is a custom template sensor - see LuxPower section of 'Inverter Setup' documentation for how to create
   soc_max:
     - sensor.lux_soc_max_kwh  # Custom template sensor - see LuxPower inverter setup for details
   battery_rate_max:
