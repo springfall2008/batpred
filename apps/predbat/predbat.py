@@ -879,13 +879,26 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         except (ValueError, TypeError):
             return False
         return True
-
+    
     def validate_is_float(self, value):
         """
         Validate that a value is a float
         """
         try:
             value = float(value)
+        except (ValueError, TypeError):
+            return False
+        return True
+
+    def validate_is_boolean(self, value):
+        """
+        Validate that a value is a boolean switch
+        """
+        if isinstance(value, str) and value.lower() in ["on", "off"]:
+            return True
+
+        try:
+            value = bool(value)
         except (ValueError, TypeError):
             return False
         return True
@@ -917,7 +930,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                     if isinstance(entries, str):
                         required_entries = self.get_arg(entries, 0, indirect=False)
                     else:
-                        required_entries = int(entries)
+                        required_entries = int(entries)    
 
                     if isinstance(value, list):
                         if len(value) < required_entries:
@@ -998,7 +1011,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     errors += 1
                                     break
                     elif expected_type == "boolean" or expected_type == "boolean_list":
-                        if expected_type == "boolean" and isinstance(value, bool):
+                        if expected_type == "boolean" and self.validate_is_boolean(value):
                             value = [value]
                         elif expected_type == "boolean_list":
                             value = self.get_arg(name, [], indirect=False)
@@ -1008,7 +1021,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                 value = value[:required_entries]
                             matches = True
                             for item in value:
-                                if not isinstance(item, bool):
+                                if not self.validate_is_boolean(item):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a boolean".format(name, item))
                                     self.arg_errors[name] = "Invalid type, expected boolean item {}".format(item)
                                     errors += 1
@@ -1081,13 +1094,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                             matches = True
                             for sensor in value:
                                 sensor_type = spec.get("sensor_type", None)
-                                if sensor_type in ["integer", "float"] and isinstance(sensor, int) and not spec.get("modify", False):
+                                sensor_types = []
+                                if sensor_type:
+                                    sensor_types = sensor_type.split("|")
+
+                                if ("integer" in sensor_types or "float" in sensor_types) and self.validate_is_int(sensor) and not spec.get("modify", False):
                                     # Allow fixed integer values
                                     continue
-                                if sensor_type == "float" and isinstance(sensor, float) and not spec.get("modify", False):
+                                if "float" in sensor_types and self.validate_is_float(sensor) and not spec.get("modify", False):
                                     # Allow fixed float values
                                     continue
-                                if sensor_type == "string" and isinstance(sensor, str) and not spec.get("modify", False) and not "." in sensor:
+                                if "string" in sensor_types and isinstance(sensor, str) and not spec.get("modify", False) and not "." in sensor:
                                     # Allow fixed string values
                                     continue
 
@@ -1101,6 +1118,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     self.arg_errors[name] = "Invalid entity_id in element {}".format(sensor)
                                     errors += 1
                                     break
+
                                 if spec.get("modify", False):
                                     prefix = sensor.split(".")[0]
                                     if prefix not in ["switch", "select", "input_number", "number"]:
@@ -1119,30 +1137,26 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     self.arg_errors[name] = "Invalid value None in element {}".format(sensor)
                                     errors += 1
                                     break
-                                if sensor_type and sensor_type == "float":
-                                    if not self.validate_is_float(state):
-                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a float got {}".format(name, sensor, state))
-                                        self.arg_errors[name] = "Invalid value in element {}, expected float".format(sensor)
-                                        errors += 1
-                                        break
-                                elif sensor_type and sensor_type == "integer":
-                                    if not self.validate_is_int(state):
-                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an integer got {}".format(name, sensor, state))
-                                        self.arg_errors[name] = "Invalid value in element {}, expected integer".format(sensor)
-                                        errors += 1
-                                        break
-                                elif sensor_type and sensor_type == "switch":
-                                    if state not in ["on", "off", True, False]:
-                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a switch got {}".format(name, sensor, state))
-                                        self.arg_errors[name] = "Invalid value in element {}, expected switch".format(sensor)
-                                        errors += 1
-                                        break
-                                elif sensor_type and sensor_type == "dict":
-                                    if not isinstance(state, dict):
-                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a dict got {}".format(name, sensor, state))
-                                        self.arg_errors[name] = "Invalid type in element {}, expected dict".format(sensor)
-                                        errors += 1
-                                        break
+
+                                validated = False
+                                if "float" in sensor_types and self.validate_is_float(state):
+                                    validated = True
+                                if "integer" in sensor_types and self.validate_is_int(state):
+                                    validated = True
+                                if "boolean" in sensor_types and self.validate_is_boolean(state):
+                                    validated = True
+                                if "dict" in sensor_types and isinstance(state, dict):
+                                    validated = True
+                                if "list" in sensor_types and isinstance(state, list):
+                                    validated = True
+                                if "string" in sensor_types and isinstance(state, str):
+                                    validated = True
+
+                                if not validated:
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid type {}".format(name, sensor, sensor_type))
+                                    self.arg_errors[name] = "Invalid type in element {}, expected {}".format(sensor, sensor_type)
+                                    errors += 1
+                                    break
 
                     if matches:
                         break
