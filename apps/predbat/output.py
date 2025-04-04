@@ -964,7 +964,7 @@ class Output:
                     carbon_str += " &rarr;"
                     carbon_color = "#FFFFFF"
 
-            # Work out cliped
+            # Work out clipped
             clipped_amount = self.predict_clipped_best.get(minute_relative_start, 0)
             clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
             clipped_change = clipped_amount_end - clipped_amount
