@@ -1308,8 +1308,6 @@ class Plan:
         else:
             loop_options = [100, 0]
 
-        self.log("Simulate export window {} start {} end {} size {} loop options {} all_n {}".format(window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), best_size, loop_options, all_n))
-
         # Collect all options
         results = []
         results10 = []
