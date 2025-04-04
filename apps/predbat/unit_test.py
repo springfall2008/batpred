@@ -8070,6 +8070,7 @@ def run_test_manual_api(my_predbat):
     original_limit = my_predbat.args["inverter_limit"]
 
     my_predbat.args["inverter_limit"] = [3600, 3500]
+    my_predbat.args["inverter_limit_charge"] = [3600, 3600]
     limit = my_predbat.get_arg("inverter_limit", 0, index=0)
     if limit != 3600:
         print("ERROR: T1 Expecting inverter limit 0 to be 3600 got {}".format(limit))
@@ -8094,7 +8095,7 @@ def run_test_manual_api(my_predbat):
         failed = 1
 
     limit = my_predbat.get_arg("inverter_limit", 0, index=1)
-    expected = 1000
+    expected = 3500
     if limit != expected:
         print("ERROR: T5 Expecting inverter limit 0 to be {} got {}".format(expected, limit))
         failed = 1
@@ -8176,6 +8177,25 @@ def run_test_manual_api(my_predbat):
     if export_override != expected:
         print("ERROR: T13 Expecting rate export override to be {} got {}".format(expected, export_override))
         failed = 1
+
+    my_predbat.api_select("manual_api", "inverter_limit_charge(0)=800")
+    my_predbat.api_select("manual_api", "inverter_limit_charge(1)=400")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+    limits = my_predbat.get_arg("inverter_limit_charge", [])
+    expected = [800, 400]
+    if limits != expected:
+        print("ERROR: T14 Expecting inverter limit to be {} got {}".format(expected, limits))
+        failed = 1
+    limit0 = my_predbat.get_arg("inverter_limit_charge", index=0, default=0)
+    if limit0 != 800:
+        print("ERROR: T15 Expecting inverter limit 0 to be {} got {}".format(800, limit0))
+        failed = 1
+    limit1 = my_predbat.get_arg("inverter_limit_charge", index=1, default=0)
+    if limit1 != 400:
+        print("ERROR: T16 Expecting inverter limit 1 to be {} got {}".format(400, limit1))
+        failed = 1
+
+    del my_predbat.args["inverter_limit_charge"]
 
     return failed
 
