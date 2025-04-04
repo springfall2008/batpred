@@ -2264,7 +2264,8 @@ class Plan:
 
                             average = self.export_window_best[window_n]["average"]
                             if price < lowest_price_charge:
-                                self.log("Skipping export optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, dp2(average)))
+                                if self.debug_enable:
+                                    self.log("Skipping export optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, dp2(average)))
                                 continue
 
                             if not printed_set:

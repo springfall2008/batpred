@@ -1131,8 +1131,8 @@ class Output:
         rate_min = self.rate_min_forward.get(self.minutes_now, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
         rate_forward = max(rate_min, 1.0, rate_export_min)
-        value_increase_hour = battery_change_hour * rate_forward
-        value_increase_day = battery_change_midnight * rate_forward
+        value_increase_hour = battery_change_hour * rate_forward * self.metric_battery_value_scaling
+        value_increase_day = battery_change_midnight * rate_forward * self.metric_battery_value_scaling
 
         self.log(
             "Battery level now {} -1hr {} midnight {} battery value change hour {} day {} rate_forward {}".format(
