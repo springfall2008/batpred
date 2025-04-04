@@ -613,7 +613,7 @@ class Plan:
                 self.charge_window_best = copy.deepcopy(self.charge_window)
 
             # Calculate best export windows
-            if self.high_export_rates and self.calculate_best_export and self.set_export_window:
+            if self.calculate_best_export and self.set_export_window:
                 self.export_window_best = copy.deepcopy(self.high_export_rates)
             else:
                 self.export_window_best = copy.deepcopy(self.export_window)
@@ -1307,6 +1307,8 @@ class Plan:
             loop_options = [100, 99, 0]
         else:
             loop_options = [100, 0]
+
+        self.log("Simulate export window {} start {} end {} size {} loop options {} all_n {}".format(window_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]), best_size, loop_options, all_n))
 
         # Collect all options
         results = []
@@ -2262,8 +2264,7 @@ class Plan:
 
                             average = self.export_window_best[window_n]["average"]
                             if price < lowest_price_charge:
-                                if self.debug_enable and 0:
-                                    self.log("Skipping export optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, dp2(average)))
+                                self.log("Skipping export optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, dp2(average)))
                                 continue
 
                             if not printed_set:
@@ -2532,6 +2533,7 @@ class Plan:
                 self.predict_iboost_best = pred.predict_iboost_best
                 self.predict_metric_best = pred.predict_metric_best
                 self.predict_carbon_best = pred.predict_carbon_best
+                self.predict_clipped_best = pred.predict_clipped_best
 
             if self.debug_enable or save:
                 self.log(

@@ -1643,10 +1643,6 @@ class Fetch:
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
 
-        # Rule out exports if the import rate is already higher unless it's a variable export tariff
-        if self.rate_export_max == self.rate_export_min:
-            self.rate_export_cost_threshold = max(self.rate_export_cost_threshold, dp2(self.rate_min))
-
         self.log("Rate thresholds (for charge/export) are import {}p ({}) export {}p ({})".format(self.rate_import_cost_threshold, self.rate_low_threshold, self.rate_export_cost_threshold, self.rate_high_threshold))
 
     def rate_scan(self, rates, print=True):

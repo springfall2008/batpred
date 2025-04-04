@@ -1206,13 +1206,13 @@ class UserInterface:
             if value == "off":
                 continue
             for prev in time_overrides[:]:
-                if "=" in prev:
+                if '=' in prev:
                     prev_no_eq = prev.split("=")[0]
-                elif "?" in prev:
+                elif '?' in prev:
                     prev_no_eq = prev.split("?")[0]
-                if "=" in value:
+                if '=' in value:
                     value_no_eq = value.split("=")[0]
-                elif "?" in value:
+                elif '?' in value:
                     value_no_eq = value.split("?")[0]
                 if prev_no_eq == value_no_eq:
                     time_overrides.remove(prev)
