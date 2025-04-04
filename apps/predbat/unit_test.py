@@ -2892,7 +2892,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
-        my_predbat.args["plan_debug"] = True
+        my_predbat.expose_config("plan_debug", True)
         # my_predbat.set_discharge_during_charge = True
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
@@ -2924,6 +2924,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # Find discharging windows
         if my_predbat.rate_export:
             my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True)
+            print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
+            print("Export windows {}".format(my_predbat.high_export_rates))
             # Update threshold automatically
             if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
                 my_predbat.rate_export_cost_threshold = export_lowest
@@ -2933,7 +2935,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             # Find charging window
             print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
             my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False)
-            print("Low Import rate found rates in range {} to {} based on threshold {}".format(lowest, highest, my_predbat.rate_import_cost_threshold))
             # Update threshold automatically
             if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
                 my_predbat.rate_import_cost_threshold = highest
@@ -3015,6 +3016,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     open(filename, "w").write(my_predbat.html_plan)
     print("Wrote plan to {}".format(filename))
 
+    print("Export windows {}".format(my_predbat.export_window_best))
     my_predbat.calculate_plan(recompute=True, debug_mode=True)
 
     # Predict

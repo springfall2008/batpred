@@ -326,6 +326,7 @@ class Prediction:
         self.predict_metric_best = {}
         self.predict_iboost_best = {}
         self.predict_carbon_best = {}
+        self.predict_clipped_best = {}
         self.iboost_running = False
         self.iboost_running_solar = False
         self.iboost_running_full = False
@@ -393,6 +394,7 @@ class Prediction:
         grid_state = "-"
         first_charge = end_record
         export_to_first_charge = 0
+        clipped_today = 0
 
         # Remove intersecting windows and optimise the data format of the charge/discharge window
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
@@ -488,6 +490,7 @@ class Prediction:
                 self.predict_metric_best[minute] = round(metric, 3)
                 self.predict_iboost_best[minute] = round(iboost_today_kwh, 2)
                 self.predict_carbon_best[minute] = round(carbon_g, 0)
+                self.predict_clipped_best[minute] = round(clipped_today, 2)
 
             # Add in standing charge, only for the final plan when we save the results
             if save and (save in ["best", "base", "base10", "best10", "test"]) and (minute_absolute % (24 * 60)) < step:
@@ -795,6 +798,7 @@ class Prediction:
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                 if total_inverted > inverter_limit:
                     over_limit = total_inverted - inverter_limit
+                    clipped_today += over_limit
                     pv_ac = max(pv_ac - over_limit * inverter_loss, 0)
             else:
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
@@ -809,6 +813,7 @@ class Prediction:
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
             if diff < 0 and abs(diff) > export_limit:
                 over_limit = abs(diff) - export_limit
+                clipped_today += over_limit
                 pv_ac = max(pv_ac - over_limit, 0)
 
             # Adjust battery soc
@@ -973,7 +978,6 @@ class Prediction:
         self.first_charge_soc = round(first_charge_soc, 4)
         self.predict_state = predict_state
         self.predict_battery_power = predict_battery_power
-        self.predict_battery_power = predict_battery_power
         self.predict_pv_power = predict_pv_power
         self.predict_grid_power = predict_grid_power
         self.predict_load_power = predict_load_power
@@ -983,7 +987,6 @@ class Prediction:
         self.metric_time = metric_time
         self.record_time = record_time
         self.predict_battery_cycle = predict_battery_cycle
-        self.predict_battery_power = predict_battery_power
         self.pv_kwh_h0 = round(pv_kwh_h0, 4)
         self.import_kwh_h0 = round(import_kwh_h0, 4)
         self.export_kwh_h0 = round(export_kwh_h0, 4)
