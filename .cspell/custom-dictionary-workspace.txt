@@ -179,6 +179,7 @@ ppkwh
 Pred
 Predai
 Predbat
+predbatt
 Predheat
 pvbat
 pwindow
