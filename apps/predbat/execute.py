@@ -299,10 +299,11 @@ class Execute:
                 # Turn minutes into time
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + export_adjust))  # Add in 1 minute margin to allow Predbat to restore demand mode
-                discharge_soc = max((self.export_limits_best[0] * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
+                discharge_soc = max((int(self.export_limits_best[0]) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.export_limits_best[0] < 100.0):
                     if not self.set_export_freeze_only and self.export_limits_best[0] < 99.0 and (self.soc_kw > discharge_soc):
+
                         if self.set_export_low_power:
                             export_rate_adjust = 1 - (self.export_limits_best[0] - int(self.export_limits_best[0]))
                         else:
@@ -317,10 +318,10 @@ class Execute:
                             inverter.adjust_charge_rate(0)
                             resetCharge = False
                         isExporting = True
-                        self.isExporting_Target = self.export_limits_best[0]
+                        self.isExporting_Target = int(self.export_limits_best[0])
 
                         status = "Exporting"
-                        status_extra = " target {}%-{}%".format(inverter.soc_percent, self.export_limits_best[0])
+                        status_extra = " target {}%-{}%".format(inverter.soc_percent, int(self.export_limits_best[0]))
                         # Immediate export mode
                     else:
                         inverter.adjust_force_export(False)
@@ -340,10 +341,10 @@ class Execute:
                             status = "Freeze exporting"
                             status_extra = " current SoC {}%".format(inverter.soc_percent)  # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
                             isExporting = True
-                            self.isExporting_Target = self.export_limits_best[0]
+                            self.isExporting_Target = int(self.export_limits_best[0])
                         else:
                             status = "Hold exporting"
-                            status_extra = " target {}%-{}%".format(inverter.soc_percent, self.export_limits_best[0])
+                            status_extra = " target {}%-{}%".format(inverter.soc_percent, int(self.export_limits_best[0]))
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {} and target {}".format(self.soc_kw, discharge_soc))
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 100):
@@ -419,7 +420,7 @@ class Execute:
                     if not disabled_export and not self.set_reserve_enable:
                         # If we are discharging and not setting reserve then we should reset the target SoC to the discharge target
                         # as some inverters can use this as a target for discharge
-                        self.adjust_battery_target_multi(inverter, self.export_limits_best[0], isCharging, isExporting)
+                        self.adjust_battery_target_multi(inverter, int(self.export_limits_best[0]), isCharging, isExporting)
                     elif not inverter.inv_has_discharge_enable_time:
                         self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
                     elif not self.inverter_hybrid and self.inverter_soc_reset and inverter.inv_has_target_soc:
