@@ -412,7 +412,7 @@ class Inverter:
         battery_min_soc = self.base.get_arg("battery_min_soc", default=max(self.reserve_min, 4), index=self.id)
 
         # Get current reserve value
-        if self.rest_data:
+        if self.rest_data and ("Control" in self.rest_data) and ("Battery_Power_Reserve" in self.rest_data["Control"]):
             self.reserve_percent_current = float(self.rest_data["Control"]["Battery_Power_Reserve"])
         else:
             self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id), battery_min_soc)
