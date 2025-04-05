@@ -1690,9 +1690,9 @@ class Plan:
                 and (start not in self.manual_all_times)
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
                 and new_window_best[-1]["average"] == window["average"]
-                and (new_window_best[-1]["target"] < new_limit_best[-1]) 
+                and (new_window_best[-1]["target"] < new_limit_best[-1])
             ):
-                # Combine two windows of the same price, provided the second charge limit is greater than the first 
+                # Combine two windows of the same price, provided the second charge limit is greater than the first
                 # and the old charge never reaches it defined limit
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
