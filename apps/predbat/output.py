@@ -837,10 +837,14 @@ class Output:
                         state += "HoldExp&searr;"
                     else:
                         state += "Exp&searr;"
-                    show_limit = str(int(target))
+                    show_limit = str(dp2(target))
+
+                    if limit > int(limit):
+                        # Snail symbol
+                        state += "&#x1F40C;"
 
                     if plan_debug:
-                        show_limit += " ({})".format(str(int(limit)))
+                        show_limit += " ({})".format(dp2(limit))
 
                 if self.export_window_best[export_window_n]["start"] in self.manual_export_times:
                     state += " &#8526;"

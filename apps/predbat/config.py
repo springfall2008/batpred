@@ -643,6 +643,13 @@ CONFIG_ITEMS = [
         "reset_inverter": True,
     },
     {
+        "name": "set_export_low_power",
+        "friendly_name": "Set Export Low Power Mode",
+        "type": "switch",
+        "default": False,
+        "reset_inverter": True,
+    },
+    {
         "name": "charge_low_power_margin",
         "friendly_name": "Low power mode margin",
         "type": "input_number",
