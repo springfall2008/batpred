@@ -32,7 +32,7 @@ This Agreement constitutes the entire agreement between the parties relating to 
 Any contributions made to the software via Github shall be deemed to be your own work and by contributing you agree that you are no longer the Copyright holder of this contribution and instead it will fall solely within the ownership of this project.
 
 9. Uses that fall outside this agreement
-If you wish to use this project for any purpose that falls outside this agreement then you must request a seperate Software License agreement from the Copyright Holder.
+If you wish to use this project for any purpose that falls outside this agreement then you must request a separate Software License agreement from the Copyright Holder.
 
 10. Contact:
 For any questions or concerns, please contact Trefor Southwell (<tdlj@tdlj.net>)
