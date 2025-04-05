@@ -115,6 +115,9 @@ otherwise, it will be Silver-Grey.
 If the load forecast is 0.5kWh or above for the slot it will be coloured Orangey-Red, from 0.25kWh to 0.5 it will be coloured Yellow,
 above 0 to 0.25, it will be Light Green, and if zero, it will be coloured White.
 
+- **Clip kWh** - The total predicted solar clipping for the half-hour slot. This column will only be shown if **switch.predbat_plan_debug**  is turned on.<BR>
+If the amount of solar clipping predicted to occur in that slot is more than 0.1kWh then the kWh will be coloured Orange, if its more than 0.01kWh it will be coloured Yellow, otherwise, it will be White.
+
 - **Car kWh** - The total predicted car charging for the half-hour slot. This column will only be shown if *num_cars* in `apps.yaml` is 1 or more.<BR>
 If the car is planned to be charged in that slot then the kWh will be coloured Yellow, otherwise, it will be White.
 
@@ -157,7 +160,7 @@ if falling by 10kg or more it will be green with a downwards arrow, and in the m
 
 If [Predbat expert mode](customisation.md#expert-mode) is turned on then a number of additional controls and switches are made available in Home Assistant.
 
-If **switch.predbat_plan_debug** is then turned on then the Predbat plan shows additional 'debugging' information for the import rate, export rate, load and PV columns.
+If **switch.predbat_plan_debug** is then turned on then the Predbat plan shows additional 'debugging' information for the import rate, export rate, load and PV columns, and the clip kWh column described above.
 
 The Predbat plan will now look like this with plan_debug turned on:
 
