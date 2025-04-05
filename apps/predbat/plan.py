@@ -1336,6 +1336,10 @@ class Plan:
                 if all_n and (start != window["start"]):
                     continue
 
+                # Don't allow slow export for small windows
+                if this_export_limit > int(this_export_limit) and (try_export_window[window_n]["end"] - start) < 15:
+                    continue
+
                 # Don't optimise start of disabled windows or freeze only windows, just for export ones
                 if (this_export_limit in [100.0, 99.0]) and (start != window["start"]):
                     continue
