@@ -899,7 +899,6 @@ class Plan:
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
 
                 # HTML data
-                print("Limits now charge {} export {}".format(self.charge_limit_best, self.export_limits_best))
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
                 # Web history
@@ -1435,7 +1434,7 @@ class Plan:
             if this_export_limit == 99:
                 min_improvement_scaled = 0.1
             elif all_n:
-                min_improvement_scaled = 0.1  # self.metric_min_improvement_export * rate_scale
+                min_improvement_scaled = self.metric_min_improvement_export * rate_scale
             else:
                 min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / 30.0
 
