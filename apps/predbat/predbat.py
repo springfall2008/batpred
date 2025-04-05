@@ -293,6 +293,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Init stub
         """
         reset_prediction_globals()
+        self.plan_debug = False
         self.arg_errors = {}
         self.ha_interface = None
         self.fatal_error = False
@@ -356,7 +357,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.predict_iboost_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
-        self.metric_min_improvement_export = 0.0
+        self.metric_min_improvement_export = 0.1
+        self.metric_min_improvement_export_freeze = 0.1
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
         self.metric_future_rate_offset_import = 0.0
@@ -882,7 +884,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         except (ValueError, TypeError):
             return False
         return True
-
+    
     def validate_is_float(self, value):
         """
         Validate that a value is a float
@@ -933,7 +935,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                     if isinstance(entries, str):
                         required_entries = self.get_arg(entries, 0, indirect=False)
                     else:
-                        required_entries = int(entries)
+                        required_entries = int(entries)    
 
                     if isinstance(value, list):
                         if len(value) < required_entries:
