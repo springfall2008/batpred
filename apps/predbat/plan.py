@@ -1656,6 +1656,18 @@ class Plan:
             end = window["end"]
             limit = charge_limit_best[window_n]
 
+            predict_minute_start = max(int((start - self.minutes_now) / 5) * 5, 0)
+            predict_minute_end = int((end - self.minutes_now) / 5) * 5
+
+            soc_max = limit
+            if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
+                # Work out min/max soc
+                soc_max = 0
+                for minute in range(predict_minute_start, predict_minute_end + 5, 5):
+                    if minute in self.predict_soc:
+                        soc_max = max(soc_max, self.predict_soc[minute])
+                window["target"] = soc_max
+
             if (
                 new_window_best
                 and (start == new_window_best[-1]["end"])
@@ -1678,8 +1690,10 @@ class Plan:
                 and (start not in self.manual_all_times)
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
                 and new_window_best[-1]["average"] == window["average"]
+                and (new_window_best[-1]["target"] < new_limit_best[-1]) 
             ):
-                # Combine two windows of the same price, provided the second charge limit is greater than the first
+                # Combine two windows of the same price, provided the second charge limit is greater than the first 
+                # and the old charge never reaches it defined limit
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
                 new_limit_best[-1] = limit
