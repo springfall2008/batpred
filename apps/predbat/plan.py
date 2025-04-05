@@ -1435,7 +1435,7 @@ class Plan:
             if this_export_limit == 99:
                 min_improvement_scaled = 0.1
             elif all_n:
-                min_improvement_scaled = 0.1 #self.metric_min_improvement_export * rate_scale
+                min_improvement_scaled = 0.1  # self.metric_min_improvement_export * rate_scale
             else:
                 min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / 30.0
 
