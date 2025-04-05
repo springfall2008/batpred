@@ -213,8 +213,8 @@ template:
           {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
 
       # Template sensor for Max Battery Charge rate
-      # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (8k) when charging from AC+Solar
-      # Always at least 5000W, the inverter limit
+      # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
+      # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
       - name: "SolarEdge Power - Batteries Max Charge Power"
         unique_id: solaredge_power_batteries_max_charge_power
         unit_of_measurement: "W"
