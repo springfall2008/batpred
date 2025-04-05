@@ -116,6 +116,7 @@ class Prediction:
             self.set_discharge_during_charge = base.set_discharge_during_charge
             self.set_read_only = base.set_read_only
             self.set_charge_low_power = base.set_charge_low_power
+            self.set_export_low_power = base.set_export_low_power
             self.set_charge_window = base.set_charge_window
             self.set_export_window = base.set_export_window
             self.charge_low_power_margin = base.charge_low_power_margin
@@ -621,6 +622,11 @@ class Prediction:
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc > discharge_min):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
+                if self.set_export_low_power:
+                    export_rate_adjust = 1 - (export_limits[export_window_n] - int(export_limits[export_window_n]))
+                else:
+                    export_rate_adjust = 1.0
+                discharge_rate_now = self.battery_rate_max_discharge * export_rate_adjust
                 discharge_rate_now_curve = (
                     get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
                     * self.battery_rate_max_scaling_discharge
