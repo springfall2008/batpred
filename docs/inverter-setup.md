@@ -566,7 +566,7 @@ The default options passed in are:
 - device_id - as defined in apps.yaml by **device_id**
 - target_soc - The SOC to charge to
 - power - The charge power to use
-- charge_start_time - Start time for the cahrge
+- charge_start_time - Start time for the charge
 - charge_end_time - End time for the charge
 
 #### charge_freeze_service
