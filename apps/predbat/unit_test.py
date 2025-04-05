@@ -2678,6 +2678,7 @@ def run_execute_test(
     set_charge_window=False,
     set_export_window=False,
     set_charge_low_power=False,
+    set_export_low_power=False,
     charge_low_power_margin=10,
     assert_charge_time_enable=False,
     assert_force_export=False,
@@ -2719,6 +2720,7 @@ def run_execute_test(
     my_predbat.num_cars = 1
     my_predbat.inverter_hybrid = inverter_hybrid
     my_predbat.set_charge_low_power = set_charge_low_power
+    my_predbat.set_export_low_power = set_export_low_power
     my_predbat.charge_low_power_margin = charge_low_power_margin
     my_predbat.minutes_now = minutes_now
     my_predbat.battery_temperature_charge_curve = {20: 1.0, 10: 0.5, 9: 0.5, 8: 0.5, 7: 0.5, 6: 0.3, 5: 0.3, 4: 0.3, 3: 0.262, 2: 0.1, 1: 0.1, 0: 0}
@@ -2892,16 +2894,16 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
-        my_predbat.expose_config("plan_debug", True)
+        my_predbat.plan_debug = True
         # my_predbat.set_discharge_during_charge = True
-        # my_predbat.calculate_export_oncharge = True
+        #my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
-        my_predbat.metric_min_improvement_export = 3
-        # my_predbat.set_reserve_min = 0
+        my_predbat.metric_min_improvement_export = 0.1
+        #my_predbat.set_reserve_min = 0
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        my_predbat.best_soc_keep = 0
+        #my_predbat.best_soc_keep = 0
         # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
         # my_predbat.inverter_loss = 0.97
@@ -2909,9 +2911,13 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_second_pass = False
-        my_predbat.metric_battery_cycle = 0
-        # my_predbat.carbon_enable = False
-        # my_predbat.metric_battery_value_scaling = 0.90
+        #my_predbat.metric_battery_cycle = 0
+        #my_predbat.carbon_enable = False
+        #my_predbat.metric_battery_value_scaling = 0.90
+        my_predbat.manual_export_times = []
+        my_predbat.manual_all_times = []
+        my_predbat.manual_charge_times = []
+        #my_predbat.set_export_low_power = True
         pass
 
     if re_do_rates:
@@ -3154,6 +3160,7 @@ def run_execute_tests(my_predbat):
     export_window_best7 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
     export_limits_best = [0]
     export_limits_best2 = [50]
+    export_limits_best3 = [50.5]
     export_limits_best_frz = [99]
 
     inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc), ActiveTestInverter(1, 0, 10.0, my_predbat.now_utc)]
@@ -4689,6 +4696,44 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
+        assert_discharge_rate=1000,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge4",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best3,
+        assert_force_export=True,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        assert_status="Exporting",
+        assert_immediate_soc_target=50,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_discharge_rate=1000,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge5",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best3,
+        assert_force_export=True,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        assert_status="Exporting",
+        assert_immediate_soc_target=50,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_discharge_rate=500,
+        set_export_low_power=True,
     )
     if failed:
         return failed
@@ -7928,7 +7973,7 @@ next_joined_event_duration_in_minutes: null
 icon: mdi:leaf
 friendly_name: Octoplus Saving Session (A-4DD6C5EE)
 """.format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset
+        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday,tz_offset=tz_offset
     )
 
     session_sensor = f"""
@@ -8062,7 +8107,6 @@ def run_test_octopus_api(my_predbat, octopus_api, octopus_account):
     failed = 1
     return failed
 
-
 def run_test_manual_api(my_predbat):
     failed = 0
     print("Test manual API")
@@ -8116,6 +8160,7 @@ def run_test_manual_api(my_predbat):
         print("ERROR: T7 Expecting inverter limit to be {} got {}".format(expected, limits))
         failed = 1
 
+
     my_predbat.api_select("manual_api", "inverter_limit(1)=1000")
     my_predbat.manual_api = my_predbat.api_select_update("manual_api")
     limits = my_predbat.get_arg("inverter_limit", [])
@@ -8149,7 +8194,7 @@ def run_test_manual_api(my_predbat):
         failed = 1
 
     my_predbat.args["inverter_limit"] = original_limit
-    my_predbat.args["rates_export_override"] = []
+    my_predbat.args['rates_export_override'] = []
 
     export_override = my_predbat.get_arg("rates_export_override", [])
     if export_override != []:
@@ -8159,7 +8204,7 @@ def run_test_manual_api(my_predbat):
     my_predbat.api_select("manual_api", "rates_export_override?start=17:00:00&end=19:00:00&rate=0")
     my_predbat.manual_api = my_predbat.api_select_update("manual_api")
     export_override = my_predbat.get_arg("rates_export_override", [])
-    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": "0"}]
+    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": '0'}]
     if export_override != expected:
         print("ERROR: T11 Expecting rate export override to be {} got {}".format(expected, export_override))
         failed = 1
@@ -8167,7 +8212,7 @@ def run_test_manual_api(my_predbat):
     my_predbat.api_select("manual_api", "rates_export_override(1)?start=12:00:00&end=13:00:00&rate=2")
     my_predbat.manual_api = my_predbat.api_select_update("manual_api")
     export_override = my_predbat.get_arg("rates_export_override", [])
-    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": "0"}, {"start": "12:00:00", "end": "13:00:00", "rate": "2"}]
+    expected = [{"start": "17:00:00", "end": "19:00:00", "rate": '0'}, {"start": "12:00:00", "end": "13:00:00", "rate": '2'}]
     if export_override != expected:
         print("ERROR: T12 Expecting rate export override to be {} got {}".format(expected, export_override))
         failed = 1
@@ -8179,6 +8224,7 @@ def run_test_manual_api(my_predbat):
     if export_override != expected:
         print("ERROR: T13 Expecting rate export override to be {} got {}".format(expected, export_override))
         failed = 1
+
 
     my_predbat.api_select("manual_api", "inverter_limit_charge(0)=800")
     my_predbat.api_select("manual_api", "inverter_limit_charge(1)=400")
@@ -8200,7 +8246,6 @@ def run_test_manual_api(my_predbat):
     del my_predbat.args["inverter_limit_charge"]
 
     return failed
-
 
 def main():
     # Parse command line arguments
