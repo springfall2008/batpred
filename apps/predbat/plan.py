@@ -1312,11 +1312,11 @@ class Plan:
             # If we support freeze, try a 99% option which will freeze at any SoC level below this
             loop_options = [100, 99, 0]
             if self.set_export_low_power:
-                loop_options.extend([0.5, 0.7])
+                loop_options.extend([0.3, 0.5, 0.7])
         else:
             loop_options = [100, 0]
             if self.set_export_low_power:
-                loop_options.extend([0.5, 0.7])
+                loop_options.extend([0.3, 0.5, 0.7])
 
         # Collect all options
         results = []
