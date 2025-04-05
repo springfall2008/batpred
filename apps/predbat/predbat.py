@@ -293,6 +293,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Init stub
         """
         reset_prediction_globals()
+        self.plan_debug = False
         self.arg_errors = {}
         self.ha_interface = None
         self.fatal_error = False
@@ -356,7 +357,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.predict_iboost_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
-        self.metric_min_improvement_export = 0.0
+        self.metric_min_improvement_export = 0.1
+        self.metric_min_improvement_export_freeze = 0.1
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
         self.metric_future_rate_offset_import = 0.0

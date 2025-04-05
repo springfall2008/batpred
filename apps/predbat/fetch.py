@@ -1835,6 +1835,7 @@ class Fetch:
         """
 
         self.debug_enable = self.get_arg("debug_enable")
+        self.plan_debug = self.get_arg("plan_debug")
         self.previous_status = self.get_state_wrapper(self.prefix + ".status")
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
@@ -1874,6 +1875,7 @@ class Fetch:
         # Metric config
         self.metric_min_improvement = self.get_arg("metric_min_improvement")
         self.metric_min_improvement_export = self.get_arg("metric_min_improvement_export")
+        self.metric_min_improvement_export_freeze = self.get_arg("metric_min_improvement_export_freeze")
         self.metric_battery_cycle = self.get_arg("metric_battery_cycle")
         self.metric_self_sufficiency = self.get_arg("metric_self_sufficiency")
         self.metric_future_rate_offset_import = self.get_arg("metric_future_rate_offset_import")
