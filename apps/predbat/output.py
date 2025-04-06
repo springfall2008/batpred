@@ -973,7 +973,10 @@ class Output:
             clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
             clipped_change = clipped_amount_end - clipped_amount
             clipped_change = dp2(clipped_change)
-            clipped_str = str(clipped_change)
+            if clipped_change == 0.0:
+                clipped_str = ""
+            else:
+                clipped_str = str(clipped_change)
             clipped_color = "#FFFFFF"
             if clipped_change >= 0.1:
                 clipped_color = "#FFAA00"
