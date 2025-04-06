@@ -552,7 +552,7 @@ class HAInterface:
             data = response.json()
             self.api_errors = 0
         except requests.exceptions.JSONDecodeError:
-            if not silent:    # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
+            if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
                 self.log("Warn: Failed to decode response {} from {}".format(response, url))
                 self.api_errors += 1
 

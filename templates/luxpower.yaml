@@ -114,7 +114,7 @@ pred_bat:
   soc_max:
     - sensor.lux_soc_max_kwh  # Custom template sensor - see LuxPower inverter setup for details
   battery_rate_max:
-    - 5130  # Set to the maximum rate your inverter can charge your battery at (in Watts) 
+    - 5130  # Set to the maximum rate your inverter can charge your battery at (in Watts)
   battery_min_soc:
     - 5
   battery_voltage:
@@ -133,7 +133,7 @@ pred_bat:
     - time.lux_force_discharge_start1
   discharge_end_time:
     - time.lux_force_discharge_end1
-  
+
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:

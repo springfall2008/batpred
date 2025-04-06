@@ -76,7 +76,7 @@ pred_bat:
     - off
   scheduled_discharge_enable:
     - off
-  
+
   # Services to control charging/discharging
   charge_start_service:
     service: select.select_option
