@@ -1332,6 +1332,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 raise e
             finally:
                 self.prediction_started = False
+            self.ha_interface.db_tick()
             self.prediction_started = False
 
     def check_entity_refresh(self):
@@ -1393,6 +1394,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.prediction_started = False
             if config_changed:
                 self.create_entity_list()
+            self.ha_interface.db_tick()
             self.prediction_started = False
 
     def run_time_loop_balance(self, cb_args):

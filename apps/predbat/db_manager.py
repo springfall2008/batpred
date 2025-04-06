@@ -219,5 +219,16 @@ class DatabaseManager:
         if self.mirror_updates:
             mirror_list = self.mirror_updates[:]
             self.mirror_updates = []
+
+            mirror_list.reverse()
+            new_mirror_list = []
+            already_done_entity = {}
+            for item in mirror_list:
+                if item["entity_id"] not in already_done_entity:
+                    new_mirror_list.append(item)
+                    already_done_entity[item["entity_id"]] = True
+            mirror_list = new_mirror_list
+            mirror_list.reverse()
+            self.log("db_manager: updating database with {} unique items".format(len(mirror_list)))
             for item in mirror_list:
                 self.set_state_db(item["entity_id"], item["state"], item["attributes"], timestamp=item["timestamp"])

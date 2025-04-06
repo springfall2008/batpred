@@ -547,7 +547,7 @@ class Output:
         """
         Publish the current plan in HTML format
         """
-        plan_debug = self.get_arg("plan_debug")
+        plan_debug = self.plan_debug
         mode = self.predbat_mode
         if self.set_read_only:
             mode += " (read only)"
@@ -2293,6 +2293,7 @@ class Output:
         opts += "inverter_hybrid({}) ".format(self.inverter_hybrid)
         opts += "metric_min_improvement({} p) ".format(self.metric_min_improvement)
         opts += "metric_min_improvement_export({} p) ".format(self.metric_min_improvement_export)
+        opts += "metric_min_improvement_export_freeze({} p) ".format(self.metric_min_improvement_export_freeze)
         opts += "metric_battery_cycle({} p/kWh) ".format(self.metric_battery_cycle)
         opts += "metric_battery_value_scaling({} x) ".format(self.metric_battery_value_scaling)
         if self.carbon_enable:
