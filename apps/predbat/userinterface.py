@@ -306,7 +306,6 @@ class UserInterface:
                     await self.async_expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
-                self.log("Plan valid now false due to select event")
 
     async def number_event(self, event, data, kwargs):
         """
@@ -345,7 +344,6 @@ class UserInterface:
                 await self.async_expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
-                self.log("Plan valid now false due to number event")
 
     async def watch_event(self, entity, attribute, old, new, kwargs):
         """
@@ -354,7 +352,6 @@ class UserInterface:
         self.log("Watched event: {} = {} will trigger re-plan".format(entity, new))
         self.update_pending = True
         self.plan_valid = False
-        self.log("Plan valid now false due watch event")
 
     async def switch_event(self, event, data, kwargs):
         """
@@ -401,7 +398,6 @@ class UserInterface:
                 await self.async_expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
-                self.log("Plan valid now false due to switch event")
 
     def get_ha_config(self, name, default):
         """
@@ -1210,13 +1206,13 @@ class UserInterface:
             if value == "off":
                 continue
             for prev in time_overrides[:]:
-                if "=" in prev:
+                if '=' in prev:
                     prev_no_eq = prev.split("=")[0]
-                elif "?" in prev:
+                elif '?' in prev:
                     prev_no_eq = prev.split("?")[0]
-                if "=" in value:
+                if '=' in value:
                     value_no_eq = value.split("=")[0]
-                elif "?" in value:
+                elif '?' in value:
                     value_no_eq = value.split("?")[0]
                 if prev_no_eq == value_no_eq:
                     time_overrides.remove(prev)
