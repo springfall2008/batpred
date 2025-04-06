@@ -1,3 +1,8 @@
+# Note that you will need to install the W/kW conversion automations
+# from https://github.com/TonyHoyle/foxess_predbat - place the
+# predbatt.yaml file from that repository into your HA configuration
+# directory, and edit the HA configuration.yaml as show in the README.
+
 pred_bat:
   module: predbat
   class: PredBat
@@ -85,7 +90,7 @@ pred_bat:
     clock_time_format: "%Y-%m-%d %H:%M:%S"
     write_and_poll_sleep: 2
     has_time_window: False
-    support_charge_freeze: False
+    support_charge_freeze: True
     support_discharge_freeze: False
 
   # Services to control charging/discharging
@@ -101,6 +106,14 @@ pred_bat:
     service: select.select_option
     entity_id: select.work_mode
     option: "Force Discharge"
+  discharge_stop_service:
+    service: select.select_option
+    entity_id: select.work_mode
+    option: "Self Use"
+  discharge_freeze_service:
+    service: select.select_option
+    entity_id: select.work_mode
+    option: "Feed-in First"
 
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
@@ -127,19 +140,19 @@ pred_bat:
   # If not using REST then instead set the Control here (one for each inverter)
   # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
   charge_rate:
-    - sensor.bms_charge_rate
+    - input_number.force_charge_power_w
   discharge_rate:
-    - sensor.bms_discharge_rate
+    - input_number.force_discharge_power_w
   battery_power:
     - sensor.invbatpower
   pv_power:
-    - sensor.pv_power
+    - sensor.pv_power_w
   load_power:
     - sensor.load_power
-  #soc_kw:
-  #  - sensor.inverter_bms_kwh_remaining
+  soc_kw:
+    - sensor.bms_actual_kwh_remaining
   soc_percent:
-     - sensor.battery_soc
+    - sensor.battery_soc
   soc_max:
     - 8.29
   battery_rate_max:

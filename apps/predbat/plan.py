@@ -109,12 +109,12 @@ class Plan:
         for loop_price in all_prices:
             pred_table = []
             if self.set_export_freeze and self.set_export_freeze_only:
-                freeze_options = [True]
+                export_options = [99]
             elif self.set_export_freeze:
-                freeze_options = [True, False]
+                export_options = [99, 0]
             else:
-                freeze_options = [False]
-            for freeze in freeze_options:
+                export_options = [0]
+            for export_option in export_options:
                 for modulo in [2, 3, 4, 6, 8, 16, 32]:
                     for divide in [96, 48, 32, 16, 8, 4, 3, 2, 1]:
                         all_n = []
@@ -202,7 +202,7 @@ class Plan:
 
                                 if window_prices_export[window_n] < lowest_price_export:
                                     lowest_price_export = window_prices_export[window_n]
-                                try_export[window_n] = 99.0 if freeze else 0
+                                try_export[window_n] = export_option
 
                         # Skip this one as it's the same as selected already
                         try_hash = str(try_charge_limit) + "_d_" + str(try_export)
@@ -216,9 +216,9 @@ class Plan:
 
                         tried_list[try_hash] = True
 
-                        pred_handle = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, False, end_record=end_record, step=step)
                         pred_item = {}
-                        pred_item["handle"] = pred_handle
+                        pred_item["handle"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, False, end_record=end_record, step=step)
+                        pred_item["handle10"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, True, end_record=end_record, step=step)
                         pred_item["charge_limit"] = try_charge_limit.copy()
                         pred_item["export_limit"] = try_export.copy()
                         pred_item["highest_price_charge"] = highest_price_charge
@@ -228,14 +228,21 @@ class Plan:
 
             for pred in pred_table:
                 handle = pred["handle"]
+                handle10 = pred["handle10"]
                 try_charge_limit = pred["charge_limit"]
                 try_export = pred["export_limit"]
                 highest_price_charge = pred["highest_price_charge"]
                 lowest_price_export = pred["lowest_price_export"]
                 loop_price = pred["loop_price"]
-                cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
 
-                metric, battery_value = self.compute_metric(end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+                cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
+                # Are we doing 10%?
+                if handle10:
+                    cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10 = handle10.get()
+                else:
+                    cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10 = handle.get()
+
+                metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
 
                 # Optimise
                 if self.debug_enable:
@@ -286,7 +293,6 @@ class Plan:
                     best_cost = cost
                     best_import = import_kwh_battery + import_kwh_house
                     best_battery_value = battery_value
-                    metric, battery_value = self.compute_metric(end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
                     if 1 or not quiet:
                         self.log(
                             "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} battery_value {} limits {} export {}".format(
@@ -613,7 +619,7 @@ class Plan:
                 self.charge_window_best = copy.deepcopy(self.charge_window)
 
             # Calculate best export windows
-            if self.high_export_rates and self.calculate_best_export and self.set_export_window:
+            if self.calculate_best_export and self.set_export_window:
                 self.export_window_best = copy.deepcopy(self.high_export_rates)
             else:
                 self.export_window_best = copy.deepcopy(self.export_window)
@@ -872,7 +878,7 @@ class Plan:
             )
             # round charge_limit_best (kWh) to 2 decimal places and export_limits_best (percentage) to nearest whole number
             self.charge_limit_best = [dp2(elem) for elem in self.charge_limit_best]
-            self.export_limits_best = [dp0(elem) for elem in self.export_limits_best]
+            self.export_limits_best = [dp2(elem) for elem in self.export_limits_best]
 
             self.log(
                 "Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format(
@@ -1305,8 +1311,12 @@ class Plan:
         elif self.set_export_freeze and not self.set_export_freeze_only:
             # If we support freeze, try a 99% option which will freeze at any SoC level below this
             loop_options = [100, 99, 0]
+            if self.set_export_low_power:
+                loop_options.extend([0.3, 0.5, 0.7])
         else:
             loop_options = [100, 0]
+            if self.set_export_low_power:
+                loop_options.extend([0.3, 0.5, 0.7])
 
         # Collect all options
         results = []
@@ -1326,12 +1336,17 @@ class Plan:
                 if all_n and (start != window["start"]):
                     continue
 
+                # Don't allow slow export for small windows
+                if this_export_limit > int(this_export_limit) and (try_export_window[window_n]["end"] - start) < 15:
+                    continue
+
                 # Don't optimise start of disabled windows or freeze only windows, just for export ones
                 if (this_export_limit in [100.0, 99.0]) and (start != window["start"]):
                     continue
 
                 # Never go below the minimum level
-                this_export_limit = max(calc_percent_limit(max(self.best_soc_min, self.reserve), self.soc_max), this_export_limit)
+                this_export_limit = max(calc_percent_limit(max(self.best_soc_min, self.reserve), self.soc_max), int(this_export_limit))
+                this_export_limit = this_export_limit + loop_limit - int(loop_limit)
                 try_options.append([start, this_export_limit])
 
                 results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, False, all_n, end_record))
@@ -1413,17 +1428,19 @@ class Plan:
                 )
 
             window_size = try_export_window[window_n]["end"] - start
-            window_key = str(int(this_export_limit)) + "_" + str(window_size)
+            window_key = str(dp2(this_export_limit)) + "_" + str(window_size)
             window_results[window_key] = [metric, cost]
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # Scale back in the case of freeze export as improvements will be smaller
+            rate_scale = 1 - (this_export_limit - int(this_export_limit))
+
             if this_export_limit == 99:
-                min_improvement_scaled = 0.1
+                min_improvement_scaled = self.metric_min_improvement_export_freeze
             elif all_n:
-                min_improvement_scaled = self.metric_min_improvement_export
+                min_improvement_scaled = self.metric_min_improvement_export * rate_scale * len(all_n)
             else:
-                min_improvement_scaled = self.metric_min_improvement_export * window_size / 30.0
+                min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / 30.0
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             if ((metric + min_improvement_scaled) <= off_metric) and (metric <= best_metric):
@@ -1639,6 +1656,18 @@ class Plan:
             end = window["end"]
             limit = charge_limit_best[window_n]
 
+            predict_minute_start = max(int((start - self.minutes_now) / 5) * 5, 0)
+            predict_minute_end = int((end - self.minutes_now) / 5) * 5
+
+            soc_max = limit
+            if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
+                # Work out min/max soc
+                soc_max = 0
+                for minute in range(predict_minute_start, predict_minute_end + 5, 5):
+                    if minute in self.predict_soc:
+                        soc_max = max(soc_max, self.predict_soc[minute])
+                window["target"] = soc_max
+
             if (
                 new_window_best
                 and (start == new_window_best[-1]["end"])
@@ -1661,8 +1690,10 @@ class Plan:
                 and (start not in self.manual_all_times)
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
                 and new_window_best[-1]["average"] == window["average"]
+                and (new_window_best[-1]["target"] < new_limit_best[-1])
             ):
                 # Combine two windows of the same price, provided the second charge limit is greater than the first
+                # and the old charge never reaches it defined limit
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
                 new_limit_best[-1] = limit
@@ -1818,7 +1849,7 @@ class Plan:
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge_scaled)
                         window["target"] = calc_percent_limit(target_soc, self.soc_max)
-                        export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max)
+                        export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max) + (limit - int(limit))
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
                     elif soc_max < limit_soc:
@@ -1969,7 +2000,7 @@ class Plan:
             self.optimise_charge_windows_manual()
             (
                 self.charge_limit_best,
-                ignore_export_limits,
+                self.export_limits_best,
                 best_price,
                 best_price_export,
                 best_metric,
@@ -1997,23 +2028,21 @@ class Plan:
             )
 
             if debug_mode:
-                org_export_limits = self.export_limits_best
-                self.export_limits_best = ignore_export_limits
                 metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
                 )
                 self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                 self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
-                self.export_limits_best = org_export_limits
                 open("plan_pre_levels.html", "w").write(self.html_plan)
                 print("Wrote plan to plan_pre_levels.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency))
 
             if self.calculate_regions:
                 region_size = int(16 * 60)
-                min_region_size = int(2 * 60)
+                min_region_size = int(60)
                 while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
-                    for region in range(0, self.end_record + self.minutes_now, int(region_size / 2)):
+                    step_size = int(max(region_size / 2, min_region_size))
+                    for region in range(0, self.end_record + self.minutes_now, step_size):
                         region_start = max(self.end_record + self.minutes_now - region - region_size, 0)
                         region_end = min(region_start + region_size, self.end_record + self.minutes_now)
 
@@ -2022,7 +2051,7 @@ class Plan:
 
                         (
                             self.charge_limit_best,
-                            ignore_export_limits,
+                            self.export_limits_best,
                             ignore_best_price,
                             ignore_best_price_export,
                             best_metric,
@@ -2043,7 +2072,7 @@ class Plan:
                             self.charge_limit_best,
                             self.charge_window_best,
                             self.export_window_best,
-                            ignore_export_limits,
+                            self.export_limits_best,
                             end_record=self.end_record,
                             region_start=region_start,
                             region_end=region_end,
@@ -2066,42 +2095,32 @@ class Plan:
                             break
 
                     if debug_mode:
-                        print("Best export now {}".format(ignore_export_limits))
                         org_export_limits = self.export_limits_best
-                        self.export_limits_best = ignore_export_limits
                         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
                             self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
                         )
                         self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                         self.update_target_values()
                         self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
-                        self.export_limits_best = org_export_limits
                         open("plan_levels_{}.html".format(region_size), "w").write(self.html_plan)
                         print(
-                            "Wrote plan to plan_levels_{}.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(
-                                region_size, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency
+                            "Wrote plan to plan_levels_{}.html - best_metric {} cost {} metric as {} battery_value {} keep {} import {} (self {})".format(
+                                region_size, best_metric, best_cost, metric, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency
                             )
                         )
 
                     region_size = int(region_size / 2)
 
-            # Keep the freeze but not the full export as that will be re-introduced later
-            for window_n in range(len(ignore_export_limits)):
-                if ignore_export_limits[window_n] == 99.0:
-                    self.export_limits_best[window_n] = 99.0
-
         if debug_mode:
             org_export_limits = self.export_limits_best
-            self.export_limits_best = ignore_export_limits
             metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
             )
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
-            self.export_limits_best = org_export_limits
             open("plan_levels.html", "w").write(self.html_plan)
-            print("Wrote plan to plan_levels.html")
+            print("Wrote plan to plan_levels.html best_metric {} metric {}".format(dp2(best_metric), dp2(metric)))
 
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
@@ -2136,6 +2155,7 @@ class Plan:
                 self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
             )
         )
+
         for pass_type in ["freeze", "normal", "low"]:
             start_at_low = False
             if pass_type in ["low"]:
@@ -2262,7 +2282,7 @@ class Plan:
 
                             average = self.export_window_best[window_n]["average"]
                             if price < lowest_price_charge:
-                                if self.debug_enable and 0:
+                                if self.debug_enable:
                                     self.log("Skipping export optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, dp2(average)))
                                 continue
 
@@ -2293,8 +2313,16 @@ class Plan:
                                 end_record=self.end_record,
                                 freeze_only=pass_type in ["freeze"],
                             )
-                            self.export_limits_best[window_n] = best_soc
-                            self.export_window_best[window_n]["start"] = best_start
+                            if best_soc != self.export_limits_best[window_n] or best_start != self.export_window_best[window_n]["start"]:
+                                self.export_limits_best[window_n] = best_soc
+                                self.export_window_best[window_n]["start"] = best_start
+                                if debug_mode:
+                                    self.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best")
+                                    self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+                                    self.update_target_values()
+                                    self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+                                    open("plan_main_export_{}.html".format(window_n), "w").write(self.html_plan)
+                                    print("Wrote plan to plan_main_export_{}.html - metric {} cost {} keep {} cycle {} import {}".format(window_n, best_metric, best_cost, best_keep, best_cycle, best_import))
 
                             if self.debug_enable:
                                 self.log(
@@ -2532,6 +2560,7 @@ class Plan:
                 self.predict_iboost_best = pred.predict_iboost_best
                 self.predict_metric_best = pred.predict_metric_best
                 self.predict_carbon_best = pred.predict_carbon_best
+                self.predict_clipped_best = pred.predict_clipped_best
 
             if self.debug_enable or save:
                 self.log(

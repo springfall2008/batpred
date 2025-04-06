@@ -203,7 +203,7 @@ class UserInterface:
                     override_index = override.get("index", 0)
                     if override_index is None:
                         override_index = 0
-                    if override_index == 0:
+                    if override_index == index:
                         value = override.get("value", value)
                         self.log("Note: API Overridden arg {} value {}".format(arg, value))
                         break

@@ -1643,10 +1643,6 @@ class Fetch:
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
 
-        # Rule out exports if the import rate is already higher unless it's a variable export tariff
-        if self.rate_export_max == self.rate_export_min:
-            self.rate_export_cost_threshold = max(self.rate_export_cost_threshold, dp2(self.rate_min))
-
         self.log("Rate thresholds (for charge/export) are import {}p ({}) export {}p ({})".format(self.rate_import_cost_threshold, self.rate_low_threshold, self.rate_export_cost_threshold, self.rate_high_threshold))
 
     def rate_scan(self, rates, print=True):
@@ -1839,6 +1835,7 @@ class Fetch:
         """
 
         self.debug_enable = self.get_arg("debug_enable")
+        self.plan_debug = self.get_arg("plan_debug")
         self.previous_status = self.get_state_wrapper(self.prefix + ".status")
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
@@ -1878,6 +1875,7 @@ class Fetch:
         # Metric config
         self.metric_min_improvement = self.get_arg("metric_min_improvement")
         self.metric_min_improvement_export = self.get_arg("metric_min_improvement_export")
+        self.metric_min_improvement_export_freeze = self.get_arg("metric_min_improvement_export_freeze")
         self.metric_battery_cycle = self.get_arg("metric_battery_cycle")
         self.metric_self_sufficiency = self.get_arg("metric_self_sufficiency")
         self.metric_future_rate_offset_import = self.get_arg("metric_future_rate_offset_import")
@@ -1981,6 +1979,7 @@ class Fetch:
         self.set_export_freeze = self.get_arg("set_export_freeze")
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
+        self.set_export_low_power = self.get_arg("set_export_low_power")
         self.charge_low_power_margin = self.get_arg("charge_low_power_margin")
         self.calculate_export_first = True
 

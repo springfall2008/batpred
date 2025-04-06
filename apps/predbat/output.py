@@ -524,6 +524,7 @@ class Output:
         if plan_debug:
             html += "<td><b>PV kWh (10%)</b></td>"
             html += "<td><b>Load kWh (10%)</b></td>"
+            html += "<td><b>Clip kWh</b></td>"
         else:
             html += "<td><b>PV kWh</b></td>"
             html += "<td><b>Load kWh</b></td>"
@@ -555,7 +556,7 @@ class Output:
         html = "<table>"
         html += "<tr>"
         html += "<td colspan=10> Plan starts: {} last updated: {} version: {} previous status: {} mode: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION, self.current_status, mode)
-        config_str = f"best_soc_min {self.best_soc_min} best_soc_max {self.best_soc_max} best_soc_keep {self.best_soc_keep} carbon_metric {self.carbon_metric} metric_self_sufficiency {self.metric_self_sufficiency} metric_battery_value_scaling {self.metric_battery_value_scaling}"
+        config_str = f"best_soc_min {self.best_soc_min} best_soc_max {self.best_soc_max} best_soc_keep {self.best_soc_keep} carbon_metric {self.carbon_metric} metric_self_sufficiency {self.metric_self_sufficiency}"
         html += "</tr><tr>"
         html += "<td colspan=10> {}</td>".format(config_str)
         html += "</tr>"
@@ -836,10 +837,14 @@ class Output:
                         state += "HoldExp&searr;"
                     else:
                         state += "Exp&searr;"
-                    show_limit = str(int(target))
+                    show_limit = str(dp2(target))
+
+                    if limit > int(limit):
+                        # Snail symbol
+                        state += "&#x1F40C;"
 
                     if plan_debug:
-                        show_limit += " ({})".format(str(int(limit)))
+                        show_limit += " ({})".format(dp2(limit))
 
                 if self.export_window_best[export_window_n]["start"] in self.manual_export_times:
                     state += " &#8526;"
@@ -934,7 +939,7 @@ class Output:
             if self.carbon_enable:
                 # Work out carbon intensity and carbon use
                 carbon_amount = self.predict_carbon_best.get(minute_relative_start, 0)
-                carbon_amount_end = self.predict_carbon_best.get(minute_relative_slot_end, 0)
+                carbon_amount_end = self.predict_carbon_best.get(minute_relative_slot_end, carbon_amount)
                 carbon_change = carbon_amount_end - carbon_amount
                 carbon_change = dp2(carbon_change)
                 carbon_intensity = dp0(self.carbon_intensity.get(minute_relative_start, 0))
@@ -963,6 +968,18 @@ class Output:
                     carbon_str += " &rarr;"
                     carbon_color = "#FFFFFF"
 
+            # Work out clipped
+            clipped_amount = self.predict_clipped_best.get(minute_relative_start, 0)
+            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+            clipped_change = clipped_amount_end - clipped_amount
+            clipped_change = dp2(clipped_change)
+            clipped_str = str(clipped_change)
+            clipped_color = "#FFFFFF"
+            if clipped_change >= 0.1:
+                clipped_color = "#FFAA00"
+            elif clipped_change >= 0.01:
+                clipped_color = "#FFFF00"
+
             # Table row
             html += '<tr style="color:black">'
             html += "<td bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
@@ -984,6 +1001,8 @@ class Output:
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
             html += "<td bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
             html += "<td bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
+            if plan_debug:
+                html += "<td bgcolor=" + clipped_color + ">" + clipped_str + "</td>"
             if plan_debug and self.load_forecast:
                 html += "<td bgcolor=" + extra_color + ">" + str(extra_forecast) + "</td>"
             if self.num_cars > 0:  # Don't display car charging data if there's no car

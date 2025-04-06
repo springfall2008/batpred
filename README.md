@@ -33,6 +33,10 @@ Some inverters have their own groups also e.g:
 - [GivTCP](https://www.facebook.com/groups/615579009972782)
 - [Solis](https://www.facebook.com/groups/288045168816481)
 
+## License
+
+Please see [License](https://github.com/springfall2008/batpred/blob/main/License.md)
+
 ```text
 Copyright (c) Trefor Southwell 2025 - All rights reserved
 This software maybe used at no cost for personal use only.
