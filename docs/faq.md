@@ -82,7 +82,7 @@ If you set **metric_battery_cycle** to say 2p then that would add another 4p to 
 Some inverters e.g. GE AIO inverter won't allow the reserve to be set to 100, in which case set in apps.yaml
 
 ```yaml
-inverter_reserve_max : 98
+  inverter_reserve_max : 98
 ```
 
 And this should prevent the issue

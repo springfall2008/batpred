@@ -25,6 +25,12 @@ pred_bat:
   threads: auto
 
   #
+  # Controls/status - must by 1 per inverter
+  #
+  num_inverters: 1
+  inverter_type: "SE"
+
+  #
   # Sensors, currently more than one can be specified and they will be summed up automatically
   # however if you have two inverters only set one of them as they will both read the same.
   #
@@ -35,17 +41,16 @@ pred_bat:
   export_today:
     - sensor.solaredge_m1_exported_kwh
   pv_today:
-    - sensor.solar_panel_production_kwh   # This is a custom sensor - see Readme on how to create or comment out
-  #
-  # Controls/status - must by 1 per inverter
-  #
-  num_inverters: 1
-  inverter_type: "SE"
+    - sensor.solar_panel_production_kwh   # This is a custom template sensor - see SolarEdge section of 'Inverter Setup' documentation for how to create
 
-  # Can be enabled if you have a backup interface
+  # If you have a backup interface then the following lines can be enabled (uncommented out)
+  #
+  #reserve:
+  #  - number.solaredge_i1_backup_reserve
   #inverter:
   #  has_reserve_soc: True
 
+  # maximum battery charge rate. If you have a single battery then can use the b1_max_charge_power sensor directly
   battery_rate_max:
     - sensor.solaredge_b1_max_charge_power
   charge_rate:
@@ -55,30 +60,20 @@ pred_bat:
   battery_power:
     - sensor.solaredge_b1_dc_power
   pv_power:
-    - sensor.solar_panel_production_w # This is a custom sensor - see Readme on how to create or comment out
+    - sensor.solar_panel_production_w # This is a custom template sensor - see SolarEdge section of 'Inverter Setup' for details
   load_power:
-    - sensor.solar_house_consumption_w # This is a custom sensor - see Readme on how to create or comment out
+    - sensor.solar_house_consumption_w # This is a custom template sensor - see SolarEdge section of 'Inverter Setup' for details
   soc_percent:
     - sensor.solaredge_b1_state_of_energy
   soc_max:
     - sensor.solaredge_b1_maximum_energy
-  # Can be enabled you have a backup interface
-  #reserve:
-  #  - number.solaredge_i1_backup_reserve
-  charge_start_time:
-    - "00:00:00"
-  charge_end_time:
-    - "00:01:00"
+
   charge_limit:
-    - number.solaredge_i1_ac_charge_limit
+    - sensor.solaredge_i1_ac_charge_limit
   scheduled_charge_enable:
     - off
   scheduled_discharge_enable:
     - off
-  discharge_start_time:
-    - "00:00:00"
-  discharge_end_time:
-    - "00:01:00"
 
   # Services to control charging/discharging
   charge_start_service:

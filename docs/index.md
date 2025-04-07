@@ -22,7 +22,7 @@ Also known by some as Batpred or Batman!
 Please see [License](https://github.com/springfall2008/batpred/blob/main/License.md)
 
 ```text
-Copyright (c) Trefor Southwell April 2024 - All rights reserved
+Copyright (c) Trefor Southwell April 2025 - All rights reserved
 This software may be used at no cost for personal use only
 No warranty is given, either expressed or implied
 ```

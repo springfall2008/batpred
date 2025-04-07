@@ -803,12 +803,22 @@ triggers:
         }}'
       restart_predbat: "Y"
   - trigger: state
+    alias: Predbat add-on not running for 15 minutes
     entity_id: binary_sensor.predbat_running
     to: "off"
     for:
       minutes: 15
     variables:
-      alert_text: Predbat add-on is not running
+      alert_text: Predbat add-on is not running, restarting
+      restart_predbat: "Y"
+  - trigger: state
+    alias: predbat_active stuck on for 20 minutes
+    entity_id:
+      - switch.predbat_active
+    for:
+      minutes: 20
+    variables:
+      alert_text: Predbat active has been stuck on (updating the plan) for 20 minutes, restarting
       restart_predbat: "Y"
 actions:
   - action: notify.mobile_app_<your mobile device id>

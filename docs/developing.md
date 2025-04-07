@@ -53,15 +53,10 @@ GitHub Codespaces gives you a full-featured development environment.
 This includes:
 
 - A full IDE (a code editor), Visual Studio Code, which can be:
-    - Run in the browser, requiring no additional software to
-    be installed
-    - Run in a virtual machine (VM) running in the cloud which
-    can connect to a copy of VS Code installed on your own
-    machine
-- A terminal where you can run commands against your codebase
-e.g. running `pre-commit` to run the automatic code quality checks, linting files, etc.
-- Software like `mkdocs` to re-generate the documentation files (and other software we may include)
-pre-installed in it
+    - Run in the browser, requiring no additional software to be installed
+    - Run in a virtual machine (VM) running in the cloud which can connect to a copy of VS Code installed on your own machine
+- A terminal where you can run commands against your codebase e.g. running `pre-commit` to run the automatic code quality checks, linting files, etc.
+- Software like `mkdocs` to re-generate the documentation files (and other software we may include) pre-installed in it
 
 The Codespaces environment is entirely separate from your HA
 installation, so does not require any modification to your HA

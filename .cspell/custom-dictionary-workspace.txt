@@ -200,6 +200,7 @@ saverestore
 searr
 Selfrun
 Selfuse
+semodbus
 SFMB
 socb
 socs
