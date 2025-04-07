@@ -227,14 +227,14 @@ You will need to make a number of changes to the solaredge apps.yaml, replacing 
 ```yaml
   battery_rate_max:
     - sensor.calc_power_batteries_max_charge_power # maximum charge power of all the batteries
-  battery_power:                  
-    - sensor.calc_power_batteries_dc_power     
+  battery_power:  
+    - sensor.calc_power_batteries_dc_power  
   soc_percent:
     - sensor.calc_battery_all_state # average SoC of the batteries
   soc_max:
     - sensor.calc_battery_total_capacity # combined kWh maximum value of all the batteries
-  soc_kw:                         
-    - sensor.calc_battery_current_capacity 
+  soc_kw:  
+    - sensor.calc_battery_current_capacity
 ```
 
 - set charge_rate and discharge_rate to the SolarEdge inverter values, e.g. 5000
