@@ -10,9 +10,8 @@
 
 import requests
 import re
-from datetime import datetime, timedelta
-from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, dp4
+from datetime import datetime
+from utils import str2time, dp1
 import xml.etree.ElementTree as etree
 
 

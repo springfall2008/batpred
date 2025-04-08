@@ -8,14 +8,9 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import copy
-import os
-import re
-import time
-import math
-from datetime import datetime, timedelta
-from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT, MINUTE_WATT
-from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit, dp4
+from datetime import timedelta
+from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
+from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
 
 
 # Only assign globals once to avoid re-creating them with processes are forked

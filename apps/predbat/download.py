@@ -8,11 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import copy
 import os
-import re
-import time
-import math
 import requests
 
 
