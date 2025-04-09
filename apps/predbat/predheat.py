@@ -13,9 +13,9 @@
 
 from datetime import datetime, timedelta
 import pytz
-from utils import str2time, dp2, dp3, dp4
+from utils import str2time, dp2, dp3
 
-from config import TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS
+from config import TIME_FORMAT
 
 MAX_INCREMENT = 100
 PREDICT_STEP = 5

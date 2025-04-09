@@ -10,12 +10,8 @@
 
 import copy
 import os
-import re
-import time
-import math
 import sys
 from datetime import datetime, timedelta
-import hashlib
 import traceback
 import sys
 
@@ -25,7 +21,6 @@ IS_APPDAEMON = False
 
 # Import AppDaemon or our standalone wrapper
 try:
-    import adbase as ad
     import appdaemon.plugins.hass.hassapi as hass
 
     IS_APPDAEMON = True
@@ -36,10 +31,7 @@ except:
 
 import pytz
 import requests
-import yaml
-from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
-import json
 
 THIS_VERSION = "v8.18.0"
 
@@ -74,7 +66,7 @@ from config import (
     APPS_SCHEMA,
 )
 from prediction import reset_prediction_globals
-from utils import minutes_since_yesterday, dp1, dp2, dp3, dp4
+from utils import minutes_since_yesterday, dp1, dp2, dp3
 from ha import HAInterface
 from web import WebInterface
 from predheat import PredHeat

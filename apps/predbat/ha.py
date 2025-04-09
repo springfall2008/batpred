@@ -8,20 +8,15 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import copy
 import os
-import re
-import time
-import math
-from datetime import datetime, timedelta
+from datetime import timedelta
 import asyncio
-from aiohttp import web, ClientSession, WSMsgType
+from aiohttp import ClientSession, WSMsgType
 import json
 import requests
 import traceback
-import sqlite3
 import threading
-from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_SECONDS
+from config import TIME_FORMAT_HA, TIMEOUT
 
 from db_manager import DatabaseManager  # database functions have been refactored to DatabaseManager
 

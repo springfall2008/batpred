@@ -8,9 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import sys
-from datetime import datetime, timedelta
-from config import MINUTE_WATT, PREDICT_STEP
+from datetime import timedelta
+from config import MINUTE_WATT
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from inverter import Inverter
 

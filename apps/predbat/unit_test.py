@@ -10,34 +10,25 @@
 
 import copy
 import os
-import re
 import time
-import math
 import sys
 import glob
 from datetime import datetime, timedelta
-import hashlib
-import traceback
 import argparse
 
-import pytz
 import requests
 import yaml
-from multiprocessing import Pool, cpu_count, set_start_method
-import asyncio
 import json
-import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp4
+from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate
 from futurerate import FutureRate
-from config import PREDICT_STEP, MINUTE_WATT
+from config import MINUTE_WATT
 from inverter import Inverter
-from config import INVERTER_DEF
 from compare import Compare
 from web import WebInterface
 from gecloud import GECloudDirect

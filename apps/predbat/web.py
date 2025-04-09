@@ -17,7 +17,7 @@ import re
 from datetime import datetime, timedelta
 import json
 
-from utils import calc_percent_limit, str2time, dp0, dp2
+from utils import calc_percent_limit, str2time, dp2
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 from predbat import THIS_VERSION
 
