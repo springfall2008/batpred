@@ -215,6 +215,7 @@ class Inverter:
         self.inv_has_idle_time = INVERTER_DEF[self.inverter_type]["has_idle_time"]
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
+        self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -1346,6 +1347,10 @@ class Inverter:
         """
         # SOC has no decimal places and clamp in min
         soc = int(max(soc, self.reserve_percent))
+
+        if isExporting and self.inv_has_target_soc and not self.inv_target_soc_used_for_discharge:
+            self.log("Inverter {} Exporting, not adjusting SOC target".format(self.id))
+            return
 
         # Check current setting and adjust
         if self.rest_data:
