@@ -1,37 +1,44 @@
 repos:
--   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
-    hooks:
-    -   id: file-contents-sorter
-        files: ^(\.cspell\/custom-dictionary-workspace.txt|requirements\.txt)$
-        args: ["--ignore-case", "--unique"]
-    -   id: trailing-whitespace
-        args: [--markdown-linebreak-ext=md]
-    -   id: end-of-file-fixer
-    -   id: check-yaml
-        exclude: (example_chart.yml)
-    -   id: check-json
-        exclude: ^(\.cspell\.json|\.devcontainer\/devcontainer\.json)$
--   repo: https://gitlab.com/bmares/check-json5
-    rev: v1.0.0
-    hooks:
-    -   id: check-json5
-        files: ^(\.cspell\.json|\.devcontainer\/devcontainer\.json)$
--   repo: https://github.com/psf/black
-    rev: 23.11.0
-    hooks:
-    -   id: black
-# -   repo: https://github.com/PyCQA/isort
-#     rev: 5.12.0
-#     hooks:
-#     -   id: isort
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.5.0
+  hooks:
+  - id: file-contents-sorter
+    files: ^(\.cspell\/custom-dictionary-workspace.txt|requirements\.txt)$
+    args: ["--ignore-case", "--unique"]
+  - id: trailing-whitespace
+    args: [--markdown-linebreak-ext=md]
+  - id: end-of-file-fixer
+  - id: check-yaml
+    exclude: (example_chart.yml)
+  - id: check-json
+    exclude: ^(\.cspell\.json|\.devcontainer\/devcontainer\.json)$
+- repo: https://gitlab.com/bmares/check-json5
+  rev: v1.0.0
+  hooks:
+  - id: check-json5
+    files: ^(\.cspell\.json|\.devcontainer\/devcontainer\.json)$
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  # Ruff version.
+  rev: v0.11.4
+  hooks:
+  # Run the linter.
+  - id: ruff
+    args: [--select=F401]
+- repo: https://github.com/psf/black
+  rev: 23.11.0
+  hooks:
+  - id: black
+# - repo: https://github.com/PyCQA/isort
+#   rev: 5.12.0
+#   hooks:
+#   - id: isort
 - repo: https://github.com/igorshubovych/markdownlint-cli
   rev: v0.37.0
   hooks:
-    - id: markdownlint-fix # Configure in .mdlrc
+  - id: markdownlint-fix # Configure in .mdlrc
 - repo: https://github.com/streetsidesoftware/cspell-cli
   rev: v8.0.0
   hooks:
-    - id: cspell
-      additional_dependencies:
-        - "@cspell/dict-en-gb"
+  - id: cspell
+    additional_dependencies:
+    - "@cspell/dict-en-gb"
