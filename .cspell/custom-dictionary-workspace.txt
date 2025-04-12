@@ -1,4 +1,7 @@
 # Custom Dictionary Words
+sigen
+sigenergy
+sigenstor
 activepower
 adata
 adbase
