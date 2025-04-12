@@ -1454,7 +1454,7 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
-     "SIG": {
+    "SIG": {
         "name": "Huawei Solar",
         "has_rest_api": False,
         "has_mqtt_api": False,

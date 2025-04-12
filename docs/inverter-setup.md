@@ -427,11 +427,14 @@ template:
      {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
          * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
-## Sigenergy Sigenstor 
+
+## Sigenergy Sigenstor
+
 To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to follow the steps below:
- - make sure the inverter is already integrated via Modbus. Here is a ([repo](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration)) with full integration.
- - make sure your charge rate is in W and not in kW. The above integration converts the values to kW by default.
-  
+
+- make sure the inverter is already integrated via Modbus. Here is a ([repo](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration)) with full integration.
+- make sure your charge rate is in W and not in kW. The above integration converts the values to kW by default.
+
   The following additions are needed to facilitate integration with Predbat and need to put put in configuration.yaml:
 
 ```yaml
@@ -447,7 +450,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
           - Command freeze charge
           - Command freeze discharge
         icon: mdi:battery-unknown
-        
+
     template:
       - sensor:
           - name: "Sigen Battery Power W"
@@ -458,7 +461,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
             unit_of_measurement: "W"  # Assuming the original is in kW and we're converting to W
             device_class: power
             state_class: measurement
-        
+
     automation:
       - id: ems_mode_selector_action
         alias: "EMS mode input selector action"
@@ -550,7 +553,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
                 - >-
                   {{ states('input_number.discharge_rate') |
                   round(0) | int }}
-        mode: single 
+        mode: single
 
 
     input_number:
@@ -595,7 +598,7 @@ Configure apps.yaml with the following:
     - sensor.sigen_daily_grid_energy_export
   pv_today:
     - sensor.sigen_daily_pv_energy_production
-    
+
   soc_max:
     - sensor.sigen_rated_battery_capacity
   battery_temperature:
@@ -625,6 +628,7 @@ Configure apps.yaml with the following:
     option: "Command freeze discharge"
 
 ```
+
 ## I want to add an unsupported inverter to Predbat
 
 - First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have
