@@ -17,7 +17,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | LuxPower | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | Growatt with Solar Assistant | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [solar_assistant_growatt.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt.yaml) |
-   | Sigenergy | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | |
+   | Sigenergy | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -435,8 +435,9 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 
 - make sure the inverter is already integrated via Modbus. Here is a ([repo](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration)) with full integration.
 - make sure your charge rate is in W and not in kW. The above integration converts the values to kW by default.
+- Copy the template sigenergy_sigenstor.yaml template over your apps.yaml and edit for your system.
 
-  The following additions are needed to facilitate integration with Predbat and need to put put in configuration.yaml:
+  The following additions are needed to facilitate integration with Predbat and need to put put in Home Assistant configuration.yaml:
 
 ```yaml
     input_select:
@@ -573,62 +574,6 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
         max: 20000
         step: 1
         mode: box
-
-```
-
-Configure apps.yaml with the following:
-
-```yaml
-  load_today:
-    - sensor.sigen_daily_energy_consumption
-  charge_rate:
-    - input_number.charge_rate
-  discharge_rate:
-    - input_number.discharge_rate
-  battery_power:
-    - sensor.sigen_battery_power_w
-  pv_power:
-    - sensor.sigen_pv_power
-  load_power:
-    - sensor.sigen_consumed_power
-  soc_percent:
-    - sensor.sigen_energy_storage_system_soc
-  import_today:
-    - sensor.sigen_daily_import_energy
-  export_today:
-    - sensor.sigen_daily_grid_energy_export
-  pv_today:
-    - sensor.sigen_daily_pv_energy_production
-
-  soc_max:
-    - sensor.sigen_rated_battery_capacity
-  battery_temperature:
-    - sensor.sigen_ess_average_cell_temperature
-
-  inverter_type: "SIG"
-     # Services to control charging/discharging
-  charge_start_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Command charging PV"
-  charge_stop_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Maximum self-consumption"
-  discharge_start_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Command discharging PV"
-  charge_freeze_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Command freeze charge"
-  discharge_freeze_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Command freeze discharge"
-
-```
 
 ## I want to add an unsupported inverter to Predbat
 
