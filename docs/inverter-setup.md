@@ -17,6 +17,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | LuxPower | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | Growatt with Solar Assistant | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [solar_assistant_growatt.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt.yaml) |
+   | Sigenergy | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -426,6 +427,207 @@ template:
   state: >
      {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
          * states('sensor.sunsynk_battery_voltage')|float]|min }}
+```
+
+## Sigenergy Sigenstor
+
+To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to follow the steps below:
+
+- make sure the inverter is already integrated via Modbus. Here is a ([repo](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration)) with full integration.
+- make sure your charge rate is in W and not in kW. The above integration converts the values to kW by default.
+
+  The following additions are needed to facilitate integration with Predbat and need to put put in configuration.yaml:
+
+```yaml
+    input_select:
+      set_ems_mode:
+        name: Set EMS mode
+        options:
+          - Maximum self-consumption
+          - Command charging Grid
+          - Command charging PV
+          - Command discharging PV
+          - Command discharging Bat
+          - Command freeze charge
+          - Command freeze discharge
+        icon: mdi:battery-unknown
+
+    template:
+      - sensor:
+          - name: "Sigen Battery Power W"
+            unique_id: sigen_battery_power_w
+            state: >
+              {% set power = states('sensor.sigen_battery_power') | float(0) %}
+              {{ (power * 1000) | round(0) }}
+            unit_of_measurement: "W"  # Assuming the original is in kW and we're converting to W
+            device_class: power
+            state_class: measurement
+
+    automation:
+      - id: ems_mode_selector_action
+        alias: "EMS mode input selector action"
+        description: "Sets the remote EMS control mode predbat"
+        trigger:
+          - platform: state
+            entity_id:
+              - input_select.set_ems_mode
+        condition: []
+        action:
+          - service: modbus.write_register
+            data_template:
+              hub: Sigen
+              slave: 247
+              address: 40031
+              value: >
+                {% if is_state('input_select.set_ems_mode', "Maximum self-consumption") %} 2  
+                {% elif is_state('input_select.set_ems_mode', "Command charging Grid") %} 3  
+                {% elif is_state('input_select.set_ems_mode', "Command charging PV") %} 4  
+                {% elif is_state('input_select.set_ems_mode', "Command discharging PV") %} 5  
+                {% elif is_state('input_select.set_ems_mode', "Command discharging Bat") %} 6
+                {% elif is_state('input_select.set_ems_mode', "Command freeze charge") %} 4
+                {% elif is_state('input_select.set_ems_mode', "Command freeze discharge") %} 6
+                {% endif %}
+          - choose:
+              - conditions:
+                  - condition: state
+                    entity_id: input_select.set_ems_mode
+                    state: "Command freeze charge"
+                sequence:
+                  - service: modbus.write_register
+                    data_template:
+                      hub: Sigen
+                      slave: 247
+                      address: 40032
+                      value:
+                        - 0
+                        - 0
+              - conditions:
+                  - condition: state
+                    entity_id: input_select.set_ems_mode
+                    state: "Command freeze discharge"
+                sequence:
+                  - service: modbus.write_register
+                    data_template:
+                      hub: Sigen
+                      slave: 247
+                      address: 40034
+                      value:
+                        - 0
+                        - 0
+        mode: single
+
+      - id: "automation_sigen_ess_max_charging_limit_input_number_action"
+        alias: "sigen ESS max charging limit input number action"
+        description: "Sigen ESS max charging limit action for batpred"
+        triggers:
+          - trigger: state
+            entity_id: input_number.charge_rate
+        action:
+          - action: modbus.write_register
+            data_template:
+              hub: Sigen
+              slave: 247
+              address: 40032
+              value:
+                - >-
+                  0
+                - >-
+                  {{ (states('input_number.charge_rate')| float) |
+                  round(0) | int }}
+        mode: single
+
+      - id: "automation_sigen_ess_max_discharging_limit_input_number_action"
+        alias: "sigen ESS max discharging limit input number action"
+        description: "Sigen ESS max discharging limit action for batpred"
+        triggers:
+          - trigger: state
+            entity_id: input_number.discharge_rate
+        action:
+          - action: modbus.write_register
+            data_template:
+              hub: Sigen
+              slave: 247
+              address: 40034
+              value:
+                - >-
+                  0
+                - >-
+                  {{ states('input_number.discharge_rate') |
+                  round(0) | int }}
+        mode: single
+
+
+    input_number:
+      charge_rate:
+        name: Battery charge rate
+        initial: 8400
+        min: 0
+        max: 20000
+        step: 1
+        mode: box
+
+      discharge_rate:
+        name: Battery discharge rate
+        initial: 8400
+        min: 0
+        max: 20000
+        step: 1
+        mode: box
+
+```
+
+Configure apps.yaml with the following:
+
+```yaml
+  load_today:
+    - sensor.sigen_daily_energy_consumption
+  charge_rate:
+    - input_number.charge_rate
+  discharge_rate:
+    - input_number.discharge_rate
+  battery_power:
+    - sensor.sigen_battery_power_w
+  pv_power:
+    - sensor.sigen_pv_power
+  load_power:
+    - sensor.sigen_consumed_power
+  soc_percent:
+    - sensor.sigen_energy_storage_system_soc
+  import_today:
+    - sensor.sigen_daily_import_energy
+  export_today:
+    - sensor.sigen_daily_grid_energy_export
+  pv_today:
+    - sensor.sigen_daily_pv_energy_production
+
+  soc_max:
+    - sensor.sigen_rated_battery_capacity
+  battery_temperature:
+    - sensor.sigen_ess_average_cell_temperature
+
+  inverter_type: "SIG"
+     # Services to control charging/discharging
+  charge_start_service:
+    service: input_select.select_option
+    entity_id: "input_select.set_ems_mode"
+    option: "Command charging PV"
+  charge_stop_service:
+    service: input_select.select_option
+    entity_id: "input_select.set_ems_mode"
+    option: "Maximum self-consumption"
+  discharge_start_service:
+    service: input_select.select_option
+    entity_id: "input_select.set_ems_mode"
+    option: "Command discharging PV"
+  charge_freeze_service:
+    service: input_select.select_option
+    entity_id: "input_select.set_ems_mode"
+    option: "Command freeze charge"
+  discharge_freeze_service:
+    service: input_select.select_option
+    entity_id: "input_select.set_ems_mode"
+    option: "Command freeze discharge"
+
 ```
 
 ## I want to add an unsupported inverter to Predbat
