@@ -1,7 +1,4 @@
 # Custom Dictionary Words
-sigen
-sigenergy
-sigenstor
 activepower
 adata
 adbase
@@ -204,6 +201,9 @@ searr
 Selfrun
 Selfuse
 SFMB
+sigen
+sigenergy
+sigenstor
 socb
 socs
 sofar
