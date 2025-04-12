@@ -14,7 +14,6 @@ from config import THIS_VERSION, TIME_FORMAT, PREDICT_STEP
 from utils import dp0, dp2, dp3, calc_percent_limit
 from prediction import Prediction
 
-
 class Output:
     def publish_car_plan(self):
         """
