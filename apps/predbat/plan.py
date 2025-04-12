@@ -907,7 +907,7 @@ class Plan:
                 )
 
                 self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
-                if metric_prev - metric < 0.1:
+                if (metric_prev - metric) < 1.0:
                     self.log("New plan metric is not significantly better than previous plan, using previous plan")
                     self.charge_window_best = copy.deepcopy(charge_window_best_prev)
                     self.charge_limit_best = copy.deepcopy(charge_limit_best_prev)
