@@ -115,11 +115,11 @@ otherwise, it will be Silver-Grey.
 If the load forecast is 0.5kWh or above for the slot it will be coloured Orangey-Red, from 0.25kWh to 0.5 it will be coloured Yellow,
 above 0 to 0.25, it will be Light Green, and if zero, it will be coloured White.
 
-- **Clip kWh**- (_Only shown with Plan_debug enabled_), shows the amount of energy lost due to clipping either due to your inverter not being able to handle all the PV that
+- **Clip kWh**- (*Only shown with Plan_debug enabled*), shows the amount of energy lost due to clipping either due to your inverter not being able to handle all the PV that
 has been generated (due to lack of AC capacity or DC charging), or due to an export limit being set.
 
-- **Xload wWh** - (_Only shown with Plan_debug enabled_), shows the load that was added externally to Predbat with **load_forecast** settings, this might come from
-PredAI, PredHeat or other sources depending on your configuration. 
+- **Xload wWh** - (*Only shown with Plan_debug enabled*), shows the load that was added externally to Predbat with **load_forecast** settings, this might come from
+PredAI, PredHeat or other sources depending on your configuration.
 
 - **Car kWh** - The total predicted car charging for the half-hour slot. This column will only be shown if *num_cars* in `apps.yaml` is 1 or more.<BR>
 If the car is planned to be charged in that slot then the kWh will be coloured Yellow, otherwise, it will be White.
