@@ -902,8 +902,10 @@ class Plan:
                     export_limits_best_prev,
                     True,
                     end_record=self.end_record,
-                )                
-                metric_prev, battery_value = self.compute_metric(self.end_record, soc_prev, soc10_prev, cost_prev, cost10_prev, final_iboost_prev, final_iboost10_prev, battery_cycle_prev, metric_keep_prev, final_carbon_g_prev, import_kwh_battery_prev, import_kwh_house_prev, export_kwh_prev)
+                )
+                metric_prev, battery_value = self.compute_metric(
+                    self.end_record, soc_prev, soc10_prev, cost_prev, cost10_prev, final_iboost_prev, final_iboost10_prev, battery_cycle_prev, metric_keep_prev, final_carbon_g_prev, import_kwh_battery_prev, import_kwh_house_prev, export_kwh_prev
+                )
 
                 self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
                 if (metric_prev - metric) < 1.0:
@@ -1798,9 +1800,9 @@ class Plan:
                 and (start not in self.manual_all_times)
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
                 and new_window_best[-1]["average"] == window["average"]
-                and (new_window_best[-1]["target"] < new_limit_best[-1]) 
+                and (new_window_best[-1]["target"] < new_limit_best[-1])
             ):
-                # Combine two windows of the same price, provided the second charge limit is greater than the first 
+                # Combine two windows of the same price, provided the second charge limit is greater than the first
                 # and the old charge never reaches it defined limit
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
