@@ -10,34 +10,25 @@
 
 import copy
 import os
-import re
 import time
-import math
 import sys
 import glob
 from datetime import datetime, timedelta
-import hashlib
-import traceback
 import argparse
 
-import pytz
 import requests
 import yaml
-from multiprocessing import Pool, cpu_count, set_start_method
-import asyncio
 import json
-import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp4
+from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate
 from futurerate import FutureRate
-from config import PREDICT_STEP, MINUTE_WATT
+from config import MINUTE_WATT
 from inverter import Inverter
-from config import INVERTER_DEF
 from compare import Compare
 from web import WebInterface
 from gecloud import GECloudDirect
@@ -858,7 +849,7 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
     # Non-REST Mode
     inv.rest_data = None
     ha.dummy_items["number.charge_limit"] = prev_soc
-    inv.adjust_battery_target(soc, isCharging=True, isExporting=False)
+    inv.adjust_battery_target(soc, isCharging=isCharging, isExporting=isExporting)
     if ha.get_state("number.charge_limit") != expect_soc:
         print("ERROR: Charge limit should be {} got {}".format(expect_soc, ha.get_state("number.charge_limit")))
         failed = True
@@ -871,9 +862,9 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"]["Target_SOC"] = expect_soc
 
-    inv.adjust_battery_target(soc, isCharging=True, isExporting=False)
+    inv.adjust_battery_target(soc, isCharging=isCharging, isExporting=isExporting)
     rest_command = dummy_rest.get_commands()
-    if soc != prev_soc:
+    if expect_soc != prev_soc:
         expect_data = [["dummy/setChargeTarget", {"chargeToPercent": expect_soc}]]
     else:
         expect_data = []
@@ -1991,6 +1982,7 @@ def run_inverter_tests():
     failed |= test_adjust_battery_target("adjust_target0", ha, inv, dummy_rest, 10, 0, True, False, 4)
     failed |= test_adjust_battery_target("adjust_target100", ha, inv, dummy_rest, 99, 100, True, False, 100)
     failed |= test_adjust_battery_target("adjust_target100r", ha, inv, dummy_rest, 100, 100, True, False, 100)
+    failed |= test_adjust_battery_target("adjust_target0x", ha, inv, dummy_rest, 50, 0, False, True, 50)
     if failed:
         return failed
 
@@ -2917,7 +2909,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         my_predbat.manual_export_times = []
         my_predbat.manual_all_times = []
         my_predbat.manual_charge_times = []
-        # my_predbat.set_export_low_power = True
+        my_predbat.set_export_low_power = True
         pass
 
     if re_do_rates:
@@ -2995,6 +2987,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
     my_predbat.debug_enable = True
+    my_predbat.plan_debug = True
 
     failed = False
     my_predbat.log("> ORIGINAL PLAN")

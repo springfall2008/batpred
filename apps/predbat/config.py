@@ -1180,6 +1180,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": False,
     },
     "GEC": {
         "name": "GivEnergy Cloud",
@@ -1206,6 +1207,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": False,
     },
     "GEE": {
         "name": "GivEnergy EMC",
@@ -1232,6 +1234,7 @@ INVERTER_DEF = {
         "has_idle_time": True,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": False,
     },
     "GS": {
         "name": "Ginlong Solis",
@@ -1258,6 +1261,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
     },
     "SE": {
         "name": "SolarEdge",
@@ -1284,6 +1288,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
     },
     "SX4": {
         "name": "Solax Gen4 (Modbus Power Control)",
@@ -1310,6 +1315,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
     },
     "SF": {
         "name": "Sofar HYD",
@@ -1336,6 +1342,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
     },
     "SFMB": {
         "name": "Sofar HYD",
@@ -1362,6 +1369,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
     },
     "HU": {
         "name": "Huawei Solar",
@@ -1388,7 +1396,8 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
-    },    
+        "target_soc_used_for_discharge": True,
+    },
     "SK": {
         "name": "Sunsynk",
         "has_rest_api": False,
@@ -1415,6 +1424,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
     },
     "SA": {
         "name": "Solar Assistant",
@@ -1442,6 +1452,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
     },
      "SIG": {
         "name": "Huawei Solar",
@@ -1468,6 +1479,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
     },
 }
 

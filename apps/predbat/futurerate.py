@@ -1,8 +1,6 @@
 from datetime import datetime, timedelta
-import os
 import requests
 import json
-import pytz
 import copy
 
 from config import TIME_FORMAT
