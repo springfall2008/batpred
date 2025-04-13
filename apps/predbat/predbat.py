@@ -33,7 +33,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.18.0"
+THIS_VERSION = "v8.18.1"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py"]
@@ -351,6 +351,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_export = 0.1
         self.metric_min_improvement_export_freeze = 0.1
+        self.metric_min_improvement_plan = 2.0
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
         self.metric_future_rate_offset_import = 0.0
