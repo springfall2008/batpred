@@ -15,7 +15,6 @@ from multiprocessing import Pool, cpu_count
 from config import PREDICT_STEP, TIME_FORMAT
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_export
-import sys
 
 """
 Used to mimic threads when they are disabled
@@ -584,9 +583,10 @@ class Plan:
         if self.plan_last_updated_minutes > self.minutes_now:
             self.log("Force recompute due to start of day")
             recompute = True
+            self.plan_valid = False
 
         # Shift onto next charge window if required
-        while self.charge_window_best and not recompute:
+        while self.charge_window_best:
             window = self.charge_window_best[0]
             if window["end"] <= self.minutes_now:
                 del self.charge_window_best[0]
@@ -597,7 +597,7 @@ class Plan:
                 break
 
         # Shift onto next export window if required
-        while self.export_window_best and not recompute:
+        while self.export_window_best:
             window = self.export_window_best[0]
             if window["end"] <= self.minutes_now:
                 del self.export_window_best[0]
@@ -608,6 +608,22 @@ class Plan:
 
         # Recompute?
         if recompute:
+            # Obtain previous plan data for comparison
+            if self.plan_valid:
+                charge_limit_best_prev = copy.deepcopy(self.charge_limit_best)
+                charge_window_best_prev = copy.deepcopy(self.charge_window_best)
+                charge_limit_percent_best_prev = copy.deepcopy(self.charge_limit_percent_best)
+                export_window_best_prev = copy.deepcopy(self.export_window_best)
+                export_limits_best_prev = copy.deepcopy(self.export_limits_best)
+                self.log("Recompute is saving previous plan...")
+            else:
+                charge_limit_best_prev = None
+                charge_window_best_prev = None
+                charge_limit_percent_best_prev = None
+                export_window_best_prev = None
+                export_limits_best_prev = None
+                self.log("Recompute, previous plan is invalid...")
+
             self.plan_valid = False  # In case of crash, plan is now invalid
 
             # Calculate best charge windows
@@ -800,7 +816,108 @@ class Plan:
                     self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                     self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
 
+            # Plan comparison
+            if charge_window_best_prev is not None:
+                # Run new plan
+                (
+                    cost,
+                    import_kwh_battery,
+                    import_kwh_house,
+                    export_kwh,
+                    soc_min,
+                    soc,
+                    soc_min_minute,
+                    battery_cycle,
+                    metric_keep,
+                    final_iboost,
+                    final_carbon_g,
+                ) = self.run_prediction(
+                    self.charge_limit_best,
+                    self.charge_window_best,
+                    self.export_window_best,
+                    self.export_limits_best,
+                    False,
+                    end_record=self.end_record,
+                )
+                (
+                    cost10,
+                    import_kwh_battery10,
+                    import_kwh_house10,
+                    export_kwh10,
+                    soc_min10,
+                    soc10,
+                    soc_min_minute10,
+                    battery_cycle10,
+                    metric_keep10,
+                    final_iboost10,
+                    final_carbon_g10,
+                ) = self.run_prediction(
+                    self.charge_limit_best,
+                    self.charge_window_best,
+                    self.export_window_best,
+                    self.export_limits_best,
+                    True,
+                    end_record=self.end_record,
+                )
+                metric, battery_value = self.compute_metric(self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+
+                # Run previous plan
+                (
+                    cost_prev,
+                    import_kwh_battery_prev,
+                    import_kwh_house_prev,
+                    export_kwh_prev,
+                    soc_min_prev,
+                    soc_prev,
+                    soc_min_minute_prev,
+                    battery_cycle_prev,
+                    metric_keep_prev,
+                    final_iboost_prev,
+                    final_carbon_g_prev,
+                ) = self.run_prediction(
+                    charge_limit_best_prev,
+                    charge_window_best_prev,
+                    export_window_best_prev,
+                    export_limits_best_prev,
+                    False,
+                    end_record=self.end_record,
+                )
+                (
+                    cost10_prev,
+                    import_kwh_battery10_prev,
+                    import_kwh_house10_prev,
+                    export_kwh_prev10_prev,
+                    soc_min10_prev,
+                    soc10_prev,
+                    soc_min_minute10_prev,
+                    battery_cycle10_prev,
+                    metric_keep10_prev,
+                    final_iboost10_prev,
+                    final_carbon_g10_prev,
+                ) = self.run_prediction(
+                    charge_limit_best_prev,
+                    charge_window_best_prev,
+                    export_window_best_prev,
+                    export_limits_best_prev,
+                    True,
+                    end_record=self.end_record,
+                )
+                metric_prev, battery_value = self.compute_metric(
+                    self.end_record, soc_prev, soc10_prev, cost_prev, cost10_prev, final_iboost_prev, final_iboost10_prev, battery_cycle_prev, metric_keep_prev, final_carbon_g_prev, import_kwh_battery_prev, import_kwh_house_prev, export_kwh_prev
+                )
+
+                self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
+                if (metric_prev - metric) < 1.0:
+                    self.log("New plan metric is not significantly better than previous plan, using previous plan")
+                    self.charge_window_best = copy.deepcopy(charge_window_best_prev)
+                    self.charge_limit_best = copy.deepcopy(charge_limit_best_prev)
+                    self.export_window_best = copy.deepcopy(export_window_best_prev)
+                    self.export_limits_best = copy.deepcopy(export_limits_best_prev)
+                else:
+                    self.log("New plan metric is significantly better from previous plan, using new plan")
+
             # Plan is now valid
+            self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))
             self.plan_valid = True
             self.plan_last_updated = self.now_utc
             self.plan_last_updated_minutes = self.minutes_now
@@ -1658,15 +1775,7 @@ class Plan:
 
             predict_minute_start = max(int((start - self.minutes_now) / 5) * 5, 0)
             predict_minute_end = int((end - self.minutes_now) / 5) * 5
-
-            soc_max = limit
-            if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                # Work out min/max soc
-                soc_max = 0
-                for minute in range(predict_minute_start, predict_minute_end + 5, 5):
-                    if minute in self.predict_soc:
-                        soc_max = max(soc_max, self.predict_soc[minute])
-                window["target"] = soc_max
+            window["target"] = self.predict_soc.get(predict_minute_end, limit)
 
             if (
                 new_window_best

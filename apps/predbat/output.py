@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import os
 import math
 from datetime import datetime, timedelta
 from config import THIS_VERSION, TIME_FORMAT, PREDICT_STEP
@@ -547,7 +546,7 @@ class Output:
         """
         Publish the current plan in HTML format
         """
-        plan_debug = self.get_arg("plan_debug")
+        plan_debug = self.plan_debug
         mode = self.predbat_mode
         if self.set_read_only:
             mode += " (read only)"
@@ -973,7 +972,7 @@ class Output:
             clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
             clipped_change = clipped_amount_end - clipped_amount
             clipped_change = dp2(clipped_change)
-            if clipped_change == 0.0:
+            if clipped_change == 0:
                 clipped_str = ""
             else:
                 clipped_str = str(clipped_change)
@@ -2296,6 +2295,7 @@ class Output:
         opts += "inverter_hybrid({}) ".format(self.inverter_hybrid)
         opts += "metric_min_improvement({} p) ".format(self.metric_min_improvement)
         opts += "metric_min_improvement_export({} p) ".format(self.metric_min_improvement_export)
+        opts += "metric_min_improvement_export_freeze({} p) ".format(self.metric_min_improvement_export_freeze)
         opts += "metric_battery_cycle({} p/kWh) ".format(self.metric_battery_cycle)
         opts += "metric_battery_value_scaling({} x) ".format(self.metric_battery_value_scaling)
         if self.carbon_enable:

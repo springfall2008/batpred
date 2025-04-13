@@ -17,7 +17,7 @@ import re
 from datetime import datetime, timedelta
 import json
 
-from utils import calc_percent_limit, str2time, dp0, dp2
+from utils import calc_percent_limit, str2time, dp2
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 from predbat import THIS_VERSION
 
@@ -406,7 +406,10 @@ var options = {
   chart: {
     type: 'line',
     width: width,
-    height: height
+    height: height,
+    animations: {
+        enabled: false
+    }
   },
   span: {
     start: 'minute', offset: '-12h'
@@ -749,12 +752,13 @@ var options = {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-    def prune_today(self, data, prune=True, group=15, prune_future=False):
+    def prune_today(self, data, prune=True, group=15, prune_future=False, intermediate=False):
         """
         Remove data from before today
         """
         results = {}
         last_time = None
+        prev_value = None
         for key in data:
             # Convert key in format '2024-09-07T15:40:09.799567+00:00' into a datetime
             if "." in key:
@@ -763,11 +767,18 @@ var options = {
                 timekey = datetime.strptime(key, TIME_FORMAT)
             if last_time and (timekey - last_time).seconds < group * 60:
                 continue
+            if intermediate and last_time and ((timekey - last_time).seconds > group * 60):
+                # Large gap, introduce intermediate data point
+                seconds_gap = (timekey - last_time).seconds
+                for i in range(1, seconds_gap // (group * 60)):
+                    new_time = last_time + timedelta(seconds=i * group * 60)
+                    results[new_time.strftime(TIME_FORMAT)] = prev_value
             if not prune or (timekey > self.base.midnight_utc):
                 if prune_future and (timekey > self.base.now_utc):
                     continue
                 results[key] = data[key]
                 last_time = timekey
+                prev_value = data[key]
         return results
 
     def get_chart(self, chart):
@@ -876,7 +887,7 @@ var options = {
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
         elif chart == "PV" or chart == "PV7":
             pv_power = self.prune_today(self.pv_power_hist, prune=chart == "PV")
-            pv_forecast = self.prune_today(self.pv_forecast_hist, prune=chart == "PV")
+            pv_forecast = self.prune_today(self.pv_forecast_hist, prune=chart == "PV", intermediate=True)
             pv_today_forecast = self.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate"), prune=False)
             pv_today_forecast10 = self.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate10"), prune=False)
             pv_today_forecast90 = self.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate90"), prune=False)

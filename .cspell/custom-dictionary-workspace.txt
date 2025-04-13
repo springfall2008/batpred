@@ -202,6 +202,9 @@ Selfrun
 Selfuse
 semodbus
 SFMB
+sigen
+sigenergy
+sigenstor
 socb
 socs
 sofar
