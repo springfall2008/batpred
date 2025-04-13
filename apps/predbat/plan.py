@@ -542,6 +542,58 @@ class Plan:
             window_n += 1
         return -1
 
+    def run_prediction_metric(self, charge_limit_best, charge_window_best, export_window_best, export_limits_best, end_record=None):
+        """
+        Run a single datapoint for PV and PV10 and return the metric
+        """
+
+        if end_record is None:
+            end_record = self.forecast_minutes
+
+        # Run new plan
+        (
+            cost,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+        ) = self.run_prediction(
+            charge_limit_best,
+            charge_window_best,
+            export_window_best,
+            export_limits_best,
+            False,
+            end_record=end_record,
+        )
+        (
+            cost10,
+            import_kwh_battery10,
+            import_kwh_house10,
+            export_kwh10,
+            soc_min10,
+            soc10,
+            soc_min_minute10,
+            battery_cycle10,
+            metric_keep10,
+            final_iboost10,
+            final_carbon_g10,
+        ) = self.run_prediction(
+            charge_limit_best,
+            charge_window_best,
+            export_window_best,
+            export_limits_best,
+            True,
+            end_record=end_record,
+        )
+        metric, battery_value = self.compute_metric(self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+        return metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh_battery + import_kwh_house, export_kwh
+
     def in_charge_window(self, charge_window, minute_abs):
         """
         Work out if this minute is within the a charge window
@@ -818,97 +870,12 @@ class Plan:
 
             # Plan comparison
             if charge_window_best_prev is not None:
-                # Run new plan
-                (
-                    cost,
-                    import_kwh_battery,
-                    import_kwh_house,
-                    export_kwh,
-                    soc_min,
-                    soc,
-                    soc_min_minute,
-                    battery_cycle,
-                    metric_keep,
-                    final_iboost,
-                    final_carbon_g,
-                ) = self.run_prediction(
-                    self.charge_limit_best,
-                    self.charge_window_best,
-                    self.export_window_best,
-                    self.export_limits_best,
-                    False,
-                    end_record=self.end_record,
-                )
-                (
-                    cost10,
-                    import_kwh_battery10,
-                    import_kwh_house10,
-                    export_kwh10,
-                    soc_min10,
-                    soc10,
-                    soc_min_minute10,
-                    battery_cycle10,
-                    metric_keep10,
-                    final_iboost10,
-                    final_carbon_g10,
-                ) = self.run_prediction(
-                    self.charge_limit_best,
-                    self.charge_window_best,
-                    self.export_window_best,
-                    self.export_limits_best,
-                    True,
-                    end_record=self.end_record,
-                )
-                metric, battery_value = self.compute_metric(self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
-
-                # Run previous plan
-                (
-                    cost_prev,
-                    import_kwh_battery_prev,
-                    import_kwh_house_prev,
-                    export_kwh_prev,
-                    soc_min_prev,
-                    soc_prev,
-                    soc_min_minute_prev,
-                    battery_cycle_prev,
-                    metric_keep_prev,
-                    final_iboost_prev,
-                    final_carbon_g_prev,
-                ) = self.run_prediction(
-                    charge_limit_best_prev,
-                    charge_window_best_prev,
-                    export_window_best_prev,
-                    export_limits_best_prev,
-                    False,
-                    end_record=self.end_record,
-                )
-                (
-                    cost10_prev,
-                    import_kwh_battery10_prev,
-                    import_kwh_house10_prev,
-                    export_kwh_prev10_prev,
-                    soc_min10_prev,
-                    soc10_prev,
-                    soc_min_minute10_prev,
-                    battery_cycle10_prev,
-                    metric_keep10_prev,
-                    final_iboost10_prev,
-                    final_carbon_g10_prev,
-                ) = self.run_prediction(
-                    charge_limit_best_prev,
-                    charge_window_best_prev,
-                    export_window_best_prev,
-                    export_limits_best_prev,
-                    True,
-                    end_record=self.end_record,
-                )
-                metric_prev, battery_value = self.compute_metric(
-                    self.end_record, soc_prev, soc10_prev, cost_prev, cost10_prev, final_iboost_prev, final_iboost10_prev, battery_cycle_prev, metric_keep_prev, final_carbon_g_prev, import_kwh_battery_prev, import_kwh_house_prev, export_kwh_prev
-                )
+                metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)
+                metric_prev, battery_value_prev, cost_prev, metric_keep_prev, battery_cycle_prev, final_carbon_g_prev, import_kwh_prev, export_kwh_prev = self.run_prediction_metric(charge_limit_best_prev, charge_window_best_prev, export_window_best_prev, export_limits_best_prev, end_record=self.end_record)
 
                 self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
-                if (metric_prev - metric) < 1.0:
-                    self.log("New plan metric is not significantly better than previous plan, using previous plan")
+                if (metric_prev - metric) < self.metric_min_improvement_plan:
+                    self.log("New plan metric is not significantly better (metric_min_improvement_plan {}) than previous plan, using previous plan".format(self.metric_min_improvement_plan))
                     self.charge_window_best = copy.deepcopy(charge_window_best_prev)
                     self.charge_limit_best = copy.deepcopy(charge_limit_best_prev)
                     self.export_window_best = copy.deepcopy(export_window_best_prev)
@@ -2056,6 +2023,7 @@ class Plan:
                     if not self.car_charging_from_battery and self.hit_car_window(self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"]):
                         continue
 
+                    self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                     best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
                         window_n,
                         record_export_windows,
@@ -2066,6 +2034,7 @@ class Plan:
                         end_record=end_record,
                     )
                     self.export_limits_best[window_n] = best_soc
+                    self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                     self.export_window_best[window_n]["start"] = best_start
             count += 1
             if count >= 8:
@@ -2336,7 +2305,7 @@ class Plan:
                             )
                             if best_soc != self.charge_limit_best[window_n]:
                                 self.charge_limit_best[window_n] = best_soc
-                                if debug_mode:
+                                if debug_mode and 0:
                                     self.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best")
                                     self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                                     self.update_target_values()
@@ -2412,6 +2381,7 @@ class Plan:
                                 )
                                 printed_set = True
 
+                            self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                             best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
                                 window_n,
                                 record_export_windows,
@@ -2424,8 +2394,9 @@ class Plan:
                             )
                             if best_soc != self.export_limits_best[window_n] or best_start != self.export_window_best[window_n]["start"]:
                                 self.export_limits_best[window_n] = best_soc
+                                self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                                 self.export_window_best[window_n]["start"] = best_start
-                                if debug_mode:
+                                if debug_mode and 0:
                                     self.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best")
                                     self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                                     self.update_target_values()
@@ -2483,6 +2454,58 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
+        # Swaps
+        if self.calculate_best_export and record_export_windows >= 2:
+            swapped = True
+            while swapped:
+                selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)
+                self.log("Swap export optimisation started metric {} cost {} battery_value {}".format(dp2(selected_metric), dp2(selected_cost), dp2(selected_battery_value)))
+                swapped = False
+                for window_n_id in range(record_export_windows - 1):
+                    window_n = record_export_windows - 1 - window_n_id
+                    for window_n_target in range(window_n + 1, min(record_export_windows, window_n + 2)):
+                        window_start = self.export_window_best[window_n]["start"]
+                        window_length = self.export_window_best[window_n]["end"] - window_start
+                        window_start_target = self.export_window_best[window_n_target]["start"]
+                        window_length_target = self.export_window_best[window_n_target]["end"] - window_start_target
+
+                        export_limit = self.export_limits_best[window_n]
+                        export_limit_target = self.export_limits_best[window_n_target]
+
+                        if window_start_target not in self.manual_all_times and export_limit < 100 and export_limit_target == 100 and window_length <= window_length_target:
+
+                            #self.log("Trying swap window {} with window {} export limit {} onto {}".format(window_n, window_n_target, export_limit, export_limit_target))
+                            # Don't optimise a charge window that hits an export window if this is disallowed
+                            if not self.calculate_export_oncharge:
+                                hit_charge = self.hit_charge_window(self.charge_window_best, self.export_window_best[window_n_target]["start"], self.export_window_best[window_n_target]["end"])
+                                if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
+                                    continue
+
+                            # Set the current window to off and optimise the swap window
+                            self.export_limits_best[window_n] = 100
+                            self.export_limits_best[window_n_target] = export_limit
+                            self.export_window_best[window_n_target]["start"] = self.export_window_best[window_n_target]["end"] - window_length
+
+                            best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record)
+
+                            if best_metric < selected_metric:
+                                self.log("Swap export window {} with {} metric {} cost {} keep {} cycle {} carbon {} import {}".format(window_n, window_n_target, best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
+                                selected_metric = best_metric
+                                selected_battery_value = best_battery_value
+                                selected_cost = best_cost
+                                selected_keep = best_keep
+                                selected_cycle = best_cycle
+                                selected_carbon = best_carbon
+                                selected_import = best_import
+                                swapped = True
+                            else:
+                                # Revert the change
+                                #self.log("Don't swap export window {} with {} metric {} (best was {}) cost {} keep {} cycle {} carbon {} import {}".format(window_n, window_n_target, best_metric, selected_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
+                                self.export_limits_best[window_n] = export_limit
+                                self.export_limits_best[window_n_target] = 100
+                                self.export_window_best[window_n_target]["start"] = window_start_target
+            self.log("Swap export optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(selected_metric), dp2(selected_cost), dp2(selected_keep), dp2(selected_cycle), dp0(selected_carbon), dp2(selected_import)))
+
         if self.calculate_second_pass:
             self.log("Second pass optimisation started")
             count = 0
@@ -2532,6 +2555,7 @@ class Plan:
                             end_record=self.end_record,
                         )
                         self.export_limits_best[window_n] = best_soc
+                        self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                         self.export_window_best[window_n]["start"] = best_start
                 if (count % 16) == 0:
                     self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, dp2(best_keep), dp0(best_carbon), dp2(best_import), dp2(best_cost)))
@@ -2671,7 +2695,7 @@ class Plan:
                 self.predict_carbon_best = pred.predict_carbon_best
                 self.predict_clipped_best = pred.predict_clipped_best
 
-            if self.debug_enable or save:
+            if save:
                 self.log(
                     "predict {} end_record {} final soc {} kWh metric {} {} metric_keep {} min_soc {} @ {} kWh load {} pv {}".format(
                         save,

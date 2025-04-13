@@ -1875,6 +1875,7 @@ class Fetch:
         # Metric config
         self.metric_min_improvement = self.get_arg("metric_min_improvement")
         self.metric_min_improvement_export = self.get_arg("metric_min_improvement_export")
+        self.metric_min_improvement_plan = self.get_arg("metric_min_improvement_plan")
         self.metric_min_improvement_export_freeze = self.get_arg("metric_min_improvement_export_freeze")
         self.metric_battery_cycle = self.get_arg("metric_battery_cycle")
         self.metric_self_sufficiency = self.get_arg("metric_self_sufficiency")
