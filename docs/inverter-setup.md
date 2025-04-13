@@ -4,20 +4,20 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
 
    | Name                          | Integration     | Template |
    | :---------------------------- | :------------- | :------------ |
-   | GivEnergy with GivTCP | [GivTCP](https://github.com/britkat1980/ha-addons) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
-   | Solis Hybrid inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
-   | Solax Gen4 inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
-   | Sofar inverters | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) |  [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
-   | Huawei inverters | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
-   | SolarEdge inverters | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
-   | Givenergy with GE Cloud | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
-   | Givenergy with GE Cloud EMC | [ge_cloud EMC](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
-   | Givenergy/Octopus No Home Assistant | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
-   | SunSynk | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
-   | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
-   | LuxPower | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
-   | Growatt with Solar Assistant | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [solar_assistant_growatt.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt.yaml) |
-   | Sigenergy | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
+   | [GivEnergy with GivTCP](#givenergy-with-givtcp) | [GivTCP](https://github.com/britkat1980/ha-addons) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
+   | [Solis Hybrid inverters](#solis-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
+   | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
+   | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) |  [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
+   | [Huawei inverters](#huawei-inverters) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
+   | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
+   | [Givenergy with GE Cloud](#givenergy-with-ge_cloud) | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
+   | [Givenergy with GE Cloud EMC](#givenergy-with-emc) | [ge_cloud EMC](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
+   | [Givenergy/Octopus No Home Assistant](#givenergyoctopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
+   | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
+   | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
+   | [LuxPower](#lux-power) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
+   | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [solar_assistant_growatt.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt.yaml) |
+   | [Sigenergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -171,11 +171,12 @@ The discussion ticket is here: <https://github.com/springfall2008/batpred/issues
 The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181>
 
 - Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> and modify them for your system
+- The default entity name prefix for the integration is 'solaredge' but if you have changed this on installation then you will need to amend the apps.yaml template and the template sensors to match your new prefix
 - Ensure that **number.solaredge_i1_storage_command_timeout** is set to a reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled
 - Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
-and switch.solaredge_i1_advanced_power_control must be on.
+and **switch.solaredge_i1_advanced_power_control** must be on.
 
-- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create this as a template within your Home Assistant configuration.yml
+- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template within your Home Assistant configuration.yml
 Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in apps.yaml
 if you can't get it to work
 
@@ -220,26 +221,108 @@ sensor:
     name: solar_panel_production_kwh
 ```
 
+If you have multiple batteries connected to your SolarEdge inverter and are using the SolarEdge Modbus Multi integration, this enumerates the multiple batteries as b1, b2, b3, etc with separate entities per battery.
+
+You will need to make a number of changes to the solaredge apps.yaml, replacing the following entries:
+
+```yaml
+  battery_rate_max:
+    - sensor.calc_power_batteries_max_charge_power # maximum charge power of all the batteries
+  battery_power:  
+    - sensor.calc_power_batteries_dc_power  
+  soc_percent:
+    - sensor.calc_battery_all_state # average SoC of the batteries
+  soc_max:
+    - sensor.calc_battery_total_capacity # combined kWh maximum value of all the batteries
+  soc_kw:  
+    - sensor.calc_battery_current_capacity
+```
+
+- set charge_rate and discharge_rate to the SolarEdge inverter values, e.g. 5000
+
+And add the following additional template sensors to configuration.yaml:
+
+```yaml
+    - sensor:
+      # Template sensor for Max Battery Charge rate
+      # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
+      # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
+      - name: "Calc Power - Batteries Max Charge Power"
+        unique_id: calc_power_batteries_max_charge_power
+        unit_of_measurement: "W"
+        device_class: "power"
+        state_class: "measurement"
+        state: >
+          {% set myB1 = float(states('sensor.solaredge_b1_max_charge_power'),0) %}
+          {% set myB2 = float(states('sensor.solaredge_b2_max_charge_power'),0) %}
+          {% set myB3 = float(states('sensor.solaredge_b3_max_charge_power'),0) %}
+          {% set myValue = ((myB1 + myB2 + myB3)) | int %}
+          {{ (myValue if (myValue) > 5000 else 5000) }}
+
+      # Calculate Total Battery Power Value
+      - name: "Calc Power - Batteries DC Power"
+        unique_id: calc_power_batteries_dc_power
+        unit_of_measurement: "W"
+        device_class: "power"
+        state_class: "measurement"
+        state: >
+          {% set myB1 = float(states('sensor.solaredge_b1_dc_power'),0) %}
+          {% set myB2 = float(states('sensor.solaredge_b2_dc_power'),0) %}
+          {% set myB3 = float(states('sensor.solaredge_b3_dc_power'),0) %}
+          {% set myValue = ((myB1 + myB2 + myB3)) %}
+          {{ myValue }}
+
+      # Average state of charge across the batteries
+      - name: "Calc Battery All State"
+        unique_id: calc_battery_all_state
+        unit_of_measurement: "%"
+        state: >
+          {% set myB1 = float(states('sensor.solaredge_b1_state_of_energy'),0) %}
+          {% set myB2 = float(states('sensor.solaredge_b2_state_of_energy'),0) %}
+          {% set myB3 = float(states('sensor.solaredge_b3_state_of_energy'),0) %}
+          {% set myValue = ((myB1 + myB2 + myB3) / 3) | round(0) %}
+          {{ myValue }}
+
+      # Total Energy Stored in the Batteries
+      - name: "Calc Battery Total Capacity"
+        unique_id: calc_battery_total_capacity
+        unit_of_measurement: kWh
+        state: >
+          {% set myB1 = float(states('sensor.solaredge_b1_maximum_energy'),0) %}
+          {% set myB2 = float(states('sensor.solaredge_b2_maximum_energy'),0) %}
+          {% set myB3 = float(states('sensor.solaredge_b3_maximum_energy'),0) %}
+          {% set myValue = ((myB1 + myB2 + myB3)) %}
+          {{ myValue }}
+
+      # Current Energy Stored in the Batteries
+      - name: "Calc Battery Current Capacity"
+        unique_id: calc_battery_current_capacity
+        unit_of_measurement: kWh
+        state: >
+          {% set myValue = (float(states('sensor.calc_battery_all_state'),0) / 100) * float(states('sensor.calc_battery_total_capacity'),0) %}
+          {{ myValue }}
+```
+
 ## GivEnergy with ge_cloud
 
 This is an experimental system, please discuss it on the ticket: <https://github.com/springfall2008/batpred/issues/905>
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
 - Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit
-    - Set geserial to your inverter serial
-- Make sure discharge down to registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled (if you have them)
+    - Set geserial to your inverter serial number
+- Make sure that the 'discharge down to' registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled in the portal (if you have them)
 
 ## GivEnergy with EMC
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
 - Now copy the template givenergy_emc.yaml from templates into your apps.yaml and edit
     - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
-    - Set geseriale to the EMS inverter serial number (look in HA for entity names)
-- Turn off slots 2, 3 and 4 for charge, export and discharge as Predbat will only use 1 slot (set the start and end times to 00:00)
+    - Set geseriale to the EMS inverter serial number (look in HA for the entity names)
+- Turn off charge, export and discharge slots 2, 3 and 4 as Predbat will only use slot 1 - set the start and end times for these to 00:00
 
 ## GivEnergy/Octopus Cloud Direct - No Home Assistant
 
-- Take the template and enter you GivEnergy API key directly into apps.yaml
+- Take the template and enter your GivEnergy API key directly into apps.yaml
 - Set your Octopus API key in apps.yaml
 - Set your Solcast API key in apps.yaml
 - Review any other configuration settings
@@ -260,6 +343,55 @@ The template is in the templates area, give it a try
 This requires the LuxPython component which integrates with your Lux Power inverter
 
 - Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required
+- LuxPower does not have a SoC max entity in kWh and the SoC percentage entity never reports the battery reaching 100%, so create the following template helper sensors:
+
+```text
+name: Lux SoC Max kWh
+template:
+  {{ (states("sensor.lux_battery_capacity_ah") |float) *
+     (states("sensor.lux_battery_voltage_live") | float) / 1000}}
+unit of measurement: kWh
+device class: Energy
+state class: Total
+```
+
+```text
+name: Lux Battery SoC Corrected
+template:
+  {% set soc = states('sensor.lux_battery')|int %}
+  {% set charging_stopped = states('sensor.lux_bms_limit_charge_live')|float == 0 %}
+  {% if charging_stopped and soc > 97 %}
+    100
+  {% else %}
+    {{ soc }}
+  {% endif %}
+unit of measurement: %
+device class: Battery
+state class: Measurement
+```
+
+- Add the following automation to set the LuxPower discharge SoC when Predbat is exporting:
+
+```yaml
+alias: Lux Set Discharge Target SOC (predbat)
+description: ""
+triggers:
+  - entity_id:
+      - binary_sensor.predbat_exporting
+      - number.lux_ac_battery_charge_level
+    trigger: state
+conditions:
+  - condition: state
+    entity_id: binary_sensor.predbat_exporting
+    state: "on"
+actions:
+  - action: number.set_value
+    data:
+      value: "{{ states('number.lux_ac_battery_charge_level') }}"
+    target:
+      entity_id: number.lux_forced_discharge_battery_level
+mode: single
+```
 
 ## Growatt with Solar Assistant
 
@@ -270,20 +402,11 @@ Copy the template solar_assistant_growatt.yaml from templates into your apps.yam
 ## Sunsynk
 
 - Copy the Sunsynk apps.yaml template and edit for your system.
-- Create the automations below
-- Create the value templates below
-
-See: <https://github.com/springfall2008/batpred/issues/1331>
-
-### SunSynk automations
-
-Copy into your HA automations
-
-#### Predbat Charge/Discharge Control
+- Create the following Home Assistant automations:
 
 ```yaml
 alias: Predbat Charge / Discharge Control
-description: ""
+description: "Turn SunSynk charge/discharge on/off to mirror Predbat"
 trigger:
   - platform: state
     entity_id:
@@ -314,7 +437,6 @@ action:
               - predbat_charge_on
         sequence:
           - service: switch.turn_on
-            metadata: {}
             data: {}
             target:
               entity_id: switch.sunsynk_grid_charge_timezone1
@@ -334,7 +456,6 @@ action:
               - predbat_discharge_on
         sequence:
           - service: switch.turn_on
-            metadata: {}
             data: {}
             target:
               entity_id: switch.sunsynk_solar_sell
@@ -351,11 +472,9 @@ action:
 mode: single
 ```
 
-#### Update the charge limits across all timezone's
-
 ```yaml
 alias: PredBat - Copy Charge Limit
-description: Copy Battery SOC to all time slots
+description: Copy Battery SOC to all timezone (time) slots
 trigger:
   - platform: state
     entity_id:
@@ -375,57 +494,37 @@ action:
 mode: single
 ```
 
-### SunSynk Value templates
-
-Copy into your template/sensor area of configuration.yaml
+- Create the following templates sensors in your configuration.yaml:
 
 ```yaml
 template:
   sensor:
-    xxxxx
-```
-
-#### Sunsynk Battery Max Charge Rate
-
-```yaml
-- name: "sunsynk_max_battery_charge_rate"
-  unit_of_measurement: "w"
-  state_class: measurement
-  state: >
-    {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+    - name: "sunsynk_max_battery_charge_rate"
+      unit_of_measurement: "w"
+      state_class: measurement
+      state: >
+        {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
         * states('sensor.sunsynk_battery_voltage')|float]|min }}
-```
 
-#### Sunsynk Battery Max Discharge Rate
-
-```yaml
-- name: "sunsynk_max_battery_discharge_rate"
-  unit_of_measurement: "w"
-  state_class: measurement
-  state: >
-    {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+    - name: "sunsynk_max_battery_discharge_rate"
+      unit_of_measurement: "w"
+      state_class: measurement
+      state: >
+        {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
         * states('sensor.sunsynk_battery_voltage')|float]|min }}
-```
 
-#### Sunsynk Charge Rate Calc
+    - name: "sunsynk_charge_rate_calc"
+      unit_of_measurement: "w"
+      state_class: measurement
+      state: >
+        {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+        * states('sensor.sunsynk_battery_voltage')|float]|min }}
 
-```yaml
-- name: "sunsynk_charge_rate_calc"
-  unit_of_measurement: "w"
-  state_class: measurement
-  state: >
-     {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
-         * states('sensor.sunsynk_battery_voltage')|float]|min }}
-```
-
-#### Sunsynk Discharge Rate Calc
-
-```yaml
-- name: "sunsynk_discharge_rate_calc"
-  unit_of_measurement: "w"
-  state_class: measurement
-  state: >
-     {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+    - name: "sunsynk_discharge_rate_calc"
+      unit_of_measurement: "w"
+      state_class: measurement
+      state: >
+        {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
          * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
@@ -581,13 +680,13 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 - Create a GitHub ticket for support and add what you know to the ticket
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
 - You can create a new inverter type in apps.yaml and change the options as to which controls it has
-- Set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) to match the custom inverter definition
+- Set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) to match the custom inverter definition ('MINE' in the example below)
 - The easy way to integrate using Home Assistant services to start charges and discharges, edit the template below:
 
 ```yaml
- inverter_type: MINE
- inverter:
-    name : "My Shiny new Inverter"
+  inverter_type: MINE
+  inverter:
+    name: "My Shiny new Inverter"
     has_rest_api: False
     has_mqtt_api: False
     output_charge_control: "power"
@@ -661,7 +760,7 @@ For each service you wish to use it must be defined in apps.yaml.
 There are two ways to define a service, the basic mode:
 
 ```yaml
-charge_start_service: my_service_name_charge
+  charge_start_service: my_service_name_charge
 ```
 
 Will call my_service_name_charge for the charge start service.
@@ -669,13 +768,13 @@ Will call my_service_name_charge for the charge start service.
 Or the custom method:
 
 ```yaml
-charge_start_service:
-   - service: my_charge_start_service
-     device_id: "{device_id}"
-     power: "{power}"
-     soc: "{target_soc}"
-     charge_start_time: "{charge_start_time}"
-     charge_end_time: "{charge_end_time}"
+  charge_start_service:
+    - service: my_charge_start_service
+      device_id: "{device_id}"
+      power: "{power}"
+      soc: "{target_soc}"
+      charge_start_time: "{charge_start_time}"
+      charge_end_time: "{charge_end_time}"
 ```
 
 Here you can define all the values passed to the service and use the default values from the template or define your own.
@@ -683,25 +782,25 @@ Here you can define all the values passed to the service and use the default val
 You can also call more than one service e.g:
 
 ```yaml
-charge_start_service:
-   - service: my_charge_start_service
-     device_id: "{device_id}"
-     power: "{power}"
-     soc: "{target_soc}"
-   - service: switch.turn_off
-     entity_id: switch.tsunami_charger
+  charge_start_service:
+    - service: my_charge_start_service
+      device_id: "{device_id}"
+      power: "{power}"
+      soc: "{target_soc}"
+    - service: switch.turn_off
+      entity_id: switch.tsunami_charger
 ```
 
 Note: By default the service will only be called once until things change, e.g. **charge_start_service** will be called once and then won't be called again until **charge_stop_service** stops the charge.
 If however, you want the service to be called on each Predbat run then you should set **repeat** to True for the given service e.g:
 
 ```yaml
-charge_start_service:
-   - service: my_charge_start_service
-     device_id: "{device_id}"
-     power: "{power}"
-     soc: "{target_soc}"
-     repeat: True
+  charge_start_service:
+    - service: my_charge_start_service
+      device_id: "{device_id}"
+      power: "{power}"
+      soc: "{target_soc}"
+      repeat: True
 ```
 
 #### charge_start_service
@@ -772,12 +871,13 @@ When True the inverter has a setting defined in apps.yaml called **scheduled_dis
 
 ### has_target_soc
 
-When True the inverter has a target soc setting in apps.yaml called **charge_limit** when False charging must be turned on and off by Predbat rather
-than the inverter doing it based on the target %
+When True the inverter has a target charge SoC setting in apps.yaml called **charge_limit**.
+When False charging must be turned on and off by Predbat rather than the inverter doing it based on the target SoC %.
 
 ### has_reserve_soc
 
-When True the inverter has a reserve soc setting in apps.yaml called **reserve**
+When True the inverter has a discharge reserve SoC setting in apps.yaml called **reserve** which is the target % to discharge the battery down to.
+When False discharging must be turned on and off by Predbat rather than the inverter doing it based on discharge Soc %.
 
 ### has_timed_pause
 

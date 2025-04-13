@@ -80,6 +80,17 @@ class HAInterface:
             else:
                 self.log("Info: Using SQL Lite database as primary data source, no HA interface available")
         else:
+            self.log("Getting slug id from HA supervisor")
+
+            # Get the current addon info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
+            res = self.api_call("/addons/self/info", core=False, silent=True)
+            if res:
+                # get add-on slug name which is the actual directory name under /addon_configs that /config is mounted to
+                self.slug = res["data"]["slug"]
+                self.log("Info: Add-on slug is {}".format(self.slug))
+
+            self.log("Checking Predbat can talk to HA")
+
             check = self.api_call("/api/services")
             if not check:
                 self.log("Warn: Unable to connect directly to Home Assistant at {}, please check your configuration of ha_url/ha_key".format(self.ha_url))
@@ -88,11 +99,7 @@ class HAInterface:
             else:
                 self.log("Info: Connected to Home Assistant at {}".format(self.ha_url))
 
-                res = self.api_call("/addons/self/info", core=False)
-                if res:
-                    # get add-on slug name which is the actual directory name under /addon_configs that /config is mounted to
-                    self.slug = res["data"]["slug"]
-                    self.log("Info: Add-on slug is {}".format(self.slug))
+                self.log("Creating websocket")
 
                 self.base.create_task(self.socketLoop())
                 self.websocket_active = True
@@ -502,22 +509,27 @@ class HAInterface:
             data_frame = {"domain": domain, "service": service, "service_data": data}
             return run_async(self.base.trigger_callback(data_frame))
 
-    def api_call(self, endpoint, data_in=None, post=False, core=True):
+    def api_call(self, endpoint, data_in=None, post=False, core=True, silent=False):
         """
         Make an API call to Home Assistant.
 
         :param endpoint: The API endpoint to call.
         :param data_in: The data to send in the body of the request.
         :param post: True if this is a POST request, False for GET.
+        :param core: True is this is a call to HA Core, False if it is a Supervisor call
+        :param silent: True if warning message from the API call is to be suppressed
         :return: The response from the API.
         """
         if core:
             url = self.ha_url + endpoint
+            key = self.ha_key
         else:
-            url = self.ha_url.replace("/core", "") + endpoint
+            # make an API call to the Supervisor using the supervisor token
+            url = "http://supervisor" + endpoint
+            key = os.environ.get("SUPERVISOR_TOKEN", None)
 
         headers = {
-            "Authorization": "Bearer " + self.ha_key,
+            "Authorization": "Bearer " + key,
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -535,8 +547,10 @@ class HAInterface:
             data = response.json()
             self.api_errors = 0
         except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Failed to decode response {} from {}".format(response, url))
-            self.api_errors += 1
+            if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
+                self.log("Warn: Failed to decode response {} from {}".format(response, url))
+                self.api_errors += 1
+
             data = None
         except (requests.Timeout, requests.exceptions.ReadTimeout):
             self.log("Warn: Timeout from {}".format(url))

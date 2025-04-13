@@ -23,22 +23,45 @@ You don't need to restart the Predbat or AppDaemon add-on for your edits to take
 When editing the `apps.yaml` file you must ensure that the file remains correctly formatted.  YAML files are especially finicky about how the file contents are indented
 and it's very easy to end up with an incorrectly formatted file that will cause problems for Predbat.
 
-The [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA) is a good introduction video to how YAML should be correctly structured but as a brief introduction,
-YAML files consist of an entity name, colon then the entity value, for example:
+The [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA) is a good introduction video to how YAML should be correctly structured but as a brief introduction:
+
+At the start of the apps.yaml is the predbat module definition:
 
 ```yaml
-timezone: Europe/London
+pred_bat:
+  module: predbat
+  class: PredBat
 ```
 
-Or the entity can be set to a list of values with each value being on a new line, two spaces, a dash, and then the value.  For example:
+YAML can be thought of as a tree structure with 'pred_bat' at the top of the tree and everything else, e.g. 'module' and 'class' being children of the pred_bat tree.
+
+Each child entry must be indented by two spaces under the parent it follows, so 'module' and 'class' are thus children of 'pred_bat'.
+
+The YAML file consists of configuration item, a colon, and then the configuration value, for example, timezone is a child configuration item under the over-arching 'pred_bat' parent:
 
 ```yaml
-car_charging_now_response:
-  - 'yes'
-  - 'on'
+  timezone: Europe/London
 ```
 
-The two spaces before the dash are especially critical. It's easy to mis-edit and have one or three spaces which isn't valid YAML.
+If the configuration item is a list of values, each of the list values appears on a new line, indented by a further two spaces, a dash, and then the value.
+For example, car_charging_response is a child of 'pred_bat' and consists of two values, 'yes' and 'no':
+
+```yaml
+  car_charging_now_response:
+    - 'yes'
+    - 'on'
+```
+
+Child entries can have children of their own, so for example rates_import_override is a child of the overarching 'pred_bat', and it has children configuration items of its own being 'start', 'end' and 'rate':
+
+```yaml
+  rates_import_override:
+    - start: '13:00:00'
+      end: '14:00:00'
+      rate: 0
+```
+
+The indentation of children being two spaces indented from their parents and there being two spaces before the dash are especially critical. It's easy to mis-edit and have one or three spaces which isn't valid YAML.
 
 NB: the sequence of entries in `apps.yaml` doesn't matter, as long as the YAML itself is structured correctly you can move things and edit things anywhere in the file.
 
@@ -90,9 +113,9 @@ timezone: Europe/London
 Sets your symbol to use for your main currency e.g. £ or $ and for 1/100th unit e.g. p or c
 
 ```yaml
-currency_symbols:
-  - '£'
-  - 'p'
+  currency_symbols:
+    - '£'
+    - 'p'
 ```
 
 ### template
@@ -101,7 +124,7 @@ Initially set to True, this is used to stop Predbat from operating until you hav
 Once you have made all other required changes to apps.yaml this line should be deleted or commented out:
 
 ```yaml
-template: True
+  template: True
 ```
 
 ### Home Assistant connection
@@ -126,8 +149,8 @@ Currently, if this communication is not established Predbat will fall back to Ap
 In future versions of Predbat, AppDaemon will be removed.
 
 ```yaml
-ha_url: 'http://homeassistant.local:8123'
-ha_key: 'xxxxxxxxxxx'
+  ha_url: 'http://homeassistant.local:8123'
+  ha_key: 'xxxxxxxxxxx'
 ```
 
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
@@ -144,20 +167,24 @@ Valid values are:
 - 'N' - Use N threads, recommended values are between 2 and 8
 
 ```yaml
-threads: auto
+  threads: auto
 ```
 
 ## Web interface
 
 Docker users can change the web port by setting **web_port** to a new port number, the default of 5052 must always be used for the Predbat add-on.
 
+```yaml
+  web_port: 5052
+````
+
 ### notify_devices
 
 A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
 
 ```yaml
-notify_devices:
-  - mobile_app_treforsiphone12_2
+  notify_devices:
+    - mobile_app_treforsiphone12_2
 ```
 
 ### days_previous
@@ -170,16 +197,16 @@ It's recommended that you set days_previous so Predbat calculates an average hou
 For example, if you just want Predbat to assume the house load on a particular day is the same as the same day of last week:
 
 ```yaml
-days_previous:
-  - 7
+  days_previous:
+    - 7
 ```
 
 Or if you want Predbat to take the average of the same day for the last two weeks:
 
 ```yaml
-days_previous:
-  - 7
-  - 14
+  days_previous:
+    - 7
+    - 14
 ```
 
 Further details and worked examples of [how days_previous works](#understanding-how-days_previous-works) are covered at the end of this document.
@@ -197,16 +224,16 @@ recorder:
 For example, to apply a 100% weighting for the first-day entry in days_previous, but only a 50% weighting to the second day in days_previous:
 
 ```yaml
-days_previous_weight:
-  - 1
-  - 0.5
+  days_previous_weight:
+    - 1
+    - 0.5
 ```
 
 The default value is 1, and all history days are equally weighted, so if you don't want to weight individual days you can simply use:
 
 ```yaml
-days_previous_weight:
-  - 1
+  days_previous_weight:
+    - 1
 ```
 
 ### forecast_hours
@@ -215,7 +242,7 @@ the number of hours that Predbat will forecast, 48 is the suggested amount, alth
 such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
 
 ```yaml
-forecast_hours: 48
+  forecast_hours: 48
 ```
 
 ## Inverter information
@@ -236,11 +263,11 @@ If you set **ge_cloud_data** to False then Predbat will use the local data for h
 you have a few days work (at least days_previous days) before this will work correctly.
 
 ```yaml
-ge_cloud_data: True
-ge_cloud_serial: '{geserial}'
-ge_cloud_key: 'xxxxx'
-ge_cloud_direct: True
-ge_cloud_automatic: True
+  ge_cloud_data: True
+  ge_cloud_serial: '{geserial}'
+  ge_cloud_key: 'xxxxx'
+  ge_cloud_direct: True
+  ge_cloud_automatic: True
 ```
 
 ### num_inverters
@@ -248,7 +275,7 @@ ge_cloud_automatic: True
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
 
 ```yaml
-num_inverters: 1
+  num_inverters: 1
 ```
 
 ### inverter_type
@@ -274,18 +301,19 @@ If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-
 ### geserial
 
 Only for GE inverters, this is a helper regular expression to find your inverter serial number, if it doesn't work edit it manually or change individual entities to match.
-If you  have more than one inverter you will need one per inverter to be used in the later configuration lines
+
+If you  have more than one GivEnergy inverter you will need one per inverter to be used in the later configuration lines.  If you only have a single GivEnergy inverter then comment out all lines that refer to geserial2 in apps.yaml.
 
 ```yaml
-geserial: 're:sensor.givtcp_(.+)_soc_kwh'
-geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
+  geserial: 're:sensor.givtcp_(.+)_soc_kwh'
+  geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
 ```
 
 If you are running GivTCP v3 and have an 'All-In-One' (AIO) or a 3-phase inverter then the helper regular expression will not correctly work
 and you will need to manually set geserial in apps.yaml to your inverter serial number, e.g.:
 
 ```yaml
-geserial: 'chNNNNgZZZ'
+  geserial: 'chNNNNgZZZ'
 ```
 
 *TIP:* If you have a single GivEnergy AIO, all control is directly to the AIO and the gateway is not required.<BR>
@@ -558,14 +586,14 @@ The **mqtt_topic** in apps.yaml set in the root of the MQTT topic (shown as **to
 
 #### Set reserve
 
-Called when the reserve is changed
+Called when the reserve (discharge-to %) is changed
 
 topic: **topic**/set/reserve
 payload: reserve
 
 #### Set target soc
 
-Called when the target (charge %) SOC is set.
+Called when the target (charge-to %) SoC is changed
 
 topic: **topic**/set/target_soc
 payload: soc
@@ -616,8 +644,10 @@ They are unlikely to need changing although a few people have reported their ent
 
 - **pv_forecast_today** - Entity name for today's Solcast forecast
 - **pv_forecast_tomorrow** - Entity name for tomorrow's Solcast's forecast
-- **pv_forecast_d3** - Entity name for Solcast's forecast for day 3
-- **pv_forecast_d4** - Entity name for Solcast's forecast for day 4 (also d5, d6 & d7 are supported, but not that useful)
+- **pv_forecast_d3** - Entity name for Solcast's forecast for the day after tomorrow
+- **pv_forecast_d4** - Entity name for Solcast's forecast for two days after tomorrow
+
+Sensors for d5, d6 & d7 are supported, but not that useful so are not pre-defined in the template.
 
 If you do not have a PV array then comment out or delete these Solcast lines from `apps.yaml`.
 
@@ -625,25 +655,25 @@ Alternatively, Predbat can obtain the [solar forecast directly from Solcast](ins
 Uncomment the following Solcast cloud interface settings in `apps.yaml` and set the API key correctly:
 
 ```yaml
-solcast_host: 'https://api.solcast.com.au/'
-solcast_api_key: 'xxxx'
-solcast_poll_hours: 8
+  solcast_host: 'https://api.solcast.com.au/'
+  solcast_api_key: 'xxxx'
+  solcast_poll_hours: 8
 ```
 
 Note that by default the Solcast API will be used to download all sites (up to 2 for hobby accounts), if you want to override this set your sites manually using
 **solcast_sites** as an array of site IDs:
 
 ```yaml
-solcast_sites:
-   - 'xxxx'
+  solcast_sites:
+    - 'xxxx'
 ```
 
 If you have more than 2 array orientations and thus more than one Solcast API key, enter each key in a list:
 
 ```yaml
-api_key:
-  - xxxx_API_key_1
-  - yyyy_API_key_2
+  solcast_api_key:
+    - xxxx_API_key_1
+    - yyyy_API_key_2
 ```
 
 Keep in mind hobbyist accounts only have 10 polls per day so you need to ensure that the solcast_poll_hours refresh period is set so that you do not exceed the 10 poll limit.
@@ -725,9 +755,9 @@ If you set this to False for each car then it is assumed that the car can charge
 One entry per car.
 
 ```yaml
-car_charging_exclusive:
-  - True
-  - True
+  car_charging_exclusive:
+    - True
+    - True
 ```
 
 ### Car Charging Filtering
@@ -744,7 +774,9 @@ so that Predbat's battery prediction plan is not distorted by previous car charg
 - **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the daily incrementing kWh data for the car charger.
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
 or edit as necessary in `apps.yaml` for your charger sensor.<BR>
-Note that this must be configured to point to an 'energy today' sensor in kWh not an instantaneous power sensor (in kW) from the car charger.<BR>
+Note that this must be configured to point to an 'energy today' sensor in kWh not an instantaneous power sensor (in kW) from the car charger.<BR><BR>
+*IMPORTANT:* If car_charging_energy is not configured with the correct sensor or your car charging energy sensor does not accurately report your car charging data (e.g. it falsely reports charging data when not actually charging),
+this will really mess up your predbat plan as Predbat will exclude all car_charging_energy from your load predictions.  Do check the entity!<BR><BR>
 *TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
 e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.<BR>
 car_charging_energy can be set to a list of energy sensors, one per line if you have multiple EV car chargers, or want to exclude multiple loads, e.g.:
@@ -827,9 +859,17 @@ If you don't specify a sensor Predbat will default to 100% - i.e. fill the car t
 expressed as a percentage - it must NOT be set to a sensor that gives the car's current kWh value as this will cause Predbat to charge the car to an incorrect level.
 If you don't specify a sensor, Predbat will default to 0%.
 
+If you have [multiple electric cars](#multiple-electric-cars) then car_charging_soc should be set to a list of sensors, e.g.:
+
+```yaml
+  car_charging_soc:
+    - 'sensor.tsunami_battery'
+    - 'sensor.toyota_XXX_battery_level'
+```
+
 ### Multiple Electric Cars
 
-Multiple cars can be planned with Predbat, in which case you should set **num_cars** in `apps.yaml` to the number of cars you want to plan
+Multiple cars can be planned with Predbat, in which case you should set **num_cars** in `apps.yaml` to the number of cars you want to plan.
 
 - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
 
@@ -837,6 +877,32 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+
+## Watch List - automatically start Predbat execution
+
+By default Predbat will run automatically every 5 minute and to execute the plan, and re-evaluate the plan automatically every 10 minutes.
+
+You can manually force Predbat to start executing by turning **switch.predbat_active** on - see [Predbat's output data](output-data.md#basic-status).
+
+Additionally Predbat can 'watch' a number of Home Assistant entities and if one of those changes, Predbat will automatically start executing.
+
+This can be useful for EV owners such as to detect when you have plugged the EV in (for Predbat to stop the battery discharging), and with Intelligent Octopus Go if Octopus gives you additional charge slots.
+
+In `apps.yaml`, uncomment (or add) the following lines, customising to the list of configuration items you have setup in apps.yaml and want Predbat to watch for changes for:
+
+```yaml
+  watch_list:
+    - '{octopus_intelligent_slot}'
+    - '{octopus_ready_time}'
+    - '{octopus_charge_limit}'
+    - '{octopus_saving_session}'
+    - '+[car_charging_planned]'
+    - '+[car_charging_soc]'
+    - '{car_charging_now}'
+```
+
+Note the notation for watch_list, a single value apps.yaml configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
+but for apps.yaml configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
 
 ## Load Forecast
 
@@ -857,23 +923,23 @@ Or
 `apps.yaml` should be configured to point to the forecast sensor and attribute (in the above formats) like this:
 
 ```yaml
-load_forecast:
-  - sensor_name$attribute_name
+  load_forecast:
+    - sensor_name$attribute_name
 ```
 
 So if using Predheat it would be configured as:
 
 ```yaml
-load_forecast:
-  - predheat.heat_energy$external
+  load_forecast:
+    - predheat.heat_energy$external
 ```
 
 Set **load_forecast_only** to True if you do not wish to use the Predbat forecast but instead want to use this as your only forecast data e.g using PredAi:
 
 ```yaml
-load_forecast_only: True
-load_forecast:
-   - sensor.givtcp_{geserial}_load_energy_today_kwh_prediction$results
+  load_forecast_only: True
+  load_forecast:
+    - sensor.givtcp_{geserial}_load_energy_today_kwh_prediction$results
 ```
 
 ## Balance Inverters
@@ -885,7 +951,7 @@ Most of the Predbat configuration for balancing inverters is through a number of
 but there is one configuration item in `apps.yaml`:
 
 ```yaml
-balance_inverters_seconds: seconds
+  balance_inverters_seconds: seconds
 ```
 
 Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
@@ -898,7 +964,7 @@ weirdness you may have from your inverter and battery setup.
 ### Clock skew
 
 ```yaml
-clock_skew: minutes
+  clock_skew: minutes
 ```
 
 Skews the local (computer) time that Predbat uses (from the computer that Predbat is running on).<BR>
@@ -913,15 +979,15 @@ Separate start and end options are applied to the start and end time windows, mo
 You can adjust the charge and discharge times written to the inverter by setting the following in `apps.yaml`:
 
 ```yaml
-inverter_clock_skew_start: minutes
-inverter_clock_skew_end: minutes
+  inverter_clock_skew_start: minutes
+  inverter_clock_skew_end: minutes
 ```
 
 Skews the setting of the charge slot registers vs the predicted start time
 
 ```yaml
-inverter_clock_skew_discharge_start: minutes
-inverter_clock_skew_discharge_end: minutes
+  inverter_clock_skew_discharge_start: minutes
+  inverter_clock_skew_discharge_end: minutes
 ```
 
 Skews the setting of the discharge slot registers vs the predicted start time
@@ -929,8 +995,8 @@ Skews the setting of the discharge slot registers vs the predicted start time
 ### Battery size scaling
 
 ```yaml
-battery_scaling:
-  - scale
+  battery_scaling:
+    - scale
 ```
 
 Default value 1.0. Multiple battery size scales can be entered, one per inverter on separate lines.
@@ -951,7 +1017,7 @@ rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lin
 ### Import export scaling
 
 ```yaml
-import_export_scaling: scale
+  import_export_scaling: scale
 ```
 
 Default value 1.0. Used to scale the import & export kWh data from GivTCP if the inverter information is incorrect.
@@ -959,7 +1025,7 @@ Default value 1.0. Used to scale the import & export kWh data from GivTCP if the
 ### Inverter rate minimum
 
 ```yaml
-inverter_battery_rate_min: watts
+  inverter_battery_rate_min: watts
 ```
 
 One per inverter (optional), set in Watts, when set models a "bug" in the inverter firmware
@@ -969,7 +1035,7 @@ The recommended setting is 200 for Gen 1 hybrids with this issue.
 ### Inverter reserve maximum
 
 ```yaml
-inverter_reserve_max: percent
+  inverter_reserve_max: percent
 ```
 
 Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
@@ -991,10 +1057,10 @@ The auto_restart itself is a list of commands to run to trigger a restart.
 - The **service** command is used to call a service and can contain arguments of **addon** and/or **entity_id**. The configuration below is for GivTCP v3.
 
 ```yaml
-auto_restart:
-  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-  - service: hassio/addon_restart
-    addon: 533ea71a_givtcp
+  auto_restart:
+    - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
+    - service: hassio/addon_restart
+      addon: 533ea71a_givtcp
 ```
 
 NB: If you are running GivTCP v2 then the line '533ea71a_givtcp' must be replaced with 'a6a2857d_givtcp'
@@ -1039,28 +1105,28 @@ If you have a GivEnergy inverter and are using the recommended default [REST mod
 then you will need to uncomment out the following entries in `apps.yaml`:
 
 ```yaml
-charge_rate:
-  - number.givtcp_{geserial}_battery_charge_rate
-battery_power:
-  - sensor.givtcp_{geserial}_battery_power
-soc_kw:
-  - sensor.givtcp_{geserial}_soc_kwh
+  charge_rate:
+    - number.givtcp_{geserial}_battery_charge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
 ```
 
 Example charging curve from a GivEnergy 9.5kWh battery with the latest firmware and Gen 1 inverter:
 
 ```yaml
-battery_charge_power_curve:
-  91 : 0.91
-  92 : 0.81
-  93 : 0.71
-  94 : 0.62
-  95 : 0.52
-  96 : 0.43
-  97 : 0.33
-  98 : 0.24
-  99 : 0.24
-  100 : 0.24
+  battery_charge_power_curve:
+    91 : 0.91
+    92 : 0.81
+    93 : 0.71
+    94 : 0.62
+    95 : 0.52
+    96 : 0.43
+    97 : 0.33
+    98 : 0.24
+    99 : 0.24
+    100 : 0.24
 ```
 
 - **battery_discharge_power_curve** - This optional configuration item enables you to model in Predbat a tail-off in discharging at low SoC%.
@@ -1082,12 +1148,12 @@ These must be configured in apps.yaml to point to Home Assistant entities that h
 If you are using REST mode to control your GivEnergy inverter then the following entries in `apps.yaml` will need to be uncommented :
 
 ```yaml
-discharge_rate:
-  - number.givtcp_{geserial}_battery_discharge_rate
-battery_power:
-  - sensor.givtcp_{geserial}_battery_power
-soc_kw:
-  - sensor.givtcp_{geserial}_soc_kwh
+  discharge_rate:
+    - number.givtcp_{geserial}_battery_discharge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
 ```
 
 ## Battery temperature curves
@@ -1185,13 +1251,13 @@ Set the name for each trigger, the number of minutes of solar export you need, a
 For example:
 
 ```yaml
-export_triggers:
-  - name: "large"
-    minutes: 60
-    energy: 1.0
-  - name: "small"
-    minutes: 15
-    energy: 0.25
+  export_triggers:
+    - name: "large"
+      minutes: 60
+      energy: 1.0
+    - name: "small"
+      minutes: 15
+      energy: 0.25
 ```
 
 **Note:** Predbat will set an export trigger to True if in the plan it predicts
@@ -1216,9 +1282,9 @@ As described earlier, **days_previous** is a list of the previous days of histor
 e.g., if you want the average of the same day for the last 2 weeks:
 
 ```yaml
-days_previous:
-  - 7
-  - 14
+  days_previous:
+    - 7
+    - 14
 ```
 
 This section describes in more detail how days_previous is used by Predbat in creating the future battery plan, and gives some worked examples and a 'gotcha' to be aware of.
@@ -1229,8 +1295,8 @@ This is best explained through a worked example:
 In this example, days_previous is set to use history from 2 days ago:
 
 ```yaml
-days_previous:
-  - 2
+  days_previous:
+    - 2
 ```
 
 If right now today it's Monday 3:15pm and Predbat is predicting the forward plan for the next 48 hours:
@@ -1245,8 +1311,8 @@ requires Predbat to operate some additional special processing if days_previous 
 Extending the previous example but this time days_previous is set to use history from just the previous day:
 
 ```yaml
-days_previous:
-  - 1
+  days_previous:
+    - 1
 ```
 
 Today it's still Monday 3:15pm and Predbat is predicting the forward plan for the next 48 hours:
@@ -1274,12 +1340,12 @@ It's recommended therefore that days_previous isn't set to 1, or if it is, that 
 If you want to set days_previous to take an average of the house load over all the days of the last week it's suggested that it be set as:
 
 ```yaml
-days_previous:
-  - 2
-  - 3
-  - 4
-  - 5
-  - 6
-  - 7
-  - 8
+  days_previous:
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
 ```

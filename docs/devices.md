@@ -1,5 +1,7 @@
 # Support 3rd party devices/integrations
 
+This section of the documentation describes the configuration required for different 3rd party devices/integrations, typically EV chargers.  If you have a device not listed then please raise a GitHub ticket with your configuration.
+
 ## Wallbox Pulsar
 
 <https://www.home-assistant.io/integrations/wallbox/>
@@ -7,9 +9,9 @@
 Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in
 
 ```yaml
-car_charging_energy: 're:sensor.wallbox_portal_added_energy'
-car_charging_planned:
-  - 're:sensor.wallbox_portal_status_description'
+  car_charging_energy: 're:sensor.wallbox_portal_added_energy'
+  car_charging_planned:
+    - 're:sensor.wallbox_portal_status_description'
 ```
 
 Wallbox works with Octopus Intelligent GO and can be triggered via Octopus themselves or an HA automation linked to the Predbat slot sensor
@@ -21,9 +23,9 @@ Wallbox works with Octopus Intelligent GO and can be triggered via Octopus thems
 Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in
 
 ```yaml
-car_charging_energy: 're:sensor.myenergi_zappi_[0-9a-z]+_charge_added_session'
-car_charging_planned:
-  - 're:sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  car_charging_energy: 're:sensor.myenergi_zappi_[0-9a-z]+_charge_added_session'
+  car_charging_planned:
+    - 're:sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 ```
 
 ## Tesla
@@ -33,10 +35,10 @@ car_charging_planned:
 Can be used to extract the car's current SoC and Charge limit. Also can be used to control the cars charging with an automation linked to the Predbat slot sensor
 
 ```yaml
-car_charging_limit:
-  - 're:number.xxx_charge_limit'
-car_charging_soc:
-  - 're:sensor.xxx_battery'
+  car_charging_limit:
+    - 're:number.xxx_charge_limit'
+  car_charging_soc:
+    - 're:sensor.xxx_battery'
 ```
 
 ## Toyota
@@ -46,8 +48,8 @@ car_charging_soc:
 Can be used to extract the car's current SoC.
 
 ```yaml
-car_charging_soc:
-  - 'sensor.toyota_XXX_battery_level'
+  car_charging_soc:
+    - 'sensor.toyota_XXX_battery_level'
 ```
 
 Example sensor name for BZ4X - `sensor.toyota_bz4x_battery_level`
@@ -59,22 +61,23 @@ Example sensor name for BZ4X - `sensor.toyota_bz4x_battery_level`
 Can be used to extract the car's current SoC.
 
 ```yaml
-car_charging_soc:
-  - 'sensor.battery'
+  car_charging_soc:
+    - 'sensor.battery'
 ```
 
-## New Ohme
+## New Ohme Integration
 
 <https://www.home-assistant.io/integrations/ohme>
 
-Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
-Also can be used with Octopus Intelligent GO to map out the cars charging slots into Predbat
+The in-built Home Assistant Ohme integration can be used with Predbat both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
+
+If you are on the Octopus Intelligent GO tariff the integration can be used to map out the cars charging slots into Predbat so that Predbat charges or stops your battery discharging into the car when its charging.
 
 **car charging energy**
 
 ```yaml
-ohme_name: 're:time.ohme_(.+)_target_time'
-car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
+  ohme_name: 're:time.ohme_(.+)_target_time'
+  car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
 ```
 
 **Car charging planned**
@@ -99,15 +102,14 @@ car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
     - "locked"
     - "plugged in"
     - "plugged_in"
+    - "Plugged in"
     - "pending_approval"
 ```
 
 **Octopus Intelligent GO**
 
-Newer Ohme Integrated into Home Assistant:
-
 Replace XXX with your device ID which can be found by going to 'Developer Tools', Selecting 'Actions', Selecting 'Ohme: List Charge Slots'
-then selecting your Device from the drop down menu. Then click on Go to YAML mode and copy the long string after config_entry:
+then selecting your Device from the drop down menu. Then click on 'Go to YAML mode' and copy the long string after config_entry:
 
 ![image](https://github.com/user-attachments/assets/fce4bce1-c6f7-49fe-96bc-7d062977059b)
 
@@ -123,32 +125,33 @@ Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged**
 **Using Ohme car charging plans on other tariff e.g. Agile**
 
 ```yaml
-octopus_ready_time: 'time.ohme_{ohme_name}_target_time'
-octopus_charge_limit: 'number.ohme_{ohme_name}_target_percentage'
-octopus_slot_low_rate: False
+  octopus_ready_time: 'time.ohme_{ohme_name}_target_time'
+  octopus_charge_limit: 'number.ohme_{ohme_name}_target_percentage'
+  octopus_slot_low_rate: False
 ```
 
 Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
 
-## Old Ohme
+## Old Ohme HACS Integration
 
 <https://github.com/dan-r/HomeAssistant-Ohme>
 
 Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
-Also can be used with Octopus Intelligent GO to map out the cars charging slots into Predbat
+
+If you are on the Octopus Intelligent GO tariff the integration can be used to map out the cars charging slots into Predbat so that Predbat charges or stops your battery discharging into the car when its charging.
 
 **car charging energy**
 
 ```yaml
-car_charging_energy: 'sensor.ohme_session_energy'
+  car_charging_energy: 'sensor.ohme_session_energy'
 ```
 
 **Octopus Intelligent GO**
 
 ```yaml
-octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
-octopus_ready_time: 'time.ohme_target_time'
-octopus_charge_limit: 'number.ohme_target_percentage'
+  octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  octopus_ready_time: 'time.ohme_target_time'
+  octopus_charge_limit: 'number.ohme_target_percentage'
 ```
 
 Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
@@ -156,10 +159,10 @@ Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged**
 **Using Ohme car charging plans on other tariff e.g. Agile**
 
 ```yaml
-octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
-octopus_ready_time: 'time.ohme_target_time'
-octopus_charge_limit: 'number.ohme_target_percent'
-octopus_slot_low_rate: False
+  octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  octopus_ready_time: 'time.ohme_target_time'
+  octopus_charge_limit: 'number.ohme_target_percent'
+  octopus_slot_low_rate: False
 ```
 
 Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
@@ -169,8 +172,8 @@ Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged**
 Normally not recommended if you are on Intelligent GO, but can be useful for ad-hoc charging not planned via Predbat
 
 ```yaml
-car_charging_now:
-  - 'binary_sensor.ohme_car_charging'
+  car_charging_now:
+    - 'binary_sensor.ohme_car_charging'
 ```
 
 ## PodPoint
@@ -180,19 +183,19 @@ car_charging_now:
 Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
 
 ```yaml
-car_charging_energy: 're:(sensor.psl_[0-9]+_current_energy)'
-car_charging_planned:
-  - 're:(sensor.psl_[0-9]+_status)'
-car_charging_planned_response:
-  - 'plugged in'
-  - 'connected-waiting-for-schedule'
-  - 'suspended-evse'
-  - 'pending'
-  - 'charging'
-car_charging_now:
-  - 're:(sensor.psl_[0-9]+_status)'
-car_charging_now_response:
-  - 'charging'
+  car_charging_energy: 're:(sensor.psl_[0-9]+_current_energy)'
+  car_charging_planned:
+    - 're:(sensor.psl_[0-9]+_status)'
+  car_charging_planned_response:
+    - 'plugged in'
+    - 'connected-waiting-for-schedule'
+    - 'suspended-evse'
+    - 'pending'
+    - 'charging'
+  car_charging_now:
+    - 're:(sensor.psl_[0-9]+_status)'
+  car_charging_now_response:
+    - 'charging'
 ```
 
 Also can be used to control the cars charging with an automation linked to the Predbat slot sensor.
@@ -207,15 +210,15 @@ Can be used both for the Car Charging Hold feature (to filter out previous car c
 For plugged-in detection on V2 models, see guidance <https://springfall2008.github.io/batpred/car-charging/#example-ev-and-charger-setup>.
 
 ```yaml
-car_charging_energy: 're:(sensor.hypervolt_session_energy_total_increasing)'
-car_charging_planned:
-  - 're:(binary_sensor.hypervolt_car_plugged)'
-car_charging_planned_response:
-  - 'on'
-car_charging_now:
-  - 're:(sensor.hypervolt_charging_readiness)'
-car_charging_now_response:
-  - 'charging'
+  car_charging_energy: 're:(sensor.hypervolt_session_energy_total_increasing)'
+  car_charging_planned:
+    - 're:(binary_sensor.hypervolt_car_plugged)'
+  car_charging_planned_response:
+    - 'on'
+  car_charging_now:
+    - 're:(sensor.hypervolt_charging_readiness)'
+  car_charging_now_response:
+    - 'charging'
 ```
 
 Note: **sensor.hypervolt_session_energy_total_increasing** defaults to 'unknown' between charging sessions.
@@ -235,23 +238,23 @@ Can be used for energy rates, car charging and saving sessions
 **For energy rate**
 
 ```yaml
-metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
-metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
 ```
 
 **For Octopus Intelligent GO**
 
 ```yaml
-octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
-octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
-octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
 ```
 
 **For Octopus Saving sessions**
 
 ```yaml
-octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
-octopus_saving_session_octopoints_per_penny: 8
+  octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
+  octopus_saving_session_octopoints_per_penny: 8
 ```
 
 ## Nordpool
@@ -267,7 +270,7 @@ This is built into Predbat, see the [apps.yaml configuration guide](apps-yaml.md
 Can be linked to Predbat to provide energy rates in your region e.g:
 
 ```yaml
-metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
+  metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
 ```
 
 ## Solcast
@@ -277,8 +280,8 @@ metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
 For solar forecast data
 
 ```yaml
-pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
-pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
-pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
-pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
 ```
