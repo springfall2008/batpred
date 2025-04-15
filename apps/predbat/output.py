@@ -565,6 +565,17 @@ class Output:
         rowspan = 0
         in_span = False
         start_span = False
+        cell_style = 'style="border-radius: 25px;padding: 3px;"'
+
+        import_cost_threshold = self.rate_import_cost_threshold
+        export_cost_threshold = self.rate_export_cost_threshold
+
+        if self.rate_best_cost_threshold_charge:
+            import_cost_threshold = self.rate_best_cost_threshold_charge
+        if self.rate_best_cost_threshold_export:
+            export_cost_threshold = self.rate_best_cost_threshold_export
+
+        rate_start = self.midnight_utc        
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
@@ -573,20 +584,16 @@ class Output:
             minute_end = minute_relative_end + self.minutes_now
             minute_relative_slot_end = minute_relative_end
             minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
+
+            if rate_start.day != minute_timestamp.day:
+                html += "<tr><td> &nbsp;</td></tr>\n"
+
             rate_start = minute_timestamp
             rate_value_import = dp2(self.rate_import.get(minute, 0))
             rate_value_export = dp2(self.rate_export.get(minute, 0))
             charge_window_n = -1
             export_window_n = -1
             in_alert = True if self.alert_active_keep.get(minute, 0) > 0 else False
-
-            import_cost_threshold = self.rate_import_cost_threshold
-            export_cost_threshold = self.rate_export_cost_threshold
-
-            if self.rate_best_cost_threshold_charge:
-                import_cost_threshold = self.rate_best_cost_threshold_charge
-            if self.rate_best_cost_threshold_export:
-                export_cost_threshold = self.rate_best_cost_threshold_export
 
             show_limit = ""
 
@@ -706,7 +713,7 @@ class Output:
             if minute in self.manual_demand_times:
                 state += " &#8526;"
 
-            pv_color = "#BCBCBC"
+            pv_color = "#FFFFFF"
             load_color = "#FFFFFF"
             extra_color = "#FFFFFF"
             rate_color_import = "#FFFFAA"
@@ -727,7 +734,7 @@ class Output:
                 pv_color = "#FFFF00"
                 pv_symbol = "&#9728;"
             elif pv_forecast == 0.0:
-                pv_forecast = ""
+                pv_forecast = "&#9866;"
 
             pv_forecast = str(pv_forecast)
             if plan_debug and pv_forecast10 > 0.0:
@@ -763,6 +770,10 @@ class Output:
                 rate_color_export = "#F18261"
             elif rate_value_export >= export_cost_threshold:
                 rate_color_export = "#FFFFAA"
+            elif rate_value_export > (0.5 * export_cost_threshold):
+                rate_color_export = "#48deff"
+            else:
+                rate_color_export = "#dcdcdc"
 
             had_state = False
 
@@ -882,10 +893,10 @@ class Output:
                 rate_str_export = "<b>" + rate_str_export + "</b>"
 
             # Total cost at start of slot, add leading minus if negative
-            if metric_start >= 0:
-                total_str = self.currency_symbols[0] + "%02.02f" % (metric_start / 100.0)
+            if metric_end >= 0:
+                total_str = self.currency_symbols[0] + "%02.02f" % (metric_end / 100.0)
             else:
-                total_str = "-" + self.currency_symbols[0] + "%02.02f" % (abs(metric_start) / 100.0)
+                total_str = "-" + self.currency_symbols[0] + "%02.02f" % (abs(metric_end) / 100.0)
 
             # Cost predicted for this slot
             if metric_change >= 10.0:
@@ -973,7 +984,7 @@ class Output:
             clipped_change = clipped_amount_end - clipped_amount
             clipped_change = dp2(clipped_change)
             if clipped_change == 0:
-                clipped_str = ""
+                clipped_str = "&#9866;"
             else:
                 clipped_str = str(clipped_change)
             clipped_color = "#FFFFFF"
@@ -985,13 +996,14 @@ class Output:
             # Table row
             html += '<tr style="color:black">'
             html += "<td bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
-            html += "<td bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
-            html += "<td bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
+            html += "<td " + cell_style + " bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
+            html += "<td " + cell_style + " bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
             if start_span:
                 if split:  # for slots that are both charging and exporting, just output the (split cell) state
                     html += "<td "
                 else:  # otherwise (non-split slots), display the state spanning over two cells
                     html += "<td colspan=2 "
+                html += cell_style + " "
                 html += "rowspan=" + str(rowspan) + " bgcolor=" + state_color + ">" + state + "</td>"
                 html += "<td rowspan=" + str(rowspan) + " bgcolor=#FFFFFF> " + show_limit + "</td>"
             elif not in_span:
@@ -999,6 +1011,7 @@ class Output:
                     html += "<td "
                 else:
                     html += "<td colspan=2 "
+                html += cell_style + " "
                 html += "bgcolor=" + state_color + ">" + state + "</td>"
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
             html += "<td bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
