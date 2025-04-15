@@ -554,11 +554,6 @@ class Output:
             mode += " (debug)"
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} previous status: {} mode: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION, self.current_status, mode)
-        config_str = f"best_soc_min {self.best_soc_min} best_soc_max {self.best_soc_max} best_soc_keep {self.best_soc_keep} carbon_metric {self.carbon_metric} metric_self_sufficiency {self.metric_self_sufficiency}"
-        html += "</tr><tr>"
-        html += "<td colspan=10> {}</td>".format(config_str)
-        html += "</tr>"
         html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
@@ -575,7 +570,7 @@ class Output:
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
 
-        rate_start = self.midnight_utc
+        rate_start = self.midnight_utc        
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
@@ -584,9 +579,6 @@ class Output:
             minute_end = minute_relative_end + self.minutes_now
             minute_relative_slot_end = minute_relative_end
             minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
-
-            if rate_start.day != minute_timestamp.day:
-                html += "<tr><td> &nbsp;</td></tr>\n"
 
             rate_start = minute_timestamp
             rate_value_import = dp2(self.rate_import.get(minute, 0))
@@ -829,7 +821,7 @@ class Output:
                     if not had_state:
                         state = ""
                     if state:
-                        state += "</td><td bgcolor=#AAAAAA>"  # charging and freeze exporting in same slot, split the state into two
+                        state += "</td><td bgcolor=#AAAAAA " + cell_style + ">"  # charging and freeze exporting in same slot, split the state into two
                         split = True
                     else:
                         state_color = "#AAAAAA"
@@ -839,7 +831,7 @@ class Output:
                     if not had_state:
                         state = ""
                     if state:
-                        state += "</td><td bgcolor=#FFFF00>"  # charging and exporting in the same slot, split the state into two
+                        state += "</td><td bgcolor=#FFFF00 " + cell_style + ">"  # charging and exporting in the same slot, split the state into two
                         split = True
                     else:
                         state_color = "#FFFF00"
@@ -922,11 +914,11 @@ class Output:
                     car_charging_str = str(car_charging_kwh)
                     car_color = "FFFF00"
                 else:
-                    car_charging_str = ""
+                    car_charging_str = "&#9866;"
                     car_color = "#FFFFFF"
 
             # iBoost
-            iboost_amount_str = ""
+            iboost_amount_str = "&#9866;"
             iboost_color = "#FFFFFF"
             if self.iboost_enable:
                 iboost_slot_end = minute_relative_slot_end
