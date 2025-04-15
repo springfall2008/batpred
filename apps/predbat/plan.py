@@ -223,9 +223,13 @@ class Plan:
                         highest_price_charge = price_set[-1]
                         lowest_price_export = price_set[0]
                         for window_n in range(record_charge_windows):
+                            if window_n >= len(try_charge_limit):
+                                continue
                             if try_charge_limit[window_n] > 0:
                                 highest_price_charge = max(highest_price_charge, window_prices[window_n])
                         for window_n in range(record_export_windows):
+                            if window_n >= len(try_export):
+                                continue
                             if try_export[window_n] < 100:
                                 lowest_price_export = min(lowest_price_export, window_prices_export[window_n])
 
