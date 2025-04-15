@@ -312,7 +312,7 @@ class WebInterface:
         table {
             border-collapse: collapse;
             padding: 1px;
-            border: 1px solid blue;
+            border: 2px solid blue;
         }
         th,
         td {
