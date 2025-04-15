@@ -560,7 +560,7 @@ class Output:
         rowspan = 0
         in_span = False
         start_span = False
-        cell_style = 'style="border-radius: 25px;padding: 3px;"'
+        cell_style = 'style="border-radius: 20px;padding: 4px;"'
 
         import_cost_threshold = self.rate_import_cost_threshold
         export_cost_threshold = self.rate_export_cost_threshold

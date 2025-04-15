@@ -310,9 +310,10 @@ class WebInterface:
             white-space: nowrap;
         }
         table {
-            border-collapse: collapse;
             padding: 1px;
-            border: 1px solid blue;
+            border: 2px solid green;
+            border-spacing: 2px;
+            background-clip: padding-box;
         }
         th,
         td {
