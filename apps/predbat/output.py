@@ -511,34 +511,34 @@ class Output:
         """
         html = ""
         html += "<tr>"
-        html += "<td><b>Time</b></td>"
+        html += "<th><b>Time</b></th>"
         if plan_debug:
-            html += "<td><b>Import {} (w/loss)</b></td>".format(self.currency_symbols[1])
-            html += "<td><b>Export {} (w/loss)</b></td>".format(self.currency_symbols[1])
+            html += "<th><b>Import {} (w/loss)</b></th>".format(self.currency_symbols[1])
+            html += "<th><b>Export {} (w/loss)</b></th>".format(self.currency_symbols[1])
         else:
-            html += "<td><b>Import {}</b></td>".format(self.currency_symbols[1])
-            html += "<td><b>Export {}</b></td>".format(self.currency_symbols[1])
-        html += "<td><b>State</b></td><td></td>"  # state can potentially be two cells for charging and exporting in the same slot
-        html += "<td><b>Limit %</b></td>"
+            html += "<th><b>Import {}</b></th>".format(self.currency_symbols[1])
+            html += "<th><b>Export {}</b></th>".format(self.currency_symbols[1])
+        html += "<th><b>State</b></th><th></th>"  # state can potentially be two cells for charging and exporting in the same slot
+        html += "<th><b>Limit %</b></th>"
         if plan_debug:
-            html += "<td><b>PV kWh (10%)</b></td>"
-            html += "<td><b>Load kWh (10%)</b></td>"
-            html += "<td><b>Clip kWh</b></td>"
+            html += "<th><b>PV kWh (10%)</b></th>"
+            html += "<th><b>Load kWh (10%)</b></th>"
+            html += "<th><b>Clip kWh</b></th>"
         else:
-            html += "<td><b>PV kWh</b></td>"
-            html += "<td><b>Load kWh</b></td>"
+            html += "<th><b>PV kWh</b></th>"
+            html += "<th><b>Load kWh</b></th>"
         if plan_debug and self.load_forecast:
-            html += "<td><b>XLoad kWh</b></td>"
+            html += "<th><b>XLoad kWh</b></th>"
         if self.num_cars > 0:
-            html += "<td><b>Car kWh</b></td>"
+            html += "<th><b>Car kWh</b></th>"
         if self.iboost_enable:
-            html += "<td><b>iBoost kWh</b></td>"
-        html += "<td><b>SoC %</b></td>"
-        html += "<td><b>Cost</b></td>"
-        html += "<td><b>Total</b></td>"
+            html += "<th><b>iBoost kWh</b></th>"
+        html += "<th><b>SoC %</b></th>"
+        html += "<th><b>Cost</b></th>"
+        html += "<th><b>Total</b></th>"
         if self.carbon_enable:
-            html += "<td><b>CO2 g/kWh</b></td>"
-            html += "<td><b>CO2 kg</b></td>"
+            html += "<th><b>CO2 g/kWh</b></th>"
+            html += "<th><b>CO2 kg</b></th>"
         html += "</tr>"
         return html
 
@@ -570,7 +570,7 @@ class Output:
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
 
-        rate_start = self.midnight_utc
+        rate_start = self.midnight_utc        
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
