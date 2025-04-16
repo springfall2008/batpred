@@ -527,6 +527,9 @@ class HAInterface:
             # make an API call to the Supervisor using the supervisor token
             url = "http://supervisor" + endpoint
             key = os.environ.get("SUPERVISOR_TOKEN", None)
+        
+        if key is None:
+            return None
 
         headers = {
             "Authorization": "Bearer " + key,

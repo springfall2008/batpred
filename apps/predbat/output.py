@@ -560,7 +560,7 @@ class Output:
         rowspan = 0
         in_span = False
         start_span = False
-        cell_style = 'style="border-radius: 20px;padding: 4px;"'
+        cell_style = 'style="padding: 4px;"'
 
         import_cost_threshold = self.rate_import_cost_threshold
         export_cost_threshold = self.rate_export_cost_threshold
@@ -570,7 +570,7 @@ class Output:
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
 
-        rate_start = self.midnight_utc
+        rate_start = self.midnight_utc        
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
