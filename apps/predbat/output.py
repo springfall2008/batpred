@@ -518,7 +518,7 @@ class Output:
         else:
             html += "<th><b>Import {}</b></th>".format(self.currency_symbols[1])
             html += "<th><b>Export {}</b></th>".format(self.currency_symbols[1])
-        html += "<th><b>State</b></th><th></th>"  # state can potentially be two cells for charging and exporting in the same slot
+        html += "<th colspan=2><b>State</b></th>"  # state can potentially be two cells for charging and exporting in the same slot
         html += "<th><b>Limit %</b></th>"
         if plan_debug:
             html += "<th><b>PV kWh (10%)</b></th>"
@@ -570,7 +570,7 @@ class Output:
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
 
-        rate_start = self.midnight_utc
+        rate_start = self.midnight_utc        
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
