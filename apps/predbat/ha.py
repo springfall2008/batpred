@@ -528,6 +528,13 @@ class HAInterface:
             url = "http://supervisor" + endpoint
             key = os.environ.get("SUPERVISOR_TOKEN", None)
 
+            if not key:
+                if not silent:
+                    self.log("Warn: api_call failure, key not set")
+                    self.api_errors += 1
+                data = None
+                return data
+
         headers = {
             "Authorization": "Bearer " + key,
             "Content-Type": "application/json",
