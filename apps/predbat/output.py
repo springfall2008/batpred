@@ -518,7 +518,7 @@ class Output:
         else:
             html += "<th><b>Import {}</b></th>".format(self.currency_symbols[1])
             html += "<th><b>Export {}</b></th>".format(self.currency_symbols[1])
-        html += "<th><b>State</b></th><th></th>"  # state can potentially be two cells for charging and exporting in the same slot
+        html += "<th colspan=2><b>State</b></th>"  # state can potentially be two cells for charging and exporting in the same slot
         html += "<th><b>Limit %</b></th>"
         if plan_debug:
             html += "<th><b>PV kWh (10%)</b></th>"
