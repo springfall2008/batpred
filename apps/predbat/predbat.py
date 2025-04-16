@@ -14,6 +14,7 @@ import sys
 from datetime import datetime, timedelta
 import traceback
 import sys
+import gc
 
 IS_COMPILED = getattr(sys, "frozen", False)
 
@@ -814,6 +815,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.comparison.publish_only()
         else:
             self.expose_config("compare_active", False)
+
+        gc.collect()
 
     async def async_download_predbat_version(self, version):
         """
