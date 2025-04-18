@@ -2518,7 +2518,20 @@ class Plan:
                         )
                         if best_metric_drop <= selected_metric:
                             if self.debug_enable:
-                                self.log("Drop export window {} limit {} {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(window_n_target, export_limit, self.time_abs_str(self.export_window_best[window_n_target]["start"]), self.time_abs_str(self.export_window_best[window_n_target]["end"]), best_metric_drop, dp2(best_cost_drop), dp2(best_keep_drop), dp2(best_cycle_drop), dp0(best_carbon_drop), dp2(best_import_drop)))
+                                self.log(
+                                    "Drop export window {} limit {} {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(
+                                        window_n_target,
+                                        export_limit,
+                                        self.time_abs_str(self.export_window_best[window_n_target]["start"]),
+                                        self.time_abs_str(self.export_window_best[window_n_target]["end"]),
+                                        best_metric_drop,
+                                        dp2(best_cost_drop),
+                                        dp2(best_keep_drop),
+                                        dp2(best_cycle_drop),
+                                        dp0(best_carbon_drop),
+                                        dp2(best_import_drop),
+                                    )
+                                )
                             selected_metric = best_metric_drop
                             selected_battery_value = best_battery_value_drop
                             selected_cost = best_cost_drop
@@ -2561,7 +2574,21 @@ class Plan:
                             if best_metric <= selected_metric and (best_metric < best_metric_drop):
                                 if self.debug_enable:
                                     self.log(
-                                        "Swap export window {} {}-{} limit {} with {} => {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(window_n, self.time_abs_str(self.export_window_best[window_n]["start"]), self.time_abs_str(self.export_window_best[window_n]["end"]), export_limit, window_n_target, self.time_abs_str(self.export_window_best[window_n_target]["start"]), self.time_abs_str(self.export_window_best[window_n_target]["end"]), best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import))
+                                        "Swap export window {} {}-{} limit {} with {} => {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(
+                                            window_n,
+                                            self.time_abs_str(self.export_window_best[window_n]["start"]),
+                                            self.time_abs_str(self.export_window_best[window_n]["end"]),
+                                            export_limit,
+                                            window_n_target,
+                                            self.time_abs_str(self.export_window_best[window_n_target]["start"]),
+                                            self.time_abs_str(self.export_window_best[window_n_target]["end"]),
+                                            best_metric,
+                                            dp2(best_cost),
+                                            dp2(best_keep),
+                                            dp2(best_cycle),
+                                            dp0(best_carbon),
+                                            dp2(best_import),
+                                        )
                                     )
                                 selected_metric = best_metric
                                 selected_battery_value = best_battery_value
