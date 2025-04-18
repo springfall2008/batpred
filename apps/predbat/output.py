@@ -561,6 +561,9 @@ class Output:
         in_span = False
         start_span = False
         cell_style = 'style="padding: 4px;"'
+        pv_total = 0
+        load_total = 0
+        car_total = 0
 
         import_cost_threshold = self.rate_import_cost_threshold
         export_cost_threshold = self.rate_export_cost_threshold
@@ -570,7 +573,7 @@ class Output:
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
 
-        rate_start = self.midnight_utc
+        rate_start = self.midnight_utc        
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
@@ -660,6 +663,8 @@ class Output:
             load_forecast = dp2(load_forecast)
             pv_forecast10 = dp2(pv_forecast10)
             load_forecast10 = dp2(load_forecast10)
+            pv_total += pv_forecast
+            load_total += load_forecast
 
             extra_forecast = ""
             extra_forecast_total = 0
@@ -885,10 +890,10 @@ class Output:
                 rate_str_export = "<b>" + rate_str_export + "</b>"
 
             # Total cost at start of slot, add leading minus if negative
-            if metric_end >= 0:
-                total_str = self.currency_symbols[0] + "%02.02f" % (metric_end / 100.0)
+            if metric_start >= 0:
+                total_str = self.currency_symbols[0] + "%02.02f" % (metric_start / 100.0)
             else:
-                total_str = "-" + self.currency_symbols[0] + "%02.02f" % (abs(metric_end) / 100.0)
+                total_str = "-" + self.currency_symbols[0] + "%02.02f" % (abs(metric_start) / 100.0)
 
             # Cost predicted for this slot
             if metric_change >= 10.0:
@@ -910,6 +915,7 @@ class Output:
             # Car charging?
             if self.num_cars > 0:
                 car_charging_kwh = self.car_charge_slot_kwh(minute_start, minute_end)
+                car_total += car_charging_kwh
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
                     car_color = "FFFF00"
@@ -1022,7 +1028,37 @@ class Output:
             if self.carbon_enable:
                 html += "<td bgcolor=" + carbon_intensity_color + ">" + str(carbon_intensity) + " </td>"
                 html += "<td bgcolor=" + carbon_color + "> " + str(carbon_str) + " </td>"
-            html += "</tr>"
+            html += "</tr>\n"
+
+        # End of plan costs
+        if metric_end >= 0:
+            total_str = self.currency_symbols[0] + "%02.02f" % (metric_end / 100.0)
+        else:
+            total_str = "-" + self.currency_symbols[0] + "%02.02f" % (abs(metric_end) / 100.0)
+        html += '<tr style="color:black">'
+        html += "<td></td><td></td><td></td><td></td><td></td><td></td>"
+        html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(pv_total))
+        html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(load_total))
+        if plan_debug:
+            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+            html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(clipped_amount_end))
+        if plan_debug and self.load_forecast:
+            html += "<td></td>"
+        if self.num_cars > 0:
+            html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(car_total))
+        if self.iboost_enable:
+            iboost_amount_str = "&#9866;"
+            iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)
+            if iboost_amount_end > 0:
+                iboost_amount_str = str(dp2(iboost_amount_end))
+            html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(iboost_amount_str)
+        html += "<td bgcolor=#FFFFFF><b>" + str(soc_percent_end) + "</b></td>"
+        html += "<td></td>" # Soc change
+        html += "<td bgcolor=#FFFFFF><b>" + str(total_str) + "</b></td>"
+        if self.carbon_enable:
+            carbon_amount_end = self.predict_carbon_best.get(minute_relative_slot_end, carbon_amount)
+            html += "<td></td><td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(carbon_amount_end / 1000.0))
+        html += "</tr>\n"
         html += "</table>"
         html = html.replace("£", "&#163;")
 
