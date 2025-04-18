@@ -2501,18 +2501,47 @@ class Plan:
                 )
                 self.log("Swap export optimisation started metric {} cost {} battery_value {}".format(dp2(selected_metric), dp2(selected_cost), dp2(selected_battery_value)))
                 swapped = False
-                for window_n_id in range(record_export_windows - 1):
-                    window_n = record_export_windows - 1 - window_n_id
-                    for window_n_target in range(window_n + 1, min(record_export_windows, window_n + 8)):
+
+                for window_n_target in range(record_export_windows - 1, 0, -1):
+                    window_start_target = self.export_window_best[window_n_target]["start"]
+                    window_length_target = self.export_window_best[window_n_target]["end"] - window_start_target
+                    export_limit_target = self.export_limits_best[window_n_target]
+
+                    if window_start_target in self.manual_all_times:
+                        continue
+
+                    # Try to drop the target
+                    if export_limit_target < 100:
+                        self.export_limits_best[window_n_target] = 100
+                        best_metric_drop, best_battery_value_drop, best_cost_drop, best_keep_drop, best_cycle_drop, best_carbon_drop, best_import_drop, best_export_drop = self.run_prediction_metric(
+                            self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+                        )
+                        if best_metric_drop <= selected_metric:
+                            if self.debug_enable:
+                                self.log("Drop export window {} limit {} {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(window_n_target, export_limit, self.time_abs_str(self.export_window_best[window_n_target]["start"]), self.time_abs_str(self.export_window_best[window_n_target]["end"]), best_metric_drop, dp2(best_cost_drop), dp2(best_keep_drop), dp2(best_cycle_drop), dp0(best_carbon_drop), dp2(best_import_drop)))
+                            selected_metric = best_metric_drop
+                            selected_battery_value = best_battery_value_drop
+                            selected_cost = best_cost_drop
+                            selected_keep = best_keep_drop
+                            selected_cycle = best_cycle_drop
+                            selected_carbon = best_carbon_drop
+                            selected_import = best_import_drop
+                            swapped = True
+                            export_limit_target = 100
+                        else:
+                            self.export_limits_best[window_n_target] = export_limit_target
+                            continue
+
+                    # Try to swap into the target slot
+                    for window_n in range(max(window_n_target - 32, 0), max(window_n_target - 1, 0), 1):
                         window_start = self.export_window_best[window_n]["start"]
                         window_length = self.export_window_best[window_n]["end"] - window_start
-                        window_start_target = self.export_window_best[window_n_target]["start"]
-                        window_length_target = self.export_window_best[window_n_target]["end"] - window_start_target
-
                         export_limit = self.export_limits_best[window_n]
-                        export_limit_target = self.export_limits_best[window_n_target]
 
-                        if window_start_target not in self.manual_all_times and export_limit < 100 and export_limit_target == 100 and window_length <= window_length_target:
+                        if window_start in self.manual_all_times:
+                            continue
+
+                        if export_limit < 99 and window_length <= window_length_target:
                             # self.log("Trying swap window {} with window {} export limit {} onto {}".format(window_n, window_n_target, export_limit, export_limit_target))
                             # Don't optimise a charge window that hits an export window if this is disallowed
                             if not self.calculate_export_oncharge:
@@ -2522,11 +2551,6 @@ class Plan:
 
                             # Set the current window to off and optimise the swap window
                             self.export_limits_best[window_n] = 100
-
-                            best_metric_drop, best_battery_value_drop, best_cost_drop, best_keep_drop, best_cycle_drop, best_carbon_drop, best_import_drop, best_export_drop = self.run_prediction_metric(
-                                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
-                            )
-
                             self.export_limits_best[window_n_target] = export_limit
                             self.export_window_best[window_n_target]["start"] = self.export_window_best[window_n_target]["end"] - window_length
 
@@ -2537,18 +2561,7 @@ class Plan:
                             if best_metric <= selected_metric and (best_metric < best_metric_drop):
                                 if self.debug_enable:
                                     self.log(
-                                        "Swap export window {} with {} => {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(
-                                            window_n,
-                                            window_n_target,
-                                            self.time_abs_str(self.export_window_best[window_n_target]["start"]),
-                                            self.time_abs_str(self.export_window_best[window_n_target]["end"]),
-                                            best_metric,
-                                            dp2(best_cost),
-                                            dp2(best_keep),
-                                            dp2(best_cycle),
-                                            dp0(best_carbon),
-                                            dp2(best_import),
-                                        )
+                                        "Swap export window {} {}-{} limit {} with {} => {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(window_n, self.time_abs_str(self.export_window_best[window_n]["start"]), self.time_abs_str(self.export_window_best[window_n]["end"]), export_limit, window_n_target, self.time_abs_str(self.export_window_best[window_n_target]["start"]), self.time_abs_str(self.export_window_best[window_n_target]["end"]), best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import))
                                     )
                                 selected_metric = best_metric
                                 selected_battery_value = best_battery_value
@@ -2558,37 +2571,12 @@ class Plan:
                                 selected_carbon = best_carbon
                                 selected_import = best_import
                                 swapped = True
+                                break
                             else:
                                 # Revert the change
-                                self.export_limits_best[window_n_target] = 100
+                                self.export_limits_best[window_n] = export_limit
+                                self.export_limits_best[window_n_target] = export_limit_target
                                 self.export_window_best[window_n_target]["start"] = window_start_target
-
-                                if best_metric_drop <= selected_metric:
-                                    if self.debug_enable:
-                                        self.log(
-                                            "Drop export window {} {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(
-                                                window_n,
-                                                self.time_abs_str(self.export_window_best[window_n]["start"]),
-                                                self.time_abs_str(self.export_window_best[window_n]["end"]),
-                                                best_metric_drop,
-                                                dp2(best_cost_drop),
-                                                dp2(best_keep_drop),
-                                                dp2(best_cycle_drop),
-                                                dp0(best_carbon_drop),
-                                                dp2(best_import_drop),
-                                            )
-                                        )
-                                    selected_metric = best_metric_drop
-                                    selected_battery_value = best_battery_value_drop
-                                    selected_cost = best_cost_drop
-                                    selected_keep = best_keep_drop
-                                    selected_cycle = best_cycle_drop
-                                    selected_carbon = best_carbon_drop
-                                    selected_import = best_import_drop
-                                    swapped = True
-                                else:
-                                    self.export_limits_best[window_n] = export_limit
-                                    # self.log("Don't drop export window {} {}-{} metric {} (best was {}) cost {} keep {} cycle {} carbon {} import {}".format(window_n, self.time_abs_str(self.export_window_best[window_n]["start"]), self.time_abs_str(self.export_window_best[window_n]["end"]), best_metric, selected_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
 
             self.log("Swap export optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(selected_metric), dp2(selected_cost), dp2(selected_keep), dp2(selected_cycle), dp0(selected_carbon), dp2(selected_import)))
 
