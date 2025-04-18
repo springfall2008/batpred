@@ -574,7 +574,7 @@ class Output:
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
 
-        rate_start = self.midnight_utc        
+        rate_start = self.midnight_utc
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
@@ -1056,7 +1056,7 @@ class Output:
                 iboost_amount_str = str(dp2(iboost_amount_end))
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(iboost_amount_str)
         html += "<td bgcolor=#FFFFFF><b>" + str(soc_percent_end) + "</b></td>"
-        html += "<td></td>" # Soc change
+        html += "<td></td>"  # Soc change
         html += "<td bgcolor=#FFFFFF><b>" + str(total_str) + "</b></td>"
         if self.carbon_enable:
             carbon_amount_end = self.predict_carbon_best.get(minute_relative_slot_end, carbon_amount)
