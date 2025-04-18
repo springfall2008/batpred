@@ -563,6 +563,7 @@ class Output:
         cell_style = 'style="padding: 4px;"'
         pv_total = 0
         load_total = 0
+        xload_total = 0
         car_total = 0
 
         import_cost_threshold = self.rate_import_cost_threshold
@@ -573,7 +574,7 @@ class Output:
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
 
-        rate_start = self.midnight_utc
+        rate_start = self.midnight_utc        
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
@@ -673,6 +674,7 @@ class Output:
                     extra_forecast += ", "
                 extra_forecast += str(dp2(value))
                 extra_forecast_total += value
+            xload_total += extra_forecast_total
 
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
@@ -1043,7 +1045,7 @@ class Output:
             clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(clipped_amount_end))
         if plan_debug and self.load_forecast:
-            html += "<td></td>"
+            html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
         if self.num_cars > 0:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(car_total))
         if self.iboost_enable:
@@ -1053,7 +1055,7 @@ class Output:
                 iboost_amount_str = str(dp2(iboost_amount_end))
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(iboost_amount_str)
         html += "<td bgcolor=#FFFFFF><b>" + str(soc_percent_end) + "</b></td>"
-        html += "<td></td>"  # Soc change
+        html += "<td></td>" # Soc change
         html += "<td bgcolor=#FFFFFF><b>" + str(total_str) + "</b></td>"
         if self.carbon_enable:
             carbon_amount_end = self.predict_carbon_best.get(minute_relative_slot_end, carbon_amount)
