@@ -1041,7 +1041,17 @@ class GECloudDirect:
 
 
 class GECloud:
-    def get_ge_url(self, url, headers, now_utc):
+    def clean_url_cache(self, now_utc):
+        """
+        Clean up the GE Cloud cache
+        """
+        for url in self.ge_url_cache.keys():
+            stamp = self.ge_url_cache[url]["stamp"]
+            age = now_utc - stamp
+            if age.seconds > (24 * 60 * 60):
+                del self.ge_url_cache[url]
+
+    def get_ge_url(self, url, headers, now_utc, max_age_minutes=30):
         """
         Get data from GE Cloud
         """
@@ -1049,7 +1059,7 @@ class GECloud:
             stamp = self.ge_url_cache[url]["stamp"]
             pdata = self.ge_url_cache[url]["data"]
             age = now_utc - stamp
-            if age.seconds < (30 * 60):
+            if age.seconds < (max_age_minutes * 60):
                 self.log("Return cached GE data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
                 return pdata
 
@@ -1073,6 +1083,7 @@ class GECloud:
         """
         geserial = self.get_arg("ge_cloud_serial")
         gekey = self.args.get("ge_cloud_key", None)
+        self.clean_url_cache(now_utc)
 
         if not geserial:
             self.log("Error: GE Cloud has been enabled but ge_cloud_serial is not set to your serial")
@@ -1091,7 +1102,7 @@ class GECloud:
             datestr = time_value.strftime("%Y-%m-%d")
             url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=4096".format(geserial, datestr)
             while url:
-                data = self.get_ge_url(url, headers, now_utc)
+                data = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 8 * 60)
 
                 darray = data.get("data", None)
                 if darray is None:

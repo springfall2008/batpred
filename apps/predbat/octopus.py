@@ -675,6 +675,17 @@ class OctopusAPI:
 
         return mdata
 
+    async def clean_url_cache(self):
+        """
+        Clean the URL cache
+        """
+        now = datetime.now()
+        for url in list(self.url_cache.keys()):
+            stamp = self.url_cache[url]["stamp"]
+            age = now - stamp
+            if age.seconds > (24 * 60 * 60):
+                del self.url_cache[url]
+
     async def fetch_url_cached(self, url):
         """
         Fetch a URL from the cache or reload it
@@ -700,6 +711,8 @@ class OctopusAPI:
         """
         Fetch the tariff data
         """
+        await self.clean_url_cache()
+
         for tariff in tariffs:
             product_code = tariffs[tariff]["productCode"]
             tariff_code = tariffs[tariff]["tariffCode"]
