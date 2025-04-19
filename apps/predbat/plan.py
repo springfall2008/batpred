@@ -2490,8 +2490,11 @@ class Plan:
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
             open("plan_first.html", "w").write(self.html_plan)
-            print("Wrote plan to plan_first.html - best metric {} cost {} battery value {} import {}, export {} carbon {}".format(dp2(best_metric), dp2(best_cost), dp2(best_battery_value), dp2(import_kwh_battery + import_kwh_house), dp2(export_kwh), dp0(final_carbon_g)))
-
+            print(
+                "Wrote plan to plan_first.html - best metric {} cost {} battery value {} import {}, export {} carbon {}".format(
+                    dp2(best_metric), dp2(best_cost), dp2(best_battery_value), dp2(import_kwh_battery + import_kwh_house), dp2(export_kwh), dp0(final_carbon_g)
+                )
+            )
 
         if self.calculate_second_pass:
             self.log("Second pass optimisation started")
@@ -2557,7 +2560,11 @@ class Plan:
                 self.update_target_values()
                 self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
                 open("plan_pass2.html", "w").write(self.html_plan)
-                print("Wrote plan to plan_pass2.html - best metric {} cost {} battery value {} import {}, export {} carbon {}".format(dp2(best_metric), dp2(best_cost), dp2(best_battery_value), dp2(import_kwh_battery + import_kwh_house), dp2(export_kwh), dp0(final_carbon_g)))
+                print(
+                    "Wrote plan to plan_pass2.html - best metric {} cost {} battery value {} import {}, export {} carbon {}".format(
+                        dp2(best_metric), dp2(best_cost), dp2(best_battery_value), dp2(import_kwh_battery + import_kwh_house), dp2(export_kwh), dp0(final_carbon_g)
+                    )
+                )
 
         # Swaps
         if self.calculate_best_export and record_export_windows >= 2:
@@ -2585,7 +2592,20 @@ class Plan:
                         )
                         if best_metric_drop <= selected_metric:
                             if self.debug_enable:
-                                self.log("Drop export window {} limit {} {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(window_n_target, export_limit, self.time_abs_str(self.export_window_best[window_n_target]["start"]), self.time_abs_str(self.export_window_best[window_n_target]["end"]), best_metric_drop, dp2(best_cost_drop), dp2(best_keep_drop), dp2(best_cycle_drop), dp0(best_carbon_drop), dp2(best_import_drop)))
+                                self.log(
+                                    "Drop export window {} limit {} {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(
+                                        window_n_target,
+                                        export_limit,
+                                        self.time_abs_str(self.export_window_best[window_n_target]["start"]),
+                                        self.time_abs_str(self.export_window_best[window_n_target]["end"]),
+                                        best_metric_drop,
+                                        dp2(best_cost_drop),
+                                        dp2(best_keep_drop),
+                                        dp2(best_cycle_drop),
+                                        dp0(best_carbon_drop),
+                                        dp2(best_import_drop),
+                                    )
+                                )
                             selected_metric = best_metric_drop
                             selected_battery_value = best_battery_value_drop
                             selected_cost = best_cost_drop
@@ -2628,7 +2648,21 @@ class Plan:
                             if best_metric <= selected_metric:
                                 if self.debug_enable:
                                     self.log(
-                                        "Swap export window {} {}-{} limit {} with {} => {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(window_n, self.time_abs_str(self.export_window_best[window_n]["start"]), self.time_abs_str(self.export_window_best[window_n]["end"]), export_limit, window_n_target, self.time_abs_str(self.export_window_best[window_n_target]["start"]), self.time_abs_str(self.export_window_best[window_n_target]["end"]), best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import))
+                                        "Swap export window {} {}-{} limit {} with {} => {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(
+                                            window_n,
+                                            self.time_abs_str(self.export_window_best[window_n]["start"]),
+                                            self.time_abs_str(self.export_window_best[window_n]["end"]),
+                                            export_limit,
+                                            window_n_target,
+                                            self.time_abs_str(self.export_window_best[window_n_target]["start"]),
+                                            self.time_abs_str(self.export_window_best[window_n_target]["end"]),
+                                            best_metric,
+                                            dp2(best_cost),
+                                            dp2(best_keep),
+                                            dp2(best_cycle),
+                                            dp0(best_carbon),
+                                            dp2(best_import),
+                                        )
                                     )
                                 selected_metric = best_metric
                                 selected_battery_value = best_battery_value
@@ -2655,7 +2689,11 @@ class Plan:
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
             open("plan_raw.html", "w").write(self.html_plan)
-            print("Wrote plan to plan_raw.html - best metric {} cost {} battery value {} import {}, export {} carbon {}".format(dp2(best_metric), dp2(best_cost), dp2(best_battery_value), dp2(import_kwh_battery + import_kwh_house), dp2(export_kwh), dp0(final_carbon_g)))
+            print(
+                "Wrote plan to plan_raw.html - best metric {} cost {} battery value {} import {}, export {} carbon {}".format(
+                    dp2(best_metric), dp2(best_cost), dp2(best_battery_value), dp2(import_kwh_battery + import_kwh_house), dp2(export_kwh), dp0(final_carbon_g)
+                )
+            )
 
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
