@@ -1515,6 +1515,10 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
+        "has_idle_time": False,
+        "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": False,
     },
 }
 
