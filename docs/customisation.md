@@ -386,7 +386,7 @@ i.e. if you change the reserve min to a level higher than the current battery So
 **switch.predbat_inverter_soc_reset**  (_expert mode_) When enabled the target SOC for the inverter(s) will be reset to 100%
 when a charge slot is not active, this can be used to workaround some firmware issues where the SOC target is
 used for solar charging as well as grid charging. When disabled the SOC % will not be changed after a charge slot.
-This is disabled by default.
+This is enabled by default.
 
 ## Balance Inverters
 
