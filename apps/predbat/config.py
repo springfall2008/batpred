@@ -1493,7 +1493,7 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
-    "FoxESS": {
+    "FoxESS" : {
         "name": "FoxESS",
         "has_rest_api": False,
         "has_mqtt_api": False,

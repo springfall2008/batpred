@@ -1255,7 +1255,7 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
         if stop_discharge:
             expected.append(["discharge_stop", {"device_id": "DID0"}])
         expected.append(["charge_freeze", {"device_id": "DID0", "target_soc": soc, "power": power}])
-    elif soc > 0:
+    elif soc > 0 and (inv.has_target_soc or soc > inv.soc_percent):
         if stop_discharge:
             expected.append(["discharge_stop", {"device_id": "DID0"}])
         expected.append(["charge_start", {"device_id": "DID0", "target_soc": soc, "power": power}])
@@ -1306,12 +1306,15 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
         expected.append(["discharge_freeze", {"device_id": "DID0", "target_soc": soc, "power": power}])
-    elif soc > 0 and soc < 100:
+    elif soc < inv.soc_percent:
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
         expected.append(["discharge_start", {"device_id": "DID0", "target_soc": soc, "power": power}])
     else:
-        expected.append(["discharge_stop", {"device_id": "DID0"}])
+        if charge_stop:
+            expected.append(["charge_stop", {"device_id": "DID0"}])
+        else:
+            expected.append(["discharge_stop", {"device_id": "DID0"}])
     if json.dumps(expected) != json.dumps(result):
         print("ERROR: Adjust export immediate - discharge service should be {} got {}".format(expected, result))
         failed = True
@@ -2905,8 +2908,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.calculate_tweak_plan = False
 
         # my_predbat.inverter_loss = 0.97
-        # my_predbat.calculate_second_pass = False
-        # my_predbat.calculate_tweak_plan = False
+        #my_predbat.calculate_second_pass = False
+        #my_predbat.calculate_tweak_plan = False
         # my_predbat.metric_battery_cycle = 0
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.90
@@ -2993,7 +2996,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     failed = False
     my_predbat.log("> ORIGINAL PLAN")
-    # my_predbat.end_record = 32*60
+    #my_predbat.end_record = 32*60
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
