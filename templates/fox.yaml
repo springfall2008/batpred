@@ -76,26 +76,32 @@ pred_bat:
     service: select.select_option
     entity_id: select.work_mode
     option: "Force Charge"
+    repeat: True
   charge_stop_service:
     service: select.select_option
     entity_id: select.work_mode
     option: "Self Use"
+    repeat: True
   discharge_start_service:
     service: select.select_option
     entity_id: select.work_mode
     option: "Force Discharge"
+    repeat: True
   discharge_stop_service:
     service: select.select_option
     entity_id: select.work_mode
     option: "Self Use"
+    repeat: True
   discharge_freeze_service:
     service: select.select_option
     entity_id: select.work_mode
     option: "Feed-in First"
+    repeat: True
   charge_freeze_service:
     service: select.select_option
     entity_id: select.work_mode
     option: "Back-up"
+    repeat: True
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   #balance_inverters_seconds: 60
