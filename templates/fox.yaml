@@ -69,29 +69,7 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 1
-
   inverter_type: FoxESS
-  inverter:
-    name: "FoxESS"
-    has_rest_api: False
-    has_mqtt_api: False
-    has_service_api: True
-    output_charge_control: "power"
-    has_charge_enable_time: False
-    has_discharge_enable_time: False
-    has_target_soc: False
-    has_reserve_soc: False
-    charge_time_format: "S"
-    charge_time_entity_is_option: False
-    soc_units: "%"
-    num_load_entities: 1
-    has_ge_inverter_mode: False
-    time_button_press: False
-    clock_time_format: "%Y-%m-%d %H:%M:%S"
-    write_and_poll_sleep: 2
-    has_time_window: False
-    support_charge_freeze: True
-    support_discharge_freeze: True
 
   # Services to control charging/discharging
   charge_start_service:
