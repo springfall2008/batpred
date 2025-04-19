@@ -91,7 +91,7 @@ pred_bat:
     write_and_poll_sleep: 2
     has_time_window: False
     support_charge_freeze: True
-    support_discharge_freeze: False
+    support_discharge_freeze: True
 
   # Services to control charging/discharging
   charge_start_service:
@@ -114,7 +114,10 @@ pred_bat:
     service: select.select_option
     entity_id: select.work_mode
     option: "Feed-in First"
-
+  charge_freeze_service:
+    service: select.select_option
+    entity_id: select.work_mode
+    option: "Back-up"
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   #balance_inverters_seconds: 60
