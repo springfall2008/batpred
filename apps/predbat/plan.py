@@ -2645,7 +2645,7 @@ class Plan:
                                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                             )
 
-                            if best_metric <= selected_metric and (best_metric < best_metric_drop):
+                            if best_metric <= selected_metric:
                                 if self.debug_enable:
                                     self.log(
                                         "Swap export window {} {}-{} limit {} with {} => {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(
