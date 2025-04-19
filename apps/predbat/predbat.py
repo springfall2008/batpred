@@ -15,8 +15,7 @@ from datetime import datetime, timedelta
 import traceback
 import sys
 import gc
-
-# from memory_profiler import profile
+#from memory_profiler import profile
 
 IS_COMPILED = getattr(sys, "frozen", False)
 
@@ -36,7 +35,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.18.7"
+THIS_VERSION = "v8.18.8"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py"]
@@ -588,7 +587,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.minutes_to_midnight = 24 * 60 - self.minutes_now
         self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
 
-    # @profile
+    #@profile
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now

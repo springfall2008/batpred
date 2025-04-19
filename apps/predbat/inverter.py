@@ -2141,6 +2141,8 @@ class Inverter:
             if target_soc == self.soc_percent or freeze:
                 if not self.call_service_template("charge_freeze_service", service_data, domain="charge", extra_data=extra_data):
                     self.call_service_template("charge_start_service", service_data, domain="charge", extra_data=extra_data)
+            elif not self.inv_has_target_soc and target_soc < self.soc_percent:
+                self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
             else:
                 self.call_service_template("charge_start_service", service_data, domain="charge", extra_data=extra_data)
         else:
