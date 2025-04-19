@@ -285,11 +285,23 @@ class FutureRate:
             print("Warning: Old futurerate URL, you must update this in apps.yaml")
             return {}, {}
 
+
+    def clean_futurerate_cache(self):
+        """
+        Clean up futurerate data
+        """
+        for url in self.futurerate_url_cache.keys():
+            stamp = self.futurerate_url_cache[url]["stamp"]
+            if stamp < self.midnight:
+                del self.futurerate_url_cache[url]
+                
     def download_futurerate_data(self, url):
         """
         Download futurerate data directly from a URL or return from cache if recent
         Retry 3 times and then throw error
         """
+
+        self.clean_futurerate_cache()
 
         # Check the cache first
         now = datetime.now()
