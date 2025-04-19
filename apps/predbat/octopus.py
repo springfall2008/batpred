@@ -712,7 +712,7 @@ class OctopusAPI:
         Fetch the tariff data
         """
         await self.clean_url_cache()
-        
+
         for tariff in tariffs:
             product_code = tariffs[tariff]["productCode"]
             tariff_code = tariffs[tariff]["tariffCode"]
