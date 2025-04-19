@@ -2165,9 +2165,12 @@ class Inverter:
             self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
             # Start discharge or discharge freeze
-            if freeze:
+            if target_soc == self.soc_percent or freeze:
                 if not self.call_service_template("discharge_freeze_service", service_data, domain="discharge", extra_data=extra_data):
                     self.call_service_template("discharge_start_service", service_data, domain="discharge", extra_data=extra_data)
+            elif not self.inv_has_target_soc and target_soc > self.soc_percent:
+                if not self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge"):
+                    self.call_service_template("charge_stop_service", service_data_stop, domain="discharge")
             else:
                 self.call_service_template("discharge_start_service", service_data, domain="discharge", extra_data=extra_data)
         else:

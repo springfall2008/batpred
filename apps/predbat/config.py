@@ -1515,7 +1515,8 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
-    }
+    },
+}
 
 # Control modes for Solax inverters
 SOLAX_SOLIS_MODES = {
