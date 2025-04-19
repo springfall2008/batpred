@@ -1041,7 +1041,7 @@ class GECloudDirect:
 
 
 class GECloud:
-    def clean_url_cache(self):
+    def clean_url_cache(self, now_utc):
         """
         Clean up the GE Cloud cache
         """
@@ -1083,7 +1083,7 @@ class GECloud:
         """
         geserial = self.get_arg("ge_cloud_serial")
         gekey = self.args.get("ge_cloud_key", None)
-        self.clean_url_cache()
+        self.clean_url_cache(now_utc)
 
         if not geserial:
             self.log("Error: GE Cloud has been enabled but ge_cloud_serial is not set to your serial")
