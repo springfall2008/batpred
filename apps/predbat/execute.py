@@ -366,13 +366,15 @@ class Execute:
                             self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                             # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
                             # from draining the battery
-                            if not isCharging and not isExporting:
+                            if not isExporting:
                                 if inverter.inv_has_timed_pause:
-                                    inverter.adjust_pause_mode(pause_discharge=True)
-                                    resetPause = False
+                                    if resetPause:
+                                        inverter.adjust_pause_mode(pause_discharge=True)
+                                        resetPause = False
                                 else:
-                                    inverter.adjust_discharge_rate(0)
-                                    resetDischarge = False
+                                    if resetDischarge:
+                                        inverter.adjust_discharge_rate(0)
+                                        resetDischarge = False
                                 carHolding = True
                                 self.log("Disabling battery discharge while the car {} is charging".format(car_n))
                                 if "Hold for car" not in status:
