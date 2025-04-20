@@ -2843,7 +2843,9 @@ def run_execute_test(
             assert_immediate_soc_target = assert_immediate_soc_target_array[inverter.id]
 
         assert_soc_target_force = (
-            assert_immediate_soc_target if assert_status in ["Charging", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"] else 0
+            assert_immediate_soc_target
+            if assert_status in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"]
+            else 0
         )
         if not set_charge_window:
             assert_soc_target_force = -1
@@ -4858,9 +4860,28 @@ def run_execute_tests(my_predbat):
         assert_charge_time_enable=True,
         set_charge_window=True,
         set_export_window=True,
-        assert_status="Charging",
+        assert_status="Charging, Hold for car",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_immediate_soc_target=100,
+        assert_pause_discharge=True,
+    )
+    failed |= run_execute_test(
+        my_predbat,
+        "car_charge2",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        soc_kw=10,
+        car_slot=charge_window_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging, Hold for car",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_immediate_soc_target=50,
+        assert_soc_target=50,
+        assert_pause_discharge=True,
     )
     failed |= run_execute_test(
         my_predbat,
