@@ -1493,7 +1493,7 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
-    "FoxESS": {
+    "FoxESS" : {
         "name": "FoxESS",
         "has_rest_api": False,
         "has_mqtt_api": False,
@@ -1641,7 +1641,7 @@ APPS_SCHEMA = {
     "car_charging_limit": {"type": "sensor", "sensor_type": "float", "entries": "num_cars"},
     "car_charging_exclusive": {"type": "boolean_list", "entries": "num_cars"},
     "carbon_intensity": {"type": "sensor", "sensor_type": "string"},
-    "octopus_intelligent_slot": {"type": "sensor", "sensor_type": "boolean"},
+    "octopus_intelligent_slot": {"type": "sensor", "sensor_type": "boolean|action"},
     "octopus_ready_time": {"type": "sensor", "sensor_type": "string"},
     "octopus_charge_limit": {"type": "sensor", "sensor_type": "float"},
     "octopus_slot_low_rate": {"type": "boolean"},
