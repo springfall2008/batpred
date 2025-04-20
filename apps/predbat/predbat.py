@@ -1085,6 +1085,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     errors += 1
                                     break
                     elif expected_type == "sensor_list" or expected_type == "sensor":
+                        sensor_type = spec.get("sensor_type", None)
+
                         if expected_type == "sensor" and isinstance(value, str):
                             value = [value]
                         elif expected_type == "sensor_list":
@@ -1097,11 +1099,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
                             matches = True
                             for sensor in value:
-                                sensor_type = spec.get("sensor_type", None)
                                 sensor_types = []
                                 if sensor_type:
                                     sensor_types = sensor_type.split("|")
 
+                                if "action" in sensor_types and isinstance(sensor, str) and "." in sensor:
+                                    # Allow action sensors
+                                    continue
                                 if ("integer" in sensor_types or "float" in sensor_types) and self.validate_is_int(sensor) and not spec.get("modify", False):
                                     # Allow fixed integer values
                                     continue
