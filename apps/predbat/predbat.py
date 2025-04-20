@@ -15,7 +15,8 @@ from datetime import datetime, timedelta
 import traceback
 import sys
 import gc
-#from memory_profiler import profile
+
+# from memory_profiler import profile
 
 IS_COMPILED = getattr(sys, "frozen", False)
 
@@ -587,7 +588,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.minutes_to_midnight = 24 * 60 - self.minutes_now
         self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
 
-    #@profile
+    # @profile
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -1114,7 +1115,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                 if "string" in sensor_types and isinstance(sensor, str) and not spec.get("modify", False) and not "." in sensor:
                                     # Allow fixed string values
                                     continue
-                                
 
                                 if not isinstance(sensor, str):
                                     self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a valid entity_id (must be a string)".format(name, sensor))
