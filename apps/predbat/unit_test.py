@@ -2843,7 +2843,9 @@ def run_execute_test(
             assert_immediate_soc_target = assert_immediate_soc_target_array[inverter.id]
 
         assert_soc_target_force = (
-            assert_immediate_soc_target if assert_status in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"] else 0
+            assert_immediate_soc_target
+            if assert_status in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"]
+            else 0
         )
         if not set_charge_window:
             assert_soc_target_force = -1
@@ -2908,8 +2910,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.calculate_tweak_plan = False
 
         # my_predbat.inverter_loss = 0.97
-        #my_predbat.calculate_second_pass = False
-        #my_predbat.calculate_tweak_plan = False
+        # my_predbat.calculate_second_pass = False
+        # my_predbat.calculate_tweak_plan = False
         # my_predbat.metric_battery_cycle = 0
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.90
@@ -2996,7 +2998,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     failed = False
     my_predbat.log("> ORIGINAL PLAN")
-    #my_predbat.end_record = 32*60
+    # my_predbat.end_record = 32*60
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
