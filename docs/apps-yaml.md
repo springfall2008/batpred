@@ -460,13 +460,13 @@ approval was lower than your maximum inverter power (check your install informat
 
 If you do not set an export limit then it is assumed to be unlimited (and thus limited by your inverter or PV system).
 
-### **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional).
+### **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional)
 
 When set in Watts, overrides the maximum charge/discharge rate settings used when controlling the inverter.
 This can be used if you need Predbat to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
 will normally configure all timed charges or discharges to be at the inverter's maximum rate.
 
-### **inverter_can_charge_during_export** 
+### **inverter_can_charge_during_export**
 
 Global setting, defaults to True.
 
