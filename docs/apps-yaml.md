@@ -428,29 +428,50 @@ for more accurate predictions.
 
 ## Inverter control configurations
 
-- **inverter_limit** - One per inverter. When set, it defines the maximum AC output power in watts for your inverter or micro-inverters (e.g. 3600).
+### **inverter_limit**
+
+One per inverter.
+
+Controls the way Predbat models your inverter, this does not change the way it is controlled.
+
+When set, it defines the maximum AC output power in watts for your inverter.
 This is used by Predbat in calculating the plan to emulate clipping that occurs in the inverter when your solar produces more than the inverter can handle,
 but it won't be that accurate as the source of the data isn't minute-by-minute.
-If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.<BR>
-For example, if you have a GivEnergy hybrid inverter you should set export_limit to 3600 or 5000 depending on which size inverter you have.
-If you have a GivEnergy All-in-one (6kW AC limit) and a 5kW Solis solar inverter, you should set inverter_limit to 11000 (6000+5000).
-For multiple All-in-ones, add each of their limits together, plus any separate solar inverter limits.
+
+For a Hybrid inverter make sure the Hybrid Inverter toggle is on, you should set the inverter limit to be the maximum power of the inverter in Watts e.g. a 5kW inverter will have a limit of 5000.
+If you have a seperate Micro Inverter for your PV then you should add its power to the inverter limit
+
+For an AC Coupled inverter make sure the Hybrid Inverter toggle is off and set this to the power of your AC Coupled inverter.
+Do not add on seperate Micro Inverters to the total power.
+
+If you have multiple inverters then set the value of each one in a list format.
 
 NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
 
-- **export_limit** - One per inverter (optional). When set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
+### **export_limit**
+
+One per inverter (optional).
+
+Controls the way Predbat models your inverter, this does not change the way it is controlled.
+
+When set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
 This is used by Predbat in calculating the plan to emulate your inverter's software export limit setting that you will have if your G98/G99
 approval was lower than your maximum inverter power (check your install information for details).
-If you do not set an export limit then it's the same as the inverter limit.
 
-NB: export_limit is ONLY used by Predbat to improve the quality of the plan, any export limit is done by the inverter and is not controlled by Predbat.
+If you do not set an export limit then it is assumed to be unlimited (and thus limited by your inverter or PV system).
 
-- **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional). When set in Watts, overrides the maximum
-charge/discharge rate settings used when controlling the inverter.
+### **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional).
+
+When set in Watts, overrides the maximum charge/discharge rate settings used when controlling the inverter.
 This can be used if you need Predbat to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
 will normally configure all timed charges or discharges to be at the inverter's maximum rate.
 
-- **inverter_can_charge_during_export** - Global setting, defaults to True.
+### **inverter_can_charge_during_export** 
+
+Global setting, defaults to True.
+
+Controls the way Predbat models your inverter, this does not change the way it is controlled.
+
 During a force export period if the generated solar exceeds the inverter limit or the export limit then the inverter will scale back the export rate.
 If this setting is True then the inverter can end up charging the battery from PV while still in Force Export mode.
 If this setting if False then the inverter will not charge the battery and the excess PV will be lost.
