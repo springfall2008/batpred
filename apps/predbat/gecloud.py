@@ -1045,7 +1045,8 @@ class GECloud:
         """
         Clean up the GE Cloud cache
         """
-        for url in self.ge_url_cache.keys():
+        current_keys = list(self.ge_url_cache.keys())
+        for url in current_keys[:]:
             stamp = self.ge_url_cache[url]["stamp"]
             age = now_utc - stamp
             if age.seconds > (24 * 60 * 60):

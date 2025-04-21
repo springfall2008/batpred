@@ -289,7 +289,8 @@ class FutureRate:
         """
         Clean up futurerate data
         """
-        for url in self.futurerate_url_cache.keys():
+        current_keys = list(self.futurerate_url_cache.keys())
+        for url in current_keys[:]:
             stamp = self.futurerate_url_cache[url]["stamp"]
             if stamp < self.midnight:
                 del self.futurerate_url_cache[url]
