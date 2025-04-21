@@ -435,8 +435,6 @@ class Inverter:
             self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit, index=self.id) / MINUTE_WATT
         if "export_limit" in self.base.args:
             self.export_limit = self.base.get_arg("export_limit", self.inverter_limit, index=self.id) / MINUTE_WATT
-        # Can't export more than the inverter limit
-        self.export_limit = min(self.export_limit, self.inverter_limit)
 
         # Log inverter details
         if not quiet:
