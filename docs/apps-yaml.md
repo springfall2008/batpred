@@ -439,10 +439,10 @@ This is used by Predbat in calculating the plan to emulate clipping that occurs 
 but it won't be that accurate as the source of the data isn't minute-by-minute.
 
 For a Hybrid inverter make sure the Hybrid Inverter toggle is on, you should set the inverter limit to be the maximum power of the inverter in Watts e.g. a 5kW inverter will have a limit of 5000.
-If you have a seperate Micro Inverter for your PV then you should add its power to the inverter limit
+If you have a separate Micro Inverter for your PV then you should add its power to the inverter limit
 
 For an AC Coupled inverter make sure the Hybrid Inverter toggle is off and set this to the power of your AC Coupled inverter.
-Do not add on seperate Micro Inverters to the total power.
+Do not add on separate Micro Inverters to the total power.
 
 If you have multiple inverters then set the value of each one in a list format.
 
