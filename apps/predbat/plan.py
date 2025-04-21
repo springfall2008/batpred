@@ -2595,7 +2595,7 @@ class Plan:
                                 self.log(
                                     "Drop export window {} limit {} {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(
                                         window_n_target,
-                                        export_limit,
+                                        export_limit_target,
                                         self.time_abs_str(self.export_window_best[window_n_target]["start"]),
                                         self.time_abs_str(self.export_window_best[window_n_target]["end"]),
                                         best_metric_drop,
