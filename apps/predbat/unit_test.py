@@ -2271,6 +2271,7 @@ def simple_scenario(
     set_charge_window=True,
     battery_temperature=20,
     set_export_freeze_only=False,
+    inverter_can_charge_during_export=True,
 ):
     """
     No PV, No Load
@@ -2358,6 +2359,7 @@ def simple_scenario(
     my_predbat.best_soc_keep_weight = keep_weight
     my_predbat.car_charging_soc[0] = car_soc
     my_predbat.car_charging_limit[0] = car_limit
+    my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
 
     if my_predbat.iboost_enable and (((not iboost_solar) and (not iboost_charging)) or iboost_smart):
         my_predbat.iboost_plan = my_predbat.plan_iboost_smart()
@@ -6396,6 +6398,21 @@ def run_model_tests(my_predbat):
         export_limit=0.5,
         inverter_limit=2.0,
         battery_rate_max_charge=2.0,
+    )
+    failed |= simple_scenario(
+        "battery_discharge_export_limit_ac_pv6",
+        my_predbat,
+        0,
+        2,
+        assert_final_metric=-export_rate * 24 * 0.5,
+        assert_final_soc=50,
+        with_battery=True,
+        discharge=0,
+        battery_soc=50,
+        export_limit=0.5,
+        inverter_limit=2.0,
+        battery_rate_max_charge=1.0,
+        inverter_can_charge_during_export=False,
     )
     failed |= simple_scenario(
         "battery_discharge_export_limit_hybrid",

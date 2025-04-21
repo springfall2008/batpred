@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.18.9"
+THIS_VERSION = "v8.18.10"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py"]
@@ -557,6 +557,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.set_charge_low_power = False
         self.set_export_low_power = False
         self.config_root = "./"
+        self.inverter_can_charge_during_export = True
+
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
                 self.config_root = root

@@ -170,6 +170,7 @@ class Prediction:
             self.iboost_running = False
             self.iboost_running_solar = False
             self.iboost_running_full = False
+            self.inverter_can_charge_during_export = base.inverter_can_charge_during_export
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -639,8 +640,11 @@ class Prediction:
                     reduce_by = over_limit
 
                     if reduce_by > battery_draw:
-                        reduce_by = reduce_by - battery_draw
-                        battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve * step)
+                        if self.inverter_can_charge_during_export:
+                            reduce_by = reduce_by - battery_draw
+                            battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve * step)
+                        else:
+                            battery_draw = 0
                     else:
                         battery_draw = battery_draw - reduce_by
 
@@ -657,7 +661,8 @@ class Prediction:
                         if reduce_by > battery_draw:
                             reduce_by = reduce_by - battery_draw
                             battery_draw = 0
-                            battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve * step)
+                            if self.inverter_can_charge_during_export:
+                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve * step)
                         else:
                             battery_draw = battery_draw - reduce_by
 
