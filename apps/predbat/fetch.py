@@ -1865,6 +1865,7 @@ class Fetch:
         self.inverter_clock_skew_end = self.get_arg("inverter_clock_skew_end", 0)
         self.inverter_clock_skew_discharge_start = self.get_arg("inverter_clock_skew_discharge_start", 0)
         self.inverter_clock_skew_discharge_end = self.get_arg("inverter_clock_skew_discharge_end", 0)
+        self.inverter_can_charge_during_export = self.get_arg("inverter_can_charge_during_export", True)
 
         # Log clock skew
         if self.inverter_clock_skew_start != 0 or self.inverter_clock_skew_end != 0:

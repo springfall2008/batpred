@@ -450,6 +450,11 @@ charge/discharge rate settings used when controlling the inverter.
 This can be used if you need Predbat to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
 will normally configure all timed charges or discharges to be at the inverter's maximum rate.
 
+- **inverter_can_charge_during_export** - Global setting, defaults to True.
+During a force export period if the generated solar exceeds the inverter limit or the export limit then the inverter will scale back the export rate.
+If this setting is True then the inverter can end up charging the battery from PV while still in Force Export mode.
+If this setting if False then the inverter will not charge the battery and the excess PV will be lost.
+
 ## Controlling the Inverter
 
 There are a few different ways to control your inverter:
