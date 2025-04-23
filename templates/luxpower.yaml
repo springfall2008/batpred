@@ -133,7 +133,9 @@ pred_bat:
     - time.lux_force_discharge_start1
   discharge_end_time:
     - time.lux_force_discharge_end1
-
+  discharge_target_soc:
+    - number.lux_forced_discharge_battery_level
+  
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
@@ -175,6 +177,7 @@ pred_bat:
   inverter_clock_skew_end: 0
   inverter_clock_skew_discharge_start: 0
   inverter_clock_skew_discharge_end: 0
+  inverter_can_charge_during_export: False
 
   # Clock skew adjusts the Predbat computer reported time
   # This is the time that Predbat takes actions like starting discharge/charging
