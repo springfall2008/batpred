@@ -370,29 +370,6 @@ device class: Battery
 state class: Measurement
 ```
 
-- Add the following automation to set the LuxPower discharge SoC when Predbat is exporting:
-
-```yaml
-alias: Lux Set Discharge Target SOC (predbat)
-description: ""
-triggers:
-  - entity_id:
-      - binary_sensor.predbat_exporting
-      - number.lux_ac_battery_charge_level
-    trigger: state
-conditions:
-  - condition: state
-    entity_id: binary_sensor.predbat_exporting
-    state: "on"
-actions:
-  - action: number.set_value
-    data:
-      value: "{{ states('number.lux_ac_battery_charge_level') }}"
-    target:
-      entity_id: number.lux_forced_discharge_battery_level
-mode: single
-```
-
 ## Growatt with Solar Assistant
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
