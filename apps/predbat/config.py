@@ -1502,7 +1502,7 @@ INVERTER_DEF = {
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
         "has_target_soc": False,
-        "has_reserve_soc": False,
+        "has_reserve_soc": True,
         "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
