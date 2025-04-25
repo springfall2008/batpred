@@ -1,5 +1,6 @@
-adbase
-appdaemon
-mkdocs
+requests
+coverage
 pre-commit
 pytz
+matplotlib
+aiohttp
