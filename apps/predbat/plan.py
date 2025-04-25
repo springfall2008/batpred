@@ -3302,7 +3302,7 @@ class Plan:
                 self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"})
                 self.dashboard_item(
                     self.prefix + ".iboost_best",
-                    state=dp2(final_iboost_kwh),
+                    state=dp4(final_iboost_kwh),
                     attributes={
                         "results": self.filtered_times(predict_iboost),
                         "today": self.filtered_today(predict_iboost, resetmidnight=True),
@@ -3622,12 +3622,19 @@ class Plan:
                         length = end - start
                         hours = length / 60
                         kwh = iboost_power * hours
-                        kwh = min(kwh, iboost_max - iboost_soc[day])
+                        iboost_left = max(iboost_max - iboost_soc[day], 0)
+                        # Scale down the number of minutes if the value exceeds the max
+                        if kwh > iboost_left:
+                            percent = iboost_left / kwh
+                            length = min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start)
+                            end = start + length
+                            hours = length / 60
+                            kwh = min(iboost_power * hours, iboost_left)
                         if kwh > 0:
                             iboost_soc[day] = dp3(iboost_soc[day] + kwh)
                             new_slot = {}
                             new_slot["start"] = start
-                            new_slot["end"] = end
+                            new_slot["end"] = start + length
                             new_slot["kwh"] = dp3(kwh)
                             new_slot["average"] = window["average"]
                             new_slot["cost"] = dp2(new_slot["average"] * kwh)

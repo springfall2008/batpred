@@ -850,8 +850,8 @@ class Prediction:
                 # Save iBoost next prediction
                 if minute == 0:
                     scaled_boost = (iboost_amount / step) * RUN_EVERY
-                    self.iboost_next = round(self.iboost_today + scaled_boost, 3)
-                    if iboost_amount > 0:
+                    self.iboost_next = round((self.iboost_today + scaled_boost), 6)
+                    if self.iboost_next > self.iboost_today:
                         self.iboost_running = True
 
             # Count battery cycles
