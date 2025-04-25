@@ -1091,8 +1091,8 @@ class Octopus:
             if "Past sessions" in line:
                 future_line = line.split("<p data-block-key")
                 for fline in future_line:
-                    for jline in fline.split("<br/>"):
-                        res = re.search(r"<i>\s*(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)", jline)
+                    for this_line in fline.split("<br/>"):
+                        res = re.search(r"<i>\s*(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)", this_line)
                         self.octopus_free_line(res, free_sessions)
             if "Free Electricity:" in line:
                 # Free Electricity: Sunday 24th November 7-9am
