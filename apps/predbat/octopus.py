@@ -995,6 +995,7 @@ class Octopus:
         """
         Parse a line from the octopus free data
         """
+
         if res:
             dayname = res.group(1)
             daynumber = res.group(2)
@@ -1090,8 +1091,9 @@ class Octopus:
             if "Past sessions" in line:
                 future_line = line.split("<p data-block-key")
                 for fline in future_line:
-                    res = re.search(r"<i>\s*(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)\s*</i>", fline)
-                    self.octopus_free_line(res, free_sessions)
+                    for this_line in fline.split("<br/>"):
+                        res = re.search(r"<i>\s*(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)", this_line)
+                        self.octopus_free_line(res, free_sessions)
             if "Free Electricity:" in line:
                 # Free Electricity: Sunday 24th November 7-9am
                 res = re.search(r"Free Electricity:\s+(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)", line)
