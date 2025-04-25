@@ -1366,8 +1366,8 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     ha.service_store_enable = False
     return failed
 
-def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_power=1, min_length=0, expect_cost=0, expect_kwh=0, expect_time=0):
 
+def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_power=1, min_length=0, expect_cost=0, expect_kwh=0, expect_time=0):
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
@@ -1402,7 +1402,7 @@ def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_powe
     my_predbat.iboost_smart = False
     my_predbat.iboost_slots = []
     my_predbat.iboost_today = 0
-    
+
     return failed
 
 
@@ -1636,8 +1636,8 @@ def run_load_octopus_slots_tests(my_predbat):
     failed |= run_load_octopus_slot_test("test4", my_predbat, slots, expected_slots4, True, 2.0, 10.0, 0.5)
     return failed
 
-def run_iboost_smart_tests(my_predbat):
 
+def run_iboost_smart_tests(my_predbat):
     """
     Test for Iboost smart
     """
@@ -1649,11 +1649,12 @@ def run_iboost_smart_tests(my_predbat):
     reset_rates2(my_predbat, import_rate, export_rate)
     my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False)
 
-    failed |= run_iboost_smart_test("iboost1", my_predbat, today=0, max_energy=5, max_power=1, min_length=0, expect_cost=import_rate*5*2, expect_kwh=5*2, expect_time=5*2*60)
-    failed |= run_iboost_smart_test("iboost2", my_predbat, today=4.9, max_energy=5, max_power=1, min_length=0, expect_cost=import_rate*(0.1+5), expect_kwh=(0.1+5), expect_time=10+5*60)
-    failed |= run_iboost_smart_test("iboost3", my_predbat, today=4.95, max_energy=5, max_power=1, min_length=0, expect_cost=import_rate*(0.05+5), expect_kwh=(0.05+5), expect_time=5+5*60)
+    failed |= run_iboost_smart_test("iboost1", my_predbat, today=0, max_energy=5, max_power=1, min_length=0, expect_cost=import_rate * 5 * 2, expect_kwh=5 * 2, expect_time=5 * 2 * 60)
+    failed |= run_iboost_smart_test("iboost2", my_predbat, today=4.9, max_energy=5, max_power=1, min_length=0, expect_cost=import_rate * (0.1 + 5), expect_kwh=(0.1 + 5), expect_time=10 + 5 * 60)
+    failed |= run_iboost_smart_test("iboost3", my_predbat, today=4.95, max_energy=5, max_power=1, min_length=0, expect_cost=import_rate * (0.05 + 5), expect_kwh=(0.05 + 5), expect_time=5 + 5 * 60)
 
     return failed
+
 
 def run_car_charging_smart_tests(my_predbat):
     """
