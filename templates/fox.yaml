@@ -138,6 +138,10 @@ pred_bat:
     - 8.29
   battery_rate_max:
     - 4200
+  reserve:
+    - number.min_soc_on_grid
+  battery_min_soc:
+    - number.min_soc
   #reserve:
   #  - number.givtcp_{geserial}_battery_power_reserve
   #inverter_mode:
@@ -345,7 +349,7 @@ pred_bat:
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
   # One per inverter
   battery_scaling:
-    - 0.9
+    - 1.0
 
   # Can be used to scale import and export data, used for workarounds
   import_export_scaling: 1.0
