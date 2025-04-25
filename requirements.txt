@@ -1,6 +1,6 @@
-requests
+aiohttp
 coverage
+matplotlib
 pre-commit
 pytz
-matplotlib
-aiohttp
+requests
