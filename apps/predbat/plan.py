@@ -73,6 +73,8 @@ class Plan:
         try_export = export_limits.copy()
         best_limits = try_charge_limit.copy()
         best_export = try_export.copy()
+        best_all_n = []
+        best_all_d = []
         if best_soc_min is None:
             best_soc_min = self.reserve
         if best_price_charge is None:
@@ -120,8 +122,6 @@ class Plan:
         charge_thresholds = [self.soc_max]
         if self.set_charge_freeze:
             charge_thresholds.append(self.reserve)
-        #if not fast:
-        #    charge_thresholds.extend([self.soc_max * i / 10.0 for i in range(10, 0, -1)])
 
         # Start loop of trials
         for loop_price in all_prices:
@@ -250,6 +250,8 @@ class Plan:
                             pred_item["highest_price_charge"] = highest_price_charge
                             pred_item["lowest_price_export"] = lowest_price_export
                             pred_item["loop_price"] = loop_price
+                            pred_item["all_n"] = all_n.copy()
+                            pred_item["all_d"] = all_d.copy()
                             pred_table.append(pred_item)
 
             for pred in pred_table:
@@ -260,6 +262,8 @@ class Plan:
                 highest_price_charge = pred["highest_price_charge"]
                 lowest_price_export = pred["lowest_price_export"]
                 loop_price = pred["loop_price"]
+                all_n = pred["all_n"]
+                all_d = pred["all_d"]
 
                 cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
                 # Are we doing 10%?
@@ -319,6 +323,8 @@ class Plan:
                     best_cost = cost
                     best_import = import_kwh_battery + import_kwh_house
                     best_battery_value = battery_value
+                    best_all_n = all_n.copy()
+                    best_all_d = all_d.copy()
                     if 1 or not quiet:
                         self.log(
                             "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} battery_value {} best_price_charge {} best_price_export {} limits {} export {}".format(
@@ -361,21 +367,27 @@ class Plan:
                     best_export,
                 )
             )
-        if test_mode:
-            # Simulate with medium PV
-            (
-                cost,
-                import_kwh_battery,
-                import_kwh_house,
-                export_kwh,
-                soc_min,
-                soc,
-                soc_min_minute,
-                battery_cycle,
-                metric_keep,
-                final_iboost,
-                final_carbon_g,
-            ) = self.run_prediction(best_limits, charge_window, export_window, best_export, False, end_record=end_record, step=PREDICT_STEP, save="test")
+
+        # Perform charge limit levelling on best_all_n
+        if best_all_n:
+            best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(0, record_charge_windows, best_limits, charge_window, export_window, export_limits, all_n=all_n, end_record=end_record)
+            if self.debug_enable:
+                self.log(
+                    "Optimise all charge limit levelling {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {}".format(
+                        best_all_n,
+                        dp4(best_price),
+                        dp4(best_cost),
+                        dp4(best_metric),
+                        dp4(best_keep),
+                        dp4(best_cycle),
+                        dp0(best_carbon),
+                        dp2(best_import),
+                        dp4(best_cost),
+                    )
+                )
+            for window_n in all_n:
+                best_limits[window_n] = best_soc
+
         return (
             best_limits,
             best_export,
