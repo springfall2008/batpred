@@ -79,10 +79,10 @@ class TestHAInterface:
             else:
                 if attribute:
                     result = default
-            print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
+            # print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
             return result
         else:
-            print("Getting state: {} attribute {} => default".format(entity_id, default))
+            # print("Getting state: {} attribute {} => default".format(entity_id, default))
             return default
 
     def call_service(self, service, **kwargs):
@@ -2958,7 +2958,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.set_discharge_during_charge = True
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
-        my_predbat.metric_min_improvement_export = 0.1
+        # my_predbat.metric_min_improvement_export = 0.1
         # my_predbat.set_reserve_min = 0
 
         # my_predbat.metric_self_sufficiency = 5
@@ -2979,6 +2979,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         my_predbat.manual_all_times = []
         my_predbat.manual_charge_times = []
         my_predbat.set_export_low_power = True
+        my_predbat.combine_charge_slots = False
         pass
 
     if re_do_rates:
@@ -3007,6 +3008,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
                 my_predbat.rate_import_cost_threshold = highest
 
             print("Lowest rate {} highest rate {} rates {}".format(lowest, highest, my_predbat.low_rates))
+    else:
+        print("don't re-do rates")
 
     print("minutes_now {} end_record {}".format(my_predbat.minutes_now, my_predbat.end_record))
 
@@ -3081,7 +3084,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
     filename = "plan_orig.html"
     open(filename, "w").write(my_predbat.html_plan)
-    print("Wrote plan to {}".format(filename))
+    print("Wrote plan to {} metric {}".format(filename, metric))
 
     print("Export windows {}".format(my_predbat.export_window_best))
     my_predbat.calculate_plan(recompute=True, debug_mode=True)
@@ -3096,7 +3099,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
     filename = "plan_final.html"
     open(filename, "w").write(my_predbat.html_plan)
-    print("Wrote plan to {}".format(filename))
+    print("Wrote plan to {} metric {}".format(filename, metric))
 
     # Expected
     actual_data = {"charge_limit_best": my_predbat.charge_limit_best, "charge_window_best": my_predbat.charge_window_best, "export_window_best": my_predbat.export_window_best, "export_limits_best": my_predbat.export_limits_best}
