@@ -1628,7 +1628,7 @@ class Fetch:
             self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts:
+            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts or self.num_cars > 0:
                 self.rate_import_cost_threshold = self.rate_max + 0.1
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
