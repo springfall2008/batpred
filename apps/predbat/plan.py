@@ -542,12 +542,12 @@ class Plan:
                     break
 
         end_record = min(self.forecast_plan_hours * 60 + next_charge_start, self.forecast_minutes + self.minutes_now)
-        max_windows = self.max_charge_windows(end_record, charge_window)
+        max_windows = self.max_charge_windows(end_record, charge_window) + 1
         if len(charge_window) > max_windows:
-            end_record = min(end_record, charge_window[max_windows + 1]["start"])
+            end_record = min(end_record, charge_window[max_windows]["start"])
             # If we are within this window then push to the end of it
             if end_record < self.minutes_now:
-                end_record = min(charge_window[max_windows + 1]["end"], self.forecast_minutes + self.minutes_now)
+                end_record = min(charge_window[max_windows]["end"], self.forecast_minutes + self.minutes_now)
 
         self.log("Calculated end_record as {} based on best_price {} next_charge_start {} max_windows {}".format(self.time_abs_str(end_record), best_price, self.time_abs_str(next_charge_start), max_windows))
         return end_record - self.minutes_now
