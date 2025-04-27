@@ -2101,7 +2101,6 @@ class Plan:
         Write debug plan to file
         """
         if debug_mode:
-
             orig_charge_limit_best = copy.deepcopy(self.charge_limit_best)
             orig_charge_window_best = copy.deepcopy(self.charge_window_best)
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
@@ -2149,8 +2148,6 @@ class Plan:
 
             self.charge_window_best = orig_charge_window_best
             self.charge_limit_best = orig_charge_limit_best
-
-
 
     def optimise_all_windows(self, best_metric, metric_keep, debug_mode=False):
         """
@@ -2463,7 +2460,6 @@ class Plan:
                                     window_n, self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
                                 )
                             )
-
 
                             self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                             best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(

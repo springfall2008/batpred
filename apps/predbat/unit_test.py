@@ -83,6 +83,7 @@ class TestHAInterface:
             return result
         else:
             #print("Getting state: {} attribute {} => default".format(entity_id, default))
+
             return default
 
     def call_service(self, service, **kwargs):
@@ -2982,7 +2983,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         my_predbat.combine_charge_slots = False
         #my_predbat.charge_limit_best[0] = 0
         #my_predbat.charge_limit_best[1] = 0
-
         pass
 
     if re_do_rates:
