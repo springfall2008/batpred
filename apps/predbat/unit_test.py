@@ -2976,11 +2976,11 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.metric_battery_cycle = 0
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.90
-        my_predbat.manual_export_times = []
-        my_predbat.manual_all_times = []
-        my_predbat.manual_charge_times = []
-        my_predbat.set_export_low_power = True
-        my_predbat.combine_charge_slots = False
+        # my_predbat.manual_export_times = []
+        # my_predbat.manual_all_times = []
+        # my_predbat.manual_charge_times = []
+        # my_predbat.set_export_low_power = True
+        # my_predbat.combine_charge_slots = False
         # my_predbat.charge_limit_best[0] = 0
         # my_predbat.charge_limit_best[1] = 0
         pass
@@ -5459,7 +5459,7 @@ def run_optimise_levels_tests(my_predbat):
         my_predbat,
         charge_window_best=charge_window_best,
         export_window_best=export_window_best,
-        expect_charge_limit=[0, 100],
+        expect_charge_limit=[0, 1],
         expect_export_limit=[0],
         load_amount=0,
         pv_amount=0,
@@ -5477,7 +5477,7 @@ def run_optimise_levels_tests(my_predbat):
         my_predbat,
         charge_window_best=charge_window_best,
         export_window_best=export_window_best,
-        expect_charge_limit=[0, 100],
+        expect_charge_limit=[0, 0],
         expect_export_limit=[100],
         load_amount=0,
         pv_amount=0,

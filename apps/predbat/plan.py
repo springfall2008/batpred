@@ -250,6 +250,8 @@ class Plan:
                             pred_item["highest_price_charge"] = highest_price_charge
                             pred_item["lowest_price_export"] = lowest_price_export
                             pred_item["loop_price"] = loop_price
+                            pred_item["divide"] = divide
+                            pred_item["modulo"] = modulo
                             pred_item["all_n"] = all_n.copy()
                             pred_item["all_d"] = all_d.copy()
                             pred_table.append(pred_item)
@@ -262,6 +264,8 @@ class Plan:
                 highest_price_charge = pred["highest_price_charge"]
                 lowest_price_export = pred["lowest_price_export"]
                 loop_price = pred["loop_price"]
+                divide = pred["divide"]
+                modulo = pred["modulo"]
                 all_n = pred["all_n"]
                 all_d = pred["all_d"]
 
@@ -375,7 +379,7 @@ class Plan:
                 0, record_charge_windows, best_limits, charge_window, export_window, best_export, all_n=best_all_n, end_record=end_record
             )
             if self.debug_enable:
-                self.log("Best all_n {} best_limits {} => {}".format(best_all_n, [best_limits[window_n] for window_n in best_all_n], best_soc))
+                self.log("Best all_n {} best_limits {} => {} metric {}".format(best_all_n, [best_limits[window_n] for window_n in best_all_n], best_soc, metric))
             for window_n in best_all_n:
                 best_limits[window_n] = best_soc
                 try_charge_limit[window_n] = best_soc
@@ -538,12 +542,12 @@ class Plan:
                     break
 
         end_record = min(self.forecast_plan_hours * 60 + next_charge_start, self.forecast_minutes + self.minutes_now)
-        max_windows = self.max_charge_windows(end_record, charge_window)
+        max_windows = self.max_charge_windows(end_record, charge_window) + 1
         if len(charge_window) > max_windows:
             end_record = min(end_record, charge_window[max_windows]["start"])
             # If we are within this window then push to the end of it
             if end_record < self.minutes_now:
-                end_record = charge_window[max_windows]["end"]
+                end_record = min(charge_window[max_windows]["end"], self.forecast_minutes + self.minutes_now)
 
         self.log("Calculated end_record as {} based on best_price {} next_charge_start {} max_windows {}".format(self.time_abs_str(end_record), best_price, self.time_abs_str(next_charge_start), max_windows))
         return end_record - self.minutes_now
