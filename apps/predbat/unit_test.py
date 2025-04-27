@@ -79,10 +79,10 @@ class TestHAInterface:
             else:
                 if attribute:
                     result = default
-            #print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
+            # print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
             return result
         else:
-            #print("Getting state: {} attribute {} => default".format(entity_id, default))
+            # print("Getting state: {} attribute {} => default".format(entity_id, default))
 
             return default
 
@@ -2981,8 +2981,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         my_predbat.manual_charge_times = []
         my_predbat.set_export_low_power = True
         my_predbat.combine_charge_slots = False
-        #my_predbat.charge_limit_best[0] = 0
-        #my_predbat.charge_limit_best[1] = 0
+        # my_predbat.charge_limit_best[0] = 0
+        # my_predbat.charge_limit_best[1] = 0
         pass
 
     if re_do_rates:
@@ -3053,7 +3053,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
         )
         my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
-        my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True)
+        my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(
+            my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None, flip=True
+        )
 
     pv_step = my_predbat.pv_forecast_minute_step
     pv10_step = my_predbat.pv_forecast_minute10_step

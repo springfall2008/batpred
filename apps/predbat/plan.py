@@ -370,19 +370,17 @@ class Plan:
 
         # Perform charge limit levelling on best_all_n
         if best_all_n:
-            metric, battery_value, cost, keep, cycle, carbon, import_this, export_this = self.run_prediction_metric(
-                best_limits, charge_window, export_window, best_export, end_record=self.end_record
+            metric, battery_value, cost, keep, cycle, carbon, import_this, export_this = self.run_prediction_metric(best_limits, charge_window, export_window, best_export, end_record=self.end_record)
+            best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
+                0, record_charge_windows, best_limits, charge_window, export_window, best_export, all_n=best_all_n, end_record=end_record
             )
-            best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(0, record_charge_windows, best_limits, charge_window, export_window, best_export, all_n=best_all_n, end_record=end_record)
             if self.debug_enable:
                 self.log("Best all_n {} best_limits {} => {}".format(best_all_n, [best_limits[window_n] for window_n in best_all_n], best_soc))
             for window_n in best_all_n:
                 best_limits[window_n] = best_soc
                 try_charge_limit[window_n] = best_soc
 
-            metric, battery_value, cost, keep, cycle, carbon, import_this, export_this = self.run_prediction_metric(
-                best_limits, charge_window, export_window, best_export, end_record=self.end_record
-            )
+            metric, battery_value, cost, keep, cycle, carbon, import_this, export_this = self.run_prediction_metric(best_limits, charge_window, export_window, best_export, end_record=self.end_record)
 
         return (
             best_limits,
@@ -2124,7 +2122,7 @@ class Plan:
                 self.export_limits_best,
                 True,
                 end_record=self.end_record,
-                save='best',
+                save="best",
             )
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
