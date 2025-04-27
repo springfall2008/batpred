@@ -84,6 +84,7 @@ class Fetch:
         cloud_factor=None,
         load_scaling_dynamic=None,
         base_offset=None,
+        flip=False,
     ):
         """
         Create cached step data for historical array
@@ -129,7 +130,7 @@ class Fetch:
         # Simple divergence model keeps the same total but brings PV/Load up and down every 5 minutes
         if cloud_factor and cloud_factor > 0:
             for minute in range(0, self.forecast_minutes, step):
-                cloud_on = int((minute + self.minutes_now) / 5) % 2
+                cloud_on = (int((minute + self.minutes_now) / 5) + 1 if flip else 0) % 2
                 if cloud_on > 0:
                     cloud_diff += min(values[minute] * cloud_factor, values.get(minute + 5, 0) * cloud_factor)
                     values[minute] += cloud_diff

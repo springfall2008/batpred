@@ -589,6 +589,26 @@ class Plan:
         if end_record is None:
             end_record = self.forecast_minutes
 
+        (
+            cost10,
+            import_kwh_battery10,
+            import_kwh_house10,
+            export_kwh10,
+            soc_min10,
+            soc10,
+            soc_min_minute10,
+            battery_cycle10,
+            metric_keep10,
+            final_iboost10,
+            final_carbon_g10,
+        ) = self.run_prediction(
+            charge_limit_best,
+            charge_window_best,
+            export_window_best,
+            export_limits_best,
+            True,
+            end_record=end_record,
+        )
         # Run new plan
         (
             cost,
@@ -610,26 +630,6 @@ class Plan:
             False,
             end_record=end_record,
             save=save,
-        )
-        (
-            cost10,
-            import_kwh_battery10,
-            import_kwh_house10,
-            export_kwh10,
-            soc_min10,
-            soc10,
-            soc_min_minute10,
-            battery_cycle10,
-            metric_keep10,
-            final_iboost10,
-            final_carbon_g10,
-        ) = self.run_prediction(
-            charge_limit_best,
-            charge_window_best,
-            export_window_best,
-            export_limits_best,
-            True,
-            end_record=end_record,
         )
         metric, battery_value = self.compute_metric(self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
         return metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh_battery + import_kwh_house, export_kwh
@@ -770,7 +770,7 @@ class Plan:
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
-        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None)
+        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
 
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
@@ -2101,9 +2101,41 @@ class Plan:
         Write debug plan to file
         """
         if debug_mode:
+
+            orig_charge_limit_best = copy.deepcopy(self.charge_limit_best)
+            orig_charge_window_best = copy.deepcopy(self.charge_window_best)
+            self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
+
+            (
+                cost10,
+                import_kwh_battery10,
+                import_kwh_house10,
+                export_kwh10,
+                soc_min10,
+                soc10,
+                soc_min_minute10,
+                battery_cycle10,
+                metric_keep10,
+                final_iboost10,
+                final_carbon_g10,
+            ) = self.run_prediction(
+                self.charge_limit_best,
+                self.charge_window_best,
+                self.export_window_best,
+                self.export_limits_best,
+                True,
+                end_record=self.end_record,
+                save='best',
+            )
+            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+            self.update_target_values()
+            self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+            open(name + "_10.html", "w").write(self.html_plan)
+
             best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, save="best"
             )
+
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
@@ -2114,6 +2146,9 @@ class Plan:
                 best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, save="test"
                 )
+
+            self.charge_window_best = orig_charge_window_best
+            self.charge_limit_best = orig_charge_limit_best
 
 
 
