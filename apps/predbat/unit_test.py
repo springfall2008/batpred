@@ -2976,11 +2976,11 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.metric_battery_cycle = 0
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.90
-        #my_predbat.manual_export_times = []
-        #my_predbat.manual_all_times = []
-        #my_predbat.manual_charge_times = []
-        #my_predbat.set_export_low_power = True
-        #my_predbat.combine_charge_slots = False
+        # my_predbat.manual_export_times = []
+        # my_predbat.manual_all_times = []
+        # my_predbat.manual_charge_times = []
+        # my_predbat.set_export_low_power = True
+        # my_predbat.combine_charge_slots = False
         # my_predbat.charge_limit_best[0] = 0
         # my_predbat.charge_limit_best[1] = 0
         pass
