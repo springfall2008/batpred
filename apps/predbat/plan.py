@@ -541,13 +541,25 @@ class Plan:
                         next_charge_start = charge_window[window_n]["end"]
                     break
 
+        end_record_min = self.minutes_now + self.forecast_plan_hours * 60
         end_record = min(self.forecast_plan_hours * 60 + next_charge_start, self.forecast_minutes + self.minutes_now)
-        max_windows = self.max_charge_windows(end_record, charge_window) + 1
+
+        # Align to next window
+        max_windows = self.max_charge_windows(end_record, charge_window)
         if len(charge_window) > max_windows:
             end_record = min(end_record, charge_window[max_windows]["start"])
             # If we are within this window then push to the end of it
             if end_record < self.minutes_now:
                 end_record = min(charge_window[max_windows]["end"], self.forecast_minutes + self.minutes_now)
+
+        # avoid too short a plan, find the next charge window if its short
+        if end_record < end_record_min:
+            # If we are within this window then push to
+            max_windows += 1
+            if len(charge_window) > max_windows:
+                end_record = min(max(end_record, charge_window[max_windows]["start"]), self.forecast_minutes + self.minutes_now)
+            # Final check to avoid too short a plan
+            end_record = max(end_record, end_record_min)
 
         self.log("Calculated end_record as {} based on best_price {} next_charge_start {} max_windows {}".format(self.time_abs_str(end_record), best_price, self.time_abs_str(next_charge_start), max_windows))
         return end_record - self.minutes_now
@@ -2346,7 +2358,7 @@ class Plan:
                             continue
 
                         # For start at high only tune down excess high slots
-                        if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
+                        if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] == 0):
                             if self.debug_enable:
                                 self.log("Skip start at high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
                             continue
