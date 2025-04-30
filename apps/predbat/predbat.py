@@ -648,6 +648,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 status, status_extra = self.execute_plan()
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(dp1(plan_age_minutes), self.calculate_plan_every))
+                self.fetch_inverter_data()
 
         # iBoost solar diverter model update state, only on 5 minute intervals
         if self.iboost_enable and scheduled:
