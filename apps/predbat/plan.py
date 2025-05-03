@@ -105,20 +105,6 @@ class Plan:
             if region_start:
                 self.log("Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end)))
 
-        # Find window prices
-        window_prices = {}
-        window_prices_export = {}
-        for loop_price in all_prices:
-            for price in price_set:
-                links = price_links[price]
-                for key in links:
-                    window_n = window_index[key]["id"]
-                    typ = window_index[key]["type"]
-                    if typ == "c":
-                        window_prices[window_n] = charge_window[window_n]["average"]
-                    elif typ == "d":
-                        window_prices_export[window_n] = export_window[window_n]["average"]
-
         charge_thresholds = [self.soc_max]
         if self.set_charge_freeze:
             charge_thresholds.append(self.reserve)
@@ -227,18 +213,28 @@ class Plan:
                                 self.log("Try this optimisation with divide {} windows {} export windows {} export_enable {}".format(divide, all_n, all_d, export_enable))
 
                             # Work out highest and lowest prices
-                            highest_price_charge = price_set[-1]
-                            lowest_price_export = price_set[0]
+                            highest_price_charge = None
+                            lowest_price_export = None
                             for window_n in range(record_charge_windows):
                                 if window_n >= len(try_charge_limit):
                                     continue
                                 if try_charge_limit[window_n] > 0:
-                                    highest_price_charge = max(highest_price_charge, window_prices[window_n])
+                                    if highest_price_charge is None:
+                                        highest_price_charge = charge_window[window_n]["average"]
+                                    else:
+                                        highest_price_charge = max(highest_price_charge, charge_window[window_n]["average"])
                             for window_n in range(record_export_windows):
                                 if window_n >= len(try_export):
                                     continue
                                 if try_export[window_n] < 100:
-                                    lowest_price_export = min(lowest_price_export, window_prices_export[window_n])
+                                    if lowest_price_export is None:
+                                        lowest_price_export = export_window[window_n]["average"]
+                                    else:
+                                        lowest_price_export = min(lowest_price_export, export_window[window_n]["average"])
+                            if highest_price_charge is None:
+                                highest_price_charge = best_price_charge
+                            if lowest_price_export is None:
+                                lowest_price_export = best_price_export
 
                             tried_list[try_hash] = True
 
@@ -2221,6 +2217,9 @@ class Plan:
 
                     # Try to swap into the target slot
                     for window_n in range(max(window_n_target - 32, 0), max(window_n_target - 1, 0), 1):
+                        previous_end = 0
+                        if window_n > 0:
+                            previous_end = self.export_window_best[window_n - 1]["end"]
                         window_start = self.export_window_best[window_n]["start"]
                         window_length = self.export_window_best[window_n]["end"] - window_start
                         export_limit = self.export_limits_best[window_n]
@@ -2239,7 +2238,7 @@ class Plan:
                             # Set the current window to off and optimise the swap window
                             self.export_limits_best[window_n] = 100
                             self.export_limits_best[window_n_target] = export_limit
-                            self.export_window_best[window_n_target]["start"] = self.export_window_best[window_n_target]["end"] - window_length
+                            self.export_window_best[window_n_target]["start"] = max(self.export_window_best[window_n_target]["end"] - window_length, previous_end)
 
                             best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
                                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
@@ -2358,9 +2357,11 @@ class Plan:
             for key in links:
                 typ = window_index[key]["type"]
                 window_n = window_index[key]["id"]
-                price = window_index[key]["average"]
+                price = self.charge_window_best[window_n]["average"]
                 if typ == "c" and (self.charge_limit_best[window_n] > self.reserve and price < lowest_price_charge):
                     lowest_price_charge = price
+        if debug_mode:
+            print("Lowest price charge {} best_price_charge {} best_price_export {}".format(lowest_price_charge, best_price, best_price_export))
 
         # Optimise individual windows in the price band for charge/export
         # First optimise those at or below threshold highest to lowest (to turn down values)
@@ -2390,21 +2391,21 @@ class Plan:
                 for key in links:
                     typ = window_index[key]["type"]
                     window_n = window_index[key]["id"]
-                    price = window_index[key]["average"]
 
                     if typ == "c":
                         # Store price set with window
-                        self.charge_window_best[window_n]["set"] = price
+                        self.charge_window_best[window_n]["set"] = price_key
                         window_start = self.charge_window_best[window_n]["start"]
+                        price = self.charge_window_best[window_n]["average"]
 
                         # Freeze pass is just export freeze
                         if pass_type in ["freeze"]:
                             continue
 
-                        # For start at high only tune down excess high slots
-                        if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] == 0):
+                        # Don't allow charging if the price is above the threshold and not already selected during levelling
+                        if (price > best_price) and (self.charge_limit_best[window_n] == 0):
                             if self.debug_enable:
-                                self.log("Skip start at high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
+                                self.log("Skip high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
                             continue
 
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
@@ -2468,16 +2469,23 @@ class Plan:
                                 )
                     else:
                         # Store price set with window
-                        self.export_window_best[window_n]["set"] = price
+                        self.export_window_best[window_n]["set"] = price_key
                         window_start = self.export_window_best[window_n]["start"]
+                        price = self.export_window_best[window_n]["average"]
 
                         # Ignore freeze pass if export freeze disabled
                         if not self.set_export_freeze and pass_type == "freeze":
                             continue
 
+                        # Ignore prices below the threshold if not already selected during levelling
+                        if (price < best_price_export) and (self.export_limits_best[window_n] == 100.0):
+                            if self.debug_enable:
+                                self.log("Skip low window {} best limit {} price_set {}".format(window_n, self.export_limits_best[window_n], price))
+                            continue
+
                         # Do highest price first
                         # Second pass to tune down any excess exports only
-                        if pass_type == "low" and ((price > best_price) or (self.export_limits_best[window_n] == 100.0)):
+                        if pass_type == "low" and ((price > best_price_export) or (self.export_limits_best[window_n] == 100.0)):
                             continue
 
                         if self.calculate_best_export and (window_start not in self.manual_all_times):
@@ -2491,7 +2499,7 @@ class Plan:
                                 continue
 
                             average = self.export_window_best[window_n]["average"]
-                            if price < lowest_price_charge:
+                            if price < lowest_price_charge and pass_type not in ["freeze"]:
                                 if self.debug_enable:
                                     self.log("Skipping export optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, dp2(average)))
                                 continue
