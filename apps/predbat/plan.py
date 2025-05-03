@@ -2357,9 +2357,8 @@ class Plan:
             for key in links:
                 typ = window_index[key]["type"]
                 window_n = window_index[key]["id"]
-                price = self.charge_window_best[window_n]["average"]
                 if typ == "c" and (self.charge_limit_best[window_n] > self.reserve and price < lowest_price_charge):
-                    lowest_price_charge = price
+                    lowest_price_charge = self.charge_window_best[window_n]["average"]
         if debug_mode:
             print("Lowest price charge {} best_price_charge {} best_price_export {}".format(lowest_price_charge, best_price, best_price_export))
 
