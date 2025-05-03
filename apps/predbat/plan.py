@@ -2279,9 +2279,7 @@ class Plan:
                                 self.export_limits_best[window_n_target] = export_limit_target
                                 self.export_window_best[window_n_target]["start"] = window_start_target
 
-
             self.log("Swap export optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(selected_metric), dp2(selected_cost), dp2(selected_keep), dp2(selected_cycle), dp0(selected_carbon), dp2(selected_import)))
-
 
     def optimise_full_second_pass(self, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=False):
         """
@@ -2727,7 +2725,11 @@ class Plan:
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
 
-        self.log("Set best_cost_charge {} best_cost_export {} best_metric {} best_keep {} best_cycle {} best_carbon {} best_import {}".format(dp2(best_price), dp2(best_price_export), dp2(best_metric), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
+        self.log(
+            "Set best_cost_charge {} best_cost_export {} best_metric {} best_keep {} best_cycle {} best_carbon {} best_import {}".format(
+                dp2(best_price), dp2(best_price_export), dp2(best_metric), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)
+            )
+        )
         self.plan_write_debug(debug_mode, "plan_levels.html")
         return best_price, best_price_export, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
 
@@ -2742,15 +2744,18 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
-        best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_detailed_pass(best_price, best_price_export, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=debug_mode)
+        best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_detailed_pass(
+            best_price, best_price_export, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=debug_mode
+        )
 
         if self.calculate_second_pass:
-            best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_full_second_pass(best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=debug_mode)
+            best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_full_second_pass(
+                best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=debug_mode
+            )
 
         # Swaps
         self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
         self.plan_write_debug(debug_mode, "plan_raw.html")
-
 
     def optimise_charge_windows_manual(self):
         """
