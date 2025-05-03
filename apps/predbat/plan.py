@@ -2441,7 +2441,7 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                                freeze_only = pass_type in ["freeze"],
+                                freeze_only=pass_type in ["freeze"],
                             )
                             if best_soc != self.charge_limit_best[window_n]:
                                 self.charge_limit_best[window_n] = best_soc
@@ -2778,7 +2778,7 @@ class Plan:
         self.plan_write_debug(debug_mode, "plan_raw.html")
 
         # Return
-        return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import         
+        return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
     def optimise_charge_windows_manual(self):
         """
