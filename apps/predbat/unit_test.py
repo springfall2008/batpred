@@ -2960,6 +2960,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
         # my_predbat.metric_min_improvement_export = 0.1
+        my_predbat.metric_min_improvement = 0.0
         # my_predbat.set_reserve_min = 0
 
         # my_predbat.metric_self_sufficiency = 5
@@ -5431,7 +5432,7 @@ def run_optimise_levels_tests(my_predbat):
         expect_charge_limit=[0, 100],
         load_amount=0.5,
         pv_amount=0,
-        expect_best_price=6.0 / 0.9,
+        expect_best_price=6.0,
         inverter_loss=0.9,
     )
     failed |= this_failed
@@ -5446,7 +5447,7 @@ def run_optimise_levels_tests(my_predbat):
         return failed
 
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "dual_pv2", my_predbat, charge_window_best=charge_window_best, expect_charge_limit=[0, 100], load_amount=2.0, pv_amount=1.0, expect_best_price=6.0 / 0.9, inverter_loss=0.9
+        "dual_pv2", my_predbat, charge_window_best=charge_window_best, expect_charge_limit=[0, 100], load_amount=2.0, pv_amount=1.0, expect_best_price=6.0, inverter_loss=0.9
     )
     failed |= this_failed
     if failed:

@@ -295,7 +295,8 @@ class UserInterface:
                 elif item.get("api"):
                     await self.async_api_select(item["name"], value)
                 else:
-                    await self.async_expose_config(item["name"], value, event=True)
+                    if item.get("value", None) != value:
+                        await self.async_expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
 
@@ -332,10 +333,11 @@ class UserInterface:
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
-                self.log("number_event: {} = {}".format(entity, value))
-                await self.async_expose_config(item["name"], value, event=True)
-                self.update_pending = True
-                self.plan_valid = False
+                if item.get("value", None) != value:
+                    self.log("number_event: {} = {}".format(entity, value))
+                    await self.async_expose_config(item["name"], value, event=True)
+                    self.update_pending = True
+                    self.plan_valid = False
 
     async def watch_event(self, entity, attribute, old, new, kwargs):
         """
@@ -386,10 +388,12 @@ class UserInterface:
                 elif service == "toggle" and isinstance(value, bool):
                     value = not value
 
-                self.log("switch_event: {} = {}".format(entity, value))
-                await self.async_expose_config(item["name"], value, event=True)
-                self.update_pending = True
-                self.plan_valid = False
+                # Check if value has changed
+                if item.get("value", None) != value:
+                    self.log("switch_event: {} = {}".format(entity, value))
+                    await self.async_expose_config(item["name"], value, event=True)
+                    self.update_pending = True
+                    self.plan_valid = False
 
     def get_ha_config(self, name, default):
         """
