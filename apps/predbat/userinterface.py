@@ -388,7 +388,6 @@ class UserInterface:
                 elif service == "toggle" and isinstance(value, bool):
                     value = not value
 
-
                 # Check if value has changed
                 if item.get("value", None) != value:
                     self.log("switch_event: {} = {}".format(entity, value))

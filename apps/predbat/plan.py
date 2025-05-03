@@ -2803,7 +2803,7 @@ class Plan:
         self.plan_write_debug(debug_mode, "plan_raw.html")
 
         # Return
-        return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import         
+        return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
     def optimise_charge_windows_manual(self):
         """
