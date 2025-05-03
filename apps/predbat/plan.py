@@ -2798,7 +2798,7 @@ class Plan:
 
         # Tweak plan
         if self.calculate_tweak_plan:
-            self.tweak_plan(self.end_record, metric, metric_keep)
+            self.tweak_plan(self.end_record, best_metric, metric_keep)
 
         self.plan_write_debug(debug_mode, "plan_raw.html")
 
