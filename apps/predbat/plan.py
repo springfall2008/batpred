@@ -2428,7 +2428,7 @@ class Plan:
                             continue
 
                         # Don't allow charging if the price is above the threshold and not already selected during levelling
-                        #if (price > best_price) and (self.charge_limit_best[window_n] == 0):
+                        # if (price > best_price) and (self.charge_limit_best[window_n] == 0):
                         #    if self.debug_enable:
                         #        self.log("Skip high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
                         #    continue
@@ -2466,7 +2466,7 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                                freeze_only = (price > best_price) and (self.charge_limit_best[window_n] == 0),
+                                freeze_only=(price > best_price) and (self.charge_limit_best[window_n] == 0),
                             )
                             if best_soc != self.charge_limit_best[window_n]:
                                 self.charge_limit_best[window_n] = best_soc
