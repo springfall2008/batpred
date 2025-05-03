@@ -77,15 +77,40 @@ class Plan:
         best_all_d = []
         if best_soc_min is None:
             best_soc_min = self.reserve
-        if best_price_charge is None:
-            best_price_charge = price_set[-1]
-        if best_price_export is None:
-            best_price_export = price_set[0]
         step = PREDICT_STEP
         if fast:
             step = 30
         if tried_list is None:
             tried_list = {}
+
+        # Work out the highest and lowest prices in case we don't have a charge or an export
+        highest_price_charge = None
+        lowest_price_export = None
+        for price in price_set:
+            links = price_links[price]
+            for key in links:
+                window_n = window_index[key]["id"]
+                typ = window_index[key]["type"]
+                if typ == "c":
+                    if highest_price_charge is None:
+                        highest_price_charge = charge_window[window_n]["average"]
+                    else:
+                        highest_price_charge = max(highest_price_charge, charge_window[window_n]["average"])
+                elif typ == "d":
+                    if lowest_price_export is None:
+                        lowest_price_export = export_window[window_n]["average"]
+                    else:
+                        lowest_price_export = min(lowest_price_export, export_window[window_n]["average"])
+
+        if highest_price_charge is None:
+            highest_price_charge = price_set[-1]
+        if lowest_price_export is None:
+            lowest_price_export = price_set[0]
+
+        if best_price_charge is None:
+            best_price_charge = highest_price_charge
+        if best_price_export is None:
+            best_price_export = lowest_price_export
 
         if region_start:
             region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
@@ -2399,14 +2424,14 @@ class Plan:
                         price = self.charge_window_best[window_n]["average"]
 
                         # Freeze pass is just export freeze
-                        if pass_type in ["freeze"] and not self.set_charge_freeze:
+                        if pass_type in ["freeze"]:
                             continue
 
                         # Don't allow charging if the price is above the threshold and not already selected during levelling
-                        if (price > best_price) and (self.charge_limit_best[window_n] == 0) and (pass_type not in ["freeze"]):
-                            if self.debug_enable:
-                                self.log("Skip high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
-                            continue
+                        #if (price > best_price) and (self.charge_limit_best[window_n] == 0):
+                        #    if self.debug_enable:
+                        #        self.log("Skip high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
+                        #    continue
 
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
                             if not printed_set:
@@ -2441,7 +2466,7 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                                freeze_only = pass_type in ["freeze"],
+                                freeze_only = (price > best_price) and (self.charge_limit_best[window_n] == 0),
                             )
                             if best_soc != self.charge_limit_best[window_n]:
                                 self.charge_limit_best[window_n] = best_soc
