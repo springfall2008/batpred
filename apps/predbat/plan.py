@@ -2428,10 +2428,10 @@ class Plan:
                             continue
 
                         # Don't allow charging if the price is above the threshold and not already selected during levelling
-                        # if (price > best_price) and (self.charge_limit_best[window_n] == 0):
-                        #    if self.debug_enable:
-                        #        self.log("Skip high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
-                        #    continue
+                        if (price > best_price) and (self.charge_limit_best[window_n] == 0):
+                           if self.debug_enable:
+                               self.log("Skip high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
+                           continue
 
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
                             if not printed_set:

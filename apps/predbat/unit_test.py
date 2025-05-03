@@ -5390,6 +5390,7 @@ def run_optimise_levels_tests(my_predbat):
     print("**** Running Optimise levels tests ****")
     reset_inverter(my_predbat)
     failed = False
+    my_predbat.best_soc_keep = 0.0
 
     # Single charge window
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 10.0}]
@@ -5401,7 +5402,7 @@ def run_optimise_levels_tests(my_predbat):
         expect_charge_limit=[0],
         load_amount=1.0,
         pv_amount=0,
-        expect_best_price=10.0 / 0.9,
+        expect_best_price=10.0,
         inverter_loss=0.9,
     )
     failed |= this_failed
@@ -5415,7 +5416,7 @@ def run_optimise_levels_tests(my_predbat):
         expect_charge_limit=[0],
         load_amount=1.0,
         pv_amount=1.0,
-        expect_best_price=10.0 / 0.9,
+        expect_best_price=10.0,
         inverter_loss=0.9,
     )
     failed |= this_failed
@@ -5440,7 +5441,7 @@ def run_optimise_levels_tests(my_predbat):
         return failed
 
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "dual_pv", my_predbat, charge_window_best=charge_window_best, expect_charge_limit=[0, 0], load_amount=1.0, pv_amount=1.0, expect_best_price=6.0 / 0.9, inverter_loss=0.9
+        "dual_pv", my_predbat, charge_window_best=charge_window_best, expect_charge_limit=[0, 0], load_amount=1.0, pv_amount=1.0, expect_best_price=6, inverter_loss=0.9
     )
     failed |= this_failed
     if failed:
@@ -5482,7 +5483,26 @@ def run_optimise_levels_tests(my_predbat):
         expect_export_limit=[100],
         load_amount=0,
         pv_amount=0,
-        expect_best_price=6.0,
+        expect_best_price=6,
+        inverter_loss=1,
+        rate_export=6.0,
+    )
+    failed |= this_failed
+    if failed:
+        return failed
+
+    # Discharge
+    export_window_best = [{"start": my_predbat.minutes_now + 240, "end": my_predbat.minutes_now + 300, "average": 7.5}]
+    this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
+        "discharge3",
+        my_predbat,
+        charge_window_best=charge_window_best,
+        export_window_best=export_window_best,
+        expect_charge_limit=[0, 0],
+        expect_export_limit=[0],
+        load_amount=0,
+        pv_amount=1,
+        expect_best_price=6,
         inverter_loss=1,
         rate_export=6.0,
     )
@@ -5589,54 +5609,35 @@ def run_optimise_levels(
     charge_limit_best = [0 for n in range(len(charge_window_best))]
     export_limits_best = [100 for n in range(len(export_window_best))]
 
-    record_charge_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, charge_window_best), 1)
-    record_export_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, export_window_best), 1)
-    print("Starting optimise levels test {}".format(name))
-
-    window_sorted, window_index, price_set, price_links = my_predbat.sort_window_by_price_combined(charge_window_best[:record_charge_windows], export_window_best[:record_export_windows])
-
-    my_predbat.optimise_charge_windows_reset(reset_all=True)
-    my_predbat.optimise_charge_windows_manual()
-    (
-        charge_limit_best,
-        export_limits_best,
-        best_price,
-        best_price_export,
-        best_metric,
-        best_cost,
-        best_keep,
-        best_soc_min,
-        best_cycle,
-        best_carbon,
-        best_import,
-        best_battery_value,
-        tried_list,
-    ) = my_predbat.optimise_charge_limit_price_threads(
-        price_set,
-        price_links,
-        window_index,
-        record_charge_windows,
-        record_export_windows,
-        charge_limit_best,
-        charge_window_best,
-        export_window_best,
-        export_limits_best,
-        end_record=end_record,
-        fast=True,
-        quiet=True,
-    )
-
-    # Predict
-    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
-    )
-
-    # Save plan
     my_predbat.charge_limit_best = charge_limit_best
-    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
+
+    print("Starting optimise levels test {}".format(name))
+    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
+        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=my_predbat.end_record
+    )
+
+    best_price, best_price_export, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = my_predbat.optimise_levels_pass(metric, metric_keep, debug_mode=False)
+
+    # Clear out windows not inside record and apply manual overrides
+    my_predbat.optimise_charge_windows_reset(reset_all=False)
+    my_predbat.optimise_charge_windows_manual()
+    record_charge_windows = max(my_predbat.max_charge_windows(my_predbat.end_record + my_predbat.minutes_now, my_predbat.charge_window_best), 1)
+    record_export_windows = max(my_predbat.max_charge_windows(my_predbat.end_record + my_predbat.minutes_now, my_predbat.export_window_best), 1)
+
+    # Predict
+    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
+        my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
+    )
+    charge_limit_best = my_predbat.charge_limit_best
+    export_limits_best = my_predbat.export_limits_best
+    charge_window_best = my_predbat.charge_window_best
+    export_window_best = my_predbat.export_window_best
+
+    # Save plan
+    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
 
     if len(expect_charge_limit) != len(charge_limit_best):
         print("ERROR: Expected {} charge limits but got {}".format(len(expect_charge_limit), len(charge_limit_best)))
@@ -5664,24 +5665,6 @@ def run_optimise_levels(
         open("plan.html", "w").write(my_predbat.html_plan)
         print("Wrote plan to plan.html")
 
-        old_log = my_predbat.log
-        my_predbat.log = print
-        my_predbat.optimise_charge_limit_price_threads(
-            price_set,
-            price_links,
-            window_index,
-            record_charge_windows,
-            record_export_windows,
-            charge_limit_best,
-            charge_window_best,
-            export_window_best,
-            export_limits_best,
-            end_record=end_record,
-            fast=True,
-            quiet=True,
-            test_mode=True,
-        )
-        my_predbat.log = old_log
         print("Best price: {} Best metric: {} Best cost: {} Best keep: {} Best soc min: {} Best cycle: {} Best carbon: {} Best import: {}".format(best_price, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import))
         print("Charge limit best: {} expected {} Discharge limit best {} expected {}".format(charge_limit_best, expect_charge_limit, export_limits_best, expect_export_limit))
 
