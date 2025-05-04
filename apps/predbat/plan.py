@@ -2654,6 +2654,8 @@ class Plan:
         best_import = 0
         best_price = 0
         best_price_export = 0
+        best_soc_min = 0
+        best_battery_value = 0
         fast_mode = True
 
         # Optimise all windows by picking a price threshold default
