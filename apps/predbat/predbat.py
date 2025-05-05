@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.19.5"
+THIS_VERSION = "v8.19.6"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py"]
@@ -709,11 +709,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             except (ValueError, TypeError):
                 savings_total_actual = 0.0
 
-            cost_total_car = self.load_previous_value_from_ha(self.prefix + ".cost_total_car")
-            try:
-                cost_total_car = float(cost_total_car)
-            except (ValueError, TypeError):
-                cost_total_car = 0.0
+            if self.num_cars > 0:
+                cost_total_car = self.load_previous_value_from_ha(self.prefix + ".cost_total_car")
+                try:
+                    cost_total_car = float(cost_total_car)
+                except (ValueError, TypeError):
+                    cost_total_car = 0.0
+            else:
+                cost_total_car = 0
 
             # Increment total at midnight for next day
             if (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every) and scheduled and recompute:

@@ -671,13 +671,25 @@ class GECloudDirect:
     async def async_read_inverter_setting(self, serial, setting_id):
         """
         Read a setting from the inverter
+
+        Code	Description	Potentially Successful?
+        -1	The device did not respond before the request timed out	Yes
+        -2	The device is offline	No
+        -3	The device does not exist or your account does not have access to the device	No
+        -4	There were one or more validation errors. Additional information may be available	No
+        -5	There was a server error	Yes
+        -6	There was no response from the server the device was last connected to. This may be because the device has been offline for an extended period of time and the server has since been decommissioned	Yes
+        -7	The device is currently locked and cannot be modified	No
+
         """
         for retry in range(RETRIES):
             data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
-            # -1 is a bad value
-            if data and data.get("value", -1) == -1:
+            data_value = None
+            if data:
+                data_value = data.get("value", -1)
+            if data and data_value in [-3, -4, -7]:
                 data = None
-            elif data and data.get("value", -1) == -2:
+            elif data and data_value in [-1, -2, -5, -6]:
                 data = None
                 # Inverter timeout, try to spread requests out
                 await asyncio.sleep(random.random() * 2)
