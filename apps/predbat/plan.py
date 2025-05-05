@@ -77,7 +77,7 @@ class Plan:
                         else:
                             lowest_price_export = min(lowest_price_export, export_window[window_n]["average"])
                         lowest_price_export_level = min(lowest_price_export_level, price)
-        
+
         if highest_price_charge is None:
             highest_price_charge = max_charge_rate
         if lowest_price_export is None:
@@ -2364,7 +2364,24 @@ class Plan:
         self.plan_write_debug(debug_mode, "plan_pass2.html")
         return best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
 
-    def optimise_detailed_pass(self, best_price_charge, best_price_export, best_price_charge_level, best_price_export_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=False):
+    def optimise_detailed_pass(
+        self,
+        best_price_charge,
+        best_price_export,
+        best_price_charge_level,
+        best_price_export_level,
+        best_metric,
+        best_cost,
+        best_keep,
+        best_soc_min,
+        best_cycle,
+        best_carbon,
+        best_import,
+        best_battery_value,
+        record_charge_windows,
+        record_export_windows,
+        debug_mode=False,
+    ):
         """
         Detailed optimisation of the charge and export windows
         """
@@ -2425,9 +2442,9 @@ class Plan:
 
                         # Don't allow charging if the price is above the threshold and not already selected during levelling
                         if (price_key > best_price_charge_level) and (self.charge_limit_best[window_n] == 0) and pass_type == "normal":
-                           if self.debug_enable:
-                               self.log("Skip high window {} best limit {} price_set {} price {} level {}".format(window_n, self.charge_limit_best[window_n], price_key, price, best_price_charge_level))
-                           continue
+                            if self.debug_enable:
+                                self.log("Skip high window {} best limit {} price_set {} price {} level {}".format(window_n, self.charge_limit_best[window_n], price_key, price, best_price_charge_level))
+                            continue
 
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
                             if not printed_set:
@@ -2760,7 +2777,9 @@ class Plan:
         """
 
         # Create levels
-        best_price_charge, best_price_export, best_price_charge_level, best_price_export_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_levels_pass(best_metric, metric_keep, debug_mode)
+        best_price_charge, best_price_export, best_price_charge_level, best_price_export_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_levels_pass(
+            best_metric, metric_keep, debug_mode
+        )
 
         # Clear out windows not inside record and apply manual overrides
         self.optimise_charge_windows_reset(reset_all=False)
@@ -2770,7 +2789,21 @@ class Plan:
 
         # Perform detailed optimisation
         best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_detailed_pass(
-            best_price_charge, best_price_export, best_price_charge_level, best_price_export_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=debug_mode
+            best_price_charge,
+            best_price_export,
+            best_price_charge_level,
+            best_price_export_level,
+            best_metric,
+            best_cost,
+            best_keep,
+            best_soc_min,
+            best_cycle,
+            best_carbon,
+            best_import,
+            best_battery_value,
+            record_charge_windows,
+            record_export_windows,
+            debug_mode=debug_mode,
         )
 
         # Second pass optimisation
