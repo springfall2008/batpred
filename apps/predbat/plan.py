@@ -36,6 +36,55 @@ class DummyThread:
 
 
 class Plan:
+    def find_price_levels(
+        self,
+        price_set,
+        price_links,
+        window_index,
+        charge_limit,
+        charge_window,
+        export_window,
+        export_limits,
+    ):
+        """
+        Find the highest and lowest price levels for charge and export windows
+        """
+        highest_price_charge = None
+        lowest_price_export = None
+        highest_price_charge_level = price_set[-1]
+        lowest_price_export_level = price_set[0]
+        max_charge_rate = -99999
+        min_export_rate = 99999
+
+        for price in price_set:
+            links = price_links[price]
+            for key in links:
+                window_n = window_index[key]["id"]
+                typ = window_index[key]["type"]
+                if typ == "c":
+                    max_charge_rate = max(max_charge_rate, price)
+                    if charge_limit[window_n] > 0:
+                        if highest_price_charge is None:
+                            highest_price_charge = charge_window[window_n]["average"]
+                        else:
+                            highest_price_charge = max(highest_price_charge, charge_window[window_n]["average"])
+                        highest_price_charge_level = max(highest_price_charge_level, price)
+                elif typ == "d":
+                    min_export_rate = min(min_export_rate, price)
+                    if export_limits[window_n] < 100.0:
+                        if lowest_price_export is None:
+                            lowest_price_export = export_window[window_n]["average"]
+                        else:
+                            lowest_price_export = min(lowest_price_export, export_window[window_n]["average"])
+                        lowest_price_export_level = min(lowest_price_export_level, price)
+
+        if highest_price_charge is None:
+            highest_price_charge = max_charge_rate
+        if lowest_price_export is None:
+            lowest_price_export = min_export_rate
+
+        return highest_price_charge, lowest_price_export, highest_price_charge_level, lowest_price_export_level
+
     def optimise_charge_limit_price_threads(
         self,
         price_set,
@@ -56,8 +105,6 @@ class Plan:
         best_cost=0,
         best_keep=0,
         best_soc_min=None,
-        best_price_charge=None,
-        best_price_export=None,
         best_cycle=0,
         best_carbon=0,
         best_import=0,
@@ -82,35 +129,6 @@ class Plan:
             step = 30
         if tried_list is None:
             tried_list = {}
-
-        # Work out the highest and lowest prices in case we don't have a charge or an export
-        highest_price_charge = None
-        lowest_price_export = None
-        for price in price_set:
-            links = price_links[price]
-            for key in links:
-                window_n = window_index[key]["id"]
-                typ = window_index[key]["type"]
-                if typ == "c":
-                    if highest_price_charge is None:
-                        highest_price_charge = charge_window[window_n]["average"]
-                    else:
-                        highest_price_charge = max(highest_price_charge, charge_window[window_n]["average"])
-                elif typ == "d":
-                    if lowest_price_export is None:
-                        lowest_price_export = export_window[window_n]["average"]
-                    else:
-                        lowest_price_export = min(lowest_price_export, export_window[window_n]["average"])
-
-        if highest_price_charge is None:
-            highest_price_charge = price_set[-1]
-        if lowest_price_export is None:
-            lowest_price_export = price_set[0]
-
-        if best_price_charge is None:
-            best_price_charge = highest_price_charge
-        if best_price_export is None:
-            best_price_export = lowest_price_export
 
         if region_start:
             region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
@@ -243,24 +261,9 @@ class Plan:
                             for window_n in range(record_charge_windows):
                                 if window_n >= len(try_charge_limit):
                                     continue
-                                if try_charge_limit[window_n] > 0:
-                                    if highest_price_charge is None:
-                                        highest_price_charge = charge_window[window_n]["average"]
-                                    else:
-                                        highest_price_charge = max(highest_price_charge, charge_window[window_n]["average"])
                             for window_n in range(record_export_windows):
                                 if window_n >= len(try_export):
                                     continue
-                                if try_export[window_n] < 100.0:
-                                    if lowest_price_export is None:
-                                        lowest_price_export = export_window[window_n]["average"]
-                                    else:
-                                        lowest_price_export = min(lowest_price_export, export_window[window_n]["average"])
-                            if highest_price_charge is None:
-                                highest_price_charge = best_price_charge
-                            if lowest_price_export is None:
-                                lowest_price_export = best_price_export
-
                             tried_list[try_hash] = True
 
                             pred_item = {}
@@ -268,8 +271,6 @@ class Plan:
                             pred_item["handle10"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, True, end_record=end_record, step=step)
                             pred_item["charge_limit"] = try_charge_limit.copy()
                             pred_item["export_limit"] = try_export.copy()
-                            pred_item["highest_price_charge"] = highest_price_charge
-                            pred_item["lowest_price_export"] = lowest_price_export
                             pred_item["loop_price"] = loop_price
                             pred_item["divide"] = divide
                             pred_item["modulo"] = modulo
@@ -282,8 +283,6 @@ class Plan:
                 handle10 = pred["handle10"]
                 try_charge_limit = pred["charge_limit"]
                 try_export = pred["export_limit"]
-                highest_price_charge = pred["highest_price_charge"]
-                lowest_price_export = pred["lowest_price_export"]
                 loop_price = pred["loop_price"]
                 divide = pred["divide"]
                 modulo = pred["modulo"]
@@ -338,8 +337,6 @@ class Plan:
                     best_metric = metric
                     best_keep = metric_keep
                     best_price = loop_price
-                    best_price_charge = highest_price_charge
-                    best_price_export = lowest_price_export
                     best_limits = try_charge_limit.copy()
                     best_export = try_export.copy()
                     best_cycle = battery_cycle
@@ -352,9 +349,8 @@ class Plan:
                     best_all_d = all_d.copy()
                     if 1 or not quiet:
                         self.log(
-                            "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} battery_value {} best_price_charge {} best_price_export {} limits {} export {}".format(
+                            "Optimise all charge found best buy/sell price band {} best price at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} battery_value {} limits {} export {}".format(
                                 loop_price,
-                                best_price_charge,
                                 dp4(best_cost),
                                 dp4(best_metric),
                                 dp4(best_keep),
@@ -363,8 +359,6 @@ class Plan:
                                 dp2(best_import),
                                 dp4(best_cost),
                                 battery_value,
-                                best_price_charge,
-                                best_price_export,
                                 best_limits,
                                 best_export,
                             )
@@ -372,11 +366,10 @@ class Plan:
 
         if self.debug_enable:
             self.log(
-                "Optimise all charge {} best price threshold {} total simulations {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} battery_value {} soc_min {} best_price_charge {} best_price_export {} limits {} export {}".format(
+                "Optimise all charge {} price band {} total simulations {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} battery_value {} soc_min {} limits {} export {}".format(
                     region_txt,
                     dp4(best_price),
                     len(tried_list),
-                    dp4(best_price_charge),
                     dp4(best_cost),
                     dp4(best_metric),
                     dp4(best_keep),
@@ -386,8 +379,6 @@ class Plan:
                     dp4(best_cost),
                     dp4(best_battery_value),
                     dp4(best_soc_min),
-                    best_price_charge,
-                    best_price_export,
                     best_limits,
                     best_export,
                 )
@@ -410,8 +401,6 @@ class Plan:
         return (
             best_limits,
             best_export,
-            best_price_charge,
-            best_price_export,
             best_metric,
             best_cost,
             best_keep,
@@ -1832,7 +1821,12 @@ class Plan:
 
             predict_minute_start = max(int((start - self.minutes_now) / 5) * 5, 0)
             predict_minute_end = int((end - self.minutes_now) / 5) * 5
-            window["target"] = self.predict_soc.get(predict_minute_end, limit)
+            start_soc = self.predict_soc.get(predict_minute_start, limit)
+            end_soc = self.predict_soc.get(predict_minute_end, limit)
+            if limit > start_soc:
+                window["target"] = end_soc
+            else:
+                window["target"] = start_soc
 
             if (
                 new_window_best
@@ -1868,9 +1862,11 @@ class Plan:
             elif limit > 0:
                 new_limit_best.append(limit)
                 new_window_best.append(window)
+                if self.debug_enable:
+                    self.log("Keep charge slot {} - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, limit, window, start, end, limit))
             else:
                 if self.debug_enable:
-                    self.log("Clip off charge slot {} limit {}".format(window, limit))
+                    self.log("Clip off charge slot window {} limit {}".format(window_n, limit))
         return new_limit_best, new_window_best
 
     def find_spare_energy(self, predict_soc, predict_export, step, first_charge):
@@ -2007,7 +2003,7 @@ class Plan:
                             soc_max = max(soc_max, predict_soc[minute])
 
                     if self.debug_enable:
-                        self.log("Examine window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_min, soc_max))
+                        self.log("Examine export window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_min, soc_max))
 
                     # Export level adjustments for safety
                     if soc_min > limit_soc:
@@ -2368,7 +2364,24 @@ class Plan:
         self.plan_write_debug(debug_mode, "plan_pass2.html")
         return best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
 
-    def optimise_detailed_pass(self, best_price, best_price_export, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=False):
+    def optimise_detailed_pass(
+        self,
+        best_price_charge,
+        best_price_export,
+        best_price_charge_level,
+        best_price_export_level,
+        best_metric,
+        best_cost,
+        best_keep,
+        best_soc_min,
+        best_cycle,
+        best_carbon,
+        best_import,
+        best_battery_value,
+        record_charge_windows,
+        record_export_windows,
+        debug_mode=False,
+    ):
         """
         Detailed optimisation of the charge and export windows
         """
@@ -2377,7 +2390,7 @@ class Plan:
         )
 
         # Work out the lowest rate we charge at from the first pass
-        lowest_price_charge = best_price
+        lowest_price_charge = best_price_charge
         for price_key in price_set:
             links = price_links[price_key]
             for key in links:
@@ -2386,15 +2399,15 @@ class Plan:
                 if typ == "c" and (self.charge_limit_best[window_n] > self.reserve):
                     lowest_price_charge = min(self.charge_window_best[window_n]["average"], lowest_price_charge)
         if debug_mode:
-            print("Lowest price charge {} best_price_charge {} best_price_export {}".format(lowest_price_charge, best_price, best_price_export))
+            print("Best price charge level {} Best price export level {} Lowest price charge {} Best price charge {} best price export {}".format(best_price_charge_level, best_price_export_level, lowest_price_charge, best_price_charge, best_price_export))
 
         # Optimise individual windows in the price band for charge/export
         # First optimise those at or below threshold highest to lowest (to turn down values)
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for export.
         self.log(
-            "Starting detailed optimisation end_record {} best_price {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
-                self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
+            "Starting detailed optimisation end_record {} best_price_charge {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
+                self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
             )
         )
 
@@ -2428,20 +2441,20 @@ class Plan:
                             continue
 
                         # Don't allow charging if the price is above the threshold and not already selected during levelling
-                        # if (price > best_price) and (self.charge_limit_best[window_n] == 0):
-                        #    if self.debug_enable:
-                        #        self.log("Skip high window {} best limit {} price_set {}".format(window_n, self.charge_limit_best[window_n], price))
-                        #    continue
+                        if (price_key > best_price_charge_level) and (self.charge_limit_best[window_n] == 0) and pass_type == "normal":
+                            if self.debug_enable:
+                                self.log("Skip high window {} best limit {} price_set {} price {} level {}".format(window_n, self.charge_limit_best[window_n], price_key, price, best_price_charge_level))
+                            continue
 
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
                             if not printed_set:
                                 self.log(
-                                    "Optimise price set {} pass {} price {} start_at_low {} best_price {} best_metric {} best_cost {} best_cycle {} best_carbon {} best_import {}".format(
+                                    "Optimise price set {} pass {} price {} start_at_low {} best_price_charge {} best_metric {} best_cost {} best_cycle {} best_carbon {} best_import {}".format(
                                         price_key,
                                         pass_type,
                                         price,
                                         start_at_low,
-                                        best_price,
+                                        best_price_charge,
                                         dp2(best_metric),
                                         dp2(best_cost),
                                         dp2(best_cycle),
@@ -2466,7 +2479,7 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                                freeze_only=(price > best_price) and (self.charge_limit_best[window_n] == 0),
+                                freeze_only=(price_key > best_price_charge_level) and (self.charge_limit_best[window_n] == 0),
                             )
                             if best_soc != self.charge_limit_best[window_n]:
                                 self.charge_limit_best[window_n] = best_soc
@@ -2505,14 +2518,14 @@ class Plan:
                             continue
 
                         # Ignore prices below the threshold if not already selected during levelling
-                        if (price < best_price_export) and (self.export_limits_best[window_n] == 100):
+                        if (price_key < best_price_export_level) and (self.export_limits_best[window_n] == 100):
                             if self.debug_enable:
-                                self.log("Skip low window {} best limit {} price_set {}".format(window_n, self.export_limits_best[window_n], price))
+                                self.log("Skip low window {} best limit {} price_set {} price {} level {}".format(window_n, self.export_limits_best[window_n], price_key, price, best_price_export_level))
                             continue
 
                         # Do highest price first
                         # Second pass to tune down any excess exports only
-                        if pass_type == "low" and ((price > best_price_export) or (self.export_limits_best[window_n] == 100)):
+                        if pass_type == "low" and (self.export_limits_best[window_n] == 100):
                             continue
 
                         if self.calculate_best_export and (window_start not in self.manual_all_times):
@@ -2525,20 +2538,15 @@ class Plan:
                             if not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"]) >= 0):
                                 continue
 
-                            average = self.export_window_best[window_n]["average"]
-                            if price < lowest_price_charge and pass_type not in ["freeze"]:
-                                if self.debug_enable:
-                                    self.log("Skipping export optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, dp2(average)))
-                                continue
-
                             if not printed_set:
                                 self.log(
-                                    "Optimise price set {} pass {} price {} start_at_low {} best_price {} best_metric {} best_cost {} best_cycle {} best_carbon {} best_import {}".format(
+                                    "Optimise price set {} pass {} price {} start_at_low {} best_price_export {} level {} best_metric {} best_cost {} best_cycle {} best_carbon {} best_import {}".format(
                                         price_key,
                                         pass_type,
                                         price,
                                         start_at_low,
-                                        best_price,
+                                        best_price_export,
+                                        best_price_export_level,
                                         dp2(best_metric),
                                         dp2(best_cost),
                                         dp2(best_cycle),
@@ -2549,8 +2557,8 @@ class Plan:
                                 printed_set = True
 
                             self.log(
-                                "Optimise export window {} end_record {} best_price {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
-                                    window_n, self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
+                                "Optimise export window {} end_record {} best_price_charge {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
+                                    window_n, self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
                                 )
                             )
 
@@ -2571,8 +2579,8 @@ class Plan:
                                 self.export_window_best[window_n]["start"] = best_start
 
                                 self.log(
-                                    "Optimised export window {} end_record {} best_price {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
-                                        window_n, self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
+                                    "Optimised export window {} end_record {} best_price_charge {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
+                                        window_n, self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
                                     )
                                 )
 
@@ -2584,7 +2592,7 @@ class Plan:
                                         window_n,
                                         self.time_abs_str(self.export_window_best[window_n]["start"]),
                                         self.time_abs_str(self.export_window_best[window_n]["end"]),
-                                        average,
+                                        price,
                                         best_soc,
                                         dp2(soc_min),
                                         self.time_abs_str(soc_min_minute),
@@ -2652,8 +2660,6 @@ class Plan:
         best_cycle = 0
         best_carbon = 0
         best_import = 0
-        best_price = 0
-        best_price_export = 0
         best_soc_min = 0
         best_battery_value = 0
         fast_mode = True
@@ -2666,8 +2672,6 @@ class Plan:
             (
                 self.charge_limit_best,
                 self.export_limits_best,
-                best_price,
-                best_price_export,
                 best_metric,
                 best_cost,
                 best_keep,
@@ -2711,8 +2715,6 @@ class Plan:
                         (
                             self.charge_limit_best,
                             self.export_limits_best,
-                            best_price,
-                            best_price_export,
                             best_metric,
                             best_cost,
                             best_keep,
@@ -2741,8 +2743,6 @@ class Plan:
                             best_cost=best_cost,
                             best_keep=best_keep,
                             best_soc_min=best_soc_min,
-                            best_price_charge=best_price,
-                            best_price_export=best_price_export,
                             best_cycle=best_cycle,
                             best_import=best_import,
                             best_carbon=best_carbon,
@@ -2756,19 +2756,20 @@ class Plan:
                     self.plan_write_debug(debug_mode, "plan_levels_{}.html".format(region_size))
                     region_size = int(region_size / 2)
 
-        self.rate_best_cost_threshold_charge = best_price
+        best_price_charge, best_price_export, best_price_charge_level, best_price_export_level = self.find_price_levels(price_set, price_links, window_index, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best)
+        self.rate_best_cost_threshold_charge = best_price_charge
         self.rate_best_cost_threshold_export = best_price_export
 
         # Set the new end record and blackout period based on the levelling
-        self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
+        self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price_charge)
 
         self.log(
-            "Set best_cost_charge {} best_cost_export {} best_metric {} best_keep {} best_cycle {} best_carbon {} best_import {}".format(
-                dp2(best_price), dp2(best_price_export), dp2(best_metric), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)
+            "Set best_price_charge_level {} best_price_export_level {} best_price_charge {} best_cost_export {} best_metric {} best_keep {} best_cycle {} best_carbon {} best_import {}".format(
+                dp2(best_price_charge_level), dp2(best_price_export_level), dp2(best_price_charge), dp2(best_price_export), dp2(best_metric), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)
             )
         )
         self.plan_write_debug(debug_mode, "plan_levels.html")
-        return best_price, best_price_export, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
+        return best_price_charge, best_price_export, best_price_charge_level, best_price_export_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
 
     def optimise_all_windows(self, best_metric, metric_keep, debug_mode=False):
         """
@@ -2776,7 +2777,9 @@ class Plan:
         """
 
         # Create levels
-        best_price, best_price_export, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_levels_pass(best_metric, metric_keep, debug_mode)
+        best_price_charge, best_price_export, best_price_charge_level, best_price_export_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_levels_pass(
+            best_metric, metric_keep, debug_mode
+        )
 
         # Clear out windows not inside record and apply manual overrides
         self.optimise_charge_windows_reset(reset_all=False)
@@ -2786,7 +2789,21 @@ class Plan:
 
         # Perform detailed optimisation
         best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_detailed_pass(
-            best_price, best_price_export, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=debug_mode
+            best_price_charge,
+            best_price_export,
+            best_price_charge_level,
+            best_price_export_level,
+            best_metric,
+            best_cost,
+            best_keep,
+            best_soc_min,
+            best_cycle,
+            best_carbon,
+            best_import,
+            best_battery_value,
+            record_charge_windows,
+            record_export_windows,
+            debug_mode=debug_mode,
         )
 
         # Second pass optimisation
