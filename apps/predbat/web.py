@@ -121,8 +121,12 @@ class WebInterface:
         self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
         self.cost_hour_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
         self.cost_yesterday_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
-        self.cost_yesterday_car_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
-        self.cost_yesterday_no_car = self.subtract_daily(self.cost_yesterday_hist, self.cost_yesterday_car_hist)
+
+        if self.base.num_cars > 0:
+            self.cost_yesterday_car_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            self.cost_yesterday_no_car = self.subtract_daily(self.cost_yesterday_hist, self.cost_yesterday_car_hist)
+        else:
+            self.cost_yesterday_no_car = self.cost_yesterday_hist
 
         compare_list = self.base.get_arg("compare_list", [])
         for item in compare_list:
