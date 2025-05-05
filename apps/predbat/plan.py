@@ -1823,10 +1823,10 @@ class Plan:
             predict_minute_end = int((end - self.minutes_now) / 5) * 5
             start_soc = self.predict_soc.get(predict_minute_start, limit)
             end_soc = self.predict_soc.get(predict_minute_end, limit)
-            if limit > start_soc:
-                window["target"] = end_soc
+            if limit <= start_soc and limit <= end_soc:
+                window["target"] = limit
             else:
-                window["target"] = start_soc
+                window["target"] = end_soc
 
             if (
                 new_window_best
