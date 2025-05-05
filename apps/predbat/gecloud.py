@@ -728,6 +728,7 @@ class GECloudDirect:
         """
         if serial not in self.register_list:
             self.register_list[serial] = await self.async_get_inverter_data_retry(GE_API_INVERTER_SETTINGS, serial)
+            self.log("Register list for {}: {}".format(serial, self.register_list[serial]))
         results = previous.copy()
 
         if serial in self.register_list:
