@@ -140,7 +140,7 @@ charge_discharge_update_button:
   - button.solis_charge_discharge
 ```
 
-is sufficient. For other configurations (for exmaple using the "solis_fb00" plugin) where separate buttons are used for charging and discharging, provide both:
+is sufficient. For other configurations (for example using the "solis_fb00" plugin) where separate buttons are used for charging and discharging, provide both:
 
 ```yaml
 charge_update_button:
