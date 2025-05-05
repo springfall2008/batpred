@@ -151,7 +151,6 @@ discharge_update_button:
 
 Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
-
 ## Solax Gen4 Inverters
 
 Use the template configuration from: [solax.sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml)

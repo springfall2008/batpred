@@ -2307,7 +2307,7 @@ class Inverter:
 
             if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable":
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
-    
+
     def press_and_poll_button(self):
         """
         Press charge/discharge update button(s) for the inverter.
@@ -2316,7 +2316,7 @@ class Inverter:
         2. charge_update_button and discharge_update_button
         """
         success = True
-    
+
         # Try single combined button first
         entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
         if entity_id:
@@ -2325,29 +2325,28 @@ class Inverter:
             # Try separate charge and discharge buttons
             charge_button = self.base.get_arg("charge_update_button", indirect=False, index=self.id)
             discharge_button = self.base.get_arg("discharge_update_button", indirect=False, index=self.id)
-    
+
             if charge_button:
                 if not self._press_single_button_and_poll(charge_button):
                     success = False
-    
+
             if discharge_button:
                 if not self._press_single_button_and_poll(discharge_button):
                     success = False
-    
+
             if not charge_button and not discharge_button:
                 self.base.log(f"Error: No update button found for inverter {self.id}")
                 return False
-    
+
         return success
-    
-    
+
     def _press_single_button_and_poll(self, entity_id):
         """
         Press a button and verify that its last_updated time changes.
         Returns True on success.
         """
         local_tz = pytz.timezone(self.base.get_arg("timezone", "Europe/London"))
-    
+
         for retry in range(8):
             self.base.call_service_wrapper("button/press", entity_id=entity_id)
             self.sleep(self.inv_write_and_poll_sleep)
@@ -2357,16 +2356,15 @@ class Inverter:
             except Exception as e:
                 self.base.log(f"Error parsing timestamp for {entity_id}: {e}")
                 continue
-    
+
             now_local = datetime.now(local_tz)
             if (now_local - time_pressed).seconds < 10:
                 self.base.log(f"Successfully pressed button {entity_id} on Inverter {self.id}")
                 return True
-    
+
         self.base.log(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
         self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
         return False
-
 
     def rest_readData(self, api="readData", retry=True):
         """
