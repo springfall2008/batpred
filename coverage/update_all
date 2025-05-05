@@ -1,0 +1,3 @@
+cp ../apps/predbat/*.py predbat_debug/
+cp /Volumes/addon_configs/6adb4f0d_predbat/apps.yaml .
+cp /Volumes/addon_configs/6adb4f0d_predbat/hass.py predbat_debug/hass.py
