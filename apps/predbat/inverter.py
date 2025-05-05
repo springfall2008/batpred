@@ -2334,10 +2334,6 @@ class Inverter:
                 if not self._press_single_button_and_poll(discharge_button):
                     success = False
 
-            if not charge_button and not discharge_button:
-                self.base.log(f"Error: No update button found for inverter {self.id}")
-                return False
-
         return success
 
     def _press_single_button_and_poll(self, entity_id):
