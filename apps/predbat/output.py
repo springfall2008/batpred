@@ -2111,8 +2111,11 @@ class Output:
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
 
-        cost_today_car_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today_car", days=2, required=False)
-        if not cost_today_car_data or self.num_cars == 0:
+        cost_today_car_data = None
+        if self.num_cars > 0:
+            cost_today_car_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today_car", days=2, required=False)
+
+        if not cost_today_car_data:
             cost_today_car_data = {}
             cost_data_car = {}
             cost_yesterday_car = 0
