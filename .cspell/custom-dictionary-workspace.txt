@@ -116,6 +116,7 @@ invname
 isort
 itemtype
 ivtime
+killall
 kopt
 Krakenflex
 kvar
