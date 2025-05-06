@@ -1,7 +1,6 @@
 import requests
 from datetime import timedelta, datetime, timezone
 from utils import str2time, dp1
-import requests
 import asyncio
 import random
 import time
@@ -201,6 +200,7 @@ class GECloudDirect:
         self.stop_cloud = False
         self.api_started = False
         self.register_entity_map = {}
+        self.long_poll_active = False
 
     def wait_api_started(self):
         """
@@ -240,8 +240,10 @@ class GECloudDirect:
                         new_value = not value
                     validation_rules = setting.get("validation_rules", [])
 
-                    self.log("GECloud: Write setting {} {} to {}".format(device, key, new_value))
+                    self.log("GECloud: Write setting {} {} old {} to {}".format(device, key, setting, new_value))
                     result = await self.async_write_inverter_setting(device, key, new_value)
+                    self.log("GECloud: Write setting {} {} to {} returns {}".format(device, key, new_value, result))
+
                     if result and ("value" in result):
                         setting["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
@@ -295,13 +297,28 @@ class GECloudDirect:
                 if setting:
                     new_value = value
                     validation_rules = setting.get("validation_rules", [])
+                    validation = setting.get("validation", None)
+                    options_text = []
+                    options_values = []
+
                     if validation_rules:
                         for validation_rule in validation_rules:
                             if validation_rule.startswith("in:"):
-                                options_text = validation_rule.split(":")[1].split(",")
-                                if new_value not in options_text:
-                                    self.log("GECloud: Invalid option {} for setting {} {}".format(new_value, device, key))
-                                    return
+                                options_values = validation_rule.split(":")[1].split(",")
+
+                    if validation.startswith("Value must be one of:"):
+                        pre, post = validation.split("(")
+                        post = post.replace(")", "")
+                        post = post.replace(", ", ",")
+                        options_text = post.split(",")
+                        if new_value not in options_text:
+                            self.log("GECloud: Invalid option {} for setting {} {} valid values are {}".format(new_value, device, key, options_text))
+                            return
+                    else:
+                        if new_value not in options_values:
+                            self.log("GECloud: Invalid option {} for setting {} {} valid values are {}".format(new_value, device, key, options_values))
+                            return
+                                
                     is_time = mapping.get("time", False)
                     if is_time:
                         # We actually write as HH:MM
@@ -446,6 +463,7 @@ class GECloudDirect:
         """
         Publish the registers
         """
+        self.log("GECloud: Publish registers for device {} {} select_key {}".format(device, registers, select_key))
         for key in registers:
             if select_key and key != select_key:
                 continue
@@ -521,7 +539,7 @@ class GECloudDirect:
                 entity_name = "switch.predbat_gecloud_" + device
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
-                self.base.dashboard_item(entity_id, state="on" if value else "off", attributes=attributes, app="gecloud")
+                self.base.dashboard_item(entity_id, state="on" if value in ['on', True, 'true', 'True'] else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
     async def async_automatic_config(self, devices):
@@ -621,17 +639,30 @@ class GECloudDirect:
             try:
                 if seconds % 60 == 0:
                     for device in devices:
+                        self.log("GECloud: Polling device {}".format(device))
                         self.status[device] = await self.async_get_inverter_status(device)
                         await self.publish_status(device, self.status[device])
                         self.meter[device] = await self.async_get_inverter_meter(device)
                         await self.publish_meter(device, self.meter[device])
                         self.info[device] = await self.async_get_device_info(device)
                         await self.publish_info(device, self.info[device])
+                        self.log("GECloud: Polling device {} finished short poll".format(device))
                 if seconds % 300 == 0:
                     for device in devices:
                         if seconds == 0 or self.polling_mode or (device == ems_device):
-                            self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
-                            await self.publish_registers(device, self.settings[device])
+                            repeat = True
+                            while repeat:
+                                self.long_poll_active = True
+                                poll_result = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
+                                if not self.long_poll_active:
+                                    # Modification during polling
+                                    self.log("GECloud: Polling device {} cancelled".format(device))
+                                else:
+                                    self.settings[device] = poll_result
+                                    await self.publish_registers(device, self.settings[device])
+                                    self.log("GECloud: Polling device {} finished long poll".format(device))
+                                    repeat = False
+                                self.long_poll_active = False
 
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
@@ -684,6 +715,7 @@ class GECloudDirect:
         """
         for retry in range(RETRIES):
             data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
+            self.log("Read inverter setting {} returns {}".format(setting_id, data))
             data_value = None
             if data:
                 data_value = data.get("value", -1)
@@ -705,6 +737,7 @@ class GECloudDirect:
         Write a setting to the inverter
         """
         for retry in range(RETRIES):
+            self.long_poll_active = False
             data = await self.async_get_inverter_data(
                 GE_API_INVERTER_WRITE_SETTING,
                 serial,
@@ -712,6 +745,8 @@ class GECloudDirect:
                 post=True,
                 datain={"value": str(value), "context": "homeassistant"},
             )
+            self.log("Write inverter setting {} returns {}".format(setting_id, data))
+
             if data and "success" in data:
                 if not data["success"]:
                     data = None
@@ -1015,13 +1050,19 @@ class GECloudDirect:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        if post:
-            if datain:
-                response = await asyncio.to_thread(requests.post, url, headers=headers, json=datain, timeout=TIMEOUT)
+
+        try:
+            if post:
+                if datain:
+                    response = await asyncio.to_thread(requests.post, url, headers=headers, json=datain, timeout=TIMEOUT)
+                else:
+                    response = await asyncio.to_thread(requests.post, url, headers=headers, timeout=TIMEOUT)
             else:
-                response = await asyncio.to_thread(requests.post, url, headers=headers, timeout=TIMEOUT)
-        else:
-            response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=TIMEOUT)
+                response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=TIMEOUT)
+        except requests.exceptions.RequestException as e:
+            self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
+            return None
+
         try:
             data = response.json()
         except requests.exceptions.JSONDecodeError:
