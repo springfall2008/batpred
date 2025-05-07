@@ -298,8 +298,8 @@ class GECloudDirect:
                     new_value = value
                     validation_rules = setting.get("validation_rules", [])
                     validation = setting.get("validation", None)
-                    options_text = []
-                    options_values = []
+                    options_text = None
+                    options_values = None
 
                     if validation_rules:
                         for validation_rule in validation_rules:
@@ -314,7 +314,7 @@ class GECloudDirect:
                         if new_value not in options_text:
                             self.log("GECloud: Invalid option {} for setting {} {} valid values are {}".format(new_value, device, key, options_text))
                             return
-                    else:
+                    elif options_values is not None:
                         if new_value not in options_values:
                             self.log("GECloud: Invalid option {} for setting {} {} valid values are {}".format(new_value, device, key, options_values))
                             return
