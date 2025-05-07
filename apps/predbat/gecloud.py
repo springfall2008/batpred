@@ -318,7 +318,7 @@ class GECloudDirect:
                         if new_value not in options_values:
                             self.log("GECloud: Invalid option {} for setting {} {} valid values are {}".format(new_value, device, key, options_values))
                             return
-                                
+
                     is_time = mapping.get("time", False)
                     if is_time:
                         # We actually write as HH:MM
@@ -539,7 +539,7 @@ class GECloudDirect:
                 entity_name = "switch.predbat_gecloud_" + device
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
-                self.base.dashboard_item(entity_id, state="on" if value in ['on', True, 'true', 'True'] else "off", attributes=attributes, app="gecloud")
+                self.base.dashboard_item(entity_id, state="on" if value in ["on", True, "true", "True"] else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
     async def async_automatic_config(self, devices):
