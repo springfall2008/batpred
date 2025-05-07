@@ -201,6 +201,7 @@ class GECloudDirect:
         self.api_started = False
         self.register_entity_map = {}
         self.long_poll_active = False
+        self.pending_writes = {}
 
     def wait_api_started(self):
         """
@@ -630,6 +631,8 @@ class GECloudDirect:
 
         devices = device_list
         self.log("GECloud: Starting up, found devices {}".format(devices))
+        for device in devices:
+            self.pending_writes[device] = []
 
         if self.automatic:
             await self.async_automatic_config(devices_dict)
@@ -650,22 +653,17 @@ class GECloudDirect:
                 if seconds % 300 == 0:
                     for device in devices:
                         if seconds == 0 or self.polling_mode or (device == ems_device):
-                            repeat = True
-                            while repeat:
-                                self.long_poll_active = True
-                                poll_result = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
-                                if not self.long_poll_active:
-                                    # Modification during polling
-                                    self.log("GECloud: Polling device {} cancelled".format(device))
-                                else:
-                                    self.settings[device] = poll_result
-                                    await self.publish_registers(device, self.settings[device])
-                                    self.log("GECloud: Polling device {} finished long poll".format(device))
-                                    repeat = False
-                                self.long_poll_active = False
+                            self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
+                            await self.publish_registers(device, self.settings[device])
+                            self.log("GECloud: Polling device {} finished long poll".format(device))
 
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
+
+            # Clear pending writes
+            for device in devices:
+                if device in self.pending_writes:
+                    self.pending_writes[device] = []
 
             if not self.api_started:
                 print("GECloud API Started")
@@ -713,6 +711,12 @@ class GECloudDirect:
         -7	The device is currently locked and cannot be modified	No
 
         """
+        if serial in self.pending_writes:
+            for pending in self.pending_writes[serial]:
+                if pending["setting_id"] == setting_id:
+                    self.log("GECloud: Read inverter setting {} pending write {}".format(setting_id, pending))
+                    return {"value": pending["value"]}
+
         for retry in range(RETRIES):
             data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
             self.log("Read inverter setting {} returns {}".format(setting_id, data))
@@ -737,7 +741,6 @@ class GECloudDirect:
         Write a setting to the inverter
         """
         for retry in range(RETRIES):
-            self.long_poll_active = False
             data = await self.async_get_inverter_data(
                 GE_API_INVERTER_WRITE_SETTING,
                 serial,
@@ -751,6 +754,7 @@ class GECloudDirect:
                 if not data["success"]:
                     data = None
             if data:
+                self.pending_writes["serial"].append({"setting_id": setting_id, "value": value})
                 break
             await asyncio.sleep(1 * (retry + 1))
         if data is None:
@@ -763,6 +767,7 @@ class GECloudDirect:
         """
         if serial not in self.register_list:
             self.register_list[serial] = await self.async_get_inverter_data_retry(GE_API_INVERTER_SETTINGS, serial)
+
         results = previous.copy()
 
         if serial in self.register_list:
