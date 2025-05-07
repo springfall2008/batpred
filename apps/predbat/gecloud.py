@@ -464,7 +464,7 @@ class GECloudDirect:
         """
         Publish the registers
         """
-        self.log("GECloud: Publish registers for device {} {} select_key {}".format(device, registers, select_key))
+        self.log("GECloud: Publish registers for device {} select_key {}".format(device, select_key))
         for key in registers:
             if select_key and key != select_key:
                 continue
@@ -540,7 +540,14 @@ class GECloudDirect:
                 entity_name = "switch.predbat_gecloud_" + device
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
-                self.base.dashboard_item(entity_id, state="on" if value in ["on", True, "true", "True"] else "off", attributes=attributes, app="gecloud")
+                state = False
+                if isinstance(value, str):
+                    if value in ["on", "true", "True"]:
+                        state = True
+                elif isinstance(value, bool):
+                    state = value
+                self.log("GECloud: Switch {} {} state {}".format(device, key, state))
+                self.base.dashboard_item(entity_id, state="on" if state else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
     async def async_automatic_config(self, devices):
