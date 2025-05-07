@@ -754,7 +754,7 @@ class GECloudDirect:
                 if not data["success"]:
                     data = None
             if data:
-                self.pending_writes["serial"].append({"setting_id": setting_id, "value": value})
+                self.pending_writes[serial].append({"setting_id": setting_id, "value": value})
                 break
             await asyncio.sleep(1 * (retry + 1))
         if data is None:
