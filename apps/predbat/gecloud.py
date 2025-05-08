@@ -241,9 +241,7 @@ class GECloudDirect:
                         new_value = not value
                     validation_rules = setting.get("validation_rules", [])
 
-                    self.log("GECloud: Write setting {} {} old {} to {}".format(device, key, setting, new_value))
                     result = await self.async_write_inverter_setting(device, key, new_value)
-                    self.log("GECloud: Write setting {} {} to {} returns {}".format(device, key, new_value, result))
 
                     if result and ("value" in result):
                         setting["value"] = result["value"]
@@ -277,7 +275,6 @@ class GECloudDirect:
                                 if new_value > float(range_max):
                                     new_value = float(range_max)
 
-                    self.log("GECloud: Write setting {} {} to {}".format(device, key, new_value))
                     result = await self.async_write_inverter_setting(device, key, new_value)
                     if result and ("value" in result):
                         setting["value"] = result["value"]
@@ -464,7 +461,6 @@ class GECloudDirect:
         """
         Publish the registers
         """
-        self.log("GECloud: Publish registers for device {} select_key {}".format(device, select_key))
         for key in registers:
             if select_key and key != select_key:
                 continue
@@ -546,7 +542,6 @@ class GECloudDirect:
                         state = True
                 elif isinstance(value, bool):
                     state = value
-                self.log("GECloud: Switch {} {} state {}".format(device, key, state))
                 self.base.dashboard_item(entity_id, state="on" if state else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
@@ -649,20 +644,17 @@ class GECloudDirect:
             try:
                 if seconds % 60 == 0:
                     for device in devices:
-                        self.log("GECloud: Polling device {}".format(device))
                         self.status[device] = await self.async_get_inverter_status(device)
                         await self.publish_status(device, self.status[device])
                         self.meter[device] = await self.async_get_inverter_meter(device)
                         await self.publish_meter(device, self.meter[device])
                         self.info[device] = await self.async_get_device_info(device)
                         await self.publish_info(device, self.info[device])
-                        self.log("GECloud: Polling device {} finished short poll".format(device))
                 if seconds % 300 == 0:
                     for device in devices:
                         if seconds == 0 or self.polling_mode or (device == ems_device):
                             self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                             await self.publish_registers(device, self.settings[device])
-                            self.log("GECloud: Polling device {} finished long poll".format(device))
 
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
@@ -693,7 +685,6 @@ class GECloudDirect:
                 post=True,
                 datain=params,
             )
-            self.log("Write EVC command {} params {} returns {}".format(command, params, data))
             if data and "success" in data:
                 if not data["success"]:
                     data = None
@@ -721,12 +712,10 @@ class GECloudDirect:
         if serial in self.pending_writes:
             for pending in self.pending_writes[serial]:
                 if pending["setting_id"] == setting_id:
-                    self.log("GECloud: Read inverter setting {} pending write {}".format(setting_id, pending))
                     return {"value": pending["value"]}
 
         for retry in range(RETRIES):
             data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
-            self.log("Read inverter setting {} returns {}".format(setting_id, data))
             data_value = None
             if data:
                 data_value = data.get("value", -1)
@@ -755,8 +744,6 @@ class GECloudDirect:
                 post=True,
                 datain={"value": str(value), "context": "homeassistant"},
             )
-            self.log("Write inverter setting {} returns {}".format(setting_id, data))
-
             if data and "success" in data:
                 if not data["success"]:
                     data = None
