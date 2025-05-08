@@ -51,8 +51,12 @@ class Plan:
         """
         highest_price_charge = None
         lowest_price_export = None
-        highest_price_charge_level = price_set[-1]
-        lowest_price_export_level = price_set[0]
+        if len(price_set):
+            highest_price_charge_level = price_set[-1]
+            lowest_price_export_level = price_set[0]
+        else:
+            highest_price_charge_level = -99999
+            lowest_price_export_level = 99999
         max_charge_rate = -99999
         min_export_rate = 99999
 
@@ -62,7 +66,7 @@ class Plan:
                 window_n = window_index[key]["id"]
                 typ = window_index[key]["type"]
                 if typ == "c":
-                    max_charge_rate = max(max_charge_rate, price)
+                    max_charge_rate = max(max_charge_rate, charge_window[window_n]["average"])
                     if charge_limit[window_n] > 0:
                         if highest_price_charge is None:
                             highest_price_charge = charge_window[window_n]["average"]
@@ -70,7 +74,7 @@ class Plan:
                             highest_price_charge = max(highest_price_charge, charge_window[window_n]["average"])
                         highest_price_charge_level = max(highest_price_charge_level, price)
                 elif typ == "d":
-                    min_export_rate = min(min_export_rate, price)
+                    min_export_rate = min(min_export_rate, export_window[window_n]["average"])
                     if export_limits[window_n] < 100.0:
                         if lowest_price_export is None:
                             lowest_price_export = export_window[window_n]["average"]

@@ -5401,7 +5401,7 @@ def run_optimise_levels_tests(my_predbat):
         expect_charge_limit=[0],
         load_amount=1.0,
         pv_amount=0,
-        expect_best_price=10.0 / 0.9,
+        expect_best_price=10.0,
         inverter_loss=0.9,
     )
     failed |= this_failed
@@ -5415,7 +5415,7 @@ def run_optimise_levels_tests(my_predbat):
         expect_charge_limit=[0],
         load_amount=1.0,
         pv_amount=1.0,
-        expect_best_price=10.0 / 0.9,
+        expect_best_price=10.0,
         inverter_loss=0.9,
     )
     failed |= this_failed
@@ -5440,7 +5440,7 @@ def run_optimise_levels_tests(my_predbat):
         return failed
 
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "dual_pv", my_predbat, charge_window_best=charge_window_best, expect_charge_limit=[0, 0], load_amount=1.0, pv_amount=1.0, expect_best_price=6.0 / 0.9, inverter_loss=0.9
+        "dual_pv", my_predbat, charge_window_best=charge_window_best, expect_charge_limit=[0, 0], load_amount=1.0, pv_amount=1.0, expect_best_price=10.0, inverter_loss=0.9
     )
     failed |= this_failed
     if failed:
@@ -5482,7 +5482,7 @@ def run_optimise_levels_tests(my_predbat):
         expect_export_limit=[100],
         load_amount=0,
         pv_amount=0,
-        expect_best_price=6.0,
+        expect_best_price=10.0,
         inverter_loss=1,
         rate_export=6.0,
     )
@@ -5600,8 +5600,6 @@ def run_optimise_levels(
     (
         charge_limit_best,
         export_limits_best,
-        best_price,
-        best_price_export,
         best_metric,
         best_cost,
         best_keep,
@@ -5625,6 +5623,7 @@ def run_optimise_levels(
         fast=True,
         quiet=True,
     )
+    best_price_charge, best_price_export, best_price_charge_level, best_price_export_level = my_predbat.find_price_levels(price_set, price_links, window_index, charge_limit_best, charge_window_best, export_window_best, export_limits_best)
 
     # Predict
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
@@ -5655,8 +5654,8 @@ def run_optimise_levels(
                 print("ERROR: Expected discharge limit {} is {} but got {}".format(n, expect_export_limit[n], export_limits_best[n]))
                 failed = True
 
-    if abs(expect_best_price - best_price) >= 0.2:
-        print("ERROR: Expected best price {} but got {}".format(expect_best_price, best_price))
+    if abs(expect_best_price - best_price_charge) >= 0.2:
+        print("ERROR: Expected best price {} but got {} ({})".format(expect_best_price, best_price_charge, best_price_charge_level))
         failed = True
 
     if failed:
@@ -5682,7 +5681,9 @@ def run_optimise_levels(
             test_mode=True,
         )
         my_predbat.log = old_log
-        print("Best price: {} Best metric: {} Best cost: {} Best keep: {} Best soc min: {} Best cycle: {} Best carbon: {} Best import: {}".format(best_price, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import))
+        print(
+            "Best price: {} Best metric: {} Best cost: {} Best keep: {} Best soc min: {} Best cycle: {} Best carbon: {} Best import: {}".format(best_price_charge_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import)
+        )
         print("Charge limit best: {} expected {} Discharge limit best {} expected {}".format(charge_limit_best, expect_charge_limit, export_limits_best, expect_export_limit))
 
     return failed, best_metric, best_keep, charge_limit_best, export_limits_best
