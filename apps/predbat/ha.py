@@ -311,7 +311,8 @@ class HAInterface:
         if not entity_id:
             return self.state_data
         elif entity_id.lower() in self.state_data:
-            if refresh:
+            if refresh and not self.ha_key:
+                # Only refresh from DB/HA if we are not the primary data source
                 self.update_state(entity_id)
             state_info = self.state_data[entity_id.lower()]
             if attribute:
