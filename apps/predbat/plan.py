@@ -70,7 +70,7 @@ class Plan:
                             highest_price_charge = max(highest_price_charge, charge_window[window_n]["average"])
                         highest_price_charge_level = max(highest_price_charge_level, price)
                 elif typ == "d":
-                    min_export_rate = min(min_export_rate, charge_window[window_n]["average"])
+                    min_export_rate = min(min_export_rate, export_window[window_n]["average"])
                     if export_limits[window_n] < 100.0:
                         if lowest_price_export is None:
                             lowest_price_export = export_window[window_n]["average"]
