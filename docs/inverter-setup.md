@@ -133,6 +133,23 @@ To run PredBat with Solis hybrid inverters, follow the following steps:
 6. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
    this is not fully tested. In due course, these mode settings will be incorporated into the code.
+7. Your inverter will require a "button press" triggered by Predbat to update the schedules. Some Solis inverter integrations feature a combined charge/discharge update button, in which case a single entry of:
+
+```yaml
+charge_discharge_update_button:
+  - button.solis_charge_discharge
+```
+
+is sufficient. For other configurations (for example using the "solis_fb00" plugin) where separate buttons are used for charging and discharging, provide both:
+
+```yaml
+charge_update_button:
+  - button.solis_charge
+discharge_update_button:
+  - button.solis_discharge
+```
+
+Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
 ## Solax Gen4 Inverters
 
