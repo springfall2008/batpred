@@ -5681,7 +5681,9 @@ def run_optimise_levels(
             test_mode=True,
         )
         my_predbat.log = old_log
-        print("Best price: {} Best metric: {} Best cost: {} Best keep: {} Best soc min: {} Best cycle: {} Best carbon: {} Best import: {}".format(best_price_charge_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import))
+        print(
+            "Best price: {} Best metric: {} Best cost: {} Best keep: {} Best soc min: {} Best cycle: {} Best carbon: {} Best import: {}".format(best_price_charge_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import)
+        )
         print("Charge limit best: {} expected {} Discharge limit best {} expected {}".format(charge_limit_best, expect_charge_limit, export_limits_best, expect_export_limit))
 
     return failed, best_metric, best_keep, charge_limit_best, export_limits_best
