@@ -1384,6 +1384,10 @@ class Inverter:
         GivTCP Workaround, keep writing until correct
         """
         # Re-written to minimise writes
+        if not entity_id:
+            self.base.log("Warn: Inverter {} write_and_poll_switch: No entity_id for {} to write {}".format(self.id, name, new_value))
+            self.base.record_status("Warn: Inverter {} write_and_poll_switch: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+            return False
         domain, entity_name = entity_id.split(".")
 
         current_state = self.base.get_state_wrapper(entity_id=entity_id)
