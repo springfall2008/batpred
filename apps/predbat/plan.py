@@ -2424,6 +2424,9 @@ class Plan:
             for price_key in price_set:
                 links = price_links[price_key].copy()
 
+                if debug_mode:
+                    print("Optimise pass {} price_key {}".format(pass_type, price_key))
+
                 # Freeze pass should be done in time order (newest first)
                 if pass_type in ["freeze"]:
                     links.reverse()
@@ -2530,6 +2533,10 @@ class Plan:
                         # Do highest price first
                         # Second pass to tune down any excess exports only
                         if pass_type == "low" and (self.export_limits_best[window_n] == 100):
+                            continue
+
+                        # Don't remove exports during freeze pass
+                        if pass_type == "freeze" and (self.export_limits_best[window_n] == 0):
                             continue
 
                         if self.calculate_best_export and (window_start not in self.manual_all_times):
