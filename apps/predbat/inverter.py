@@ -1856,6 +1856,10 @@ class Inverter:
                     # If the inverter uses hours and minutes then write to these entities too
                     self.write_and_poll_option("discharge_start_hour", self.base.get_arg("discharge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
                     self.write_and_poll_option("discharge_start_minute", self.base.get_arg("discharge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
+                elif self.inv_charge_time_format == "H:M-H:M":
+                    # If the inverter uses hours and minutes then write to these entities too
+                    discharge_time = new_start + "-" + new_end
+                    self.write_and_poll_option("discharge_time", self.base.get_arg("discharge_time", indirect=False, index=self.id), discharge_time)
             else:
                 self.log("Warn: Inverter {} unable write export start time as neither REST or discharge_start_time are set".format(self.id))
 
@@ -1874,6 +1878,8 @@ class Inverter:
                 if self.inv_charge_time_format == "H M":
                     self.write_and_poll_option("discharge_end_hour", self.base.get_arg("discharge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
                     self.write_and_poll_option("discharge_end_minute", self.base.get_arg("discharge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
+                elif self.inv_charge_time_format == "H:M-H:M":
+                    pass
             else:
                 self.log("Warn: Inverter {} unable write export end time as neither REST or discharge_end_time are set".format(self.id))
 
@@ -2054,6 +2060,10 @@ class Inverter:
                     for y in ["hour", "minute"]:
                         name = f"{direction}_{x}_{y}"
                         self.write_and_poll_value(name, self.base.get_arg(name, indirect=False, index=self.id), 0)
+            elif self.inv_charge_time_format == "H:M-H:M":
+                # To disable we set both times to 00:00
+                name = f"{direction}_time"
+                self.write_and_poll_value(name, self.base.get_arg(name, indirect=False, index=self.id), "00:00-00:00")
             else:
                 self.set_current_from_power(direction, 0)
 
@@ -2249,7 +2259,7 @@ class Inverter:
             self.disable_charge_window(notify=False)
             have_disabled = True
 
-        if new_start != old_start or (self.inv_charge_time_format == "H M"):
+        if new_start != old_start or (self.inv_charge_time_format in ["H M", "H:M-H:M"]):
             if self.rest_data:
                 pass  # REST will be written as start/end together
             elif "charge_start_time" in self.base.args:
@@ -2261,11 +2271,15 @@ class Inverter:
                     # If the inverter uses hours and minutes then write to these entities too
                     self.write_and_poll_option("charge_start_hour", self.base.get_arg("charge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
                     self.write_and_poll_option("charge_start_minute", self.base.get_arg("charge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
+                elif self.inv_charge_time_format == "H:M-H:M":
+                    # If the inverter uses hours and minutes then write to these entities too
+                    charge_time = new_start + "-" + new_end
+                    self.write_and_poll_option("charge_time", self.base.get_arg("charge_time", indirect=False, index=self.id), charge_time)
             else:
                 self.log("Warn: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
 
         # Program end slot
-        if new_end != old_end or (self.inv_charge_time_format == "H M"):
+        if new_end != old_end or (self.inv_charge_time_format in ["H M", "H:M-H:M"]):
             if self.rest_data:
                 pass  # REST will be written as start/end together
             elif "charge_end_time" in self.base.args:
@@ -2276,10 +2290,12 @@ class Inverter:
                 if self.inv_charge_time_format == "H M":
                     self.write_and_poll_option("charge_end_hour", self.base.get_arg("charge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
                     self.write_and_poll_option("charge_end_minute", self.base.get_arg("charge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
+                elif self.inv_charge_time_format == "H:M-H:M":
+                    pass
             else:
                 self.log("Warn: Inverter {} unable write charge window end as neither REST, charge_end_hour or charge_end_time are set".format(self.id))
 
-        if new_start != old_start or new_end != old_end or (self.inv_charge_time_format == "H M"):
+        if new_start != old_start or new_end != old_end or (self.inv_charge_time_format in ["H M", "H:M-H:M"]):
             if self.rest_data:
                 self.rest_setChargeSlot1(new_start, new_end)
 
