@@ -1,5 +1,5 @@
 import requests
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timezone
 import asyncio
 import random
 import time
