@@ -204,8 +204,11 @@ class Fetch:
             load_yesterday = max(load_yesterday - (self.car_charging_rate[0] * step / 60.0), 0)
 
         # Apply base load
-        if self.base_load:
-            load_yesterday = max(load_yesterday, (self.base_load * step / 60.0))
+        base_load = self.base_load * step / 60.0
+        if load_yesterday < base_load:
+            add_to_base = base_load - load_yesterday
+            load_yesterday += add_to_base
+            load_yesterday_raw += add_to_base
 
         return load_yesterday, load_yesterday_raw
 
