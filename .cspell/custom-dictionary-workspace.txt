@@ -52,6 +52,7 @@ dend
 devcontainer
 devcontainers
 dexport
+digestmod
 dimport
 dischargefreeze
 diverter
@@ -182,6 +183,7 @@ Predai
 Predbat
 predbatt
 Predheat
+psum
 pvbat
 pwindow
 pylint
@@ -214,6 +216,7 @@ solarman
 Solax
 solaxmodbus
 Solcast
+soliscloud
 solisx
 sourcery
 Southwell
@@ -222,6 +225,7 @@ startt
 stdlib
 stepline
 sunsynk
+syscmd
 tasmota
 tdata
 tdiff

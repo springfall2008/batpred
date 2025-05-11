@@ -203,6 +203,10 @@ class Fetch:
             # Car charging hold - ignore car charging in computation based on threshold
             load_yesterday = max(load_yesterday - (self.car_charging_rate[0] * step / 60.0), 0)
 
+        # Apply base load
+        if self.base_load:
+            load_yesterday = max(load_yesterday, (self.base_load * step / 60.0))
+
         return load_yesterday, load_yesterday_raw
 
     def previous_days_modal_filter(self, data):
@@ -1909,6 +1913,7 @@ class Fetch:
         self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
+        self.base_load = self.get_arg("base_load", 0) / 1000.0
 
         # Charge curve
         if self.args.get("battery_charge_power_curve", "") == "auto":
