@@ -11,6 +11,10 @@ apexcharts
 appdaemon
 appkey
 argname
+digestmod
+syscmd
+soliscloud
+psum
 autodocstring
 autoflake
 automations
