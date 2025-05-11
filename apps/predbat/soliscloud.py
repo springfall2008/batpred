@@ -52,105 +52,6 @@ all_registers = [
 171,
 172,
 173,
-178,
-180,
-181,
-182,
-183,
-184,
-185,
-186,
-188,
-225,
-226,
-287,
-288,
-289,
-308,
-309,
-310,
-313,
-314,
-331,
-334,
-335,
-336,
-342,
-343,
-345,
-346,
-347,
-348,
-349,
-350,
-351,
-352,
-354,
-355,
-356,
-357,
-360,
-361,
-362,
-363,
-364,
-367,
-375,
-376,
-378,
-442,
-443,
-444,
-462,
-466,
-469,
-471,
-472,
-473,
-474,
-475,
-476,
-477,
-478,
-479,
-480,
-481,
-482,
-483,
-484,
-485,
-486,
-487,
-488,
-489,
-490,
-491,
-492,
-493,
-494,
-495,
-496,
-497,
-499,
-500,
-502,
-505,
-506,
-507,
-515,
-516,
-517,
-542,
-576,
-577,
-594,
-607,
-609,
-611,
-613,
-632,
-634,
-634,
 636,
 676,
 4611,
@@ -272,11 +173,6 @@ all_registers = [
 579,
 580,
 634,
-33022,
-33023,
-33024,
-33025,
-33026,
 ]
 
 class SolisCloudDirect:
@@ -329,7 +225,27 @@ class SolisCloudDirect:
             self.log("Warn: SolisCloud: API failed to start in required time")
             return False
         return True
+    
+    async def read_inverter_registers(self, device):
 
+        for cid in self.register_data[device]:
+            value = await self.read_single_register(device, cid)
+            if value is not None:
+                self.register_data[device][cid]["value"] = value
+                self.log("SolisCloud: Read register {} for device {} value {}".format(cid, device, value))
+
+    async def read_single_register(self, device, cid):
+        """
+        Read single register
+        """
+        payload = {'inverterSn': device, 'cid': str(cid)}
+        result = await self.api_call_retry(SOLIS_READ_ENDPOINT, payload)
+        if result and "data" in result and result.get("data", None):
+            data = result.get("data", {})
+            msg = data.get("msg", None)
+            if msg:
+                return msg
+        return None
 
     async def get_inverter_registers(self, device, all=False):
         """
@@ -349,7 +265,7 @@ class SolisCloudDirect:
         for start in range(0, len(cids), 50):
             end = start + 50
             batch_cids = cids[start:end]
-            payload = {'inverterSn': device, 'cids': ','.join(batch_cids)}
+            payload = {'inverterSn': device, 'cids': ','.join(batch_cids), 'language': 2}
             result = await self.api_call_retry(SOLIS_READ_BATCH_ENDPOINT, payload)
             if result and "data" in result and result.get("data", None):
                 records = result.get("data", [])
@@ -493,6 +409,8 @@ class SolisCloudDirect:
 
         # Get devices using the modified auto-detection (returns dict)
         devices = await self.get_inverter_list()
+
+        # Discover registers
         for device in devices:
             self.register_data[device] = {}
             await self.get_inverter_registers(device, all=True)
@@ -510,8 +428,8 @@ class SolisCloudDirect:
                 if seconds % 300 == 0:
                     devices = await self.get_inverter_list()
                     for device in devices:
+                        await self.read_inverter_registers(device)
                         await self.publish_registers(device)
-                        await self.get_inverter_registers(device, all=False)
                 if seconds % 60 == 0:
                     for device in devices:
                         self.log("SolisCloud: Getting inverter details for device {}".format(device))
