@@ -175,6 +175,7 @@ all_registers = [
 634,
 ]
 
+
 class SolisCloudDirect:
     def __init__(self, base):
         """
@@ -344,7 +345,7 @@ class SolisCloudDirect:
                 on = record.get("on", None)
                 off = record.get("off", None)
 
-                attributes={
+                attributes = {
                     "friendly_name": description,
                     "unit_of_measurement": unit,
                 }
@@ -364,17 +365,12 @@ class SolisCloudDirect:
                 else:
                     base_type = "sensor"
 
-                self.base.dashboard_item(
-                    base_type + "." + entity_name,
-                    value,
-                    app="soliscloud",
-                    attributes=attributes
-                )
+                self.base.dashboard_item(base_type + "." + entity_name, value, app="soliscloud", attributes=attributes)
 
     async def publish_device(self, device):
         detail = self.inverter_detail.get(device, {})
         print("SolisCloud: Publishing device {} detail {}".format(device, detail))
-        if  detail:
+        if detail:
             entity_name = "sensor.soliscloud_" + device
             power_max = self.to_float(detail.get("inverterPower", 0)) * 1000.0
             power_value = self.to_float(detail.get("power", 0)) * 1000.0
@@ -419,7 +415,7 @@ class SolisCloudDirect:
         for device in devices:
             self.pending_writes[device] = []
 
-        #if self.automatic:
+        # if self.automatic:
         #    await self.async_automatic_config(devices_dict)
 
         seconds = 0
@@ -433,13 +429,13 @@ class SolisCloudDirect:
                 if seconds % 60 == 0:
                     for device in devices:
                         self.log("SolisCloud: Getting inverter details for device {}".format(device))
-                        #await self.get_inverter_details(device)
-                        #await self.publish_device(device)
+                        # await self.get_inverter_details(device)
+                        # await self.publish_device(device)
 
             except Exception as e:
                 self.log("Error: SolisCloud: Exception in main loop {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                
+
             # Clear pending writes
             for device in devices:
                 if device in self.pending_writes:
@@ -464,7 +460,7 @@ class SolisCloudDirect:
                 res = await self.api_call(endpoint, payload)
                 if res:
                     code = res.get("code", None)
-                    if code == '0':
+                    if code == "0":
                         return res
             except Exception as e:
                 pass
@@ -502,7 +498,7 @@ class SolisCloudDirect:
         )
         if res.status_code != 200:
             raise Exception(f"API call failed with status code {res.status_code}: {res.text}")
-        
+
         response = res.json()
         return response
 
@@ -520,6 +516,7 @@ class DummyBase:
 
     def dashboard_item(self, entity_name, value, attributes=None, app=None):
         print(f"Dashboard item {entity_name}: {value}, attributes: {attributes}, app: {app}")
+
 
 if __name__ == "__main__":
     # Example usage
