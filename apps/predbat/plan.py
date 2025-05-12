@@ -1051,9 +1051,9 @@ class Plan:
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
 
                 # HTML data
-                self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
                 text = self.short_textual_plan(soc_min, soc_min_minute)
                 self.log("Info: " + text)
+                self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
                 # Web history
                 if self.web_interface:

@@ -791,7 +791,6 @@ class Output:
             sentence += " Your next {} slot will be in {} where rates will be {}.".format(export_type, self.duration_string(self.export_window_best[export_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.export_window_best[export_window_n_next]["start"], export=True))
 
         if publish:
-            self.dashboard_item(self.prefix + ".plan_text", state=sentence, attributes={"friendly_name": "Plan Text Description", "icon": "mdi:text-account"})
             self.text_plan = sentence
 
         return sentence
@@ -1321,7 +1320,7 @@ class Output:
         html = html.replace("£", "&#163;")
 
         if publish:
-            self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+            self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text:": self.text_plan, "html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
             self.html_plan = html
 
         return html
