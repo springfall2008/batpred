@@ -632,9 +632,7 @@ class Output:
             # Round minutes to nearest 15 minutes
             minutes = round(minutes / 15)
 
-            if hours >= 24:
-                text = "day"
-            elif hours >= 8:
+            if hours >= 8:
                 text = "{} hours".format(hours)
             elif minutes == 0:
                 if hours == 1:
@@ -794,6 +792,7 @@ class Output:
 
 
         if publish:
+            self.log("Plan description: {}".format(sentence))
             self.dashboard_item(self.prefix + ".plan_description", state=sentence, attributes={"friendly_name": "Plan Description", "icon": "mdi:text-account"})
 
         return sentence
