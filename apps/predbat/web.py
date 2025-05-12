@@ -43,7 +43,7 @@ class WebInterface:
         results = {}
         last_updated_time = None
         last_day_stamp = None
-        if history:
+        if history and len(history) >=1:
             history = history[0]
 
         if not history:

@@ -834,7 +834,8 @@ class Output:
             mode += " (read only)"
         if self.debug_enable:
             mode += " (debug)"
-        html = "<h4>{}</h4>".format(self.text_plan)
+        if publish:
+            html = "<h4>{}</h4>".format(self.text_plan)
         html += "<table>"
         html += "<tr>"
         html += self.get_html_plan_header(plan_debug)
