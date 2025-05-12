@@ -631,7 +631,12 @@ class Output:
             minutes = minutes - (hours * 60)
             # Round minutes to nearest 15 minutes
             minutes = round(minutes / 15)
-            if minutes == 0:
+
+            if hours >= 24:
+                text = "day"
+            elif hours >= 8:
+                text = "{} hours".format(hours)
+            elif minutes == 0:
                 if hours == 1:
                     text = "{} hour".format(hours)
                 else:
