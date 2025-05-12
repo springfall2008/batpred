@@ -697,23 +697,35 @@ class Output:
                 text = "in eco mode"
         return text
 
-    def get_charge_type(self, charge_limit):
+    def get_charge_type(self, charge_limit, current=False):
         """
         Get the charge type for the given charge limit
         """
         if charge_limit == self.reserve:
-            return "charge freeze"
+            if current:
+                return "freeze charging"
+            else:
+                return "charge freeze"
         else:
-            return "charge"
+            if current:
+                return "charging"
+            else:
+                return "charge"
         
-    def get_export_type(self, export_limit):
+    def get_export_type(self, export_limit, current=False):
         """
         Get the export type for the given export limit
         """
         if export_limit == 99:
-            return "export freeze"
+            if current:
+                return "freeze exporting"
+            else:
+                return "export freeze"
         else:
-            return "export"
+            if current:
+                return "exporting"
+            else:
+                return "export"
 
     def short_textual_plan(self, soc_min, soc_min_minute, publish=True):
         """
@@ -740,10 +752,10 @@ class Output:
         rate_export_duration = rate_bucket_export[0]["end"] - rate_bucket_export[0]["start"]
 
         if not fixed_import:
-            sentence = "Current import rates are {} for the next {} ".format(rate_import_str, self.duration_string(rate_import_duration))
+            sentence = "Current import rates are {} for the next {}".format(rate_import_str, self.duration_string(rate_import_duration))
         if not fixed_export:
             if sentence:
-                sentence += "and "
+                sentence += " and "
             else:
                 sentence = "Current "
             sentence += "export rates are {} for the next {}".format(rate_export_str, self.duration_string(rate_export_duration))        
@@ -774,21 +786,24 @@ class Output:
                     # We know we ran out as it says the percentage above anyhow
                     pass
                 else:
-                    sentence += " You will run out of battery in {}.".format(self.duration_string(soc_min_minute - self.minutes_now))
+                    if self.in_charge_window(self.charge_window_best, soc_min_minute) >= 0 or self.in_charge_window(self.charge_window_best, soc_min_minute + 10) >= 0:
+                        sentence += " You have enough battery to reach the next charge."
+                    else:
+                        sentence += " You will run out of battery in {}.".format(self.duration_string(soc_min_minute - self.minutes_now))
             else:
-                sentence += " You will reach a minimum of {} percent battery in {}.".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
+                sentence += " You will reach a minimum of {}% battery in {}.".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
 
         charge_window_n_next = self.get_next_charge_window(self.minutes_now)
         export_window_n_next = self.get_next_export_window(self.minutes_now)
         if charge_window_n < 0 and charge_window_n_next >= 0:
             charge_type = self.get_charge_type(self.charge_limit_best[charge_window_n_next])
-            sentence += " Your next {} slot will be in {} where rates will be {}.".format(charge_type, self.duration_string(self.charge_window_best[charge_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.charge_window_best[charge_window_n_next]["start"], export=False))
+            sentence += " Your next {} slot will be in {} where import rates will be {}.".format(charge_type, self.duration_string(self.charge_window_best[charge_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.charge_window_best[charge_window_n_next]["start"], export=False))
         elif charge_window_n < 0:
             sentence += " No charging is planned."
 
         if export_window_n < 0 and export_window_n_next >= 0:
             export_type = self.get_export_type(self.export_limits_best[export_window_n_next])
-            sentence += " Your next {} slot will be in {} where rates will be {}.".format(export_type, self.duration_string(self.export_window_best[export_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.export_window_best[export_window_n_next]["start"], export=True))
+            sentence += " Your next {} slot will be in {} where export rates will be {}.".format(export_type, self.duration_string(self.export_window_best[export_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.export_window_best[export_window_n_next]["start"], export=True))
 
         if publish:
             self.text_plan = sentence
@@ -806,7 +821,8 @@ class Output:
             mode += " (read only)"
         if self.debug_enable:
             mode += " (debug)"
-        html = "<table>"
+        html = "<h4>{}</h4>".format(self.text_plan)
+        html += "<table>"
         html += "<tr>"
         html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
