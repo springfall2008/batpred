@@ -564,9 +564,9 @@ class Output:
             elif rate <= import_cost_threshold:
                 return "cheap"
             elif rate <= (import_cost_threshold * 1.5):
-                return "moderate"
+                return "expensive"
             else:
-                return "high"
+                return "very expensive"
         else:
             if rate == 0:
                 return "zero"
@@ -574,12 +574,12 @@ class Output:
                 return "negative"
             elif rate <= (export_cost_threshold * 0.5):
                 return "very low"
-            elif rate <= export_cost_threshold:
+            elif rate < export_cost_threshold:
                 return "low"
             elif rate <= (export_cost_threshold * 1.5):
-                return "moderate"
-            else:
                 return "high"
+            else:
+                return "very high"
             
     def get_rate_text(self, minute, export=False):
 
@@ -789,7 +789,6 @@ class Output:
 
 
         if publish:
-            self.log("Publish plan description")
             self.dashboard_item(self.prefix + ".plan_description", state=sentence, attributes={"friendly_name": "Plan Description", "icon": "mdi:text-account"})
 
         return sentence
