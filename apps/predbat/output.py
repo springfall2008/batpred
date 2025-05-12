@@ -681,10 +681,10 @@ class Output:
         """
         if export_window_n >= 0:
             target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
-            text = "force exporting to {} for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
+            text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
         elif charge_window_n >= 0:
-            target_charge = self.charge_window_best[charge_window_n].get("target", self.charge_limit_best[charge_window_n])
-            text = "charging to {} for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
+            target_charge = calc_percent_limit(self.charge_window_best[charge_window_n].get("target", self.charge_limit_best[charge_window_n]), self.soc_max)
+            text = "charging to {}% for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
         else:
             charge_window_n = self.get_next_charge_window(minutes_now)
             export_window_n = self.get_next_export_window(minutes_now)
@@ -762,10 +762,6 @@ class Output:
                 sentence = "Current "
             sentence += "export rates are {} for the next {}".format(rate_export_str, self.duration_string(rate_export_duration))        
 
-        car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
-        if car_charging_kwh > 0:
-            sentence += " Your car is currently charging."
-
         # Step 2 - find the current state of charge
         soc_percent = calc_percent_limit(self.predict_soc_best.get(0, 0.0), self.soc_max)
 
@@ -798,6 +794,10 @@ class Output:
                         sentence += " You will run out of battery in {}.".format(self.duration_string(soc_min_minute - self.minutes_now))
             else:
                 sentence += " You will reach a minimum of {}% battery in {}.".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
+
+        car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
+        if car_charging_kwh > 0:
+            sentence += " Your car is currently charging."
 
         charge_window_n_next = self.get_next_charge_window(self.minutes_now)
         export_window_n_next = self.get_next_export_window(self.minutes_now)
