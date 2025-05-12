@@ -577,9 +577,9 @@ class Output:
             elif rate < export_cost_threshold:
                 return "low"
             elif rate <= (export_cost_threshold * 1.5):
-                return "high"
+                return "good"
             else:
-                return "very high"
+                return "very good"
             
     def get_rate_text(self, minute, export=False):
 
@@ -776,7 +776,7 @@ class Output:
                 else:
                     sentence += " You will run out of battery in {}.".format(self.duration_string(soc_min_minute - self.minutes_now))
             else:
-                sentence += " You will reach a minimum of {}% battery in {}.".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
+                sentence += " You will reach a minimum of {} percent battery in {}.".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
 
         charge_window_n_next = self.get_next_charge_window(self.minutes_now)
         export_window_n_next = self.get_next_export_window(self.minutes_now)
@@ -790,10 +790,8 @@ class Output:
             export_type = self.get_export_type(self.export_limits_best[export_window_n_next])
             sentence += " Your next {} slot will be in {} where rates will be {}.".format(export_type, self.duration_string(self.export_window_best[export_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.export_window_best[export_window_n_next]["start"], export=True))
 
-
         if publish:
-            self.log("Plan description: {}".format(sentence))
-            self.dashboard_item(self.prefix + ".plan_description", state=sentence, attributes={"friendly_name": "Plan Description", "icon": "mdi:text-account"})
+            self.dashboard_item(self.prefix + ".plan_text", state=sentence, attributes={"friendly_name": "Plan Text Description", "icon": "mdi:text-account"})
 
         return sentence
 
