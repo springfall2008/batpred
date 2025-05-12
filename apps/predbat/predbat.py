@@ -288,6 +288,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Init stub
         """
         reset_prediction_globals()
+        self.text_plan = "Computing please wait..."
         self.base_load = 0
         self.plan_debug = False
         self.arg_errors = {}

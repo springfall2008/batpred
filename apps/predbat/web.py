@@ -226,6 +226,9 @@ class WebInterface:
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "</table>\n"
+        text += "<table>\n"
+        text += "<h2>Plan textual description</h2>\n"
+        text += "<tr><td>{}</td></tr>\n".format(self.base.text_plan)
         text += "<br>\n"
 
         # Form the app list

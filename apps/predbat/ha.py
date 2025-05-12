@@ -485,6 +485,7 @@ class HAInterface:
             item = self.db_manager.set_state_db_later(entity_id, state, attributes)
             # Locally cache state until DB update happens
             self.update_state_item(item, entity_id, nodb=True)
+            
 
         if self.ha_key:
             data = {"state": state}

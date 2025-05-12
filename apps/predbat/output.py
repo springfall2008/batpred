@@ -792,6 +792,7 @@ class Output:
 
         if publish:
             self.dashboard_item(self.prefix + ".plan_text", state=sentence, attributes={"friendly_name": "Plan Text Description", "icon": "mdi:text-account"})
+            self.text_plan = sentence
 
         return sentence
 
