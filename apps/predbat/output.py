@@ -680,9 +680,11 @@ class Output:
         Get the charge export text for the given minute
         """
         if export_window_n >= 0:
-            text = "force exporting for the next {}".format(self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
+            target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
+            text = "force exporting to {} for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
         elif charge_window_n >= 0:
-            text = "charging for the next {}".format(self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
+            target_charge = self.charge_window_best[charge_window_n].get("target", self.charge_limit_best[charge_window_n])
+            text = "charging to {} for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
         else:
             charge_window_n = self.get_next_charge_window(minutes_now)
             export_window_n = self.get_next_export_window(minutes_now)
@@ -760,6 +762,10 @@ class Output:
                 sentence = "Current "
             sentence += "export rates are {} for the next {}".format(rate_export_str, self.duration_string(rate_export_duration))        
 
+        car_charging_kwh = self.car_charge_slot_kwh(self.minutes_now, self.minutes_now + 5)
+        if car_charging_kwh > 0:
+            sentence += " Your car is currently charging."
+
         # Step 2 - find the current state of charge
         soc_percent = calc_percent_limit(self.predict_soc_best.get(0, 0.0), self.soc_max)
 
@@ -797,7 +803,14 @@ class Output:
         export_window_n_next = self.get_next_export_window(self.minutes_now)
         if charge_window_n < 0 and charge_window_n_next >= 0:
             charge_type = self.get_charge_type(self.charge_limit_best[charge_window_n_next])
-            sentence += " Your next {} slot will be in {} where import rates will be {}.".format(charge_type, self.duration_string(self.charge_window_best[charge_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.charge_window_best[charge_window_n_next]["start"], export=False))
+            car_charging_kwh = self.car_charge_slot_kwh(self.charge_window_best[charge_window_n_next]["start"], self.charge_window_best[charge_window_n_next]["end"])
+
+            sentence += " Your next {} slot will be in {} where import rates will be {}".format(charge_type, self.duration_string(self.charge_window_best[charge_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.charge_window_best[charge_window_n_next]["start"], export=False))
+            if car_charging_kwh > 0:
+                sentence += " and your car will be charged with {} kWh.".format(car_charging_kwh)
+            else:
+                sentence += "."
+
         elif charge_window_n < 0:
             sentence += " No charging is planned."
 
