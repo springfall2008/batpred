@@ -711,7 +711,7 @@ class Output:
         Get the export type for the given export limit
         """
         if export_limit == 99:
-            "export freeze"
+            return "export freeze"
         else:
             return "export"
 
