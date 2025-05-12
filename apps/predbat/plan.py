@@ -1052,6 +1052,8 @@ class Plan:
 
                 # HTML data
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
+                text = self.short_textual_plan(soc_min, soc_min_minute)
+                self.log("Info: " + text)
 
                 # Web history
                 if self.web_interface:

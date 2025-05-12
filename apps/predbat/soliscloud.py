@@ -9,7 +9,7 @@ import hmac
 import json
 import traceback
 
-SOLIS_CLOUD_API_URL = "https://www.soliscloud.com:13333/"
+SOLIS_CLOUD_API_URL = "https://www.soliscloud.com:13333"
 SOLIS_READ_ENDPOINT = "/v2/api/atRead"
 SOLIS_READ_BATCH_ENDPOINT = "/v2/api/atReadBatch"
 SOLIS_CONTROL_ENDPOINT = "/v2/api/control"
@@ -29,151 +29,35 @@ attribute_table = {
 }
 
 all_registers = [
-    52,
-    54,
     56,
-    100,
     103,
-    109,
-    142,
-    143,
-    144,
-    148,
-    155,
-    156,
     157,
     158,
     160,
-    162,
-    163,
-    166,
-    167,
-    168,
-    171,
-    172,
-    173,
-    636,
-    676,
-    4611,
-    4615,
-    4773,
+    284,
+    7229,
+    7963,
     5916,
+    5946,
+    5948,
+    5928,
     5917,
     5918,
     5919,
     5920,
     5921,
     5922,
+    5964,
+    5967,
+    5965,
     5923,
     5924,
     5925,
     5926,
     5927,
-    5946,
-    5928,
-    5947,
-    5948,
-    5949,
-    5929,
-    5950,
-    5951,
-    5952,
-    5930,
-    5953,
-    5954,
-    5955,
-    5931,
-    5956,
-    5957,
-    5958,
-    5932,
-    5959,
-    5960,
-    5961,
-    5933,
-    5962,
-    5963,
-    5964,
-    5965,
-    5966,
-    5967,
-    5968,
-    5969,
-    5970,
-    5971,
-    5972,
-    5973,
-    5974,
-    5975,
-    5976,
-    5977,
-    5978,
-    5979,
-    5980,
-    5981,
-    5982,
-    5983,
-    5987,
-    5984,
-    5985,
-    5986,
-    13,
-    14,
-    15,
-    18,
-    463,
-    532,
-    549,
-    52,
-    54,
-    56,
-    284,
-    285,
-    286,
-    287,
-    289,
-    290,
-    291,
-    292,
-    293,
-    294,
-    295,
-    296,
-    297,
-    303,
-    305,
-    307,
-    308,
-    309,
-    310,
-    311,
-    312,
-    316,
-    317,
-    318,
-    319,
-    321,
-    323,
-    324,
-    325,
-    326,
-    327,
-    367,
-    378,
-    538,
-    539,
-    540,
-    541,
-    544,
-    574,
-    575,
-    576,
-    577,
-    578,
-    579,
-    580,
-    634,
-]
+    499,
+    636,
+] 
 
 
 class SolisCloudDirect:
@@ -261,9 +145,9 @@ class SolisCloudDirect:
             for cid in self.register_data.get(device, {}):
                 cids.append(str(cid))
 
-        # Process CIDs in batches of 50
-        for start in range(0, len(cids), 50):
-            end = start + 50
+        # Process CIDs in batches of 20
+        for start in range(0, len(cids) + 1, 20):
+            end = start + 20
             batch_cids = cids[start:end]
             payload = {"inverterSn": device, "cids": ",".join(batch_cids), "language": 2}
             result = await self.api_call_retry(SOLIS_READ_BATCH_ENDPOINT, payload)
@@ -274,9 +158,13 @@ class SolisCloudDirect:
                         for item in record:
                             syscmd = item.get("sysCommand", {})
                             cid = syscmd.get("id", None)
+                            productModel = syscmd.get("productModel", None)
+                            productModels = []
+                            if productModel:
+                                productModels = productModel.split(",")
+                            print("SolisCloud: Register {} for device {} productModel '{}'".format(cid, device, productModel))
                             if cid:
-                                productModels = syscmd.get("productModel", "").split(",")
-                                if this_model in productModels:
+                                if not productModels or (this_model in productModels):
                                     self.register_data[device][cid] = syscmd
                                     name2 = syscmd.get("name2", None)
                                     value = syscmd.get("value", None)
@@ -336,6 +224,9 @@ class SolisCloudDirect:
                 cid = record.get("id", None)
                 value = record.get("value", None)
                 description = record.get("name2", None)
+                description = description.strip() if description else None
+                if description is None:
+                    description = str(cid)
                 register_name = description.replace(" ", "_").replace("-", "_").lower()
                 entity_name = "solis_cloud_" + device + "_" + register_name
                 min = record.get("min", None)
@@ -428,8 +319,8 @@ class SolisCloudDirect:
                 if seconds % 60 == 0:
                     for device in devices:
                         self.log("SolisCloud: Getting inverter details for device {}".format(device))
-                        # await self.get_inverter_details(device)
-                        # await self.publish_device(device)
+                        await self.get_inverter_details(device)
+                        await self.publish_device(device)
 
             except Exception as e:
                 self.log("Error: SolisCloud: Exception in main loop {}".format(e))
@@ -464,7 +355,7 @@ class SolisCloudDirect:
             except Exception as e:
                 pass
             self.log("SolisCloud: API call failed: result {}".format(res))
-            time.sleep(random.uniform(1, 3))
+            time.sleep(i * 2)
         return None
 
     async def api_call(self, endpoint, payload):

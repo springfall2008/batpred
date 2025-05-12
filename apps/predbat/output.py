@@ -542,6 +542,259 @@ class Output:
         html += "</tr>"
         return html
 
+    def band_rate_text(self, rate, export=False):
+        """
+        Turn the rate into some text
+        """
+        import_cost_threshold = self.rate_import_cost_threshold
+        export_cost_threshold = self.rate_export_cost_threshold
+
+        if self.rate_best_cost_threshold_charge:
+            import_cost_threshold = self.rate_best_cost_threshold_charge
+        if self.rate_best_cost_threshold_export:
+            export_cost_threshold = self.rate_best_cost_threshold_export
+
+        if not export:
+            if rate == 0:
+                return "free"
+            elif rate < 0:
+                return "negative"
+            elif rate <= import_cost_threshold * 0.5:
+                return "very cheap"
+            elif rate <= import_cost_threshold:
+                return "cheap"
+            elif rate <= (import_cost_threshold * 1.5):
+                return "moderate"
+            else:
+                return "high"
+        else:
+            if rate == 0:
+                return "zero"
+            elif rate < 0:
+                return "negative"
+            elif rate <= (export_cost_threshold * 0.5):
+                return "very low"
+            elif rate <= export_cost_threshold:
+                return "low"
+            elif rate <= (export_cost_threshold * 1.5):
+                return "moderate"
+            else:
+                return "high"
+            
+    def get_rate_text(self, minute, export=False):
+
+        """
+        Get the rate text for the given minute
+        """
+
+        if not export:
+            rate_import = self.rate_import.get(minute, 0)
+            rate_import_str = self.band_rate_text(rate_import)
+            return rate_import_str
+        else:
+            rate_export = self.rate_export.get(minute, 0)
+            rate_export_str = self.band_rate_text(rate_export, export=True)
+            return rate_export_str
+    
+    def rate_text_scan(self, export=False):
+        """
+        Create text description for each rate band
+        """
+        rate_array = []
+
+        end_plan = min(self.end_record, self.forecast_minutes) + self.minutes_now
+        rate_text = self.get_rate_text(self.minutes_now, export=export)
+        start_minute = self.minutes_now
+
+        for minute in range(self.minutes_now, end_plan):
+            rate_text_new = self.get_rate_text(minute, export=export)
+            if rate_text != rate_text_new:
+                rate_array.append({"start": start_minute, "end": minute, "rate": rate_text})
+                start_minute = minute
+                rate_text = rate_text_new
+        # Add the last rate band
+        if minute > start_minute:
+            rate_array.append({"start": start_minute, "end": end_plan, "rate": rate_text})
+        
+        return rate_array
+    
+    def duration_string(self, minutes):
+        """
+        Convert a number of minutes into a string
+        """
+
+        text = ""
+        if minutes < 60:
+            text = "{} minutes".format(minutes)
+        else:
+            hours = int(minutes / 60)
+            minutes = minutes - (hours * 60)
+            # Round minutes to nearest 15 minutes
+            minutes = round(minutes / 15)
+            if minutes == 0:
+                if hours == 1:
+                    text = "{} hour".format(hours)
+                else:
+                    text = "{} hours".format(hours)
+            else:
+                minutes_text = ""
+                if minutes == 1:
+                    minutes_text = "and a quarter"
+                elif minutes == 2:
+                    minutes_text = "and a half"
+                elif minutes == 3:
+                    minutes_text = "and three quarters"
+                if hours == 1 and minutes == 0:
+                    text = "{} {}".format(hours, minutes_text)
+                else:
+                    text = "{} {} hours".format(hours, minutes_text)
+        return text 
+    
+    def get_next_charge_window(self, minute_now):
+        # Work out when the next charge or export window is
+        charge_window_n = -1
+        for minute in range(minute_now, self.forecast_minutes + minute_now, PREDICT_STEP):
+            charge_window_n = self.in_charge_window(self.charge_window_best, minute)
+            if charge_window_n >= 0 and self.charge_limit_best[charge_window_n] == 0:
+                charge_window_n = -1
+            if charge_window_n >= 0:
+                break
+        return charge_window_n
+    
+    def get_next_export_window(self, minutes_now):
+        # Work out when the next charge or export window is
+        export_window_n = -1
+        for minute in range(minutes_now, self.forecast_minutes + minutes_now, PREDICT_STEP):
+            export_window_n = self.in_charge_window(self.export_window_best, minute)
+            if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100:
+                export_window_n = -1
+            if export_window_n >= 0:
+                break
+        return export_window_n
+
+    def get_charge_export_text(self, minutes_now, charge_window_n, export_window_n):
+        """
+        Get the charge export text for the given minute
+        """
+        if export_window_n >= 0:
+            text = "force exporting for the next {}".format(self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
+        elif charge_window_n >= 0:
+            text = "charging for the next {}".format(self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
+        else:
+            charge_window_n = self.get_next_charge_window(minutes_now)
+            export_window_n = self.get_next_export_window(minutes_now)
+            next_charge_export = minutes_now + self.forecast_minutes
+            if charge_window_n >= 0:
+                next_charge_export = min(self.charge_window_best[charge_window_n]["start"], next_charge_export)
+            if export_window_n >= 0:
+                next_charge_export = min(self.export_window_best[export_window_n]["start"], next_charge_export)
+            if next_charge_export < minutes_now + self.forecast_minutes:
+                text = "in eco mode for the next {}".format(self.duration_string(next_charge_export - minutes_now))
+            else:
+                text = "in eco mode"
+        return text
+
+    def get_charge_type(self, charge_limit):
+        """
+        Get the charge type for the given charge limit
+        """
+        if charge_limit == self.reserve:
+            return "charge freeze"
+        else:
+            return "charge"
+        
+    def get_export_type(self, export_limit):
+        """
+        Get the export type for the given export limit
+        """
+        if export_limit == 99:
+            "export freeze"
+        else:
+            return "export"
+
+    def short_textual_plan(self, soc_min, soc_min_minute, publish=True):
+        """
+        The short textual plan gives a summary in text format of the current plan
+        """
+
+        sentence = ""
+
+        fixed_export = False
+        if self.rate_export_min == self.rate_export_max:
+            fixed_export = True
+
+        fixed_import = False
+        if self.rate_min == self.rate_max:
+            fixed_import = True
+
+        # Step 1 find out the textual name of all the rates in the next 24 hours and put them into buckets
+        rate_bucket_import = self.rate_text_scan(export=False)
+        rate_bucket_export = self.rate_text_scan(export=True)
+
+        rate_import_str = rate_bucket_import[0]["rate"]
+        rate_import_duration = rate_bucket_import[0]["end"] - rate_bucket_import[0]["start"]
+        rate_export_str = rate_bucket_export[0]["rate"]
+        rate_export_duration = rate_bucket_export[0]["end"] - rate_bucket_export[0]["start"]
+
+        if not fixed_import:
+            sentence = "Current import rates are {} for the next {} ".format(rate_import_str, self.duration_string(rate_import_duration))
+        if not fixed_export:
+            if sentence:
+                sentence += "and "
+            else:
+                sentence = "Current "
+            sentence += "export rates are {} for the next {}".format(rate_export_str, self.duration_string(rate_export_duration))        
+
+        # Step 2 - find the current state of charge
+        soc_percent = calc_percent_limit(self.predict_soc_best.get(0, 0.0), self.soc_max)
+
+        # Find if the battery is charging, discharging or force exporting
+        charge_window_n = self.in_charge_window(self.charge_window_best, self.minutes_now)
+        if charge_window_n >= 0 and self.charge_limit_best[charge_window_n] == 0:
+            charge_window_n = -1
+
+        export_window_n = self.in_charge_window(self.export_window_best, self.minutes_now)
+        if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100:
+            export_window_n = -1
+
+        charge_export_text = self.get_charge_export_text(self.minutes_now, charge_window_n, export_window_n)
+        if sentence:
+            sentence += ", "
+        else:
+            sentence = "Currently "
+        sentence += "the battery is currently at {}% and is {}.".format(soc_percent, charge_export_text)
+
+        soc_min_percent = calc_percent_limit(soc_min, self.soc_max)
+        if soc_min_minute < self.forecast_minutes + self.minutes_now:
+            if soc_min_percent <= self.reserve_percent:
+                if soc_min_minute <= self.minutes_now:
+                    # We know we ran out as it says the percentage above anyhow
+                    pass
+                else:
+                    sentence += " You will run out of battery in {}.".format(self.duration_string(soc_min_minute - self.minutes_now))
+            else:
+                sentence += " You will reach a minimum of {}% battery in {}.".format(soc_min_percent, self.duration_string(soc_min_minute - self.minutes_now))
+
+        charge_window_n_next = self.get_next_charge_window(self.minutes_now)
+        export_window_n_next = self.get_next_export_window(self.minutes_now)
+        if charge_window_n < 0 and charge_window_n_next >= 0:
+            charge_type = self.get_charge_type(self.charge_limit_best[charge_window_n_next])
+            sentence += " Your next {} slot will be in {} where rates will be {}.".format(charge_type, self.duration_string(self.charge_window_best[charge_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.charge_window_best[charge_window_n_next]["start"], export=False))
+        elif charge_window_n < 0:
+            sentence += " No charging is planned."
+
+        if export_window_n < 0 and export_window_n_next >= 0:
+            export_type = self.get_export_type(self.export_limits_best[export_window_n_next])
+            sentence += " Your next {} slot will be in {} where rates will be {}.".format(export_type, self.duration_string(self.export_window_best[export_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.export_window_best[export_window_n_next]["start"], export=True))
+
+
+        if publish:
+            self.log("Publish plan description")
+            self.dashboard_item(self.prefix + ".plan_description", state=sentence, attributes={"friendly_name": "Plan Description", "icon": "mdi:text-account"})
+
+        return sentence
+
+
     def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
         """
         Publish the current plan in HTML format

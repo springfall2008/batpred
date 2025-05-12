@@ -149,7 +149,7 @@ def reset_rates(my_predbat, ir, xr):
         my_predbat.rate_export[minute] = xr
     my_predbat.rate_export_min = xr
     my_predbat.rate_scan(my_predbat.rate_import, print=False)
-    my_predbat.rate_scan(my_predbat.rate_export, print=False)
+    my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
 def reset_rates2(my_predbat, ir, xr):
@@ -163,7 +163,7 @@ def reset_rates2(my_predbat, ir, xr):
             my_predbat.rate_export[minute] = xr * 2
     my_predbat.rate_export_min = xr
     my_predbat.rate_scan(my_predbat.rate_import, print=False)
-    my_predbat.rate_scan(my_predbat.rate_export, print=False)
+    my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
 
 def update_rates_import(my_predbat, charge_window_best):
@@ -2977,9 +2977,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.metric_battery_cycle = 0
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.90
-        # my_predbat.manual_export_times = []
-        # my_predbat.manual_all_times = []
-        # my_predbat.manual_charge_times = []
+        my_predbat.manual_export_times = []
+        my_predbat.manual_all_times = []
+        my_predbat.manual_charge_times = []
+        my_predbat.manual_demand_times = []
         # my_predbat.set_export_low_power = True
         # my_predbat.combine_charge_slots = False
         # my_predbat.charge_limit_best[0] = 0
@@ -5636,6 +5637,9 @@ def run_optimise_levels(
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
+
+    text = my_predbat.short_textual_plan(soc_min, soc_min_minute)
+    print(text)
 
     if len(expect_charge_limit) != len(charge_limit_best):
         print("ERROR: Expected {} charge limits but got {}".format(len(expect_charge_limit), len(charge_limit_best)))
