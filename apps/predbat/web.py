@@ -587,7 +587,8 @@ var options = {
             line = line.strip()
             if line.startswith("- "):
                 line = line[2:]
-            sentence_clean += "<li>{}</li>\n".format(line)
+            if line:
+                sentence_clean += "<li>{}</li>\n".format(line)
         sentence_clean = "<ul>\n" + sentence_clean + "</ul>\n"
         return sentence_clean
 

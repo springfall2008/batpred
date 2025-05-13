@@ -55,10 +55,10 @@ class Plan:
             highest_price_charge_level = price_set[-1]
             lowest_price_export_level = price_set[0]
         else:
-            highest_price_charge_level = -99999
-            lowest_price_export_level = 99999
-        max_charge_rate = -99999
-        min_export_rate = 99999
+            highest_price_charge_level = self.rate_min
+            lowest_price_export_level = self.rate_export_max
+        max_charge_rate = self.rate_min
+        min_export_rate = self.rate_export_max
 
         for price in price_set:
             links = price_links[price]
