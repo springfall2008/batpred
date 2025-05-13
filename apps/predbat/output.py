@@ -613,13 +613,19 @@ class Output:
 
         end_plan = min(self.end_record, self.forecast_minutes) + self.minutes_now
         rate_text = self.get_rate_text(self.minutes_now, export=export)
-        rate_amount = dp1(self.rate_import.get(self.minutes_now, 0))
+        if export:
+            rate_amount = dp1(self.rate_export.get(self.minutes_now, 0))
+        else:
+            rate_amount = dp1(self.rate_import.get(self.minutes_now, 0))
         rate_amount_min = rate_amount
         rate_amount_max = rate_amount
         start_minute = self.minutes_now
 
         for minute in range(self.minutes_now, end_plan):
-            rate_amount = dp1(self.rate_import.get(self.minutes_now, 0))
+            if export:
+                rate_amount = dp1(self.rate_export.get(minute, 0))
+            else:
+                rate_amount = dp1(self.rate_import.get(minute, 0))
             rate_text_new = self.get_rate_text(minute, export=export)
             if rate_text != rate_text_new:
                 rate_array.append({"start": start_minute, "end": minute, "rate": rate_text, "range" : rate_range})
