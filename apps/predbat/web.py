@@ -226,7 +226,6 @@ class WebInterface:
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "</table>\n"
-        text += "<table>\n"
         text += "<h2>Plan textual description</h2>\n"
         text += "<tr><td>{}</td></tr>\n".format(self.base.text_plan)
         text += "<br>\n"
@@ -239,6 +238,7 @@ class WebInterface:
                 app_list.append(app)
 
         # Display per app
+        text += "<table>\n"
         for app in app_list:
             text += "<h2>{} Entities</h2>\n".format(app[0].upper() + app[1:])
             text += "<table>\n"
@@ -576,9 +576,8 @@ var options = {
         Return the Predbat plan as an HTML page
         """
         self.default_page = "./plan"
-        html_plan = self.base.html_plan
         text = self.get_header("Predbat Plan", refresh=60)
-        text += "<body>{}</body></html>\n".format(html_plan)
+        text += "<body><h4>{}<>h4><br>{}</body></html>\n".format(self.base.text_plan, self.base.html_plan)
         return web.Response(content_type="text/html", text=text)
 
     async def html_log(self, request):
