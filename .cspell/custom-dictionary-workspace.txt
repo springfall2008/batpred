@@ -172,6 +172,7 @@ openweathermap
 pdata
 pdetails
 perc
+percnt
 pitem
 pkwh
 postdata
