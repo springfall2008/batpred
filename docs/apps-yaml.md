@@ -987,6 +987,19 @@ Defines how often to run the inverter balancing, 30 seconds is recommended if yo
 There are a number of different configuration items in `apps.yaml` that can be used to tweak the way Predbat operates and workaround
 weirdness you may have from your inverter and battery setup.
 
+### Base load
+
+Sometimes the load predictions can yield near zero data due to inaccuracy of data (e.g. a second PV system not tracked, car data being unrealiable, poor sensors). 
+In order to not get unrealistically low values you can set a base load value (in watts) which Predbat will use as a minimum load for a 30-minute period. 
+
+To set a base load set **base_load** as an integer value in watts.
+
+```
+   base_load: 300
+```
+
+The above example load forecasts will now not fall below 300 watts which would be 0.15 kWh in a 30-minute period.
+
 ### Clock skew
 
 ```yaml
