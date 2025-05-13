@@ -994,7 +994,7 @@ In order to not get unrealistically low values you can set a base load value (in
 
 To set a base load set **base_load** as an integer value in watts.
 
-```
+```yaml
    base_load: 300
 ```
 
