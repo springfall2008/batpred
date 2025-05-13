@@ -597,7 +597,7 @@ class Output:
             rate_import = dp1(self.rate_import.get(minute, 0))
             band = self.band_rate_text(rate_import)
             if with_value:
-                band +=" ({}{})".format(rate_import, self.currency_symbols[1])
+                band += " ({}{})".format(rate_import, self.currency_symbols[1])
         else:
             rate_export = dp1(self.rate_export.get(minute, 0))
             band = self.band_rate_text(rate_export, export=True)
@@ -628,7 +628,7 @@ class Output:
                 rate_amount = dp1(self.rate_import.get(minute, 0))
             rate_text_new = self.get_rate_text(minute, export=export)
             if rate_text != rate_text_new:
-                rate_array.append({"start": start_minute, "end": minute, "rate": rate_text, "range" : rate_range})
+                rate_array.append({"start": start_minute, "end": minute, "rate": rate_text, "range": rate_range})
                 start_minute = minute
                 rate_text = rate_text_new
                 rate_amount_min = rate_amount
