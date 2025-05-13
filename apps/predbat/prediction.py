@@ -942,7 +942,7 @@ class Prediction:
                 discharge_has_run = True
 
             # Record soc min
-            if record and (discharge_has_run or charge_has_run or not charge_window):
+            if record:
                 if soc < soc_min:
                     soc_min_minute = minute_absolute
                 soc_min = min(soc_min, soc)

@@ -43,7 +43,7 @@ class WebInterface:
         results = {}
         last_updated_time = None
         last_day_stamp = None
-        if history:
+        if history and len(history) >= 1:
             history = history[0]
 
         if not history:
@@ -226,7 +226,10 @@ class WebInterface:
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "</table>\n"
-        text += "<br>\n"
+        text += "<h2>Plan textual description</h2>\n"
+        text += "<table>\n"
+        text += "<tr><td>{}</td></tr>\n".format(self.get_text_plan_html())
+        text += "</table>\n"
 
         # Form the app list
         app_list = ["predbat"]
@@ -236,6 +239,7 @@ class WebInterface:
                 app_list.append(app)
 
         # Display per app
+        text += "<table>\n"
         for app in app_list:
             text += "<h2>{} Entities</h2>\n".format(app[0].upper() + app[1:])
             text += "<table>\n"
@@ -568,14 +572,33 @@ var options = {
         else:
             return web.Response(content_type="application/json", text='{"result": "error"}')
 
+    def get_text_plan_html(self):
+        """
+        Return the Predbat plan as an html text string
+        """
+        sentence_clean = self.base.text_plan
+        sentence_clean = sentence_clean.replace("&", "&amp;")
+        sentence_clean = sentence_clean.replace("%", "&percnt;")
+        sentence_clean = sentence_clean.replace("<", "&lt;")
+        sentence_clean = sentence_clean.replace(">", "&gt;")
+        sentence_lines = sentence_clean.split("\n")
+        sentence_clean = ""
+        for line in sentence_lines:
+            line = line.strip()
+            if line.startswith("- "):
+                line = line[2:]
+            if line:
+                sentence_clean += "<li>{}</li>\n".format(line)
+        sentence_clean = "<ul>\n" + sentence_clean + "</ul>\n"
+        return sentence_clean
+
     async def html_plan(self, request):
         """
         Return the Predbat plan as an HTML page
         """
         self.default_page = "./plan"
-        html_plan = self.base.html_plan
         text = self.get_header("Predbat Plan", refresh=60)
-        text += "<body>{}</body></html>\n".format(html_plan)
+        text += "<body>{}</body></html>\n".format(self.base.html_plan)
         return web.Response(content_type="text/html", text=text)
 
     async def html_log(self, request):

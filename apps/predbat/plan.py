@@ -55,10 +55,8 @@ class Plan:
             highest_price_charge_level = price_set[-1]
             lowest_price_export_level = price_set[0]
         else:
-            highest_price_charge_level = -99999
-            lowest_price_export_level = 99999
-        max_charge_rate = -99999
-        min_export_rate = 99999
+            highest_price_charge_level = self.rate_min
+            lowest_price_export_level = self.rate_export_max
 
         for price in price_set:
             links = price_links[price]
@@ -66,7 +64,6 @@ class Plan:
                 window_n = window_index[key]["id"]
                 typ = window_index[key]["type"]
                 if typ == "c":
-                    max_charge_rate = max(max_charge_rate, charge_window[window_n]["average"])
                     if charge_limit[window_n] > 0:
                         if highest_price_charge is None:
                             highest_price_charge = charge_window[window_n]["average"]
@@ -74,7 +71,6 @@ class Plan:
                             highest_price_charge = max(highest_price_charge, charge_window[window_n]["average"])
                         highest_price_charge_level = max(highest_price_charge_level, price)
                 elif typ == "d":
-                    min_export_rate = min(min_export_rate, export_window[window_n]["average"])
                     if export_limits[window_n] < 100.0:
                         if lowest_price_export is None:
                             lowest_price_export = export_window[window_n]["average"]
@@ -83,9 +79,9 @@ class Plan:
                         lowest_price_export_level = min(lowest_price_export_level, price)
 
         if highest_price_charge is None:
-            highest_price_charge = max_charge_rate
+            highest_price_charge = self.rate_min
         if lowest_price_export is None:
-            lowest_price_export = min_export_rate
+            lowest_price_export = self.rate_export_max
 
         return highest_price_charge, lowest_price_export, highest_price_charge_level, lowest_price_export_level
 
@@ -1051,6 +1047,10 @@ class Plan:
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
 
                 # HTML data
+                text = self.short_textual_plan(soc_min, soc_min_minute, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
+                text_lines = text.split("\n")
+                for line in text_lines:
+                    self.log(line)
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
                 # Web history
