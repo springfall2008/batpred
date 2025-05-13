@@ -141,9 +141,6 @@ pred_bat:
   scheduled_charge_enable:
     - switch.givtcp_{geserial}_enable_charge_schedule
   #  - switch.givtcp2_{geserial2}_enable_charge_schedule
-  scheduled_discharge_enable:
-    - switch.givtcp_{geserial}_enable_discharge_schedule
-  #  - switch.givtcp2_{geserial2}_enable_discharge_schedule
   discharge_start_time:
     - select.givtcp_{geserial}_discharge_start_time_slot_1
   #  - select.givtcp2_{geserial2}_discharge_start_time_slot_1
