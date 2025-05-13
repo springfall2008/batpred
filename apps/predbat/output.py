@@ -633,7 +633,6 @@ class Output:
                 rate_text = rate_text_new
                 rate_amount_min = rate_amount
                 rate_amount_max = rate_amount
-            rate_amount = dp1(self.rate_import.get(minute, 0))
             rate_amount_min = min(rate_amount_min, rate_amount)
             rate_amount_max = max(rate_amount_max, rate_amount)
             if rate_amount_min == rate_amount_max:

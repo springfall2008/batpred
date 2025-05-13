@@ -2959,7 +2959,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.set_discharge_during_charge = True
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
-        # my_predbat.metric_min_improvement_export = 0.4
+        my_predbat.metric_min_improvement_export = 0.1
         # my_predbat.metric_min_improvement = 0.0
         # my_predbat.set_reserve_min = 0
 
