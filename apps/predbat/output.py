@@ -636,7 +636,7 @@ class Output:
                 rate_range = "({}{} - {}{})".format(rate_amount_min, self.currency_symbols[1], rate_amount_max, self.currency_symbols[1])
         # Add the last rate band
         if minute > start_minute:
-            rate_array.append({"start": start_minute, "end": end_plan, "rate": rate_text, "range" : rate_range})
+            rate_array.append({"start": start_minute, "end": end_plan, "rate": rate_text, "range": rate_range})
 
         return rate_array
 
