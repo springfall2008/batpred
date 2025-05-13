@@ -227,8 +227,9 @@ class WebInterface:
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "</table>\n"
         text += "<h2>Plan textual description</h2>\n"
-        text += "<tr><td>{}</td></tr>\n".format(self.base.text_plan)
-        text += "<br>\n"
+        text += "<table><tr><td>\n"
+        text += "<tr><td>{}</td></tr>\n".format(self.get_text_plan_html())
+        text += "</td></tr></table>\n"
 
         # Form the app list
         app_list = ["predbat"]
@@ -571,13 +572,24 @@ var options = {
         else:
             return web.Response(content_type="application/json", text='{"result": "error"}')
 
+    def get_text_plan_html(self):
+        """
+        Return the Predbat plan as an html text string
+        """
+        sentence_clean = self.base.text_plan
+        sentence_clean = sentence_clean.replace("&", "&amp;")
+        sentence_clean = sentence_clean.replace("%", "&percnt;")
+        sentence_clean = sentence_clean.replace("<", "&lt;")
+        sentence_clean = sentence_clean.replace(">", "&gt;")
+        return sentence_clean
+
     async def html_plan(self, request):
         """
         Return the Predbat plan as an HTML page
         """
         self.default_page = "./plan"
         text = self.get_header("Predbat Plan", refresh=60)
-        text += "<body><h4>{}<>h4><br>{}</body></html>\n".format(self.base.text_plan, self.base.html_plan)
+        text += "<body>{}</body></html>\n".format(self.base.html_plan)
         return web.Response(content_type="text/html", text=text)
 
     async def html_log(self, request):

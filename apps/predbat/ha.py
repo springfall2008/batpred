@@ -565,4 +565,5 @@ class HAInterface:
         if self.api_errors >= 10:
             self.log("Error: Too many API errors, stopping")
             self.base.fatal_error = True
+
         return data
