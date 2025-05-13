@@ -227,9 +227,9 @@ class WebInterface:
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "</table>\n"
         text += "<h2>Plan textual description</h2>\n"
-        text += "<table><tr><td>\n"
+        text += "<table>\n"
         text += "<tr><td>{}</td></tr>\n".format(self.get_text_plan_html())
-        text += "</td></tr></table>\n"
+        text += "</table>\n"
 
         # Form the app list
         app_list = ["predbat"]
@@ -581,6 +581,14 @@ var options = {
         sentence_clean = sentence_clean.replace("%", "&percnt;")
         sentence_clean = sentence_clean.replace("<", "&lt;")
         sentence_clean = sentence_clean.replace(">", "&gt;")
+        sentence_lines = sentence_clean.split("\n")
+        sentence_clean = ""
+        for line in sentence_lines:
+            line = line.strip()
+            if line:
+                line = line.replace("- ", "")
+                sentence_clean += "<li>{}</li>\n".format(line)
+        sentence_clean = "<ul>\n" + sentence_clean + "</ul>\n"
         return sentence_clean
 
     async def html_plan(self, request):

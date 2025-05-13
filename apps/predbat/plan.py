@@ -1051,8 +1051,10 @@ class Plan:
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
 
                 # HTML data
-                text = self.short_textual_plan(soc_min, soc_min_minute)
-                self.log("Info: " + text)
+                text = self.short_textual_plan(soc_min, soc_min_minute, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
+                text_lines = text.split("\n")
+                for line in text_lines:
+                    self.log(line)
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
                 # Web history

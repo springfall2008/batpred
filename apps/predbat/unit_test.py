@@ -5638,7 +5638,7 @@ def run_optimise_levels(
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
 
-    text = my_predbat.short_textual_plan(soc_min, soc_min_minute)
+    text = my_predbat.short_textual_plan(soc_min, soc_min_minute, pv_step, pv_step, load_step, load_step, end_record)
     print(text)
 
     if len(expect_charge_limit) != len(charge_limit_best):
