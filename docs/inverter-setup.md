@@ -530,7 +530,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 - make sure your charge rate is in W and not in kW. The above integration converts the values to kW by default.
 - Copy the template sigenergy_sigenstor.yaml template over your apps.yaml and edit for your system.
 
-  The following additions are needed to facilitate integration with Predbat and need to put put in Home Assistant configuration.yaml:
+  The following additions are needed to facilitate integration with Predbat and need to put put in Home Assistant `configuration.yaml`:
 
 ```yaml
     input_select:
@@ -650,7 +650,6 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
                   round(0) | int }}
         mode: single
 
-
     input_number:
       charge_rate:
         name: Battery charge rate
@@ -667,6 +666,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
         max: 20000
         step: 1
         mode: box
+```
 
 ## I want to add an unsupported inverter to Predbat
 
