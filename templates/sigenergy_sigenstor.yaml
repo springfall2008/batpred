@@ -35,6 +35,13 @@ pred_bat:
   #
   load_today:
     - sensor.sigen_daily_energy_consumption
+  import_today:
+    - sensor.sigen_daily_import_energy
+  export_today:
+    - sensor.sigen_daily_grid_energy_export
+  pv_today:
+    - sensor.sigen_daily_pv_energy_production
+
   charge_rate:
     - input_number.charge_rate
   discharge_rate:
@@ -47,12 +54,7 @@ pred_bat:
     - sensor.sigen_consumed_power
   soc_percent:
     - sensor.sigen_energy_storage_system_soc
-  import_today:
-    - sensor.sigen_daily_import_energy
-  export_today:
-    - sensor.sigen_daily_grid_energy_export
-  pv_today:
-    - sensor.sigen_daily_pv_energy_production
+
   soc_max:
     - sensor.sigen_rated_battery_capacity
   battery_temperature:
