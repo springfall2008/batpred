@@ -785,7 +785,7 @@ class Output:
                 pv_forecast_slots.append({"start": minute_abs_start, "end": minute_abs_slot_end, "text": text, "pv_forecast": pv_forecast})
         return pv_forecast_slots
 
-    def get_text_plan_html(self, sentence): 
+    def get_text_plan_html(self, sentence):
         """
         Return the Predbat plan as an html text string
         """
