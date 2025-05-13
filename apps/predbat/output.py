@@ -594,15 +594,15 @@ class Output:
         """
 
         if not export:
-            rate_import = dp2(self.rate_import.get(minute, 0))
+            rate_import = dp1(self.rate_import.get(minute, 0))
             band = self.band_rate_text(rate_import)
             if with_value:
-                band +=" ({})".format(band, rate_import)
+                band +=" ({}{})".format(rate_import, self.currency_symbols[1])
         else:
-            rate_export = dp2(self.rate_export.get(minute, 0))
+            rate_export = dp1(self.rate_export.get(minute, 0))
             band = self.band_rate_text(rate_export, export=True)
             if with_value:
-                band += " ({})".format(band, rate_export)
+                band += " ({}{})".format(rate_export, self.currency_symbols[1])
         return band
 
     def rate_text_scan(self, export=False):
@@ -619,7 +619,14 @@ class Output:
         start_minute = self.minutes_now
 
         for minute in range(self.minutes_now, end_plan):
+            rate_amount = dp1(self.rate_import.get(self.minutes_now, 0))
             rate_text_new = self.get_rate_text(minute, export=export)
+            if rate_text != rate_text_new:
+                rate_array.append({"start": start_minute, "end": minute, "rate": rate_text, "range" : rate_range})
+                start_minute = minute
+                rate_text = rate_text_new
+                rate_amount_min = rate_amount
+                rate_amount_max = rate_amount
             rate_amount = dp1(self.rate_import.get(minute, 0))
             rate_amount_min = min(rate_amount_min, rate_amount)
             rate_amount_max = max(rate_amount_max, rate_amount)
@@ -627,10 +634,6 @@ class Output:
                 rate_range = "({}{})".format(rate_amount_min, self.currency_symbols[1])
             else:
                 rate_range = "({}{} - {}{})".format(rate_amount_min, self.currency_symbols[1], rate_amount_max, self.currency_symbols[1])
-            if rate_text != rate_text_new:
-                rate_array.append({"start": start_minute, "end": minute, "rate": rate_text, "range" : rate_range})
-                start_minute = minute
-                rate_text = rate_text_new
         # Add the last rate band
         if minute > start_minute:
             rate_array.append({"start": start_minute, "end": end_plan, "rate": rate_text, "range" : rate_range})
@@ -748,7 +751,7 @@ class Output:
             else:
                 return "export"
 
-    def get_pv_forcecast_slots(self, pv_forecast_minute_step):
+    def get_pv_forecast_slots(self, pv_forecast_minute_step):
         pv_forecast_slots = []
 
         for minute_relative in range(0, self.forecast_minutes, 30):
@@ -783,7 +786,7 @@ class Output:
         """
 
         sentence = ""
-        pv_forecast_slots = self.get_pv_forcecast_slots(pv_forecast_minute_step)
+        pv_forecast_slots = self.get_pv_forecast_slots(pv_forecast_minute_step)
 
         # Step 1 find out the textual name of all the rates in the next 24 hours and put them into buckets
         rate_bucket_import = self.rate_text_scan(export=False)
