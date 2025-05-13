@@ -989,8 +989,8 @@ weirdness you may have from your inverter and battery setup.
 
 ### Base load
 
-Sometimes the load predictions can yield near zero data due to inaccuracy of data (e.g. a second PV system not tracked, car data being unrealiable, poor sensors). 
-In order to not get unrealistically low values you can set a base load value (in watts) which Predbat will use as a minimum load for a 30-minute period. 
+Sometimes the load predictions can yield near zero data due to inaccuracy of data (e.g. a second PV system not tracked, car data being unrealiable, poor sensors).
+In order to not get unrealistically low values you can set a base load value (in watts) which Predbat will use as a minimum load for a 30-minute period.
 
 To set a base load set **base_load** as an integer value in watts.
 
