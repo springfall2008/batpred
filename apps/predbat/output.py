@@ -785,6 +785,26 @@ class Output:
                 pv_forecast_slots.append({"start": minute_abs_start, "end": minute_abs_slot_end, "text": text, "pv_forecast": pv_forecast})
         return pv_forecast_slots
 
+    def get_text_plan_html(self, sentence): 
+        """
+        Return the Predbat plan as an html text string
+        """
+        sentence_clean = sentence
+        sentence_clean = sentence_clean.replace("&", "&amp;")
+        sentence_clean = sentence_clean.replace("%", "&percnt;")
+        sentence_clean = sentence_clean.replace("<", "&lt;")
+        sentence_clean = sentence_clean.replace(">", "&gt;")
+        sentence_lines = sentence_clean.split("\n")
+        sentence_clean = ""
+        for line in sentence_lines:
+            line = line.strip()
+            if line.startswith("- "):
+                line = line[2:]
+            if line:
+                sentence_clean += "<li>{}</li>\n".format(line)
+        sentence_clean = "<ul>\n" + sentence_clean + "</ul>\n"
+        return sentence_clean
+
     def short_textual_plan(self, soc_min, soc_min_minute, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
         """
         The short textual plan gives a summary in text format of the current plan
@@ -883,7 +903,7 @@ class Output:
             )
 
         if publish:
-            self.text_plan = sentence
+            self.text_plan = self.get_text_plan_html(sentence)
 
         return sentence
 
@@ -1412,7 +1432,7 @@ class Output:
         html = html.replace("£", "&#163;")
 
         if publish:
-            self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text:": self.text_plan, "html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+            self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
             self.html_plan = html
 
         return html
