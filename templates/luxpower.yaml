@@ -163,12 +163,20 @@ pred_bat:
   # Predbat can compute this curve automatically if you have enough data, restart the add-on and look in the logfile for the data
   # once set here Predbat will no longer re-compute the curve.
   # Can also be set to 'auto' to just use the calculation curve, not recommended if you are using low power charging mode.
+  #
+  # uncomment the following charge_rate and discharge_rate lines if you want Predbat to create the charge curves for you
+  # charge_rate:
+  #   - number.lux_target_charge_current_w
+  # discharge_rate:
+  #   - number.lux_target_discharge_current_w
+  #
+  # Example curves from Hanchu batteries with Luxpower inverter:
   battery_charge_power_curve:
     97 : 0.5
     98 : 0.2
     99 : 0.1
-  #battery_discharge_power_curve:
-  #  4 : 1.0
+  battery_discharge_power_curve:
+    4 : 1.0
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
