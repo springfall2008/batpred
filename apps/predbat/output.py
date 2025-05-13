@@ -580,9 +580,8 @@ class Output:
                 return "good"
             else:
                 return "very good"
-            
-    def get_rate_text(self, minute, export=False):
 
+    def get_rate_text(self, minute, export=False):
         """
         Get the rate text for the given minute
         """
@@ -595,7 +594,7 @@ class Output:
             rate_export = self.rate_export.get(minute, 0)
             rate_export_str = self.band_rate_text(rate_export, export=True)
             return rate_export_str
-    
+
     def rate_text_scan(self, export=False):
         """
         Create text description for each rate band
@@ -615,9 +614,9 @@ class Output:
         # Add the last rate band
         if minute > start_minute:
             rate_array.append({"start": start_minute, "end": end_plan, "rate": rate_text})
-        
+
         return rate_array
-    
+
     def duration_string(self, minutes):
         """
         Convert a number of minutes into a string
@@ -651,8 +650,8 @@ class Output:
                     text = "{} {}".format(hours, minutes_text)
                 else:
                     text = "{} {} hours".format(hours, minutes_text)
-        return text 
-    
+        return text
+
     def get_next_charge_window(self, minute_now):
         # Work out when the next charge or export window is
         charge_window_n = -1
@@ -663,7 +662,7 @@ class Output:
             if charge_window_n >= 0:
                 break
         return charge_window_n
-    
+
     def get_next_export_window(self, minutes_now):
         # Work out when the next charge or export window is
         export_window_n = -1
@@ -713,7 +712,7 @@ class Output:
                 return "charging"
             else:
                 return "charge"
-        
+
     def get_export_type(self, export_limit, current=False):
         """
         Get the export type for the given export limit
@@ -760,7 +759,7 @@ class Output:
                 sentence += " and "
             else:
                 sentence = "Current "
-            sentence += "export rates are {} for the next {}".format(rate_export_str, self.duration_string(rate_export_duration))        
+            sentence += "export rates are {} for the next {}".format(rate_export_str, self.duration_string(rate_export_duration))
 
         # Step 2 - find the current state of charge
         soc_percent = calc_percent_limit(self.predict_soc_best.get(0, 0.0), self.soc_max)
@@ -805,7 +804,9 @@ class Output:
             charge_type = self.get_charge_type(self.charge_limit_best[charge_window_n_next])
             car_charging_kwh = self.car_charge_slot_kwh(self.charge_window_best[charge_window_n_next]["start"], self.charge_window_best[charge_window_n_next]["end"])
 
-            sentence += " Your next {} slot will be in {} where import rates will be {}".format(charge_type, self.duration_string(self.charge_window_best[charge_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.charge_window_best[charge_window_n_next]["start"], export=False))
+            sentence += " Your next {} slot will be in {} where import rates will be {}".format(
+                charge_type, self.duration_string(self.charge_window_best[charge_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.charge_window_best[charge_window_n_next]["start"], export=False)
+            )
             if car_charging_kwh > 0:
                 sentence += " and your car will be charged with {} kWh.".format(car_charging_kwh)
             else:
@@ -816,13 +817,14 @@ class Output:
 
         if export_window_n < 0 and export_window_n_next >= 0:
             export_type = self.get_export_type(self.export_limits_best[export_window_n_next])
-            sentence += " Your next {} slot will be in {} where export rates will be {}.".format(export_type, self.duration_string(self.export_window_best[export_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.export_window_best[export_window_n_next]["start"], export=True))
+            sentence += " Your next {} slot will be in {} where export rates will be {}.".format(
+                export_type, self.duration_string(self.export_window_best[export_window_n_next]["start"] - self.minutes_now), self.get_rate_text(self.export_window_best[export_window_n_next]["start"], export=True)
+            )
 
         if publish:
             self.text_plan = sentence
 
         return sentence
-
 
     def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
         """
