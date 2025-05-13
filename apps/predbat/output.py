@@ -828,6 +828,7 @@ class Output:
         """
         Publish the current plan in HTML format
         """
+        html = ""
         plan_debug = self.plan_debug
         mode = self.predbat_mode
         if self.set_read_only:
