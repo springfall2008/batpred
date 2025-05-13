@@ -27,7 +27,7 @@ As well as Octopus rate URLs (rates_import_octopus_url/rates_export_octopus_url)
 Octopus integration rates (metric_octopus_import/metric_octopus_export) and Energi Data service rates (metric_energidataservice_import/metric_energidataservice_export).
 
 Each tariff must be given an ID which will be used to create a sensor to track predicted cost over time, the full name is used in the description of that sensor and on
-the web page.
+the web page.  The ID can contain alphanumeric characters or underscores; do not use slashes, commas or other special characters in the ID or predbat will crash when running the compare!
 
 If you do not set an import or export rate for a particular tariff then your existing energy rates will be used.
 
