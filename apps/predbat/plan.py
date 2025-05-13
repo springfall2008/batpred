@@ -57,8 +57,6 @@ class Plan:
         else:
             highest_price_charge_level = self.rate_min
             lowest_price_export_level = self.rate_export_max
-        max_charge_rate = self.rate_min
-        min_export_rate = self.rate_export_max
 
         for price in price_set:
             links = price_links[price]
@@ -66,7 +64,6 @@ class Plan:
                 window_n = window_index[key]["id"]
                 typ = window_index[key]["type"]
                 if typ == "c":
-                    max_charge_rate = max(max_charge_rate, charge_window[window_n]["average"])
                     if charge_limit[window_n] > 0:
                         if highest_price_charge is None:
                             highest_price_charge = charge_window[window_n]["average"]
@@ -74,7 +71,6 @@ class Plan:
                             highest_price_charge = max(highest_price_charge, charge_window[window_n]["average"])
                         highest_price_charge_level = max(highest_price_charge_level, price)
                 elif typ == "d":
-                    min_export_rate = min(min_export_rate, export_window[window_n]["average"])
                     if export_limits[window_n] < 100.0:
                         if lowest_price_export is None:
                             lowest_price_export = export_window[window_n]["average"]
@@ -83,9 +79,9 @@ class Plan:
                         lowest_price_export_level = min(lowest_price_export_level, price)
 
         if highest_price_charge is None:
-            highest_price_charge = max_charge_rate
+            highest_price_charge = self.rate_min
         if lowest_price_export is None:
-            lowest_price_export = min_export_rate
+            lowest_price_export = self.rate_export_max
 
         return highest_price_charge, lowest_price_export, highest_price_charge_level, lowest_price_export_level
 
