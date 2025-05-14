@@ -813,7 +813,7 @@ car_charging_energy can be set to a list of energy sensors, one per line if you 
     - sensor.mixergy_ID_energy
 ```
 
-- **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range of 0.1 to 1.0)
+- **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range of 0 to 1.0)
 to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW).
 
 If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure the following Home Assistant entity:

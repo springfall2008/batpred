@@ -13,10 +13,32 @@ Predbat has a web interface active and can be opened via the Predbat Add-on by c
 
 If you are not using the Predbat Add-on then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or Native on your Linux/MAC).
 
-The Web interface can allow you to view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles. You can change your view using
-the top menu bar.
+The Web interface can allow you to view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles.
+You can change your view using the top menu bar.
 
 ![image](https://github.com/user-attachments/assets/4d7c1129-89bd-4a11-81ba-6bc8dec797cb)
+
+### Dash View
+
+### Charts View
+
+### Config View
+
+### apps.yaml View
+
+Predbat validates your apps.yaml and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
+
+![image](images/apps-yaml-validation-error.png)
+
+Further details of the apps.yaml error can be found in the [Predbat Log](#log-view)
+
+### Log View
+
+### Compare View
+
+### Docs
+
+Provides a quick link to the [Predbat documentation](https://springfall2008.github.io/batpred/).
 
 ## Displaying output data
 
