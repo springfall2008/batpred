@@ -9,6 +9,8 @@ Once you have given Predbat a list of tariffs that you want to compare then it w
 
 If you do decide to switch to Octopus Energy after using this feature please consider using my referral link so we can both save some money: <https://share.octopus.energy/jolly-eel-176>
 
+Its recommended to watch the [YouTube video on Energy tariff comparison](https://youtu.be/qOG7nxHJKaE) as this explains the feature in more detail and what the different columns of the comparison mean.
+
 ## Limitations
 
 Keep in mind this is an approximation of costs for the following 24-hour period and the reality could be different. In particular, car charging costs are unlikely to reflect the true picture as it will only be planned after you plug in.

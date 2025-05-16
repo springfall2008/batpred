@@ -45,6 +45,8 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 - [GivEnergy Inverter Pause, Manual Freeze Charge/Discharge](https://youtu.be/4cJhKmB5vkY)
 - [Optimising for Carbon Footprint](https://youtu.be/uVUnrESRZXs)
 - [Calculating your cost savings](https://youtu.be/NQ9YD9fBLxM)
+- [Comparing Energy Tariffs](https://youtu.be/qOG7nxHJKaE)
+- [Introduction to Predheat](https://youtu.be/_-KIQen67zI)
 
 ## Energy Tariffs
 
