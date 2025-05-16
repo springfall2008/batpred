@@ -170,13 +170,13 @@ Valid values are:
   threads: auto
 ```
 
-## Web interface
+### Web interface
 
-Docker users can change the web port by setting **web_port** to a new port number, the default of 5052 must always be used for the Predbat add-on.
+Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat add-on.
 
 ```yaml
   web_port: 5052
-````
+```
 
 ### notify_devices
 
@@ -757,6 +757,12 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
+
+## Energy Comparison
+
+You can configure in apps.yaml a **compare_list** section to define a list of Energy tariffs for Predbat to compare based on your predicted load and solar generation.
+
+See the [Predbat Compare feature](compare.md) for details of how to define the tariffs to be compared.
 
 ## Car Charging Integration
 

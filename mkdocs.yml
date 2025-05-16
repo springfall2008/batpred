@@ -18,11 +18,11 @@ nav:
     - faq.md
     - devices.md
     - manual-api.md
-    - compare.md
   - 'Viewing Predbat data':
     - output-data.md
     - predbat-plan-card.md
     - creating-charts.md
+    - compare.md
   - 'Predbat development':
     - todo-list.md
     - developing.md

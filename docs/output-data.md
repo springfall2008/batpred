@@ -79,7 +79,25 @@ Further details of the apps.yaml error can be found in the [Predbat Log](#log-vi
 
 ### Log View
 
+Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so the Log view provides an easy way to see and download the Predbat logfile.
+
+![image](images/web-console-log-view.png)
+
+By default the Log view opens in the Warnings tab which shows a filtered list of Warnings and Errors in the Predbat logfile.
+
+The Errors tab shows a filtered list of just logfile Errors, and the All tab shows all entries in the Predbat logfile.
+
+Normal log messages are coloured Green, Warnings are Orange, and Errors in Red.  The Logfile view shows newest entries at the top and auto-refreshes so as Predbat is executing the most recent logs will appear at the top and the log will scroll downwards.
+
+The Download tab provides the option to download the logfile.
+
+Further details about the Predbat logfile and its location is [described below](#predbat-logfile).
+
 ### Compare View
+
+The Compare View provides access to Predbat's [Compare Energy Tariff feature](compare.md) which enables you compare what it would cost you (or you'd gain from export) on different energy tariffs with your predicted load and solar generation.
+
+![image](https://github.com/user-attachments/assets/399866a1-7d86-457d-b525-7c2e1fdf683b)
 
 ### Docs View
 
@@ -665,7 +683,7 @@ or if you want to verify that Predbat is running OK.
 
 There is a lot of output in the logfile, this is normal!
 
-If you are using the Predbat add-on then the logfile can easily be viewed via the 'Log' tab of the [Predbat web console](#web-interface).
+If you are using the Predbat add-on then the logfile can easily be viewed via the 'Log' tab of the [Predbat web console](#log-view).
 
 To directly view the physical logfile, it can be found in one of three different directories in Home Assistant with slightly different filenames depending on how you installed Predbat:
 
