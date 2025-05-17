@@ -692,19 +692,80 @@ var options = {
 
         loglines = logdata.split("\n")
         text = self.get_header("Predbat Log", refresh=10)
-        text += "<body bgcolor=#ffffff>"
+        text += """<body>
+<style>
+.log-menu {
+    background-color: #ffffff;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    margin-bottom: 6px;
+    border-bottom: 1px solid #ddd;
+    padding: 4px 0;
+}
+
+.log-menu a {
+    color: #333;
+    text-align: center;
+    padding: 4px 12px;
+    text-decoration: none;
+    font-size: 14px;
+    border-radius: 4px;
+    margin: 0 2px;
+}
+
+.log-menu a:hover {
+    background-color: #f0f0f0;
+    color: #4CAF50;
+}
+
+.log-menu a.active {
+    background-color: #4CAF50;
+    color: white;
+}
+
+/* Dark mode log menu styles */
+body.dark-mode .log-menu {
+    background-color: #1e1e1e;
+    border-bottom: 1px solid #333;
+}
+
+body.dark-mode .log-menu a {
+    color: white;
+}
+
+body.dark-mode .log-menu a:hover {
+    background-color: #2c652f;
+    color: white;
+}
+
+body.dark-mode .log-menu a.active {
+    background-color: #4CAF50;
+    color: white;
+}
+</style>
+"""
 
         if errors:
-            text += "<h2>Logfile (errors)</h2>\n"
+            active_all = ""
+            active_warnings = ""
+            active_errors = "active"
         elif warnings:
-            text += "<h2>Logfile (Warnings)</h2>\n"
+            active_all = ""
+            active_warnings = "active"
+            active_errors = ""
         else:
-            text += "<h2>Logfile (All)</h2>\n"
+            active_all = "active"
+            active_warnings = ""
+            active_errors = ""
 
-        text += '- <a href="./log">All</a> '
-        text += '<a href="./log?warnings">Warnings</a> '
-        text += '<a href="./log?errors">Errors</a> '
-        text += '<a href="./debug_log">Download</a><br>\n'
+        text += '<div class="log-menu">'
+        text += "<h3>Logfile</h3> "
+        text += f'<a href="./log" class="{active_all}">All</a>'
+        text += f'<a href="./log?warnings" class="{active_warnings}">Warnings</a>'
+        text += f'<a href="./log?errors" class="{active_errors}">Errors</a>'
+        text += '<a href="./debug_log">Download</a>'
+        text += '</div>'
 
         text += "<table width=100%>\n"
 
@@ -1007,15 +1068,94 @@ var options = {
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
         text = self.get_header("Predbat Charts", refresh=60 * 5)
-        text += "<body>\n"
-        text += "<h2>{} Chart</h2>\n".format(chart)
-        text += '- <a href="./charts?chart=Battery">Battery</a> '
-        text += '<a href="./charts?chart=Power">Power</a> '
-        text += '<a href="./charts?chart=Cost">Cost</a> '
-        text += '<a href="./charts?chart=Rates">Rates</a> '
-        text += '<a href="./charts?chart=InDay">InDay</a> '
-        text += '<a href="./charts?chart=PV">PV</a> '
-        text += '<a href="./charts?chart=PV7">PV7</a> '
+        text += """<body>
+<style>
+.charts-menu {
+    background-color: #ffffff;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    margin-bottom: 6px;
+    border-bottom: 1px solid #ddd;
+    padding: 4px 0;
+}
+
+.charts-menu a {
+    color: #333;
+    text-align: center;
+    padding: 4px 12px;
+    text-decoration: none;
+    font-size: 14px;
+    border-radius: 4px;
+    margin: 0 2px;
+}
+
+.charts-menu a:hover {
+    background-color: #f0f0f0;
+    color: #4CAF50;
+}
+
+.charts-menu a.active {
+    background-color: #4CAF50;
+    color: white;
+}
+
+/* Dark mode charts menu styles */
+body.dark-mode .charts-menu {
+    background-color: #1e1e1e;
+    border-bottom: 1px solid #333;
+}
+
+body.dark-mode .charts-menu a {
+    color: white;
+}
+
+body.dark-mode .charts-menu a:hover {
+    background-color: #2c652f;
+    color: white;
+}
+
+body.dark-mode .charts-menu a.active {
+    background-color: #4CAF50;
+    color: white;
+}
+</style>
+"""
+        
+        # Define which chart is active
+        active_battery = ""
+        active_power = ""
+        active_cost = ""
+        active_rates = ""
+        active_inday = ""
+        active_pv = ""
+        active_pv7 = ""
+        
+        if chart == "Battery":
+            active_battery = "active"
+        elif chart == "Power":
+            active_power = "active"
+        elif chart == "Cost":
+            active_cost = "active"
+        elif chart == "Rates":
+            active_rates = "active"
+        elif chart == "InDay":
+            active_inday = "active"
+        elif chart == "PV":
+            active_pv = "active"
+        elif chart == "PV7":
+            active_pv7 = "active"
+            
+        text += '<div class="charts-menu">'
+        text += "<h3>Charts</h3> "
+        text += f'<a href="./charts?chart=Battery" class="{active_battery}">Battery</a>'
+        text += f'<a href="./charts?chart=Power" class="{active_power}">Power</a>'
+        text += f'<a href="./charts?chart=Cost" class="{active_cost}">Cost</a>'
+        text += f'<a href="./charts?chart=Rates" class="{active_rates}">Rates</a>'
+        text += f'<a href="./charts?chart=InDay" class="{active_inday}">InDay</a>'
+        text += f'<a href="./charts?chart=PV" class="{active_pv}">PV</a>'
+        text += f'<a href="./charts?chart=PV7" class="{active_pv7}">PV7</a>'
+        text += '</div>'
 
         text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
