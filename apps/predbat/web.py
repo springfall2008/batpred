@@ -1820,12 +1820,12 @@ window.addEventListener('resize', function() {
         percent_rounded_to_nearest_10 = round(float(percent) / 10) * 10
         if self.base.isCharging:
             if percent_rounded_to_nearest_10 == 0:
-                icon_text = "battery-outline"
+                icon_text = "battery-charging-outline"
             else:
                 icon_text = "battery-charging-{}".format(percent_rounded_to_nearest_10)
         else:
             if percent_rounded_to_nearest_10 == 0:
-                icon_text = "battery-charging-outline"
+                icon_text = "battery-outline"
             elif percent_rounded_to_nearest_10 == 100:
                 icon_text = "battery"
             else:
