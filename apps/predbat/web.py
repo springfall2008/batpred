@@ -81,6 +81,11 @@ class WebInterface:
                 last_updated_time = item[last_updated_key]
                 last_updated_stamp = str2time(last_updated_time)
             except (ValueError, TypeError):
+                if isinstance(state, str):
+                    if state.lower() in ["on", "true", "yes"]:
+                        state = 1
+                    elif state.lower() in ["off", "false", "no"]:
+                        state = 0
                 continue
 
             day_stamp = last_updated_stamp.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -148,6 +153,7 @@ class WebInterface:
         app.router.add_get("/apps", self.html_apps)
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
+        app.router.add_get("/entity", self.html_entity)
         app.router.add_post("/config", self.html_config_post)
         app.router.add_get("/dash", self.html_dash)
         app.router.add_get("/debug_yaml", self.html_debug_yaml)
@@ -196,7 +202,7 @@ class WebInterface:
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
-    def get_status_html(self, level, status, debug_enable, read_only, mode, version):
+    def get_status_html(self, status, debug_enable, read_only, mode, version):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -210,7 +216,7 @@ class WebInterface:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
         text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
-        text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
+        text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
         text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
         if self.base.arg_errors:
@@ -239,7 +245,6 @@ class WebInterface:
                 app_list.append(app)
 
         # Display per app
-        text += "<table>\n"
         for app in app_list:
             text += "<h2>{} Entities</h2>\n".format(app[0].upper() + app[1:])
             text += "<table>\n"
@@ -253,19 +258,92 @@ class WebInterface:
                         entity_list.append(entity_id)
 
             for entity in entity_list:
-                state = self.base.dashboard_values.get(entity, {}).get("state", None)
-                attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
-                unit_of_measurement = attributes.get("unit_of_measurement", "")
-                icon = self.icon2html(attributes.get("icon", ""))
-                if unit_of_measurement is None:
-                    unit_of_measurement = ""
-                friendly_name = attributes.get("friendly_name", "")
-                if state is None:
-                    state = "None"
-                text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
+                text += self.html_get_entity_text(entity)
             text += "</table>\n"
 
         return text
+
+    def html_get_entity_text(self, entity):
+        text = ""
+        state = self.base.dashboard_values.get(entity, {}).get("state", None)
+        attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
+        unit_of_measurement = attributes.get("unit_of_measurement", "")
+        icon = self.icon2html(attributes.get("icon", ""))
+        if unit_of_measurement is None:
+            unit_of_measurement = ""
+        friendly_name = attributes.get("friendly_name", "")
+        if state is None:
+            state = "None"
+        text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format(icon, entity, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
+        return text
+
+    async def html_entity(self, request):
+        """
+        Return the Predbat entity as an HTML page
+        """
+        entity = request.query.get("entity_id", None)
+        if not entity:
+            return web.Response(content_type="text/html", text="Entity not found", status=404)
+
+        text = self.get_header("Predbat Entity", refresh=60)
+
+        # Include a back button to return the previous page
+        text += """<div style="margin-bottom: 15px;">
+            <a href="{}" class="button" style="display: inline-block; padding: 8px 15px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
+                <span class="mdi mdi-arrow-left" style="margin-right: 5px;"></span>Back
+            </a>
+        </div>""".format(
+            self.default_page
+        )
+
+        attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
+        unit_of_measurement = attributes.get("unit_of_measurement", "")
+        friendly_name = attributes.get("friendly_name", "")
+
+        text += "<table>\n"
+        text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
+        text += self.html_get_entity_text(entity)
+        text += "</table>\n"
+
+        text += "<h2>History Chart</h2>\n"
+        text += '<div id="chart"></div>'
+        now_str = self.base.now_utc.strftime(TIME_FORMAT)
+        history = self.base.get_history_wrapper(entity, 7, required=False)
+        history_chart = self.history_attribute(history)
+        series_data = []
+        series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "2"})
+        text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)
+
+        # History table
+        text += "<h2>History</h2>\n"
+        text += "<table>\n"
+        text += "<tr><th>Time</th><th>State</th></tr>\n"
+
+        prev_stamp = None
+        if history and len(history) >= 1:
+            history = history[0]
+            if history:
+                count = 0
+                history.reverse()
+                for item in history:
+                    if "last_updated" not in item:
+                        continue
+                    last_updated_time = item["last_updated"]
+                    last_updated_stamp = str2time(last_updated_time)
+                    state = item.get("state", None)
+                    if state is None:
+                        state = "None"
+                    # Only show in 30 minute intervals
+                    if prev_stamp and ((prev_stamp - last_updated_stamp) < timedelta(minutes=30)):
+                        continue
+                    text += "<tr><td>{}</td><td>{}</td></tr>\n".format(last_updated_stamp.strftime(TIME_FORMAT), state)
+                    prev_stamp = last_updated_stamp
+                    count += 1
+        text += "</table>\n"
+
+        # Return web response
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
 
     def get_header(self, title, refresh=0):
         """
@@ -316,10 +394,10 @@ class WebInterface:
             background-color: #4CAF50;
             color: white;
         }
-        .default {
+        .default, .cfg_default {
             background-color: #ffffff;
         }
-        .modified {
+        .modified, .cfg_modified {
             background-color: #ffcccc;
         }
 
@@ -330,14 +408,19 @@ class WebInterface:
             color: #e0e0e0;
             border: 2px solid #121212;
         }
-        table.dark-mode {
+        body.dark-mode table {
             border-color: #333;
         }
-        th.dark-mode {
+        body.dark-mode th {
             background-color: #333;
             color: #e0e0e0;
         }
-        .modified.dark-mode {
+        body.dark-mode .default,
+        body.dark-mode .cfg_default {
+            background-color: #121212;
+        }
+        body.dark-mode .modified,
+        body.dark-mode .cfg_modified {
             background-color: #662222;
         }
         /* Dark mode link styles */
@@ -385,6 +468,13 @@ class WebInterface:
         body {
             padding-top: 65px; /* Increased padding to account for the fixed menu height */
         }
+
+        .battery-wrapper {
+            display: flex;
+            align-items: center;
+            margin-left: 10px;
+        }
+
     </style>
     <script>
     // Check and apply the saved dark mode preference on page load
@@ -400,6 +490,16 @@ class WebInterface:
         else {
             document.body.classList.remove('dark-mode');
             document.documentElement.classList.remove('dark-mode');
+        }
+
+        // Update logo image source based on dark mode
+        const logoImage = document.getElementById('logo-image');
+        if (logoImage) {
+            if (darkModeEnabled) {
+                logoImage.src = logoImage.getAttribute('data-dark-src');
+            } else {
+                logoImage.src = logoImage.getAttribute('data-light-src');
+            }
         }
     };
 
@@ -893,8 +993,7 @@ body.dark-mode .log-menu a.active {
         self.default_page = "./dash"
         text = self.get_header("Predbat Dashboard", refresh=60)
         text += "<body>\n"
-        soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-        text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode, THIS_VERSION)
+        text += self.get_status_html(self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode, THIS_VERSION)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -1221,9 +1320,9 @@ body.dark-mode .charts-menu a.active {
 
                 text += "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(icon, friendly, entity, itemtype)
                 if value == default:
-                    text += '<td class="default">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
+                    text += '<td class="cfg_default">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
                 else:
-                    text += '<td class="modified">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
+                    text += '<td class="cfg_modified">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
 
                 if itemtype == "switch":
                     text += '<td><select name="{}" id="{}" onchange="javascript: this.form.submit();">'.format(useid, useid)
@@ -1576,7 +1675,9 @@ function setActiveMenuItem() {
     }
 
     // Default page from server if nothing else matches
-    const defaultPage = '{}';
+    const defaultPage = '"""
+            + self.default_page
+            + """';
 
     // First try to get the active page from session storage (in case of resize or direct navigation)
     const storedActivePage = localStorage.getItem('activeMenuItem');
@@ -1688,8 +1789,17 @@ window.addEventListener('resize', function() {
 
 <div class="menu-bar">
     <div class="logo">
-        <img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" alt="Predbat Logo">
-        <span class="logo-text">Predbat</span>
+        <img id="logo-image"
+             src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
+             data-light-src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
+             data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
+             alt="Predbat Logo"
+        >
+        <div class="battery-wrapper">
+            """
+            + self.get_battery_status_icon()
+            + """
+        </div>
     </div>
     <a href='./dash'>Dash</a>
     <a href='./plan'>Plan</a>
@@ -1705,8 +1815,35 @@ window.addEventListener('resize', function() {
         <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
     </div>
 </div>
-""".format(
-                self.default_page
-            )
+"""
         )
+        return text
+
+    def get_battery_status_icon(self):
+        """
+        Returns a visual indicator showing if the battery is charging or exporting
+        """
+        if not self.base.dashboard_index:
+            return '<span class="mdi mdi-battery-sync"></span>'
+
+        percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
+        percent_rounded_to_nearest_10 = round(float(percent) / 10) * 10
+        if self.base.isCharging:
+            if percent_rounded_to_nearest_10 == 0:
+                icon_text = "battery-charging-outline"
+            else:
+                icon_text = "battery-charging-{}".format(percent_rounded_to_nearest_10)
+        else:
+            if percent_rounded_to_nearest_10 == 0:
+                icon_text = "battery-outline"
+            elif percent_rounded_to_nearest_10 == 100:
+                icon_text = "battery"
+            else:
+                icon_text = "battery-{}".format(percent_rounded_to_nearest_10)
+
+        text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
+        text += str(dp2(percent)) + "%"
+
+        if self.base.isExporting:
+            text += '<span class="mdi mdi-transmission-tower-export"></span>'
         return text
