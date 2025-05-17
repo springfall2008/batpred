@@ -401,6 +401,16 @@ class WebInterface:
             document.body.classList.remove('dark-mode');
             document.documentElement.classList.remove('dark-mode');
         }
+
+        // Update logo image source based on dark mode
+        const logoImage = document.getElementById('logo-image');
+        if (logoImage) {
+            if (darkModeEnabled) {
+                logoImage.src = logoImage.getAttribute('data-dark-src');
+            } else {
+                logoImage.src = logoImage.getAttribute('data-light-src');
+            }
+        }
     };
 
     function toggleDarkMode() {
@@ -1688,7 +1698,12 @@ window.addEventListener('resize', function() {
 
 <div class="menu-bar">
     <div class="logo">
-        <img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" alt="Predbat Logo">
+        <img id="logo-image" 
+             src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" 
+             data-light-src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
+             data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
+             alt="Predbat Logo"
+        >
         <span class="logo-text">Predbat</span>
     </div>
     <a href='./dash'>Dash</a>
@@ -1707,6 +1722,5 @@ window.addEventListener('resize', function() {
 </div>
 """.format(
                 self.default_page
-            )
-        )
+            ))
         return text
