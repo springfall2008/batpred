@@ -385,6 +385,13 @@ class WebInterface:
         body {
             padding-top: 65px; /* Increased padding to account for the fixed menu height */
         }
+
+        .battery-wrapper {
+            display: flex;
+            align-items: center;
+            margin-left: 10px;
+        }
+
     </style>
     <script>
     // Check and apply the saved dark mode preference on page load
@@ -1430,8 +1437,7 @@ body.dark-mode .charts-menu a.active {
         if self.base.arg_errors:
             config_warning = '<span style="color: #ffcc00; margin-left: 5px;">&#9888;</span>'
 
-        text += (
-            """
+        text += """
 <style>
 .menu-bar {
     background-color: #ffffff;
@@ -1586,7 +1592,7 @@ function setActiveMenuItem() {
     }
 
     // Default page from server if nothing else matches
-    const defaultPage = '{}';
+    const defaultPage = '""" + self.default_page + """';
 
     // First try to get the active page from session storage (in case of resize or direct navigation)
     const storedActivePage = localStorage.getItem('activeMenuItem');
@@ -1704,14 +1710,14 @@ window.addEventListener('resize', function() {
              data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
              alt="Predbat Logo"
         >
-        <span class="logo-text">Predbat</span>
+        <div class="battery-wrapper">
+            """ + self.get_battery_status_icon() + """
+        </div>
     </div>
     <a href='./dash'>Dash</a>
     <a href='./plan'>Plan</a>
     <a href='./charts'>Charts</a>
-    <a href='./config'>Config"""
-            + config_warning
-            + """</a>
+    <a href='./config'>Config""" + config_warning + """</a>
     <a href='./apps'>Apps</a>
     <a href='./log'>Log</a>
     <a href='./compare'>Compare</a>
@@ -1720,7 +1726,34 @@ window.addEventListener('resize', function() {
         <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
     </div>
 </div>
-""".format(
-                self.default_page
-            ))
+"""
+        return text
+
+    def get_battery_status_icon(self):
+        """
+        Returns a visual indicator showing if the battery is charging or exporting
+        """
+        if not self.base.dashboard_index:
+            return '<span class="mdi mdi-battery-sync"></span>'
+        
+        percent = self.base.soc_percent
+        percent_rounded_to_nearest_10 = round(float(percent) / 10) * 10
+        if self.base.isCharging:
+            if percent_rounded_to_nearest_10 == 0:
+                icon_text = "battery-outline"
+            else:
+                icon_text = "battery-charging-{}".format(percent_rounded_to_nearest_10)
+        else:
+            if percent_rounded_to_nearest_10 == 0:
+                icon_text = "battery-charging-outline"
+            elif percent_rounded_to_nearest_10 == 100:
+                icon_text = "battery"
+            else:
+                icon_text = "battery-{}".format(percent_rounded_to_nearest_10)
+            
+        text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
+        text += str(self.base.soc_percent) + "%"
+
+        if self.base.isExporting:
+            text += '<span class="mdi mdi-transmission-tower-export"></span>'
         return text
