@@ -196,7 +196,7 @@ class WebInterface:
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
-    def get_status_html(self, level, status, debug_enable, read_only, mode, version):
+    def get_status_html(self, status, debug_enable, read_only, mode, version):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -210,7 +210,7 @@ class WebInterface:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
         text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
-        text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
+        text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
         text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
         if self.base.arg_errors:
@@ -385,6 +385,13 @@ class WebInterface:
         body {
             padding-top: 65px; /* Increased padding to account for the fixed menu height */
         }
+
+        .battery-wrapper {
+            display: flex;
+            align-items: center;
+            margin-left: 10px;
+        }
+
     </style>
     <script>
     // Check and apply the saved dark mode preference on page load
@@ -400,6 +407,16 @@ class WebInterface:
         else {
             document.body.classList.remove('dark-mode');
             document.documentElement.classList.remove('dark-mode');
+        }
+
+        // Update logo image source based on dark mode
+        const logoImage = document.getElementById('logo-image');
+        if (logoImage) {
+            if (darkModeEnabled) {
+                logoImage.src = logoImage.getAttribute('data-dark-src');
+            } else {
+                logoImage.src = logoImage.getAttribute('data-light-src');
+            }
         }
     };
 
@@ -893,8 +910,7 @@ body.dark-mode .log-menu a.active {
         self.default_page = "./dash"
         text = self.get_header("Predbat Dashboard", refresh=60)
         text += "<body>\n"
-        soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-        text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode, THIS_VERSION)
+        text += self.get_status_html(self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode, THIS_VERSION)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -1576,7 +1592,9 @@ function setActiveMenuItem() {
     }
 
     // Default page from server if nothing else matches
-    const defaultPage = '{}';
+    const defaultPage = '"""
+            + self.default_page
+            + """';
 
     // First try to get the active page from session storage (in case of resize or direct navigation)
     const storedActivePage = localStorage.getItem('activeMenuItem');
@@ -1688,8 +1706,17 @@ window.addEventListener('resize', function() {
 
 <div class="menu-bar">
     <div class="logo">
-        <img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" alt="Predbat Logo">
-        <span class="logo-text">Predbat</span>
+        <img id="logo-image"
+             src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
+             data-light-src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
+             data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
+             alt="Predbat Logo"
+        >
+        <div class="battery-wrapper">
+            """
+            + self.get_battery_status_icon()
+            + """
+        </div>
     </div>
     <a href='./dash'>Dash</a>
     <a href='./plan'>Plan</a>
@@ -1705,8 +1732,35 @@ window.addEventListener('resize', function() {
         <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
     </div>
 </div>
-""".format(
-                self.default_page
-            )
+"""
         )
+        return text
+
+    def get_battery_status_icon(self):
+        """
+        Returns a visual indicator showing if the battery is charging or exporting
+        """
+        if not self.base.dashboard_index:
+            return '<span class="mdi mdi-battery-sync"></span>'
+
+        percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
+        percent_rounded_to_nearest_10 = round(float(percent) / 10) * 10
+        if self.base.isCharging:
+            if percent_rounded_to_nearest_10 == 0:
+                icon_text = "battery-outline"
+            else:
+                icon_text = "battery-charging-{}".format(percent_rounded_to_nearest_10)
+        else:
+            if percent_rounded_to_nearest_10 == 0:
+                icon_text = "battery-charging-outline"
+            elif percent_rounded_to_nearest_10 == 100:
+                icon_text = "battery"
+            else:
+                icon_text = "battery-{}".format(percent_rounded_to_nearest_10)
+
+        text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
+        text += str(self.base.soc_percent) + "%"
+
+        if self.base.isExporting:
+            text += '<span class="mdi mdi-transmission-tower-export"></span>'
         return text
