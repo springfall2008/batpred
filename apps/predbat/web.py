@@ -1436,7 +1436,8 @@ body.dark-mode .charts-menu a.active {
         if self.base.arg_errors:
             config_warning = '<span style="color: #ffcc00; margin-left: 5px;">&#9888;</span>'
 
-        text += """
+        text += (
+            """
 <style>
 .menu-bar {
     background-color: #ffffff;
@@ -1591,7 +1592,9 @@ function setActiveMenuItem() {
     }
 
     // Default page from server if nothing else matches
-    const defaultPage = '""" + self.default_page + """';
+    const defaultPage = '"""
+            + self.default_page
+            + """';
 
     // First try to get the active page from session storage (in case of resize or direct navigation)
     const storedActivePage = localStorage.getItem('activeMenuItem');
@@ -1703,20 +1706,24 @@ window.addEventListener('resize', function() {
 
 <div class="menu-bar">
     <div class="logo">
-        <img id="logo-image" 
-             src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" 
+        <img id="logo-image"
+             src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
              data-light-src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
              data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
              alt="Predbat Logo"
         >
         <div class="battery-wrapper">
-            """ + self.get_battery_status_icon() + """
+            """
+            + self.get_battery_status_icon()
+            + """
         </div>
     </div>
     <a href='./dash'>Dash</a>
     <a href='./plan'>Plan</a>
     <a href='./charts'>Charts</a>
-    <a href='./config'>Config""" + config_warning + """</a>
+    <a href='./config'>Config"""
+            + config_warning
+            + """</a>
     <a href='./apps'>Apps</a>
     <a href='./log'>Log</a>
     <a href='./compare'>Compare</a>
@@ -1726,6 +1733,7 @@ window.addEventListener('resize', function() {
     </div>
 </div>
 """
+        )
         return text
 
     def get_battery_status_icon(self):
@@ -1734,7 +1742,7 @@ window.addEventListener('resize', function() {
         """
         if not self.base.dashboard_index:
             return '<span class="mdi mdi-battery-sync"></span>'
-        
+
         percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
         percent_rounded_to_nearest_10 = round(float(percent) / 10) * 10
         if self.base.isCharging:
@@ -1749,7 +1757,7 @@ window.addEventListener('resize', function() {
                 icon_text = "battery"
             else:
                 icon_text = "battery-{}".format(percent_rounded_to_nearest_10)
-            
+
         text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
         text += str(self.base.soc_percent) + "%"
 
