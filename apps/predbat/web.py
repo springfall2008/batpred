@@ -339,12 +339,79 @@ class WebInterface:
         .modified {
             background-color: #ffcccc;
         }
-        """
-        text += "</style>"
+
+        /* Dark mode styles */
+        body.dark-mode {
+            background-color: #121212;
+            color: #e0e0e0;
+        }
+        table.dark-mode {
+            border-color: #333;
+        }
+        th.dark-mode {
+            background-color: #333;
+            color: #e0e0e0;
+        }
+        .modified.dark-mode {
+            background-color: #662222;
+        }
+        /* Dark mode link styles */
+        body.dark-mode a {
+            color: #8cb4ff;
+        }
+        body.dark-mode a:visited {
+            color: #c58cff;
+        }
+        body.dark-mode a:hover {
+            color: #afd2ff;
+        }
+        /* Dark mode chart styles */
+        body.dark-mode .apexcharts-legend-text {
+            color: #ffffff !important;
+        }
+        body.dark-mode .apexcharts-title-text {
+            fill: #ffffff !important;
+        }
+        body.dark-mode .apexcharts-xaxis-label,
+        body.dark-mode .apexcharts-yaxis-label {
+            fill: #e0e0e0 !important;
+        }
+</style>
+<script>
+// Check and apply the saved dark mode preference on page load
+window.onload = function() {
+    const darkModeEnabled = localStorage.getItem('darkMode') === 'true';
+    if (darkModeEnabled) {
+        applyDarkModeToAllFrames(true);
+    }
+};
+
+function toggleDarkMode() {
+    const isDarkMode = document.body.classList.toggle('dark-mode');
+    localStorage.setItem('darkMode', isDarkMode);
+    applyDarkModeToAllFrames(isDarkMode);
+}
+
+function applyDarkModeToAllFrames(enable) {
+    const frames = [window, ...Array.from(window.parent.frames)];
+    frames.forEach(frame => {
+        try {
+            if (enable) {
+                frame.document.body.classList.add('dark-mode');
+            } else {
+                frame.document.body.classList.remove('dark-mode');
+            }
+        } catch (e) {
+            console.error('Error applying dark mode to frame:', e);
+        }
+    });
+}
+</script>
+"""
 
         if refresh:
             text += '<meta http-equiv="refresh" content="{}" >'.format(refresh)
-        text += "</head>\n"
+        text += "</head><body>"
         return text
 
     def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
@@ -1212,21 +1279,122 @@ var options = {
         Return the Predbat Menu page as an HTML page
         """
         text = self.get_header("Predbat Menu")
-        text += "<body>\n"
-        text += "<table><tr>\n"
-        text += '<td><h2>Predbat</h2></td><td><img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" width="50" height="50"></td>\n'
-        text += '<td><a href="./dash" target="main_frame">Dash</a></td>\n'
-        text += '<td><a href="./plan" target="main_frame">Plan</a></td>\n'
-        text += '<td><a href="./charts" target="main_frame">Charts</a></td>\n'
-        text += '<td><a href="./config" target="main_frame">Config</a></td>\n'
-        warning = ""
+        
+        # Check if there are configuration errors
+        config_warning = ""
         if self.base.arg_errors:
-            warning = "&#9888;&nbsp;"
-        text += '<td>{}<a href="./apps" target="main_frame">apps.yaml</a></td>\n'.format(warning)
-        text += '<td><a href="./log?warnings" target="main_frame">Log</a></td>\n'
-        text += '<td><a href="./compare" target="main_frame">Compare</a></td>\n'
-        text += '<td><a href="https://springfall2008.github.io/batpred/" target="main_frame">Docs</a></td>\n'
-        text += "</table></body></html>\n"
+            config_warning = '<span style="color: #ffcc00; margin-left: 5px;">&#9888;</span>'
+            
+        text += """<body>
+<style>
+.menu-bar {
+    background-color: #ffffff;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #ddd;
+}
+
+.menu-bar .logo {
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+}
+
+.menu-bar .logo img {
+    height: 40px;
+    margin-right: 10px;
+}
+
+.menu-bar .logo-text {
+    font-size: 24px;
+    font-weight: bold;
+    color: #333;
+}
+
+.menu-bar a {
+    float: left;
+    color: #333;
+    text-align: center;
+    padding: 14px 16px;
+    text-decoration: none;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+}
+
+.menu-bar a:hover {
+    background-color: #f0f0f0;
+    color: #4CAF50;
+}
+
+.dark-mode-toggle {
+    margin-left: auto;
+    padding: 14px 16px;
+}
+
+.dark-mode-toggle button {
+    background-color: #f0f0f0;
+    color: #333;
+    border: 1px solid #ddd;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.dark-mode-toggle button:hover {
+    background-color: #e0e0e0;
+}
+
+/* Dark mode menu styles */
+body.dark-mode .menu-bar {
+    background-color: #1e1e1e;
+    border-bottom: 1px solid #333;
+}
+
+body.dark-mode .menu-bar .logo-text {
+    color: white;
+}
+
+body.dark-mode .menu-bar a {
+    color: white;
+}
+
+body.dark-mode .menu-bar a:hover {
+    background-color: #2c652f;
+    color: white;
+}
+
+body.dark-mode .dark-mode-toggle button {
+    background-color: #444;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .dark-mode-toggle button:hover {
+    background-color: #666;
+}
+</style>
+
+<div class="menu-bar">
+    <div class="logo">
+        <img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" alt="Predbat Logo">
+        <span class="logo-text">Predbat</span>
+    </div>
+    <a href='./dash' target='main_frame'>Dash</a>
+    <a href='./plan' target='main_frame'>Plan</a>
+    <a href='./charts' target='main_frame'>Charts</a>
+    <a href='./config' target='main_frame'>Config""" + config_warning + """</a>
+    <a href='./apps' target='main_frame'>Apps</a>
+    <a href='./log?warnings' target='main_frame'>Log</a>
+    <a href='./compare' target='main_frame'>Compare</a>
+    <a href='https://springfall2008.github.io/batpred/' target='main_frame'>Docs</a>
+    <div class="dark-mode-toggle">
+        <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
+    </div>
+</div>
+</body></html>
+"""
         return web.Response(content_type="text/html", text=text)
 
     async def html_index(self, request):
