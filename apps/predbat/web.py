@@ -669,7 +669,7 @@ var options = {
         warnings = False
 
         if "errors" in args or (not args and self.default_log == "errors"):
-            errors = True            
+            errors = True
             self.default_log = "errors"
         elif "warnings" in args or (not args and self.default_log == "warnings"):
             warnings = True
@@ -755,7 +755,7 @@ body.dark-mode .log-menu a.active {
         text += f'<a href="./log?warnings" class="{active_warnings}">Warnings</a>'
         text += f'<a href="./log?errors" class="{active_errors}">Errors</a>'
         text += '<a href="./debug_log">Download</a>'
-        text += '</div>'
+        text += "</div>"
 
         text += "<table width=100%>\n"
 
@@ -1111,7 +1111,7 @@ body.dark-mode .charts-menu a.active {
 }
 </style>
 """
-        
+
         # Define which chart is active
         active_battery = ""
         active_power = ""
@@ -1120,7 +1120,7 @@ body.dark-mode .charts-menu a.active {
         active_inday = ""
         active_pv = ""
         active_pv7 = ""
-        
+
         if chart == "Battery":
             active_battery = "active"
         elif chart == "Power":
@@ -1135,7 +1135,7 @@ body.dark-mode .charts-menu a.active {
             active_pv = "active"
         elif chart == "PV7":
             active_pv7 = "active"
-            
+
         text += '<div class="charts-menu">'
         text += "<h3>Charts</h3> "
         text += f'<a href="./charts?chart=Battery" class="{active_battery}">Battery</a>'
@@ -1145,7 +1145,7 @@ body.dark-mode .charts-menu a.active {
         text += f'<a href="./charts?chart=InDay" class="{active_inday}">InDay</a>'
         text += f'<a href="./charts?chart=PV" class="{active_pv}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{active_pv7}">PV7</a>'
-        text += '</div>'
+        text += "</div>"
 
         text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
@@ -1413,8 +1413,9 @@ body.dark-mode .charts-menu a.active {
         config_warning = ""
         if self.base.arg_errors:
             config_warning = '<span style="color: #ffcc00; margin-left: 5px;">&#9888;</span>'
-            
-        text += """
+
+        text += (
+            """
 <style>
 .menu-bar {
     background-color: #ffffff;
@@ -1559,23 +1560,23 @@ function storeActiveMenuItem(path) {
 function setActiveMenuItem() {
     // Get all menu links
     const menuLinks = document.querySelectorAll('.menu-bar a');
-    
+
     // Get current page path from window location
     let currentPath = window.location.pathname;
-    
+
     // Handle paths with trailing slash
     if (currentPath.endsWith('/')) {
         currentPath = currentPath.slice(0, -1);
     }
-    
+
     // Default page from server if nothing else matches
     const defaultPage = '{}';
-    
+
     // First try to get the active page from session storage (in case of resize or direct navigation)
     const storedActivePage = localStorage.getItem('activeMenuItem');
-    
+
     let currentPage = currentPath;
-    
+
     // If the current page is the root, check if we have a stored page
     if (currentPath === '' || currentPath === '/') {
         if (storedActivePage) {
@@ -1587,37 +1588,37 @@ function setActiveMenuItem() {
         // Store the current page for future reference
         localStorage.setItem('activeMenuItem', currentPage);
     }
-    
+
     let activeFound = false;
-    
+
     // Remove active class from all links
     menuLinks.forEach(link => {
         link.classList.remove('active');
-        
+
         // Check if this link's href matches the current page
         const linkPath = new URL(link.href).pathname;
-        
+
         // Ensure we're comparing cleanly
         const cleanLinkPath = linkPath.endsWith('/') ? linkPath.slice(0, -1) : linkPath;
         const cleanCurrentPage = currentPage.endsWith('/') ? currentPage.slice(0, -1) : currentPage;
-        
-        // Match either the exact path or paths with a leading ./ 
+
+        // Match either the exact path or paths with a leading ./
         // (since server-side our paths often have ./ prefix)
-        if (cleanCurrentPage === cleanLinkPath || 
-            cleanLinkPath.endsWith(cleanCurrentPage) || 
+        if (cleanCurrentPage === cleanLinkPath ||
+            cleanLinkPath.endsWith(cleanCurrentPage) ||
             cleanCurrentPage.endsWith(cleanLinkPath)) {
             link.classList.add('active');
             activeFound = true;
         }
     });
-    
+
     // If no active item was found, set default
     if (!activeFound && menuLinks.length > 0) {
         const defaultLink = menuLinks[0]; // Set first menu item as default
         defaultLink.classList.add('active');
         storeActiveMenuItem(new URL(defaultLink.href).pathname);
     }
-    
+
     // Scroll active item into view
     const activeItem = document.querySelector('.menu-bar a.active');
     if (activeItem) {
@@ -1632,7 +1633,7 @@ function setActiveMenuItem() {
 // Initialize menu on page load
 document.addEventListener("DOMContentLoaded", function() {
     setActiveMenuItem();
-    
+
     // For each menu item, add click handler to set it as active
     const menuLinks = document.querySelectorAll('.menu-bar a');
     menuLinks.forEach(link => {
@@ -1641,13 +1642,13 @@ document.addEventListener("DOMContentLoaded", function() {
             if (!this.href.includes(window.location.hostname)) {
                 return;
             }
-            
+
             // Remove active class from all links
             menuLinks.forEach(l => l.classList.remove('active'));
-            
+
             // Add active class to clicked link
             this.classList.add('active');
-            
+
             // Store the clicked menu item path
             storeActiveMenuItem(new URL(this.href).pathname);
         });
@@ -1687,7 +1688,9 @@ window.addEventListener('resize', function() {
     <a href='./dash'>Dash</a>
     <a href='./plan'>Plan</a>
     <a href='./charts'>Charts</a>
-    <a href='./config'>Config""" + config_warning + """</a>
+    <a href='./config'>Config"""
+            + config_warning
+            + """</a>
     <a href='./apps'>Apps</a>
     <a href='./log'>Log</a>
     <a href='./compare'>Compare</a>
@@ -1696,6 +1699,8 @@ window.addEventListener('resize', function() {
         <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
     </div>
 </div>
-""".format(self.default_page)
+""".format(
+                self.default_page
+            )
+        )
         return text
-
