@@ -38,6 +38,7 @@ class WebInterface:
         self.cost_yesterday_car_hist = {}
         self.cost_yesterday_no_car = {}
         self.web_port = self.base.get_arg("web_port", 5052)
+        self.default_log = "warnings"
 
     def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, print=False, daily=False, offset_days=0, first=True, pounds=False):
         results = {}
@@ -141,10 +142,9 @@ class WebInterface:
     async def start(self):
         # Start the web server
         app = web.Application()
-        app.router.add_get("/", self.html_index)
+        app.router.add_get("/", self.html_default)
         app.router.add_get("/plan", self.html_plan)
         app.router.add_get("/log", self.html_log)
-        app.router.add_get("/menu", self.html_menu)
         app.router.add_get("/apps", self.html_apps)
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
@@ -274,31 +274,14 @@ class WebInterface:
         text = '<!doctype html><html><head><meta charset="utf-8"><title>Predbat Web Interface</title>'
 
         text += """
-<link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
-<style>
+    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
         body, html {
             margin: 0;
             padding: 0;
             height: 100%;
-        }
-       .iframe-container {
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-        /* Style for the top menu iframe */
-        .menu-frame {
-            height: 80px; /* Adjust the height of the menu bar */
-            width: 100%;
-            border: none;
-            overflow: hidden;
-        }
-        /* Style for the full height iframe */
-        .main-frame {
-            flex-grow: 1;
-            width: 100%;
-            border: none;
+            border: 2px solid #ffffff;
         }
         body {
             font-family: Arial, sans-serif;
@@ -334,16 +317,18 @@ class WebInterface:
             color: white;
         }
         .default {
-            background-color: #fffffff;
+            background-color: #ffffff;
         }
         .modified {
             background-color: #ffcccc;
         }
 
-        /* Dark mode styles */
+        /* Apply dark mode to html element as well for earlier styling */
+        html.dark-mode,
         body.dark-mode {
             background-color: #121212;
             color: #e0e0e0;
+            border: 2px solid #121212;
         }
         table.dark-mode {
             border-color: #333;
@@ -376,42 +361,61 @@ class WebInterface:
         body.dark-mode .apexcharts-yaxis-label {
             fill: #e0e0e0 !important;
         }
-</style>
-<script>
-// Check and apply the saved dark mode preference on page load
-window.onload = function() {
-    const darkModeEnabled = localStorage.getItem('darkMode') === 'true';
-    if (darkModeEnabled) {
-        applyDarkModeToAllFrames(true);
-    }
-};
 
-function toggleDarkMode() {
-    const isDarkMode = document.body.classList.toggle('dark-mode');
-    localStorage.setItem('darkMode', isDarkMode);
-    applyDarkModeToAllFrames(isDarkMode);
-}
-
-function applyDarkModeToAllFrames(enable) {
-    const frames = [window, ...Array.from(window.parent.frames)];
-    frames.forEach(frame => {
-        try {
-            if (enable) {
-                frame.document.body.classList.add('dark-mode');
-            } else {
-                frame.document.body.classList.remove('dark-mode');
-            }
-        } catch (e) {
-            console.error('Error applying dark mode to frame:', e);
+        .menu-bar {
+            background-color: #ffffff;
+            overflow-x: auto; /* Enable horizontal scrolling */
+            white-space: nowrap; /* Prevent menu items from wrapping */
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+            -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+            scrollbar-width: thin; /* Firefox */
+            scrollbar-color: #4CAF50 #f0f0f0; /* Firefox */
+            position: fixed; /* Change from sticky to fixed */
+            top: 0; /* Stick to the top */
+            left: 0; /* Ensure it starts from the left edge */
+            right: 0; /* Ensure it extends to the right edge */
+            width: 100%; /* Make sure it spans the full width */
+            z-index: 1000; /* Ensure it's above other content */
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); /* Add subtle shadow for visual separation */
         }
-    });
-}
-</script>
-"""
+
+        /* Add padding to body to prevent content from hiding under fixed header */
+        body {
+            padding-top: 65px; /* Increased padding to account for the fixed menu height */
+        }
+    </style>
+    <script>
+    // Check and apply the saved dark mode preference on page load
+    window.onload = function() {
+        applyDarkMode();
+    };
+    function applyDarkMode() {
+        const darkModeEnabled = localStorage.getItem('darkMode') === 'true';
+        if (darkModeEnabled) {
+            document.body.classList.add('dark-mode');
+            document.documentElement.classList.add('dark-mode');
+        }
+        else {
+            document.body.classList.remove('dark-mode');
+            document.documentElement.classList.remove('dark-mode');
+        }
+    };
+
+    function toggleDarkMode() {
+        const isDarkMode = document.body.classList.toggle('dark-mode');
+        localStorage.setItem('darkMode', isDarkMode);
+        // Force reload to apply dark mode styles
+        location.reload();
+    }
+    </script>
+    """
 
         if refresh:
             text += '<meta http-equiv="refresh" content="{}" >'.format(refresh)
         text += "</head><body>"
+        text += self.get_menu_html()
         return text
 
     def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
@@ -659,6 +663,12 @@ var options = {
         sentence_clean = "<ul>\n" + sentence_clean + "</ul>\n"
         return sentence_clean
 
+    async def html_default(self, request):
+        """
+        Redirect request to the default page
+        """
+        raise web.HTTPFound(self.default_page)
+
     async def html_plan(self, request):
         """
         Return the Predbat plan as an HTML page
@@ -683,12 +693,18 @@ var options = {
         args = request.query
         errors = False
         warnings = False
-        if "errors" in args:
-            errors = True
-            self.default_page = "./log?errors"
-        if "warnings" in args:
+
+        if "errors" in args or (not args and self.default_log == "errors"):
+            errors = True            
+            self.default_log = "errors"
+        elif "warnings" in args or (not args and self.default_log == "warnings"):
             warnings = True
-            self.default_page = "./log?warnings"
+            self.default_log = "warnings"
+        elif "all" in args or (not args and self.default_log == "all"):
+            self.default_log = "all"
+        else:
+            self.default_log = "warnings"
+            warnings = True
 
         loglines = logdata.split("\n")
         text = self.get_header("Predbat Log", refresh=10)
@@ -761,7 +777,7 @@ body.dark-mode .log-menu a.active {
 
         text += '<div class="log-menu">'
         text += "<h3>Logfile</h3> "
-        text += f'<a href="./log" class="{active_all}">All</a>'
+        text += f'<a href="./log?all" class="{active_all}">All</a>'
         text += f'<a href="./log?warnings" class="{active_warnings}">Warnings</a>'
         text += f'<a href="./log?errors" class="{active_errors}">Errors</a>'
         text += '<a href="./debug_log">Download</a>'
@@ -1414,31 +1430,47 @@ body.dark-mode .charts-menu a.active {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-    async def html_menu(self, request):
+    def get_menu_html(self):
         """
-        Return the Predbat Menu page as an HTML page
+        Return the Predbat Menu page as HTML
         """
-        text = self.get_header("Predbat Menu")
-        
+        text = ""
         # Check if there are configuration errors
         config_warning = ""
         if self.base.arg_errors:
             config_warning = '<span style="color: #ffcc00; margin-left: 5px;">&#9888;</span>'
             
-        text += """<body>
+        text += """
 <style>
 .menu-bar {
     background-color: #ffffff;
-    overflow: hidden;
+    overflow-x: auto; /* Enable horizontal scrolling */
+    white-space: nowrap; /* Prevent menu items from wrapping */
     display: flex;
     align-items: center;
     border-bottom: 1px solid #ddd;
+    -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+    scrollbar-width: thin; /* Firefox */
+    scrollbar-color: #4CAF50 #f0f0f0; /* Firefox */
+    position: fixed; /* Change from sticky to fixed */
+    top: 0; /* Stick to the top */
+    left: 0; /* Ensure it starts from the left edge */
+    right: 0; /* Ensure it extends to the right edge */
+    width: 100%; /* Make sure it spans the full width */
+    z-index: 1000; /* Ensure it's above other content */
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); /* Add subtle shadow for visual separation */
+}
+
+/* Add padding to body to prevent content from hiding under fixed header */
+body {
+    padding-top: 65px; /* Increased padding to account for the fixed menu height */
 }
 
 .menu-bar .logo {
     display: flex;
     align-items: center;
     padding: 0 16px;
+    min-width: fit-content; /* Prevent logo from shrinking */
 }
 
 .menu-bar .logo img {
@@ -1450,10 +1482,10 @@ body.dark-mode .charts-menu a.active {
     font-size: 24px;
     font-weight: bold;
     color: #333;
+    white-space: nowrap;
 }
 
 .menu-bar a {
-    float: left;
     color: #333;
     text-align: center;
     padding: 14px 16px;
@@ -1461,6 +1493,8 @@ body.dark-mode .charts-menu a.active {
     font-size: 16px;
     display: flex;
     align-items: center;
+    white-space: nowrap;
+    flex-shrink: 0; /* Prevent items from shrinking */
 }
 
 .menu-bar a:hover {
@@ -1468,9 +1502,15 @@ body.dark-mode .charts-menu a.active {
     color: #4CAF50;
 }
 
+.menu-bar a.active {
+    background-color: #4CAF50;
+    color: white;
+}
+
 .dark-mode-toggle {
     margin-left: auto;
     padding: 14px 16px;
+    flex-shrink: 0; /* Prevent from shrinking */
 }
 
 .dark-mode-toggle button {
@@ -1480,6 +1520,7 @@ body.dark-mode .charts-menu a.active {
     padding: 8px 12px;
     border-radius: 4px;
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .dark-mode-toggle button:hover {
@@ -1490,6 +1531,11 @@ body.dark-mode .charts-menu a.active {
 body.dark-mode .menu-bar {
     background-color: #1e1e1e;
     border-bottom: 1px solid #333;
+    scrollbar-color: #4CAF50 #333; /* Firefox */
+}
+
+body.dark-mode .menu-bar::-webkit-scrollbar-track {
+    background: #333;
 }
 
 body.dark-mode .menu-bar .logo-text {
@@ -1505,6 +1551,11 @@ body.dark-mode .menu-bar a:hover {
     color: white;
 }
 
+body.dark-mode .menu-bar a.active {
+    background-color: #4CAF50;
+    color: white;
+}
+
 body.dark-mode .dark-mode-toggle button {
     background-color: #444;
     color: #e0e0e0;
@@ -1516,36 +1567,161 @@ body.dark-mode .dark-mode-toggle button:hover {
 }
 </style>
 
+<script>
+// Add viewport meta tag if it doesn't exist
+if (!document.querySelector('meta[name="viewport"]')) {
+    const meta = document.createElement('meta');
+    meta.name = 'viewport';
+    meta.content = 'width=device-width, initial-scale=1, maximum-scale=1';
+    document.head.appendChild(meta);
+}
+
+// Store the active menu item in session storage
+function storeActiveMenuItem(path) {
+    localStorage.setItem('activeMenuItem', path);
+}
+
+// Function to set the active menu item
+function setActiveMenuItem() {
+    // Get all menu links
+    const menuLinks = document.querySelectorAll('.menu-bar a');
+    
+    // Get current page path from window location
+    let currentPath = window.location.pathname;
+    
+    // Handle paths with trailing slash
+    if (currentPath.endsWith('/')) {
+        currentPath = currentPath.slice(0, -1);
+    }
+    
+    // Default page from server if nothing else matches
+    const defaultPage = '{}';
+    
+    // First try to get the active page from session storage (in case of resize or direct navigation)
+    const storedActivePage = localStorage.getItem('activeMenuItem');
+    
+    let currentPage = currentPath;
+    
+    // If the current page is the root, check if we have a stored page
+    if (currentPath === '' || currentPath === '/') {
+        if (storedActivePage) {
+            currentPage = storedActivePage;
+        } else {
+            currentPage = defaultPage;
+        }
+    } else {
+        // Store the current page for future reference
+        localStorage.setItem('activeMenuItem', currentPage);
+    }
+    
+    let activeFound = false;
+    
+    // Remove active class from all links
+    menuLinks.forEach(link => {
+        link.classList.remove('active');
+        
+        // Check if this link's href matches the current page
+        const linkPath = new URL(link.href).pathname;
+        
+        // Ensure we're comparing cleanly
+        const cleanLinkPath = linkPath.endsWith('/') ? linkPath.slice(0, -1) : linkPath;
+        const cleanCurrentPage = currentPage.endsWith('/') ? currentPage.slice(0, -1) : currentPage;
+        
+        // Match either the exact path or paths with a leading ./ 
+        // (since server-side our paths often have ./ prefix)
+        if (cleanCurrentPage === cleanLinkPath || 
+            cleanLinkPath.endsWith(cleanCurrentPage) || 
+            cleanCurrentPage.endsWith(cleanLinkPath)) {
+            link.classList.add('active');
+            activeFound = true;
+        }
+    });
+    
+    // If no active item was found, set default
+    if (!activeFound && menuLinks.length > 0) {
+        const defaultLink = menuLinks[0]; // Set first menu item as default
+        defaultLink.classList.add('active');
+        storeActiveMenuItem(new URL(defaultLink.href).pathname);
+    }
+    
+    // Scroll active item into view
+    const activeItem = document.querySelector('.menu-bar a.active');
+    if (activeItem) {
+        // Scroll with a slight offset to make it more visible
+        const menuBar = document.querySelector('.menu-bar');
+        const activeItemLeft = activeItem.offsetLeft;
+        const menuBarWidth = menuBar.clientWidth;
+        menuBar.scrollLeft = activeItemLeft - menuBarWidth / 2 + activeItem.clientWidth / 2;
+    }
+}
+
+// Initialize menu on page load
+document.addEventListener("DOMContentLoaded", function() {
+    setActiveMenuItem();
+    
+    // For each menu item, add click handler to set it as active
+    const menuLinks = document.querySelectorAll('.menu-bar a');
+    menuLinks.forEach(link => {
+        link.addEventListener('click', function(e) {
+            // Don't override external links (like Docs)
+            if (!this.href.includes(window.location.hostname)) {
+                return;
+            }
+            
+            // Remove active class from all links
+            menuLinks.forEach(l => l.classList.remove('active'));
+            
+            // Add active class to clicked link
+            this.classList.add('active');
+            
+            // Store the clicked menu item path
+            storeActiveMenuItem(new URL(this.href).pathname);
+        });
+    });
+});
+
+// Additional window.onload handler for other functionality
+const originalOnLoad = window.onload;
+window.onload = function() {
+    // Call the original onload function if it exists
+    if (typeof originalOnLoad === 'function') {
+        originalOnLoad();
+    }
+    applyDarkMode();
+};
+
+// Handle window resize without losing active menu item
+window.addEventListener('resize', function() {
+    // Don't reload the page, just make sure the active menu item is visible
+    setTimeout(function() {
+        const activeItem = document.querySelector('.menu-bar a.active');
+        if (activeItem) {
+            const menuBar = document.querySelector('.menu-bar');
+            const activeItemLeft = activeItem.offsetLeft;
+            const menuBarWidth = menuBar.clientWidth;
+            menuBar.scrollLeft = activeItemLeft - menuBarWidth / 2 + activeItem.clientWidth / 2;
+        }
+    }, 100);
+});
+</script>
+
 <div class="menu-bar">
     <div class="logo">
         <img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" alt="Predbat Logo">
         <span class="logo-text">Predbat</span>
     </div>
-    <a href='./dash' target='main_frame'>Dash</a>
-    <a href='./plan' target='main_frame'>Plan</a>
-    <a href='./charts' target='main_frame'>Charts</a>
-    <a href='./config' target='main_frame'>Config""" + config_warning + """</a>
-    <a href='./apps' target='main_frame'>Apps</a>
-    <a href='./log?warnings' target='main_frame'>Log</a>
-    <a href='./compare' target='main_frame'>Compare</a>
-    <a href='https://springfall2008.github.io/batpred/' target='main_frame'>Docs</a>
+    <a href='./dash'>Dash</a>
+    <a href='./plan'>Plan</a>
+    <a href='./charts'>Charts</a>
+    <a href='./config'>Config""" + config_warning + """</a>
+    <a href='./apps'>Apps</a>
+    <a href='./log'>Log</a>
+    <a href='./compare'>Compare</a>
+    <a href='https://springfall2008.github.io/batpred/'>Docs</a>
     <div class="dark-mode-toggle">
         <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
     </div>
 </div>
-</body></html>
-"""
-        return web.Response(content_type="text/html", text=text)
+""".format(self.default_page)
+        return text
 
-    async def html_index(self, request):
-        """
-        Return the Predbat index page as an HTML page
-        """
-        text = self.get_header("Predbat Index")
-        text += "<body>\n"
-        text += '<div class="iframe-container">\n'
-        text += '<iframe src="./menu" title="Menu frame" class="menu-frame" name="menu_frame"></iframe>\n'
-        text += '<iframe src="{}" title="Main frame" class="main-frame" name="main_frame"></iframe>\n'.format(self.default_page)
-        text += "</div>\n"
-        text += "</body></html>\n"
-        return web.Response(content_type="text/html", text=text)
