@@ -262,7 +262,7 @@ class WebInterface:
             text += "</table>\n"
 
         return text
-    
+
     def html_get_entity_text(self, entity):
         text = ""
         state = self.base.dashboard_values.get(entity, {}).get("state", None)
@@ -284,7 +284,7 @@ class WebInterface:
         entity = request.query.get("entity_id", None)
         if not entity:
             return web.Response(content_type="text/html", text="Entity not found", status=404)
-        
+
         text = self.get_header("Predbat Entity", refresh=60)
 
         # Include a back button to return the previous page
@@ -292,7 +292,9 @@ class WebInterface:
             <a href="{}" class="button" style="display: inline-block; padding: 8px 15px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                 <span class="mdi mdi-arrow-left" style="margin-right: 5px;"></span>Back
             </a>
-        </div>""".format(self.default_page)
+        </div>""".format(
+            self.default_page
+        )
 
         attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
         unit_of_measurement = attributes.get("unit_of_measurement", "")
@@ -308,7 +310,7 @@ class WebInterface:
         now_str = self.base.now_utc.strftime(TIME_FORMAT)
         history = self.base.get_history_wrapper(entity, 7, required=False)
         history_chart = self.history_attribute(history)
-        series_data = []    
+        series_data = []
         series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "2"})
         text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)
 
@@ -341,7 +343,7 @@ class WebInterface:
 
         # Return web response
         text += "</body></html>\n"
-        return web.Response(content_type="text/html", text=text)                
+        return web.Response(content_type="text/html", text=text)
 
     def get_header(self, title, refresh=0):
         """
@@ -413,11 +415,11 @@ class WebInterface:
             background-color: #333;
             color: #e0e0e0;
         }
-        body.dark-mode .default, 
+        body.dark-mode .default,
         body.dark-mode .cfg_default {
             background-color: #121212;
         }
-        body.dark-mode .modified, 
+        body.dark-mode .modified,
         body.dark-mode .cfg_modified {
             background-color: #662222;
         }
