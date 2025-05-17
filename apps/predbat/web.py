@@ -196,7 +196,7 @@ class WebInterface:
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
-    def get_status_html(self, level, status, debug_enable, read_only, mode, version):
+    def get_status_html(self, status, debug_enable, read_only, mode, version):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -210,7 +210,7 @@ class WebInterface:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
         text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
-        text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
+        text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
         text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
         if self.base.arg_errors:
@@ -910,8 +910,7 @@ body.dark-mode .log-menu a.active {
         self.default_page = "./dash"
         text = self.get_header("Predbat Dashboard", refresh=60)
         text += "<body>\n"
-        soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-        text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode, THIS_VERSION)
+        text += self.get_status_html(self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode, THIS_VERSION)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -1736,7 +1735,7 @@ window.addEventListener('resize', function() {
         if not self.base.dashboard_index:
             return '<span class="mdi mdi-battery-sync"></span>'
         
-        percent = self.base.soc_percent
+        percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
         percent_rounded_to_nearest_10 = round(float(percent) / 10) * 10
         if self.base.isCharging:
             if percent_rounded_to_nearest_10 == 0:
