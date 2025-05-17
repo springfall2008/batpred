@@ -228,7 +228,7 @@ class WebInterface:
         text += "</table>\n"
         text += "<h2>Plan textual description</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>{}</td></tr>\n".format(self.get_text_plan_html())
+        text += "<tr><td>{}</td></tr>\n".format(self.base.text_plan)
         text += "</table>\n"
 
         # Form the app list
@@ -642,32 +642,6 @@ var options = {
             return web.Response(content_type="application/json", text=json.dumps(result))
         else:
             return web.Response(content_type="application/json", text='{"result": "error"}')
-
-    def get_text_plan_html(self):
-        """
-        Return the Predbat plan as an html text string
-        """
-        sentence_clean = self.base.text_plan
-        sentence_clean = sentence_clean.replace("&", "&amp;")
-        sentence_clean = sentence_clean.replace("%", "&percnt;")
-        sentence_clean = sentence_clean.replace("<", "&lt;")
-        sentence_clean = sentence_clean.replace(">", "&gt;")
-        sentence_lines = sentence_clean.split("\n")
-        sentence_clean = ""
-        for line in sentence_lines:
-            line = line.strip()
-            if line.startswith("- "):
-                line = line[2:]
-            if line:
-                sentence_clean += "<li>{}</li>\n".format(line)
-        sentence_clean = "<ul>\n" + sentence_clean + "</ul>\n"
-        return sentence_clean
-
-    async def html_default(self, request):
-        """
-        Redirect request to the default page
-        """
-        raise web.HTTPFound(self.default_page)
 
     async def html_plan(self, request):
         """
