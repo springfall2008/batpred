@@ -1404,6 +1404,12 @@ body.dark-mode .charts-menu a.active {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    async def html_default(self, request):
+        """
+        Redirect to the default page
+        """
+        return web.HTTPFound(self.default_page)
+
     def get_menu_html(self):
         """
         Return the Predbat Menu page as HTML
