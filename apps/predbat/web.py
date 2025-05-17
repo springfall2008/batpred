@@ -1840,7 +1840,7 @@ window.addEventListener('resize', function() {
                 icon_text = "battery-{}".format(percent_rounded_to_nearest_10)
 
         text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
-        text += str(self.base.soc_percent) + "%"
+        text += str(dp2(percent)) + "%"
 
         if self.base.isExporting:
             text += '<span class="mdi mdi-transmission-tower-export"></span>'
