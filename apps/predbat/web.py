@@ -239,7 +239,6 @@ class WebInterface:
                 app_list.append(app)
 
         # Display per app
-        text += "<table>\n"
         for app in app_list:
             text += "<h2>{} Entities</h2>\n".format(app[0].upper() + app[1:])
             text += "<table>\n"
