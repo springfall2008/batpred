@@ -1449,7 +1449,7 @@ document.addEventListener("DOMContentLoaded", function() {
         text = ""
         text += "<table>\n"
         text += "<tr><th></th><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th></tr>\n"
-        found= False
+        found = False
         for item in self.base.CONFIG_ITEMS:
             if self.base.user_config_item_enabled(item) and item.get("entity") == entity:
                 value = item.get("value", "")
