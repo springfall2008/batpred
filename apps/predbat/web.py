@@ -193,6 +193,7 @@ class WebInterface:
         Return the attributes of an entity as HTML
         """
         text = ""
+        attributes = {}
         if from_db:
             history = self.base.get_history_wrapper(entity, 1, required=False)
             if history and len(history) >= 1:
@@ -1091,7 +1092,7 @@ body.dark-mode .log-menu a.active {
                 if state is not None:
                     text = '<a href="./entity?entity_id={}">{}</a> = {}'.format(entity_id, value, state)
                 else:
-                    text = '<span style="background-color:#FFAAAA"> {} ? </p>'.format(value)
+                    text = '<span style="background-color:#FFAAAA"> {} ? </span>'.format(value)
             else:
                 text = str(value)
         else:
