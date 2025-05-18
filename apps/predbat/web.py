@@ -188,9 +188,19 @@ class WebInterface:
         self.abort = True
         await asyncio.sleep(1)
 
-    def get_attributes_html(self, entity):
+    def get_attributes_html(self, entity, from_db=False):
+        """
+        Return the attributes of an entity as HTML
+        """
         text = ""
-        attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
+        if from_db:
+            history = self.base.get_history_wrapper(entity, 1, required=False)
+            if history and len(history) >= 1:
+                history = history[0]
+                if history:
+                    attributes = history[0].get("attributes", {})
+        else:
+            attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
         if not attributes:
             return ""
         text += "<table>"
@@ -287,7 +297,7 @@ class WebInterface:
             state = self.base.get_state_wrapper(entity_id=entity)
             unit_of_measurement = self.base.get_state_wrapper(entity_id=entity, attribute="unit_of_measurement")
             friendly_name = self.base.get_state_wrapper(entity_id=entity, attribute="friendly_name")
-            text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format("", entity, friendly_name, entity, state, unit_of_measurement, "")
+            text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format("", entity, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity, from_db=True))
         return text
 
     async def html_entity(self, request):
