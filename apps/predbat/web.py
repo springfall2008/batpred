@@ -288,9 +288,8 @@ class WebInterface:
         """
         Return the Predbat entity as an HTML page
         """
-        entity = request.query.get("entity_id", None)
-        if not entity:
-            return web.Response(content_type="text/html", text="Entity not found", status=404)
+        entity = request.query.get("entity_id", "")
+        days = int(request.query.get("days", 7))  # Default to 7 days if not specified
 
         text = self.get_header("Predbat Entity", refresh=60)
 
@@ -307,46 +306,129 @@ class WebInterface:
         unit_of_measurement = attributes.get("unit_of_measurement", "")
         friendly_name = attributes.get("friendly_name", "")
 
-        text += "<table>\n"
-        text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
-        text += self.html_get_entity_text(entity)
-        text += "</table>\n"
+        # Add entity dropdown selector
+        text += """<div style="margin-bottom: 20px;">
+            <form id="entitySelectForm" style="display: flex; align-items: center;">
+                <label for="entitySelect" style="margin-right: 10px; font-weight: bold;">Select Entity: </label>
+                <select id="entitySelect" name="entity_id" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; flex-grow: 1; max-width: 500px;" onchange="document.getElementById('entitySelectForm').submit();">
+        """
 
-        text += "<h2>History Chart</h2>\n"
-        text += '<div id="chart"></div>'
-        now_str = self.base.now_utc.strftime(TIME_FORMAT)
-        history = self.base.get_history_wrapper(entity, 7, required=False)
-        history_chart = self.history_attribute(history)
-        series_data = []
-        series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "2"})
-        text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)
+        # Add app list entries to dropdown
+        app_list = ["predbat"]
+        for entity_id in self.base.dashboard_index_app.keys():
+            app = self.base.dashboard_index_app[entity_id]
+            if app not in app_list:
+                app_list.append(app)
 
-        # History table
-        text += "<h2>History</h2>\n"
-        text += "<table>\n"
-        text += "<tr><th>Time</th><th>State</th></tr>\n"
+        if not entity:
+            text += f'<optgroup label="Not selected"></optgroup>\n'
+            text += f'<option value="" selected></option>\n'
+            text += "</optgroup>\n"
 
-        prev_stamp = None
-        if history and len(history) >= 1:
-            history = history[0]
-            if history:
-                count = 0
-                history.reverse()
-                for item in history:
-                    if "last_updated" not in item:
-                        continue
-                    last_updated_time = item["last_updated"]
-                    last_updated_stamp = str2time(last_updated_time)
-                    state = item.get("state", None)
-                    if state is None:
-                        state = "None"
-                    # Only show in 30 minute intervals
-                    if prev_stamp and ((prev_stamp - last_updated_stamp) < timedelta(minutes=30)):
-                        continue
-                    text += "<tr><td>{}</td><td>{}</td></tr>\n".format(last_updated_stamp.strftime(TIME_FORMAT), state)
-                    prev_stamp = last_updated_stamp
-                    count += 1
-        text += "</table>\n"
+        # Group entities by app in the dropdown
+        for app in app_list:
+            text += f'<optgroup label="{app[0].upper() + app[1:]} Entities">\n'
+
+            if app == "predbat":
+                entity_list = self.base.dashboard_index
+            else:
+                entity_list = []
+                for entity_id in self.base.dashboard_index_app.keys():
+                    if self.base.dashboard_index_app[entity_id] == app:
+                        entity_list.append(entity_id)
+
+            for entity_id in entity_list:
+                entity_friendly_name = self.base.dashboard_values.get(entity_id, {}).get("attributes", {}).get("friendly_name", entity_id)
+                selected = "selected" if entity_id == entity else ""
+                text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>\n'
+
+            text += "</optgroup>\n"
+
+        text += f'<optgroup label="Config Settings">\n'
+        for item in self.base.CONFIG_ITEMS:
+            if self.base.user_config_item_enabled(item):
+                entity_id = item.get("entity", "")
+                entity_friendly_name = item.get("friendly_name", "")
+                if entity_id:
+                    selected = "selected" if entity_id == entity else ""
+                    text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>\n'
+
+        text += "</optgroup>\n"
+        text += """
+                </select>
+                <input type="hidden" name="days" value="{}" />
+            </form>
+        </div>""".format(
+            days
+        )
+
+        # Add days selector
+        text += """<div style="margin-bottom: 20px;">
+            <form id="daysSelectForm" style="display: flex; align-items: center;">
+                <label for="daysSelect" style="margin-right: 10px; font-weight: bold;">History Days: </label>
+                <select id="daysSelect" name="days" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd;" onchange="document.getElementById('daysSelectForm').submit();">
+        """
+
+        # Add days options
+        for option in [1, 2, 3, 4, 5, 7, 10, 14, 21, 30, 60, 90]:
+            selected = "selected" if option == days else ""
+            text += f'<option value="{option}" {selected}>{option} days</option>'
+
+        text += """
+                </select>
+                <input type="hidden" name="entity_id" value="{}" />
+            </form>
+        </div>""".format(
+            entity
+        )
+
+        if entity:
+            config_text = self.html_config_item_text(entity)
+            if not config_text:
+                text += "<table>\n"
+                text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
+                text += self.html_get_entity_text(entity)
+                text += "</table>\n"
+            else:
+                text += config_text
+
+            text += "<h2>History Chart</h2>\n"
+            text += '<div id="chart"></div>'
+            now_str = self.base.now_utc.strftime(TIME_FORMAT)
+            history = self.base.get_history_wrapper(entity, days, required=False)
+            history_chart = self.history_attribute(history)
+            series_data = []
+            series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "3", "stroke_curve": "stepline"})
+            text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)
+
+            # History table
+            text += "<h2>History</h2>\n"
+            text += "<table>\n"
+            text += "<tr><th>Time</th><th>State</th></tr>\n"
+
+            prev_stamp = None
+            if history and len(history) >= 1:
+                history = history[0]
+                if history:
+                    count = 0
+                    history.reverse()
+                    for item in history:
+                        if "last_updated" not in item:
+                            continue
+                        last_updated_time = item["last_updated"]
+                        last_updated_stamp = str2time(last_updated_time)
+                        state = item.get("state", None)
+                        if state is None:
+                            state = "None"
+                        # Only show in 30 minute intervals
+                        if prev_stamp and ((prev_stamp - last_updated_stamp) < timedelta(minutes=30)):
+                            continue
+                        text += "<tr><td>{}</td><td>{}</td></tr>\n".format(last_updated_stamp.strftime(TIME_FORMAT), state)
+                        prev_stamp = last_updated_stamp
+                        count += 1
+            text += "</table>\n"
+        else:
+            text += "<h2>Select an entity</h2>\n"
 
         # Return web response
         text += "</body></html>\n"
@@ -1363,6 +1445,34 @@ document.addEventListener("DOMContentLoaded", function() {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    def html_config_item_text(self, entity):
+        text = ""
+        text += "<table>\n"
+        text += "<tr><th></th><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th></tr>\n"
+        found = False
+        for item in self.base.CONFIG_ITEMS:
+            if self.base.user_config_item_enabled(item) and item.get("entity") == entity:
+                value = item.get("value", "")
+                if value is None:
+                    value = item.get("default", "")
+                friendly = item.get("friendly_name", "")
+                itemtype = item.get("type", "")
+                default = item.get("default", "")
+                icon = self.icon2html(item.get("icon", ""))
+                unit = item.get("unit", "")
+                text += "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(icon, friendly, entity, itemtype)
+                if value == default:
+                    text += '<td class="cfg_default">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
+                else:
+                    text += '<td class="cfg_modified">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
+                text += "</tr>\n"
+                found = True
+        text += "</table>\n"
+        if found:
+            return text
+        else:
+            return None
+
     async def html_config(self, request):
         """
         Return the Predbat config as an HTML page
@@ -1397,7 +1507,7 @@ document.addEventListener("DOMContentLoaded", function() {
                 if itemtype == "input_number" and item.get("step", 1) == 1:
                     value = int(value)
 
-                text += "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(icon, friendly, entity, itemtype)
+                text += '<tr><td>{}</td><td><a href="./entity?entity_id={}">{}</a></td><td>{}</td><td>{}</td>'.format(icon, entity, friendly, entity, itemtype)
                 if value == default:
                     text += '<td class="cfg_default">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
                 else:
@@ -1615,7 +1725,7 @@ document.addEventListener("DOMContentLoaded", function() {
     top: 0; /* Stick to the top */
     left: 0; /* Ensure it starts from the left edge */
     right: 0; /* Ensure it extends to the right edge */
-    width: 100%; /* Make sure it spans the full width */
+    width:  100%; /* Make sure it spans the full width */
     z-index: 1000; /* Ensure it's above other content */
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); /* Add subtle shadow for visual separation */
 }
@@ -1655,6 +1765,8 @@ body {
     white-space: nowrap;
     flex-shrink: 0; /* Prevent items from shrinking */
 }
+
+
 
 .menu-bar a:hover {
     background-color: #f0f0f0;
@@ -1882,6 +1994,7 @@ window.addEventListener('resize', function() {
     </div>
     <a href='./dash'>Dash</a>
     <a href='./plan'>Plan</a>
+    <a href='./entity'>Entities</a>
     <a href='./charts'>Charts</a>
     <a href='./config'>Config"""
             + config_warning
