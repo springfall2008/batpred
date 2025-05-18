@@ -272,16 +272,22 @@ class WebInterface:
 
     def html_get_entity_text(self, entity):
         text = ""
-        state = self.base.dashboard_values.get(entity, {}).get("state", None)
-        attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
-        unit_of_measurement = attributes.get("unit_of_measurement", "")
-        icon = self.icon2html(attributes.get("icon", ""))
-        if unit_of_measurement is None:
-            unit_of_measurement = ""
-        friendly_name = attributes.get("friendly_name", "")
-        if state is None:
-            state = "None"
-        text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format(icon, entity, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
+        if entity in self.base.dashboard_values:
+            state = self.base.dashboard_values.get(entity, {}).get("state", None)
+            attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
+            unit_of_measurement = attributes.get("unit_of_measurement", "")
+            icon = self.icon2html(attributes.get("icon", ""))
+            if unit_of_measurement is None:
+                unit_of_measurement = ""
+            friendly_name = attributes.get("friendly_name", "")
+            if state is None:
+                state = "None"
+            text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format(icon, entity, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
+        else:
+            state = self.base.get_state_wrapper(entity_id=entity)
+            unit_of_measurement = self.base.get_state_wrapper(entity_id=entity, attribute="unit_of_measurement")
+            friendly_name = self.base.get_state_wrapper(entity_id=entity, attribute="friendly_name")
+            text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format("", entity, friendly_name, entity, state, unit_of_measurement, "")
         return text
 
     async def html_entity(self, request):
@@ -321,8 +327,12 @@ class WebInterface:
                 app_list.append(app)
 
         if not entity:
-            text += f'<optgroup label="Not selected"></optgroup>\n'
+            text += f'<optgroup label="Not selected">\n'
             text += f'<option value="" selected></option>\n'
+            text += "</optgroup>\n"
+        elif entity not in self.base.dashboard_values:
+            text += f'<optgroup label="Selected">\n'
+            text += f'<option value="{entity}" selected>{entity}</option>\n'
             text += "</optgroup>\n"
 
         # Group entities by app in the dropdown
@@ -1069,7 +1079,7 @@ body.dark-mode .log-menu a.active {
                     state = self.base.get_state_wrapper(entity_id=entity_id, default=None)
 
                 if state is not None:
-                    text = "{} = {}".format(value, state)
+                    text = '<a href="./entity?entity_id={}">{}</a> = {}'.format(entity_id, value, state)
                 else:
                     text = '<span style="background-color:#FFAAAA"> {} ? </p>'.format(value)
             else:
