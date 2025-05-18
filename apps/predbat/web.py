@@ -289,6 +289,8 @@ class WebInterface:
         Return the Predbat entity as an HTML page
         """
         entity = request.query.get("entity_id", None)
+        days = int(request.query.get("days", 7))  # Default to 7 days if not specified
+        
         if not entity:
             return web.Response(content_type="text/html", text="Entity not found", status=404)
 
@@ -342,8 +344,27 @@ class WebInterface:
             
         text += """
                 </select>
+                <input type="hidden" name="days" value="{}" />
             </form>
-        </div>"""
+        </div>""".format(days)
+
+        # Add days selector
+        text += """<div style="margin-bottom: 20px;">
+            <form id="daysSelectForm" style="display: flex; align-items: center;">
+                <label for="daysSelect" style="margin-right: 10px; font-weight: bold;">History Days: </label>
+                <select id="daysSelect" name="days" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd;" onchange="document.getElementById('daysSelectForm').submit();">
+        """
+        
+        # Add days options
+        for option in [1, 2, 3, 4, 5, 7, 10, 14, 21, 30, 60, 90]:
+            selected = "selected" if option == days else ""
+            text += f'<option value="{option}" {selected}>{option} days</option>'
+            
+        text += """
+                </select>
+                <input type="hidden" name="entity_id" value="{}" />
+            </form>
+        </div>""".format(entity)
 
         text += "<table>\n"
         text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
@@ -353,7 +374,7 @@ class WebInterface:
         text += "<h2>History Chart</h2>\n"
         text += '<div id="chart"></div>'
         now_str = self.base.now_utc.strftime(TIME_FORMAT)
-        history = self.base.get_history_wrapper(entity, 7, required=False)
+        history = self.base.get_history_wrapper(entity, days, required=False)
         history_chart = self.history_attribute(history)
         series_data = []
         series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "2"})
@@ -1653,7 +1674,7 @@ document.addEventListener("DOMContentLoaded", function() {
     top: 0; /* Stick to the top */
     left: 0; /* Ensure it starts from the left edge */
     right: 0; /* Ensure it extends to the right edge */
-    width: 100%; /* Make sure it spans the full width */
+    width:  100%; /* Make sure it spans the full width */
     z-index: 1000; /* Ensure it's above other content */
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); /* Add subtle shadow for visual separation */
 }
