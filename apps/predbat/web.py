@@ -323,6 +323,7 @@ class WebInterface:
         if not entity:
             text += f'<optgroup label="Not selected"></optgroup>\n'
             text += f'<option value="" selected></option>\n'
+            text += "</optgroup>\n"
 
         # Group entities by app in the dropdown
         for app in app_list:
@@ -343,6 +344,16 @@ class WebInterface:
 
             text += "</optgroup>\n"
 
+        text += f'<optgroup label="Config Settings">\n'
+        for item in self.base.CONFIG_ITEMS:
+            if self.base.user_config_item_enabled(item):
+                entity_id = item.get("entity", "")
+                entity_friendly_name = item.get("friendly_name", "")
+                if entity_id:
+                    selected = "selected" if entity_id == entity else ""
+                    text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>\n'
+
+        text += "</optgroup>\n"
         text += """
                 </select>
                 <input type="hidden" name="days" value="{}" />
@@ -372,10 +383,14 @@ class WebInterface:
         )
 
         if entity:
-            text += "<table>\n"
-            text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
-            text += self.html_get_entity_text(entity)
-            text += "</table>\n"
+            config_text = self.html_config_item_text(entity)
+            if not config_text:
+                text += "<table>\n"
+                text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
+                text += self.html_get_entity_text(entity)
+                text += "</table>\n"
+            else:
+                text += config_text
 
             text += "<h2>History Chart</h2>\n"
             text += '<div id="chart"></div>'
@@ -1430,6 +1445,34 @@ document.addEventListener("DOMContentLoaded", function() {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    def html_config_item_text(self, entity):
+        text = ""
+        text += "<table>\n"
+        text += "<tr><th></th><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th></tr>\n"
+        found= False
+        for item in self.base.CONFIG_ITEMS:
+            if self.base.user_config_item_enabled(item) and item.get("entity") == entity:
+                value = item.get("value", "")
+                if value is None:
+                    value = item.get("default", "")
+                friendly = item.get("friendly_name", "")
+                itemtype = item.get("type", "")
+                default = item.get("default", "")
+                icon = self.icon2html(item.get("icon", ""))
+                unit = item.get("unit", "")
+                text += "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(icon, friendly, entity, itemtype)
+                if value == default:
+                    text += '<td class="cfg_default">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
+                else:
+                    text += '<td class="cfg_modified">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
+                text += "</tr>\n"
+                found = True
+        text += "</table>\n"
+        if found:
+            return text
+        else:
+            return None
+
     async def html_config(self, request):
         """
         Return the Predbat config as an HTML page
@@ -1464,7 +1507,7 @@ document.addEventListener("DOMContentLoaded", function() {
                 if itemtype == "input_number" and item.get("step", 1) == 1:
                     value = int(value)
 
-                text += "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(icon, friendly, entity, itemtype)
+                text += '<tr><td>{}</td><td><a href="./entity?entity_id={}">{}</a></td><td>{}</td><td>{}</td>'.format(icon, entity, friendly, entity, itemtype)
                 if value == default:
                     text += '<td class="cfg_default">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
                 else:
