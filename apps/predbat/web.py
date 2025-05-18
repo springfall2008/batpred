@@ -86,7 +86,10 @@ class WebInterface:
                         state = 1
                     elif state.lower() in ["off", "false", "no"]:
                         state = 0
-                continue
+                    else:
+                        continue
+                else:
+                    continue
 
             day_stamp = last_updated_stamp.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
             if offset_days:
