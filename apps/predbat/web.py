@@ -288,12 +288,9 @@ class WebInterface:
         """
         Return the Predbat entity as an HTML page
         """
-        entity = request.query.get("entity_id", None)
+        entity = request.query.get("entity_id", "")
         days = int(request.query.get("days", 7))  # Default to 7 days if not specified
         
-        if not entity:
-            return web.Response(content_type="text/html", text="Entity not found", status=404)
-
         text = self.get_header("Predbat Entity", refresh=60)
 
         # Include a back button to return the previous page
@@ -322,10 +319,15 @@ class WebInterface:
             app = self.base.dashboard_index_app[entity_id]
             if app not in app_list:
                 app_list.append(app)
+
+        if not entity:
+            text += f'<optgroup label="Not selected"></optgroup>\n'
+            text += f'<option value="" selected></option>\n'
         
+
         # Group entities by app in the dropdown
         for app in app_list:
-            text += f'<optgroup label="{app[0].upper() + app[1:]} Entities">'
+            text += f'<optgroup label="{app[0].upper() + app[1:]} Entities">\n'
             
             if app == "predbat":
                 entity_list = self.base.dashboard_index
@@ -333,14 +335,14 @@ class WebInterface:
                 entity_list = []
                 for entity_id in self.base.dashboard_index_app.keys():
                     if self.base.dashboard_index_app[entity_id] == app:
-                        entity_list.append(entity_id)
-            
+                        entity_list.append(entity_id)            
+
             for entity_id in entity_list:
                 entity_friendly_name = self.base.dashboard_values.get(entity_id, {}).get("attributes", {}).get("friendly_name", entity_id)
                 selected = "selected" if entity_id == entity else ""
-                text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>'
+                text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>\n'
             
-            text += '</optgroup>'
+            text += '</optgroup>\n'
             
         text += """
                 </select>
@@ -366,46 +368,49 @@ class WebInterface:
             </form>
         </div>""".format(entity)
 
-        text += "<table>\n"
-        text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
-        text += self.html_get_entity_text(entity)
-        text += "</table>\n"
+        if entity:
+            text += "<table>\n"
+            text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
+            text += self.html_get_entity_text(entity)
+            text += "</table>\n"
 
-        text += "<h2>History Chart</h2>\n"
-        text += '<div id="chart"></div>'
-        now_str = self.base.now_utc.strftime(TIME_FORMAT)
-        history = self.base.get_history_wrapper(entity, days, required=False)
-        history_chart = self.history_attribute(history)
-        series_data = []
-        series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "2"})
-        text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)
+            text += "<h2>History Chart</h2>\n"
+            text += '<div id="chart"></div>'
+            now_str = self.base.now_utc.strftime(TIME_FORMAT)
+            history = self.base.get_history_wrapper(entity, days, required=False)
+            history_chart = self.history_attribute(history)
+            series_data = []
+            series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "3", "stroke_curve": "stepline"})
+            text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)
 
-        # History table
-        text += "<h2>History</h2>\n"
-        text += "<table>\n"
-        text += "<tr><th>Time</th><th>State</th></tr>\n"
+            # History table
+            text += "<h2>History</h2>\n"
+            text += "<table>\n"
+            text += "<tr><th>Time</th><th>State</th></tr>\n"
 
-        prev_stamp = None
-        if history and len(history) >= 1:
-            history = history[0]
-            if history:
-                count = 0
-                history.reverse()
-                for item in history:
-                    if "last_updated" not in item:
-                        continue
-                    last_updated_time = item["last_updated"]
-                    last_updated_stamp = str2time(last_updated_time)
-                    state = item.get("state", None)
-                    if state is None:
-                        state = "None"
-                    # Only show in 30 minute intervals
-                    if prev_stamp and ((prev_stamp - last_updated_stamp) < timedelta(minutes=30)):
-                        continue
-                    text += "<tr><td>{}</td><td>{}</td></tr>\n".format(last_updated_stamp.strftime(TIME_FORMAT), state)
-                    prev_stamp = last_updated_stamp
-                    count += 1
-        text += "</table>\n"
+            prev_stamp = None
+            if history and len(history) >= 1:
+                history = history[0]
+                if history:
+                    count = 0
+                    history.reverse()
+                    for item in history:
+                        if "last_updated" not in item:
+                            continue
+                        last_updated_time = item["last_updated"]
+                        last_updated_stamp = str2time(last_updated_time)
+                        state = item.get("state", None)
+                        if state is None:
+                            state = "None"
+                        # Only show in 30 minute intervals
+                        if prev_stamp and ((prev_stamp - last_updated_stamp) < timedelta(minutes=30)):
+                            continue
+                        text += "<tr><td>{}</td><td>{}</td></tr>\n".format(last_updated_stamp.strftime(TIME_FORMAT), state)
+                        prev_stamp = last_updated_stamp
+                        count += 1
+            text += "</table>\n"
+        else:
+            text += "<h2>Select an entity</h2>\n"
 
         # Return web response
         text += "</body></html>\n"
@@ -1943,6 +1948,7 @@ window.addEventListener('resize', function() {
     </div>
     <a href='./dash'>Dash</a>
     <a href='./plan'>Plan</a>
+    <a href='./entity'>Entities</a>
     <a href='./charts'>Charts</a>
     <a href='./config'>Config"""
             + config_warning
