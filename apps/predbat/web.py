@@ -422,11 +422,11 @@ class WebInterface:
             background-color: #333;
             color: #e0e0e0;
         }
-        body.dark-mode .default, 
+        body.dark-mode .default,
         body.dark-mode .cfg_default {
             background-color: #121212;
         }
-        body.dark-mode .modified, 
+        body.dark-mode .modified,
         body.dark-mode .cfg_modified {
             background-color: #662222;
         }
