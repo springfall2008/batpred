@@ -253,6 +253,7 @@ weblink
 welink
 writeonly
 xaxis
+yaxistooltip
 xlabel
 xload
 xticks
