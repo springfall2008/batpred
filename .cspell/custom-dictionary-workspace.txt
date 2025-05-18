@@ -253,10 +253,10 @@ weblink
 welink
 writeonly
 xaxis
-yaxistooltip
 xlabel
 xload
 xticks
 yaxis
+yaxistooltip
 ylabel
 zappi
