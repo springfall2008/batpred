@@ -227,6 +227,7 @@ stdlib
 stepline
 sunsynk
 syscmd
+tabindex
 tasmota
 tdata
 tdiff
