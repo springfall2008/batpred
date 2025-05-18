@@ -78,14 +78,21 @@ class WebInterface:
                 state = float(state) * scale
                 if pounds:
                     state = dp2(state / 100)
-                last_updated_time = item[last_updated_key]
-                last_updated_stamp = str2time(last_updated_time)
             except (ValueError, TypeError):
                 if isinstance(state, str):
                     if state.lower() in ["on", "true", "yes"]:
                         state = 1
                     elif state.lower() in ["off", "false", "no"]:
                         state = 0
+                    else:
+                        continue
+                else:
+                    continue
+
+            try:
+                last_updated_time = item[last_updated_key]
+                last_updated_stamp = str2time(last_updated_time)
+            except (ValueError, TypeError):
                 continue
 
             day_stamp = last_updated_stamp.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -443,6 +450,44 @@ class WebInterface:
         body.dark-mode .apexcharts-xaxis-label,
         body.dark-mode .apexcharts-yaxis-label {
             fill: #e0e0e0 !important;
+        }
+        /* Dark mode tooltip styles */
+        body.dark-mode .apexcharts-tooltip {
+            background: #333 !important;
+            color: #e0e0e0 !important;
+            border: 1px solid #555 !important;
+        }
+        body.dark-mode .apexcharts-tooltip-title {
+            background: #444 !important;
+            color: #e0e0e0 !important;
+            border-bottom: 1px solid #555 !important;
+        }
+        body.dark-mode .apexcharts-tooltip-series-group {
+            border-bottom: 1px solid #555 !important;
+        }
+        body.dark-mode .apexcharts-tooltip-text {
+            color: #e0e0e0 !important;
+        }
+        body.dark-mode .apexcharts-tooltip-text-y-value,
+        body.dark-mode .apexcharts-tooltip-text-goals-value,
+        body.dark-mode .apexcharts-tooltip-text-z-value {
+            color: #e0e0e0 !important;
+        }
+        body.dark-mode .apexcharts-tooltip-marker {
+            box-shadow: 0 0 0 1px #444 !important;
+        }
+        body.dark-mode .apexcharts-tooltip-text-label {
+            color: #afd2ff !important;
+        }
+        body.dark-mode .apexcharts-xaxistooltip,
+        body.dark-mode .apexcharts-yaxistooltip {
+            background: #333 !important;
+            color: #e0e0e0 !important;
+            border: 1px solid #555 !important;
+        }
+        body.dark-mode .apexcharts-xaxistooltip-text,
+        body.dark-mode .apexcharts-yaxistooltip-text {
+            color: #e0e0e0 !important;
         }
 
         .menu-bar {
@@ -1160,13 +1205,24 @@ body.dark-mode .log-menu a.active {
         text += """<body>
 <style>
 .charts-menu {
+tabindex="0"  <!-- Make the menu focusable -->
     background-color: #ffffff;
-    overflow: hidden;
+    overflow-x: auto; /* Enable horizontal scrolling */
+    white-space: nowrap; /* Prevent menu items from wrapping */
     display: flex;
     align-items: center;
     margin-bottom: 6px;
     border-bottom: 1px solid #ddd;
     padding: 4px 0;
+    -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+    scrollbar-width: thin; /* Firefox */
+    scrollbar-color: #4CAF50 #f0f0f0; /* Firefox */
+}
+
+.charts-menu h3 {
+    margin: 0 10px;
+    flex-shrink: 0; /* Prevent shrinking */
+    white-space: nowrap; /* Prevent text wrapping */
 }
 
 .charts-menu a {
@@ -1177,6 +1233,9 @@ body.dark-mode .log-menu a.active {
     font-size: 14px;
     border-radius: 4px;
     margin: 0 2px;
+    flex-shrink: 0; /* Prevent items from shrinking */
+    white-space: nowrap;
+    display: inline-block;
 }
 
 .charts-menu a:hover {
@@ -1193,6 +1252,11 @@ body.dark-mode .log-menu a.active {
 body.dark-mode .charts-menu {
     background-color: #1e1e1e;
     border-bottom: 1px solid #333;
+    scrollbar-color: #4CAF50 #333; /* Firefox */
+}
+
+body.dark-mode .charts-menu h3 {
+    color: #e0e0e0;
 }
 
 body.dark-mode .charts-menu a {
@@ -1209,6 +1273,21 @@ body.dark-mode .charts-menu a.active {
     color: white;
 }
 </style>
+<script>
+// Initialize the charts menu scrolling functionality
+document.addEventListener("DOMContentLoaded", function() {
+    // Scroll active item into view
+    setTimeout(function() {
+        const activeItem = document.querySelector('.charts-menu a.active');
+        if (activeItem) {
+            const menuBar = document.querySelector('.charts-menu');
+            const activeItemLeft = activeItem.offsetLeft;
+            const menuBarWidth = menuBar.clientWidth;
+            menuBar.scrollLeft = activeItemLeft - menuBarWidth / 2 + activeItem.clientWidth / 2;
+        }
+    }, 100);
+});
+</script>
 """
 
         # Define which chart is active

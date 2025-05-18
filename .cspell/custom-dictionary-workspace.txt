@@ -227,6 +227,7 @@ stdlib
 stepline
 sunsynk
 syscmd
+tabindex
 tasmota
 tdata
 tdiff
@@ -253,9 +254,11 @@ weblink
 welink
 writeonly
 xaxis
+xaxistooltip
 xlabel
 xload
 xticks
 yaxis
+yaxistooltip
 ylabel
 zappi
