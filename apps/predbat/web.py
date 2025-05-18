@@ -307,6 +307,44 @@ class WebInterface:
         unit_of_measurement = attributes.get("unit_of_measurement", "")
         friendly_name = attributes.get("friendly_name", "")
 
+        # Add entity dropdown selector
+        text += """<div style="margin-bottom: 20px;">
+            <form id="entitySelectForm" style="display: flex; align-items: center;">
+                <label for="entitySelect" style="margin-right: 10px; font-weight: bold;">Select Entity: </label>
+                <select id="entitySelect" name="entity_id" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; flex-grow: 1; max-width: 500px;" onchange="document.getElementById('entitySelectForm').submit();">
+        """
+        
+        # Add app list entries to dropdown
+        app_list = ["predbat"]
+        for entity_id in self.base.dashboard_index_app.keys():
+            app = self.base.dashboard_index_app[entity_id]
+            if app not in app_list:
+                app_list.append(app)
+        
+        # Group entities by app in the dropdown
+        for app in app_list:
+            text += f'<optgroup label="{app[0].upper() + app[1:]} Entities">'
+            
+            if app == "predbat":
+                entity_list = self.base.dashboard_index
+            else:
+                entity_list = []
+                for entity_id in self.base.dashboard_index_app.keys():
+                    if self.base.dashboard_index_app[entity_id] == app:
+                        entity_list.append(entity_id)
+            
+            for entity_id in entity_list:
+                entity_friendly_name = self.base.dashboard_values.get(entity_id, {}).get("attributes", {}).get("friendly_name", entity_id)
+                selected = "selected" if entity_id == entity else ""
+                text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>'
+            
+            text += '</optgroup>'
+            
+        text += """
+                </select>
+            </form>
+        </div>"""
+
         text += "<table>\n"
         text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
         text += self.html_get_entity_text(entity)
@@ -1655,6 +1693,8 @@ body {
     white-space: nowrap;
     flex-shrink: 0; /* Prevent items from shrinking */
 }
+
+
 
 .menu-bar a:hover {
     background-color: #f0f0f0;
