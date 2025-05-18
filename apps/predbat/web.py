@@ -1205,6 +1205,7 @@ body.dark-mode .log-menu a.active {
         text += """<body>
 <style>
 .charts-menu {
+tabindex="0"  <!-- Make the menu focusable -->
     background-color: #ffffff;
     overflow-x: auto; /* Enable horizontal scrolling */
     white-space: nowrap; /* Prevent menu items from wrapping */
