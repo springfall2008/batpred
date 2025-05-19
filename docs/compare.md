@@ -108,18 +108,18 @@ If you do not set an import or export rate for a particular tariff then your exi
 
 By default, the comparison will be run at Midnight every night and saved for the entire day.
 
-You can view the comparison on the [Predbat web interface](output-data.md#compare-view) under the 'Compare' view and also manually trigger a new comparison by hitting the 'Compare now' button, or by turning on **switch.predbat_compare_active**.
+You can view the comparison on the [Predbat web interface](web-interface.md#compare-view) under the 'Compare' view.
+
+You can manually trigger a new comparison by hitting the 'Compare now' button, or by turning on **switch.predbat_compare_active**.
 
 When a compare is running **switch.predbat_compare_active** will be turned on, otherwise it will be off.
 
-Predbat will highlight which tariff may be the best cost-wise for the next 24-hour period based on the plan optimisation metrics you have defined. The metric
-includes the value of the contents of your battery and iBoost that has been diverted during this period.
+Predbat will highlight which tariff may be the best cost-wise for the next 24-hour period based on the plan optimisation metrics you have defined.
+The metric includes the value of the contents of your battery and iBoost that has been diverted during this period.
 
 The predicted cost is also shown, but keep in mind ending the day with an empty battery may be cheaper today but cost more tomorrow.
 
-![image](https://github.com/user-attachments/assets/399866a1-7d86-457d-b525-7c2e1fdf683b)
-
-![image](https://github.com/user-attachments/assets/b7c7f9a3-8a80-4abf-a08c-4da62b9258fe)
+![image](images/web-interface-compare-view.png)
 
 ## Comparison sensors
 

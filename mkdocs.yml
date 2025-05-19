@@ -20,6 +20,7 @@ nav:
     - manual-api.md
   - 'Viewing Predbat data':
     - output-data.md
+    - web-interface.md
     - predbat-plan-card.md
     - creating-charts.md
     - compare.md
