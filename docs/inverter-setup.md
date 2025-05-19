@@ -165,10 +165,9 @@ For this integration, the key elements are:
 
 - Hardware - [sofar2mqtt EPS board](https://www.instructables.com/Sofar2mqtt-Remote-Control-for-Sofar-Solar-Inverter/) - Relatively easy to solder and flash, or can be bought pre-made.
 - Software - [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) - MQTT integration
-- Home Assistant configuration - [sofar_inverter.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yml) package (in templates directory)
-with the MQTT sensors. This is the default with a couple of additional inputs to support battery capacity. This should be installed in Home Assistant.
-- Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory).
-This file should be copied to apps.yaml
+- Home Assistant configuration - [sofar_inverter.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yaml) (in templates directory),
+defines the custom HA entities and should be added to HA's `configuration.yaml`. This is the default Sofar HA configuration with a couple of additional inputs to support battery capacity.
+- Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory). This file should be copied to apps.yaml
 
 - Please note that the inverter needs to be put into "Passive Mode" for the sofar2mqtt to control the inverter.
 - This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%
@@ -193,9 +192,8 @@ The discussion ticket is here: <https://github.com/springfall2008/batpred/issues
 - Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
 and **switch.solaredge_i1_advanced_power_control** must be on.
 
-- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template within your Home Assistant configuration.yml
-Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in apps.yaml
-if you can't get it to work
+- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template within your Home Assistant `configuration.yaml`.
+Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in apps.yaml if you can't get it to work
 
 ```yaml
 template:

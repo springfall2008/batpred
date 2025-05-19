@@ -509,7 +509,7 @@ or
 
 - **battery_power** - Current battery power in watts
 - **battery_voltage** - Current battery voltage (only needed for inverters controlled via amps)
-- **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 2500)
+- **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh
 - **battery_min_soc** - When set limits the target SOC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve setting in %

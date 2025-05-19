@@ -34,9 +34,6 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
 
-  # Max inverter power from battery
-  battery_rate_max:
-    - 3000
   # Battery capacity in kWh
   soc_max:
     - 6.5
@@ -92,6 +89,10 @@ pred_bat:
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
   inverter_limit: 3245
+
+  # Set to the maximum rate your inverter can charge your battery at (in Watts)
+  battery_rate_max:
+    - 3000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit

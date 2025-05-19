@@ -109,8 +109,9 @@ pred_bat:
   discharge_rate:
     - sensor.sunsynk_discharge_rate_calc # Needs template sensor see docs
 
+  # Set to the maximum rate your inverter can charge your battery at (in Watts)
   battery_rate_max:
-    - 8000  # The maximum rate of the battery charge/discharge in watts **required to lift the 2600w default limit**
+    - 8000
 
   battery_voltage:
     - sensor.sunsynk_battery_voltage
