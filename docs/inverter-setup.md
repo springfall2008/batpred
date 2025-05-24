@@ -6,7 +6,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | :---------------------------- | :------------- | :------------ |
    | [GivEnergy with GivTCP](#givenergy-with-givtcp) | [GivTCP](https://github.com/britkat1980/ha-addons) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
    | [Solis Hybrid inverters](#solis-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
-   | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
+   | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)<BR>in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
    | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) |  [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
    | [Huawei inverters](#huawei-inverters) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
    | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
@@ -17,7 +17,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [LuxPower](#lux-power) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [solar_assistant_growatt.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt.yaml) |
-   | [Sigenergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
+   | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -165,10 +165,9 @@ For this integration, the key elements are:
 
 - Hardware - [sofar2mqtt EPS board](https://www.instructables.com/Sofar2mqtt-Remote-Control-for-Sofar-Solar-Inverter/) - Relatively easy to solder and flash, or can be bought pre-made.
 - Software - [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) - MQTT integration
-- Home Assistant configuration - [sofar_inverter.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yml) package (in templates directory)
-with the MQTT sensors. This is the default with a couple of additional inputs to support battery capacity. This should be installed in Home Assistant.
-- Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory).
-This file should be copied to apps.yaml
+- Home Assistant configuration - [sofar_inverter.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yaml) (in templates directory),
+defines the custom HA entities and should be added to HA's `configuration.yaml`. This is the default Sofar HA configuration with a couple of additional inputs to support battery capacity.
+- Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory). This file should be copied to apps.yaml
 
 - Please note that the inverter needs to be put into "Passive Mode" for the sofar2mqtt to control the inverter.
 - This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%
@@ -193,9 +192,8 @@ The discussion ticket is here: <https://github.com/springfall2008/batpred/issues
 - Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
 and **switch.solaredge_i1_advanced_power_control** must be on.
 
-- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template within your Home Assistant configuration.yml
-Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in apps.yaml
-if you can't get it to work
+- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template within your Home Assistant `configuration.yaml`.
+Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in apps.yaml if you can't get it to work
 
 ```yaml
 template:
@@ -530,7 +528,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 - make sure your charge rate is in W and not in kW. The above integration converts the values to kW by default.
 - Copy the template sigenergy_sigenstor.yaml template over your apps.yaml and edit for your system.
 
-  The following additions are needed to facilitate integration with Predbat and need to put put in Home Assistant configuration.yaml:
+  The following additions are needed to facilitate integration with Predbat and need to put put in Home Assistant `configuration.yaml`:
 
 ```yaml
     input_select:
@@ -650,7 +648,6 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
                   round(0) | int }}
         mode: single
 
-
     input_number:
       charge_rate:
         name: Battery charge rate
@@ -667,6 +664,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
         max: 20000
         step: 1
         mode: box
+```
 
 ## I want to add an unsupported inverter to Predbat
 

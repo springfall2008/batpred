@@ -136,8 +136,6 @@ pred_bat:
     - sensor.battery_soc
   soc_max:
     - 8.29
-  battery_rate_max:
-    - 4200
   reserve:
     - number.min_soc_on_grid
   battery_min_soc:
@@ -167,6 +165,10 @@ pred_bat:
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
     - 5000
+
+  # Set the maximum charge/discharge rate of the battery
+  battery_rate_max:
+    - 4200
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit

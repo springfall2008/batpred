@@ -7,16 +7,9 @@ There can never be a single Predbat dashboard that suits every user, so instead 
 
 ## Web interface
 
-**NOTE:** The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.
+The [Predbat Web Interface](web-interface.md) provides an easy to use way to see and change different aspects of your Predbat system including view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles.
 
-Predbat has a web interface active and can be opened via the Predbat Add-on by clicking on 'Web UI'. The web interface can be added to your sidebar by turning on the 'Show in Sidebar' toggle.
-
-If you are not using the Predbat Add-on then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or Native on your Linux/MAC).
-
-The Web interface can allow you to view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles. You can change your view using
-the top menu bar.
-
-![image](https://github.com/user-attachments/assets/4d7c1129-89bd-4a11-81ba-6bc8dec797cb)
+![image](images/web-interface-plan-view.png)
 
 ## Displaying output data
 
@@ -257,16 +250,18 @@ Credit @DJBenson for the code.
 
 ### Viewing the Predbat plan
 
-- **predbat.plan_html** - A sensor that contains an HTML render of the Predbat  predicted best plan, detailing import and export rates, predicted house load, solar generation,
+- **predbat.plan_html** - A sensor that contains an HTML render of the Predbat predicted best plan, detailing import and export rates, predicted house load, solar generation, any solar clipping,
 battery SoC, car and iBoost charging, and Predbat's planned charging and discharging activities.
 
-It is recommended to [Create the Predbat Plan card](predbat-plan-card.md) as an easy way to see the plan that Predbat has created.
+The plan is contained in the 'html' attribute, and its recommended to [Create the Predbat Plan card](predbat-plan-card.md) as an easy way to see the plan that Predbat has created.
 
-If you are using the Predbat add-on then the Predbat plan can also be viewed via the 'Plan' tab of the [Predbat web console](#web-interface).
+The sensor also contains the 'text' attribute which gives a HTML formatted brief text description of the Predbat plan.
+
+If you are using the Predbat add-on or docker then the Predbat plan can also be viewed via the ['Plan' view of the Predbat web interface](web-interface#plan-view), and the text description via the ['Dash' view](web-interface.md#dash-view).
 
 ### Graphing the Predbat predictions
 
-A set of Apex Charts can also be created to see graphically what Predbat plans to do - [Creating the charts](creating-charts.md).
+A set of Apex Charts can also be created to see graphically what Predbat plans to do - [Creating the charts](creating-charts.md).  Renditions of the key charts can also be seen in the ['Charts' view of the Predbat web interface](web-interface.md#charts-view).
 
 ## Basic status
 
@@ -598,7 +593,7 @@ or if you want to verify that Predbat is running OK.
 
 There is a lot of output in the logfile, this is normal!
 
-If you are using the Predbat add-on then the logfile can easily be viewed via the 'Log' tab of the [Predbat web console](#web-interface).
+If you are using the Predbat add-on then the logfile can easily be viewed via the 'Log' tab of the [Predbat web interface](web-interface.md#log-view).
 
 To directly view the physical logfile, it can be found in one of three different directories in Home Assistant with slightly different filenames depending on how you installed Predbat:
 
@@ -776,7 +771,7 @@ triggers:
       minutes: 5
     variables:
       alert_text: >-
-        predbat status is {{ states('predbat.status') }}, error={{
+        Predbat status is {{ states('predbat.status') }}, error={{
         state_attr('predbat.status', 'error') }}
   - trigger: state
     alias: Predbat is in error status for 5 minutes
@@ -787,7 +782,7 @@ triggers:
       minutes: 5
     variables:
       alert_text: >-
-        predbat status is {{ states('predbat.status') }}, error={{
+        Predbat status is {{ states('predbat.status') }}, error={{
         state_attr('predbat.status', 'error') }}
   - trigger: state
     alias: Predbat status.last_updated has not changed for 20 minutes

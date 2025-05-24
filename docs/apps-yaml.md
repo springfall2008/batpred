@@ -170,13 +170,13 @@ Valid values are:
   threads: auto
 ```
 
-## Web interface
+### Web interface
 
-Docker users can change the web port by setting **web_port** to a new port number, the default of 5052 must always be used for the Predbat add-on.
+Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat add-on.
 
 ```yaml
   web_port: 5052
-````
+```
 
 ### notify_devices
 
@@ -509,7 +509,7 @@ or
 
 - **battery_power** - Current battery power in watts
 - **battery_voltage** - Current battery voltage (only needed for inverters controlled via amps)
-- **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 2500)
+- **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh
 - **battery_min_soc** - When set limits the target SOC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve setting in %
@@ -758,6 +758,12 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
 
+## Energy Comparison
+
+You can configure in apps.yaml a **compare_list** section to define a list of Energy tariffs for Predbat to compare based on your predicted load and solar generation.
+
+See the [Predbat Compare feature](compare.md) for details of how to define the tariffs to be compared.
+
 ## Car Charging Integration
 
 Predbat can include electric vehicle charging in its plan and manage the battery activity so that the battery isn't discharged into your car when the car is charging
@@ -813,7 +819,7 @@ car_charging_energy can be set to a list of energy sensors, one per line if you 
     - sensor.mixergy_ID_energy
 ```
 
-- **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range of 0.1 to 1.0)
+- **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range of 0 to 1.0)
 to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW).
 
 If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure the following Home Assistant entity:

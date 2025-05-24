@@ -609,8 +609,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.download_predbat_releases()
 
         if self.get_arg("template", False):
-            self.log("Error: Template Configuration, please edit apps.yaml")
-            self.record_status("Error: Template Configuration, please edit apps.yaml", had_errors=True)
+            self.log("Error: You have not completed editing the apps.yaml template, Predbat cannot run. Please comment out 'Template: True' line in apps.yaml to start Predbat running")
+            self.record_status("Error: Template Configuration, remove 'Template: True' line in apps.yaml to start predbat running", had_errors=True)
             return
 
         self.expose_config("active", True)

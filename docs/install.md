@@ -332,6 +332,8 @@ multiple import rates during the day, and variable tariffs such as Agile, etc.
 
 The detailed [Predbat Customisation Guide](customisation.md) details all the Predbat configuration items (switches, input numbers, etc) in Home Assistant, and what each of them does.
 
+The Predbat [Web Interface](web-interface.md) provides an easy way to view all of the Predbat configuration items, check apps.yaml for errors, and view the logfile.
+
 ## Ready to light the touch-paper
 
 By now you should have successfully installed and configured Predbat and the other components it is dependent upon
@@ -341,7 +343,7 @@ By now you should have successfully installed and configured Predbat and the oth
 
 You have checked the [Predbat log file](output-data.md#predbat-logfile) doesn't have any errors (there is a lot of output in the logfile, this is normal).
 
-You have [configured Predbat's control entities](customisation.md), created some [dashboard pages to control and monitor Predbat](output-data.md#displaying-output-data),
+You have [configured Predbat's control entities](customisation.md), [checked for apps.yaml errors](web-interface.md#appsyaml-view), created some [dashboard pages to control and monitor Predbat](output-data.md#displaying-output-data),
 and are ready to start Predbat generating your plan.
 
 You may initially want to set **select.predbat_mode** to *Monitor* to see how Predbat operates, e.g. by studying the [Predbat Plan](predbat-plan-card.md).

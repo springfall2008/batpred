@@ -2,6 +2,8 @@
 
 Predheat attempts to model water-based central heating systems based on a boiler or a heat pump.
 
+Further details can be found in the [Predheat YouTube video](https://youtu.be/_-KIQen67zI)
+
 ## Operation
 
 The app runs every 5 minutes and it will automatically update its prediction for the heating system for the next period, up to a maximum of 48 hours.

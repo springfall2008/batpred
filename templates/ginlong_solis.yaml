@@ -28,9 +28,10 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
 
-  # Max inverter power from battery
+  # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
     - 3600
+
   # Battery capacity in kWh
   soc_max:
     - 10

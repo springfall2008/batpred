@@ -35,9 +35,10 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
 
-  # Max inverter power from battery
+  # Set to the maximum rate your inverter can charge your battery at (in Watts)
   battery_rate_max:
     - 5000
+
   # Battery capacity in kWh
   soc_max:
     - 11.6
