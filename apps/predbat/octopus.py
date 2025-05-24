@@ -16,6 +16,7 @@ from datetime import timezone
 import time
 import os
 import yaml
+import traceback
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -359,6 +360,7 @@ class OctopusAPI:
 
             except Exception as e:
                 self.log("Error: Octopus API: {}".format(e))
+                self.log("Error: " + traceback.format_exc())
 
             await asyncio.sleep(60)
         await self.api.async_close()

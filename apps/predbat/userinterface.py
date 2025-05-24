@@ -520,7 +520,7 @@ class UserInterface:
                 else:
                     return True
             else:
-                self.log("Warn: Badly formed CONFIG enable item {}, please raise a Github ticket".format(item["name"]))
+                return False
         return True
 
     async def async_update_save_restore_list(self):

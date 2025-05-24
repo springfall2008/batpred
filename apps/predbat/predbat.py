@@ -36,10 +36,10 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.19.14"
+THIS_VERSION = "v8.20.0"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -290,6 +290,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         reset_prediction_globals()
         self.text_plan = "Computing please wait..."
         self.base_load = 0
+        self.db_manager = None
         self.plan_debug = False
         self.arg_errors = {}
         self.ha_interface = None
@@ -956,7 +957,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                         continue
 
                 for expected_type in expected_types:
-                    if expected_type == "integer" or expected_type == "integer_list":
+                    if expected_type == "none":
+                        if self.get_arg(name, indirect=False) is None:
+                            matches = True
+                            break
+                    elif expected_type == "integer" or expected_type == "integer_list":
                         if expected_type == "integer" and isinstance(value, int):
                             value = [value]
                         elif expected_type == "integer_list":
@@ -1078,7 +1083,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                                     errors += 1
                                     break
                     elif expected_type == "int_float_dict":
-                        if instance(value, dict):
+                        if isinstance(value, dict):
                             matches = True
                             for key in value:
                                 if not self.validate_is_int(key):
@@ -1148,10 +1153,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
                                 state = self.get_state_wrapper(sensor)
                                 if state is None:
-                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} returned value None".format(name, sensor))
-                                    self.arg_errors[name] = "Invalid value None in element {}".format(sensor)
-                                    errors += 1
-                                    break
+                                    self.log("Expected types {} state {}".format(sensor_types, state))
+                                    if "none" in sensor_types:
+                                        # Allow None values for sensors
+                                        continue
+                                    else:
+                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} returned value None".format(name, sensor))
+                                        self.arg_errors[name] = "Invalid value None in element {}".format(sensor)
+                                        errors += 1
+                                        break
 
                                 validated = False
                                 if "float" in sensor_types and self.validate_is_float(state):
@@ -1254,9 +1264,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
             raise e
 
-        # Update db
-        self.ha_interface.db_tick()
-
         # Run every N minutes aligned to the minute
         seconds_now = (now - self.midnight).seconds
 
@@ -1303,6 +1310,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             await self.ge_cloud_direct.stop()
         if self.octopus_api_direct:
             self.octopus_api_direct.stop()
+        if self.ha_interface:
+            self.ha_interface.stop()
 
         await asyncio.sleep(0)
         if hasattr(self, "pool"):
@@ -1342,7 +1351,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 raise e
             finally:
                 self.prediction_started = False
-            self.ha_interface.db_tick()
             self.prediction_started = False
 
     def check_entity_refresh(self):
@@ -1368,9 +1376,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         else:
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
-
-        # Database tick
-        self.ha_interface.db_tick()
 
     def run_time_loop(self, cb_args):
         """
@@ -1404,7 +1409,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.prediction_started = False
             if config_changed:
                 self.create_entity_list()
-            self.ha_interface.db_tick()
             self.prediction_started = False
 
     def run_time_loop_balance(self, cb_args):
