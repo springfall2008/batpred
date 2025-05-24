@@ -1,13 +1,18 @@
 # -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2024 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
 # Database Manager for Predbat Home Battery System
 # This module handles all SQL Lite database operations.
 # -----------------------------------------------------------------------------
 
-import sqlite3
-import json
-from datetime import datetime, timedelta
-
-TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
+from datetime import timedelta
+import asyncio
+import time
+import traceback
+import threading
+from db_engine import DatabaseEngine, TIME_FORMAT_DB
 
 
 class DatabaseManager:
@@ -15,220 +20,136 @@ class DatabaseManager:
         self.base = base
         self.log = base.log
         self.db_days = db_days
-        self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
-        self.db_cursor = self.db.cursor()
-        self.mirror_updates = []
+        self.stop_thread = False
+        self.db_queue = []
+        self.queue_id = 0
+        self.queue_results = {}
+        self.sync_event = threading.Event()
+        self.async_event = asyncio.Event()
+        self.return_event = threading.Event()
 
-    def cleanup_db(self):
+    def bridge_event(self, loop):
+        self.sync_event.wait()
+        loop.call_soon_threadsafe(self.async_event.set)
+
+    async def start(self):
         """
-        This searches all tables for data older than N days and deletes it
+        Initialize the database and clean up old data
         """
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS entities (entity_index INTEGER PRIMARY KEY AUTOINCREMENT, entity_name TEXT KEY UNIQUE)")
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
-        self.db_cursor.execute(
-            "DELETE FROM states WHERE datetime < ? AND keep != ?",
-            (
-                self.base.now_utc_real - timedelta(days=self.db_days),
-                "D",
-            ),
-        )
-        self.db.commit()
+
+        self.db_engine = DatabaseEngine(self.base, self.db_days)
+
+        loop = asyncio.get_running_loop()
+
+        # Start the bridge in a thread
+        threading.Thread(target=self.bridge_event, args=(loop,), daemon=True).start()
+
+        self.log("db_manager: Started")
+
+        while not self.stop_thread:
+            if not self.db_queue:
+                await self.async_event.wait()
+                continue
+            else:
+                item = self.db_queue.pop(0)
+
+            try:
+                queue_id, command, info = item[0], item[1], item[2]
+                if command == "get_history":
+                    history = self.db_engine._get_history_db(info["sensor"], info["now"], info["days"])
+                    self.queue_results[queue_id] = history
+                    self.return_event.set()  # Notify that the result is ready
+                elif command == "set_state":
+                    self.db_engine._set_state_db(info["entity_id"], info["state"], info["attributes"], timestamp=info["timestamp"])
+                elif command == "get_all_entities":
+                    entities = self.db_engine._get_all_entities_db()
+                    self.queue_results[queue_id] = entities
+                    self.return_event.set()  # Notify that the result is ready
+                elif command == "get_state":
+                    state = self.db_engine._get_state_db(info["entity_id"])
+                    self.queue_results[queue_id] = state
+                    self.return_event.set()  # Notify that the result is ready
+                elif command == "stop":
+                    self.stop_thread = True
+                    self.log("db_manager: stopping")
+
+            except Exception as e:
+                self.log(f"Error in database thread: {e}")
+                self.log("Error: " + traceback.format_exc())
+
+        self.db_engine._close()
+        self.log("db_manager: Stopped")
+
+    def send_via_ipc(self, command, info, expect_response=False):
+        """
+        Send a command to the database manager thread via IPC
+        """
+        queue_id = self.queue_id
+        self.queue_id += 1
+        self.db_queue.append((queue_id, command, info))
+        self.return_event.clear()  # Clear the event before waiting
+        self.sync_event.set()  # Notify the thread to process the queue
+
+        if expect_response:
+            count = 0.0
+            while (queue_id not in self.queue_results) and count < 15.0:
+                self.return_event.wait(0.1)
+                if queue_id not in self.queue_results:
+                    time.sleep(0.1)  # Wait a bit before checking again
+                count += 0.1
+            if queue_id in self.queue_results:
+                result = self.queue_results[queue_id]
+                del self.queue_results[queue_id]
+                return result
+            else:
+                self.log("Error: No response received for command '{}' after waiting".format(command))
+                return None
+        return None
+
+    def stop(self):
+        """
+        Close the database connection
+        """
+        self.stop_thread = True
+        queue_id = self.queue_id
+        self.queue_id += 1
+        self.send_via_ipc("stop", {}, expect_response=False)
 
     def get_state_db(self, entity_id):
         """
-        Get entity current state from the SQLLite database
+        Get entity current state but run it from the DB thread
         """
-        entity_id = entity_id.lower()
-        entity_index = self.get_entity_index_db(entity_id)
-        if not entity_index:
-            return None
+        # Queue the request using IPC and wait for the result
 
-        self.db_cursor.execute("SELECT datetime, state, attributes FROM latest WHERE entity_index=?", (entity_index,))
-        res = self.db_cursor.fetchone()
-        if res:
-            state = res[1]
-            attributes = {}
-            try:
-                attributes = json.loads(res[2])
-            except json.JSONDecodeError:
-                pass
-            return {"last_updated": res[0] + "Z", "state": state, "attributes": attributes}
-        else:
-            return None
+        result = self.send_via_ipc("get_state", {"entity_id": entity_id}, expect_response=True)
+        return result
 
-    def get_entity_index_db(self, entity_id):
+    def get_all_entities_db(self):
         """
-        Get the entity index from the SQLLite database
+        Get all entity names from the SQLLite database but run it from the DB thread
         """
-        self.db_cursor.execute("SELECT entity_index FROM entities WHERE entity_name=?", (entity_id,))
-        res = self.db_cursor.fetchone()
-        if res:
-            return res[0]
-        else:
-            return None
+        # Queue the request using IPC and wait for the result
 
-    def get_all_entities(self):
-        """
-        Get all entity names from the SQLLite database
-        """
-        self.db_cursor.execute("SELECT entity_name FROM entities")
-        rows = self.db_cursor.fetchall()
-        return [row[0] for row in rows]
-
-    def set_state_db_later(self, entity_id, state, attributes, timestamp=None):
-        if timestamp:
-            now_utc = timestamp
-        else:
-            now_utc = self.base.now_utc_real
-
-        # Convert time to GMT+0
-        now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)
-        now_utc_txt = now_utc.strftime(TIME_FORMAT_DB)
-
-        item = {"last_changed": now_utc_txt, "state": state, "attributes": attributes}
-        self.mirror_updates.append({"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": self.base.now_utc_real})
-        return item
+        result = self.send_via_ipc("get_all_entities", {}, expect_response=True)
+        return result
 
     def set_state_db(self, entity_id, state, attributes, timestamp=None):
-        """
-        Records the state of a predbat entity into the SQLLite database
-        There is one table per Entity created with history recorded
-        """
-        state = str(state)
-
-        # Put the entity_id into entities table if its not in already
-        self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
-        self.db.commit()
-        entity_index = self.get_entity_index_db(entity_id)
-
-        # Use of last_changed allows the state to be recorded at a different time
-        if timestamp:
+        if timestamp is not None:
             now_utc = timestamp
         else:
             now_utc = self.base.now_utc_real
 
         # Convert time to GMT+0
         now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)
-        now_utc_txt = now_utc.strftime(TIME_FORMAT_DB)
+        self.send_via_ipc("set_state", {"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": now_utc})
 
-        system = {}
-
-        attributes_record = {}
-        attributes_record_full = {}
-        for key in attributes:
-            value = attributes[key]
-            # Ignore large fields which will increase the database size
-            if len(str(value)) < 128:
-                attributes_record[key] = attributes[key]
-            attributes_record_full[key] = attributes[key]
-        attributes_record_json = json.dumps(attributes_record)
-        attributes_record_full_json = json.dumps(attributes_record_full)
-        system_json = json.dumps(system)
-
-        # Record the state of the entity
-        # If the entity value and attributes are unchanged then don't record the new state
-        self.db_cursor.execute("SELECT datetime, state, attributes, system, keep FROM states WHERE entity_index=? ORDER BY datetime DESC LIMIT 1", (entity_index,))
-        last_record = self.db_cursor.fetchone()
-        keep = "D"
-        if last_record:
-            last_datetime = datetime.strptime(last_record[0], TIME_FORMAT_DB)
-            last_state = last_record[1]
-            last_attributes = last_record[2]
-            last_system = last_record[3]
-            last_keep = last_record[4]
-            if last_state == state and last_attributes == attributes_record_json and last_system == system_json:
-                return
-
-            # Compute keep value
-            last_datetime_datestr = last_datetime.strftime("%Y-%m-%d")
-            now_datetime_datestr = now_utc.strftime("%Y-%m-%d")
-            if last_datetime_datestr == now_datetime_datestr:
-                if last_datetime.hour == now_utc.hour:
-                    keep = "I"
-                else:
-                    keep = "H"
-
-        # Insert the new state record
-        try:
-            self.db_cursor.execute("DELETE FROM states WHERE entity_index = ? AND datetime = ?", (entity_index, now_utc_txt))
-            self.db_cursor.execute(
-                "INSERT INTO states (datetime, entity_index, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    now_utc_txt,
-                    entity_index,
-                    state,
-                    attributes_record_json,
-                    system_json,
-                    keep,
-                ),
-            )
-            # Also update the latest table
-            self.db_cursor.execute("DELETE FROM latest WHERE entity_index = ?", (entity_index,))
-            self.db_cursor.execute(
-                "INSERT INTO latest (entity_index, datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    entity_index,
-                    now_utc_txt,
-                    state,
-                    attributes_record_full_json,
-                    system_json,
-                    keep,
-                ),
-            )
-            self.db.commit()
-        except sqlite3.IntegrityError:
-            self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
+        item = {"last_changed": now_utc.strftime(TIME_FORMAT_DB), "state": state, "attributes": attributes}
+        return item
 
     def get_history_db(self, sensor, now, days=30):
         """
-        Get the history for a sensor from the SQLLite database.
+        Get history but run it from the DB thread
         """
-        start = now - timedelta(days=days)
-
-        entity_index = self.get_entity_index_db(sensor)
-        if not entity_index:
-            self.log("Warn: Entity {} does not exist".format(sensor))
-            return None
-
-        # Get the history for the sensor, sorted by datetime
-        self.db_cursor.execute(
-            "SELECT datetime, state, attributes FROM states WHERE entity_index = ? AND datetime >= ? ORDER BY datetime",
-            (
-                entity_index,
-                start.strftime(TIME_FORMAT_DB),
-            ),
-        )
-        res = self.db_cursor.fetchall()
-        history = []
-        for item in res:
-            state = item[1]
-            attributes = {}
-            try:
-                attributes = json.loads(item[2])
-            except json.JSONDecodeError:
-                pass
-
-            history.append({"last_updated": item[0] + "Z", "state": state, "attributes": attributes})
-        return [history]
-
-    def db_tick(self):
-        """
-        Update the database with any new data
-        """
-        if self.mirror_updates:
-            mirror_list = self.mirror_updates[:]
-            self.mirror_updates = []
-
-            mirror_list.reverse()
-            new_mirror_list = []
-            already_done_entity = {}
-            for item in mirror_list:
-                if item["entity_id"] not in already_done_entity:
-                    new_mirror_list.append(item)
-                    already_done_entity[item["entity_id"]] = True
-            mirror_list = new_mirror_list
-            mirror_list.reverse()
-            self.log("db_manager: updating database with {} unique items".format(len(mirror_list)))
-            for item in mirror_list:
-                self.set_state_db(item["entity_id"], item["state"], item["attributes"], timestamp=item["timestamp"])
+        # Queue the request using IPC and wait for the result
+        result = self.send_via_ipc("get_history", {"sensor": sensor, "now": now, "days": days}, expect_response=True)
+        return result

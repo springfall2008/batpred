@@ -10,17 +10,16 @@
 
 import os
 from datetime import timedelta
+from datetime import datetime
 import asyncio
 from aiohttp import ClientSession, WSMsgType
 import json
 import requests
 import traceback
 import threading
-from config import TIME_FORMAT_HA, TIMEOUT
+from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 
 from db_manager import DatabaseManager  # database functions have been refactored to DatabaseManager
-
-TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
 
 
 class RunThread(threading.Thread):
@@ -67,6 +66,7 @@ class HAInterface:
         self.db_cursor = None
         self.websocket_active = False
         self.api_errors = 0
+        self.stop_thread = False
 
         self.base = base
         self.log = base.log
@@ -109,8 +109,13 @@ class HAInterface:
             # Open the SQL Lite database called predbat.db using the DatabaseManager
             self.log("Info: Opening database")
             self.db_manager = DatabaseManager(self.base, self.db_days)
-            self.log("Info: Clean data older than {} days".format(self.db_days))
-            self.db_manager.cleanup_db()
+            self.db_manager_task = self.base.create_task(self.db_manager.start())
+
+    def stop(self):
+        self.stop_thread = True
+        if self.db_manager:
+            self.log("Info: Stopping database manager")
+            self.db_manager.stop()
 
     def get_slug(self):
         """
@@ -144,7 +149,7 @@ class HAInterface:
                     await websocket.send_json({"id": id, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
 
                     async for message in websocket:
-                        if self.base.stop_thread:
+                        if self.stop_thread:
                             self.log("Info: Web socket stopping")
                             break
 
@@ -186,7 +191,7 @@ class HAInterface:
         error_count = 0
 
         while True:
-            if self.base.stop_thread or self.base.fatal_error:
+            if self.stop_thread or self.base.fatal_error:
                 self.log("Info: Web socket stopping")
                 break
             if self.base.hass_api_version >= 2 and error_count >= 10:
@@ -226,7 +231,7 @@ class HAInterface:
                         self.base.update_pending = True  # Force an update when web-socket reconnects
 
                         async for message in websocket:
-                            if self.base.stop_thread:
+                            if self.stop_thread:
                                 self.log("Info: Web socket stopping")
                                 break
 
@@ -292,11 +297,11 @@ class HAInterface:
                     self.log("Error: " + traceback.format_exc())
                     error_count += 1
 
-            if not self.base.stop_thread:
+            if not self.stop_thread:
                 self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds - error count {}".format(error_count))
                 await asyncio.sleep(5)
 
-        if not self.base.stop_thread:
+        if not self.stop_thread:
             self.log("Error: Web Socket failed to reconnect, stopping....")
             self.websocket_active = False
             raise Exception("Web Socket failed to reconnect")
@@ -363,16 +368,10 @@ class HAInterface:
             self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
             if not nodb and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
-                self.db_manager.mirror_updates.append({"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": self.base.now_utc_real})
+                if last_changed:
+                    last_changed = datetime.strptime(last_changed, TIME_FORMAT_HA_TZ)
 
-    def db_tick(self):
-        """
-        Update the database with any new data
-        """
-        if not self.db_enable:
-            return
-
-        self.db_manager.db_tick()
+                self.db_manager.set_state_db(entity_id, state, attributes, timestamp=last_changed)
 
     def update_states_db(self):
         """
@@ -381,7 +380,7 @@ class HAInterface:
         if not self.db_enable:
             return
 
-        entities = self.db_manager.get_all_entities()
+        entities = self.db_manager.get_all_entities_db()
         for entity_name in entities:
             self.update_state_db(entity_name)
 
@@ -482,7 +481,7 @@ class HAInterface:
         self.db_mirror_list[entity_id] = True
 
         if self.db_mirror_ha or self.db_primary:
-            item = self.db_manager.set_state_db_later(entity_id, state, attributes)
+            item = self.db_manager.set_state_db(entity_id, state, attributes)
             # Locally cache state until DB update happens
             self.update_state_item(item, entity_id, nodb=True)
 

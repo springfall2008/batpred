@@ -1,3 +1,9 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2024 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+
 import requests
 from datetime import timedelta, datetime, timezone
 from utils import str2time, dp1
