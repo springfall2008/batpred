@@ -3,9 +3,7 @@
 # This module handles all SQL Lite database operations.
 # -----------------------------------------------------------------------------
 
-import sqlite3
-import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 import asyncio
 import time
 import traceback
