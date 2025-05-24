@@ -1,4 +1,8 @@
 # -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2024 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
 # Database Manager for Predbat Home Battery System
 # This module handles all SQL Lite database operations.
 # -----------------------------------------------------------------------------
