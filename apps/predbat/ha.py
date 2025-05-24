@@ -21,6 +21,7 @@ from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 
 from db_manager import DatabaseManager  # database functions have been refactored to DatabaseManager
 
+
 class RunThread(threading.Thread):
     def __init__(self, coro):
         self.coro = coro
@@ -109,7 +110,6 @@ class HAInterface:
             self.log("Info: Opening database")
             self.db_manager = DatabaseManager(self.base, self.db_days)
             self.db_manager_task = self.base.create_task(self.db_manager.start())
-
 
     def stop(self):
         self.stop_thread = True
