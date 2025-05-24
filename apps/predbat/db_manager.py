@@ -11,6 +11,8 @@ import time
 import traceback
 import threading
 from db_engine import DatabaseEngine, TIME_FORMAT_DB
+
+
 class DatabaseManager:
     def __init__(self, base, db_days):
         self.base = base
@@ -36,7 +38,7 @@ class DatabaseManager:
         self.db_engine = DatabaseEngine(self.base, self.db_days)
 
         loop = asyncio.get_running_loop()
-    
+
         # Start the bridge in a thread
         threading.Thread(target=self.bridge_event, args=(loop,), daemon=True).start()
 
@@ -101,7 +103,7 @@ class DatabaseManager:
                 self.log("Error: No response received for command '{}' after waiting".format(command))
                 return None
         return None
-    
+
     def stop(self):
         """
         Close the database connection
@@ -128,7 +130,7 @@ class DatabaseManager:
 
         result = self.send_via_ipc("get_all_entities", {}, expect_response=True)
         return result
-    
+
     def set_state_db(self, entity_id, state, attributes, timestamp=None):
         if timestamp is not None:
             now_utc = timestamp
@@ -149,6 +151,3 @@ class DatabaseManager:
         # Queue the request using IPC and wait for the result
         result = self.send_via_ipc("get_history", {"sensor": sensor, "now": now, "days": days}, expect_response=True)
         return result
-
-
-

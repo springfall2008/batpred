@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 
 TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
 
-class DatabaseEngine:
 
+class DatabaseEngine:
     def __init__(self, base, db_days):
         self.base = base
         self.log = base.log
@@ -79,7 +79,7 @@ class DatabaseEngine:
             return res[0]
         else:
             return None
-        
+
     def _get_all_entities_db(self):
         """
         Get all entity names from the SQLLite database
@@ -99,7 +99,6 @@ class DatabaseEngine:
         self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
         self.db.commit()
         entity_index = self._get_entity_index_db(entity_id)
-
 
         # Convert time to GMT+0
         now_utc = timestamp
