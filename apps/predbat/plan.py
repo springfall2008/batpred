@@ -2448,6 +2448,9 @@ class Plan:
         # First optimise those at or below threshold highest to lowest (to turn down values)
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for export.
+        best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
+            self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+        )
         self.log(
             "Starting detailed optimisation end_record {} best_price_charge {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
                 self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
