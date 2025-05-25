@@ -615,10 +615,12 @@ class Prediction:
             if export_window_n >= 0:
                 discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, self.best_soc_min)
 
-            if save == 'test' and charge_window_n >= 0:
-                print("Minute {}: set_discharge_during_charge {} charge_window_n {} charge_limit_n {} soc {} charge_limit_n {} charge_rate_now {} charge_rate_now_curve {} export_window_n {} discharge_rate_now {} discharge_rate_now_curve {}".format(
-                    minute_absolute, self.set_discharge_during_charge, charge_window_n, charge_limit_n, soc, charge_limit_n, charge_rate_now, charge_rate_now_curve, export_window_n, discharge_rate_now, discharge_rate_now_curve
-                ))
+            if save == "test" and charge_window_n >= 0:
+                print(
+                    "Minute {}: set_discharge_during_charge {} charge_window_n {} charge_limit_n {} soc {} charge_limit_n {} charge_rate_now {} charge_rate_now_curve {} export_window_n {} discharge_rate_now {} discharge_rate_now_curve {}".format(
+                        minute_absolute, self.set_discharge_during_charge, charge_window_n, charge_limit_n, soc, charge_limit_n, charge_rate_now, charge_rate_now_curve, export_window_n, discharge_rate_now, discharge_rate_now_curve
+                    )
+                )
 
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc > discharge_min):
                 # Discharge enable
