@@ -163,8 +163,8 @@ class Plan:
                 export_options = [0]
 
             for export_option in export_options:
-                for modulo in [1024]: # [2, 3, 4, 6, 8, 16, 32]:
-                    for divide in [1]: # [96, 48, 32, 16, 8, 4, 3, 2, 1]:
+                for modulo in [1024]:  # [2, 3, 4, 6, 8, 16, 32]:
+                    for divide in [1]:  # [96, 48, 32, 16, 8, 4, 3, 2, 1]:
                         for charge_threshold in charge_thresholds:
                             all_n = []
                             all_d = []
@@ -2520,7 +2520,7 @@ class Plan:
                                 if hit_export >= 0 and self.export_limits_best[hit_export] < 100:
                                     continue
 
-                            if ((price_key > best_price_charge_level) and (self.charge_limit_best[window_n] == 0) and not pass_type == "low"):
+                            if (price_key > best_price_charge_level) and (self.charge_limit_best[window_n] == 0) and not pass_type == "low":
                                 continue
 
                             n_best_soc, n_best_metric, n_best_cost, n_soc_min, n_soc_min_minute, n_best_keep, n_best_cycle, n_best_carbon, n_best_import = self.optimise_charge_limit(
@@ -2591,7 +2591,7 @@ class Plan:
                             continue
 
                         # Don't remove exports during freeze pass
-                        if (pass_type == "freeze" and self.export_limits_best[window_n] == 0):
+                        if pass_type == "freeze" and self.export_limits_best[window_n] == 0:
                             continue
 
                         if self.calculate_best_export and (window_start not in self.manual_all_times):
