@@ -29,8 +29,15 @@ class DatabaseManager:
         self.return_event = threading.Event()
 
     def bridge_event(self, loop):
-        self.sync_event.wait()
-        loop.call_soon_threadsafe(self.async_event.set)
+        """
+        This function runs in a separate thread to bridge the event loop and the database manager.
+        It waits for the sync_event to be set and then sets the async_event to notify the main loop.
+        This allows the database manager to process commands asynchronously.
+        """
+        while not self.stop_thread:
+            self.sync_event.wait()
+            self.sync_event.clear()  # Clear the event to allow the loop to continue
+            loop.call_soon_threadsafe(self.async_event.set)
 
     async def start(self):
         """
@@ -49,6 +56,7 @@ class DatabaseManager:
         while not self.stop_thread:
             if not self.db_queue:
                 await self.async_event.wait()
+                self.async_event.clear()
                 continue
             else:
                 item = self.db_queue.pop(0)
