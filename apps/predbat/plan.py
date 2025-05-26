@@ -1808,7 +1808,6 @@ class Plan:
                 window_links[sort_key]["average_secondary"] = dp1(average_import)  # Round to nearest 0.1 penny to avoid too many bands
 
                 if self.set_export_freeze:
-
                     pv_period = 0
                     for minute in range(window_start - self.minutes_now, window["end"] - self.minutes_now, PREDICT_STEP):
                         pv_period += pv_forecast_minute_step.get(minute, 0)
