@@ -2957,14 +2957,14 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.set_discharge_during_charge = True
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
-        my_predbat.metric_min_improvement_export = 0.1
-        my_predbat.metric_min_improvement_export_freeze = 0.1
+        #my_predbat.metric_min_improvement_export = 0.1
+        #my_predbat.metric_min_improvement_export_freeze = 0.1
         # my_predbat.metric_min_improvement = 0.0
         # my_predbat.set_reserve_min = 0
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        my_predbat.best_soc_keep = 0
+        #my_predbat.best_soc_keep = 0
         # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
         # my_predbat.inverter_loss = 0.97
@@ -2975,7 +2975,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.calculate_tweak_plan = False
         # my_predbat.metric_battery_cycle = 0
         # my_predbat.carbon_enable = False
-        # my_predbat.metric_battery_value_scaling = 0.90
+        #my_predbat.metric_battery_value_scaling = 0.50
         my_predbat.manual_export_times = []
         my_predbat.manual_all_times = []
         my_predbat.manual_charge_times = []
@@ -5011,6 +5011,11 @@ def run_window_sort_test(name, my_predbat, charge_window_best, export_window_bes
     my_predbat.metric_battery_cycle = metric_battery_cycle
     my_predbat.battery_loss = battery_loss
     my_predbat.battery_loss_discharge = battery_loss_discharge
+    my_predbat.prediction.pv_forecast_minute_step = {}
+
+    # Pretend we have PV all the time to allow discharge freeze to appear in the sort
+    for minute in range(end_record + my_predbat.minutes_now):
+        my_predbat.prediction.pv_forecast_minute_step[minute] = 1.0
 
     print("Starting window sort test {}".format(name))
 
@@ -5614,6 +5619,7 @@ def run_optimise_levels(
         best_import,
         best_battery_value,
         tried_list,
+        level_results,
     ) = my_predbat.optimise_charge_limit_price_threads(
         price_set,
         price_links,

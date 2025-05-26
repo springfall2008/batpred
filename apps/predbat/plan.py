@@ -180,134 +180,140 @@ class Plan:
             charge_option = {}
             for max_charge_slots in [48, 32, 24, 16, 12, 8, 6, 4, 3, 2, 1]:
                 for max_export_slots in [48, 32, 24, 16, 12, 8, 6, 4, 3, 2, 1]:
-                    all_n = []
-                    all_d = []
-                    count_c = 0
-                    count_d = 0
-                    for price in price_set[::-1]:
-                        links = price_links[price]
-                        if loop_price >= price:
-                            for key in links:
-                                window_n = window_index[key]["id"]
-                                typ = window_index[key]["type"]
-                                if typ in ["c", "cf"]:
-                                    if typ == "cf" and not self.set_charge_freeze:
-                                        pass
-                                    elif region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
-                                        pass
-                                    elif count_c < max_charge_slots:
-                                        all_n.append(window_n)
-                                        if typ == "c":
-                                            charge_option[window_n] = self.soc_max
-                                        else:
-                                            charge_option[window_n] = self.reserve
-                                        count_c += 1
-                    for price in price_set:
-                        links = price_links[price]
-                        if export_enable and loop_price < price:
-                            # For prices above threshold try export
-                            for key in links:
-                                typ = window_index[key]["type"]
-                                window_n = window_index[key]["id"]
-                                if typ in ["d", "df"]:
-                                    if typ == "df" and not self.set_export_freeze:
-                                        pass
-                                    elif region_start and (export_window[window_n]["start"] > region_end or export_window[window_n]["end"] < region_start):
-                                        pass
-                                    elif count_d < max_export_slots:
-                                        all_d.append(window_n)
-                                        if typ == "d":
-                                            export_option[window_n] = self.best_soc_min
-                                        else:
-                                            export_option[window_n] = 99.0
-                                        count_d += 1
-
-                    # Sort for print out
-                    all_n.sort()
-                    all_d.sort()
-
-                    # This price band setting for charge
-                    try_charge_limit = best_limits.copy()
-                    for window_n in range(record_charge_windows):
-                        if window_n >= len(try_charge_limit):
+                    for try_charge_freeze in [True, False]:
+                        if try_charge_freeze and not self.set_charge_freeze:
                             continue
+                        for try_export_freeze in [True, False]:
+                            if try_export_freeze and not self.set_export_freeze:
+                                continue
+                            all_n = []
+                            all_d = []
+                            count_c = 0
+                            count_d = 0
+                            for price in price_set[::-1]:
+                                links = price_links[price]
+                                if loop_price >= price:
+                                    for key in links:
+                                        window_n = window_index[key]["id"]
+                                        typ = window_index[key]["type"]
+                                        if typ in ["c", "cf"]:
+                                            if typ == "cf" and (not self.set_charge_freeze or not try_charge_freeze):
+                                                pass
+                                            elif region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
+                                                pass
+                                            elif count_c < max_charge_slots and (window_n not in all_n):
+                                                all_n.append(window_n)
+                                                if typ == "c":
+                                                    charge_option[window_n] = self.soc_max
+                                                else:
+                                                    charge_option[window_n] = self.reserve
+                                                count_c += 1
+                            for price in price_set:
+                                links = price_links[price]
+                                if export_enable and loop_price < price:
+                                    # For prices above threshold try export
+                                    for key in links:
+                                        typ = window_index[key]["type"]
+                                        window_n = window_index[key]["id"]
+                                        if typ in ["d", "df"]:
+                                            if typ == "df" and (not self.set_export_freeze or not try_export_freeze):
+                                                pass
+                                            elif region_start and (export_window[window_n]["start"] > region_end or export_window[window_n]["end"] < region_start):
+                                                pass
+                                            elif count_d < max_export_slots and (window_n not in all_d):
+                                                all_d.append(window_n)
+                                                if typ == "d":
+                                                    export_option[window_n] = self.best_soc_min
+                                                else:
+                                                    export_option[window_n] = 99.0
+                                                count_d += 1
 
-                        if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
-                            continue
+                            # Sort for print out
+                            all_n.sort()
+                            all_d.sort()
 
-                        if charge_window[window_n]["start"] in self.manual_all_times:
-                            continue
-
-                        if window_n in all_n:
-                            try_charge_limit[window_n] = charge_option[window_n]
-                        else:
-                            try_charge_limit[window_n] = 0
-
-                    # Try export on/off
-                    try_export = best_export_limits.copy()
-                    for window_n in range(record_export_windows):
-                        if window_n >= len(export_limits):
-                            continue
-
-                        if region_start and (export_window[window_n]["start"] > region_end or export_window[window_n]["end"] < region_start):
-                            continue
-
-                        if export_window[window_n]["start"] in self.manual_all_times:
-                            continue
-
-                        try_export[window_n] = 100.0
-                        if window_n in all_d:
-                            if not self.calculate_export_oncharge:
-                                hit_charge = self.hit_charge_window(self.charge_window_best, export_window[window_n]["start"], export_window[window_n]["end"])
-                                if hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                            # This price band setting for charge
+                            try_charge_limit = best_limits.copy()
+                            for window_n in range(record_charge_windows):
+                                if window_n >= len(try_charge_limit):
                                     continue
-                            if not self.car_charging_from_battery and self.hit_car_window(export_window[window_n]["start"], export_window[window_n]["end"]):
+
+                                if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
+                                    continue
+
+                                if charge_window[window_n]["start"] in self.manual_all_times:
+                                    continue
+
+                                if window_n in all_n:
+                                    try_charge_limit[window_n] = charge_option[window_n]
+                                else:
+                                    try_charge_limit[window_n] = 0
+
+                            # Try export on/off
+                            try_export = best_export_limits.copy()
+                            for window_n in range(record_export_windows):
+                                if window_n >= len(export_limits):
+                                    continue
+
+                                if region_start and (export_window[window_n]["start"] > region_end or export_window[window_n]["end"] < region_start):
+                                    continue
+
+                                if export_window[window_n]["start"] in self.manual_all_times:
+                                    continue
+
+                                try_export[window_n] = 100.0
+                                if window_n in all_d:
+                                    if not self.calculate_export_oncharge:
+                                        hit_charge = self.hit_charge_window(self.charge_window_best, export_window[window_n]["start"], export_window[window_n]["end"])
+                                        if hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                                            continue
+                                    if not self.car_charging_from_battery and self.hit_car_window(export_window[window_n]["start"], export_window[window_n]["end"]):
+                                        continue
+                                    if not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, export_window[window_n]["start"], export_window[window_n]["end"]) >= 0):
+                                        continue
+
+                                    try_export[window_n] = export_option[window_n]
+
+                            # Skip this one as it's the same as selected already
+                            try_hash = str(try_charge_limit) + "_d_" + str(try_export)
+                            if try_hash in tried_list:
+                                try_value = tried_list[try_hash]
+                                if try_value is not True:
+                                    if loop_price not in levels_score:
+                                        levels_score[loop_price] = 9999999
+                                    levels_score[loop_price] = min(levels_score[loop_price], tried_list[try_hash])
+                                if self.debug_enable and 0:
+                                    self.log(
+                                        "Skip this optimisation with loop_price {} max_charge_slots {} max_export_slots {} windows {} export windows {} export_enable {} as it's the same as previous ones hash {}".format(
+                                            loop_price, max_charge_slots, max_export_slots, all_n, all_d, export_enable, try_hash
+                                        )
+                                    )
                                 continue
-                            if not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, export_window[window_n]["start"], export_window[window_n]["end"]) >= 0):
-                                continue
 
-                            try_export[window_n] = export_option[window_n]
+                            if self.debug_enable and 0:
+                                self.log("Try this optimisation with loop_price {} max_charge_slots {} max_export_slots {} windows {} export windows {} export_enable {}".format(loop_price, max_charge_slots, max_export_slots, all_n, all_d, export_enable))
 
-                    # Skip this one as it's the same as selected already
-                    try_hash = str(try_charge_limit) + "_d_" + str(try_export)
-                    if try_hash in tried_list:
-                        try_value = tried_list[try_hash]
-                        if try_value is not True:
-                            if loop_price not in levels_score:
-                                levels_score[loop_price] = 9999999
-                            levels_score[loop_price] = min(levels_score[loop_price], tried_list[try_hash])
-                        if self.debug_enable and 0:
-                            self.log(
-                                "Skip this optimisation with loop_price {} max_charge_slots {} max_export_slots {} windows {} export windows {} export_enable {} as it's the same as previous ones hash {}".format(
-                                    loop_price, max_charge_slots, max_export_slots, all_n, all_d, export_enable, try_hash
-                                )
-                            )
-                        continue
+                            # Work out highest and lowest prices
+                            highest_price_charge = None
+                            lowest_price_export = None
+                            for window_n in range(record_charge_windows):
+                                if window_n >= len(try_charge_limit):
+                                    continue
+                            for window_n in range(record_export_windows):
+                                if window_n >= len(try_export):
+                                    continue
+                            tried_list[try_hash] = True
 
-                    if self.debug_enable and 0:
-                        self.log("Try this optimisation with loop_price {} max_charge_slots {} max_export_slots {} windows {} export windows {} export_enable {}".format(loop_price, max_charge_slots, max_export_slots, all_n, all_d, export_enable))
-
-                    # Work out highest and lowest prices
-                    highest_price_charge = None
-                    lowest_price_export = None
-                    for window_n in range(record_charge_windows):
-                        if window_n >= len(try_charge_limit):
-                            continue
-                    for window_n in range(record_export_windows):
-                        if window_n >= len(try_export):
-                            continue
-                    tried_list[try_hash] = True
-
-                    pred_item = {}
-                    pred_item["handle"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, False, end_record=end_record, step=step)
-                    pred_item["handle10"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, True, end_record=end_record, step=step)
-                    pred_item["charge_limit"] = try_charge_limit.copy()
-                    pred_item["export_limit"] = try_export.copy()
-                    pred_item["loop_price"] = loop_price
-                    pred_item["all_n"] = all_n.copy()
-                    pred_item["all_d"] = all_d.copy()
-                    pred_item["try_hash"] = try_hash
-                    pred_table.append(pred_item)
+                            pred_item = {}
+                            pred_item["handle"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, False, end_record=end_record, step=step)
+                            pred_item["handle10"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, True, end_record=end_record, step=step)
+                            pred_item["charge_limit"] = try_charge_limit.copy()
+                            pred_item["export_limit"] = try_export.copy()
+                            pred_item["loop_price"] = loop_price
+                            pred_item["all_n"] = all_n.copy()
+                            pred_item["all_d"] = all_d.copy()
+                            pred_item["try_hash"] = try_hash
+                            pred_table.append(pred_item)
 
             for pred in pred_table:
                 handle = pred["handle"]
