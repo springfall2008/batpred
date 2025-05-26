@@ -145,9 +145,7 @@ class Plan:
                 worst_level_score = max(worst_level_score, levels_score[price])
             level_score_range = abs(worst_level_score - best_level_score)
 
-        best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
-            best_limits, charge_window, export_window, export_limits, end_record=self.end_record
-        )
+        best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(best_limits, charge_window, export_window, export_limits, end_record=self.end_record)
 
         if region_start:
             region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
@@ -212,7 +210,7 @@ class Plan:
                                 typ = window_index[key]["type"]
                                 window_n = window_index[key]["id"]
                                 if typ in ["d", "df"]:
-                                    if typ == 'df' and not self.set_export_freeze:
+                                    if typ == "df" and not self.set_export_freeze:
                                         pass
                                     elif region_start and (export_window[window_n]["start"] > region_end or export_window[window_n]["end"] < region_start):
                                         pass
@@ -277,9 +275,13 @@ class Plan:
                         if try_value is not True:
                             if loop_price not in levels_score:
                                 levels_score[loop_price] = 9999999
-                            levels_score[loop_price] = min(levels_score[loop_price], tried_list[try_hash])                                    
+                            levels_score[loop_price] = min(levels_score[loop_price], tried_list[try_hash])
                         if self.debug_enable and 0:
-                            self.log("Skip this optimisation with loop_price {} max_charge_slots {} max_export_slots {} windows {} export windows {} export_enable {} as it's the same as previous ones hash {}".format(loop_price, max_charge_slots, max_export_slots, all_n, all_d, export_enable, try_hash))
+                            self.log(
+                                "Skip this optimisation with loop_price {} max_charge_slots {} max_export_slots {} windows {} export windows {} export_enable {} as it's the same as previous ones hash {}".format(
+                                    loop_price, max_charge_slots, max_export_slots, all_n, all_d, export_enable, try_hash
+                                )
+                            )
                         continue
 
                     if self.debug_enable and 0:
@@ -2760,7 +2762,9 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
-        window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_high_import=self.calculate_export_high_import)
+        window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
+            self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_high_import=self.calculate_export_high_import
+        )
 
         best_soc = self.soc_max
         best_cost = best_metric
@@ -2858,7 +2862,7 @@ class Plan:
                             best_carbon=best_carbon,
                             best_battery_value=best_battery_value,
                             tried_list=tried_list,
-                            levels_score= levels_score,
+                            levels_score=levels_score,
                         )
                         # Reached the end of the window
                         if self.end_record + self.minutes_now - region - region_size < 0:
