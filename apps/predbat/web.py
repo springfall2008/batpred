@@ -20,7 +20,6 @@ import json
 from utils import calc_percent_limit, str2time, dp2
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 from predbat import THIS_VERSION
-from urllib.parse import quote
 
 TIME_FORMAT_DAILY = "%Y-%m-%d"
 
@@ -2083,6 +2082,6 @@ window.addEventListener('resize', function() {
             return web.json_response({"error": "Could not determine request domain"}, status=400)
 
         response = web.HTTPFound(location=redirect_url)
-        response.set_cookie(name="access-token", value=quote(token), path="/", domain=domain, secure=True, httponly=False, samesite="Strict", max_age=60 * 60 * 24 * 7)  # 7 days
+        response.set_cookie(name="access-token", value=token, path="/", domain=domain, secure=True, httponly=False, samesite="Strict", max_age=60 * 60 * 24 * 7)  # 7 days
 
         return response
