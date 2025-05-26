@@ -250,7 +250,7 @@ class Prediction:
         )
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g
 
-    def find_charge_window_optimised(self, charge_windows):
+    def find_charge_window_optimised(self, charge_windows, charge_limit, is_export=False):
         """
         Takes in an array of charge windows
         Returns a dictionary defining for each minute that is in the charge window will contain the window number
@@ -258,7 +258,10 @@ class Prediction:
         charge_window_optimised = {}
         for window_n in range(len(charge_windows)):
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
-                charge_window_optimised[minute] = window_n
+                if is_export and charge_limit[window_n] < 100.0:
+                    charge_window_optimised[minute] = window_n
+                elif not is_export and charge_limit[window_n] > 0.0:
+                    charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
     def in_iboost_slot(self, minute):
@@ -395,8 +398,8 @@ class Prediction:
 
         # Remove intersecting windows and optimise the data format of the charge/discharge window
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
-        charge_window_optimised = self.find_charge_window_optimised(charge_window)
-        export_window_optimised = self.find_charge_window_optimised(export_window)
+        charge_window_optimised = self.find_charge_window_optimised(charge_window, charge_limit)
+        export_window_optimised = self.find_charge_window_optimised(export_window, export_limits, is_export=True)
 
         # For the SOC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
@@ -445,17 +448,14 @@ class Prediction:
             charge_limit_n = 0
             if charge_window_n >= 0:
                 charge_limit_n = charge_limit[charge_window_n]
-                if charge_limit_n == 0:
-                    charge_window_n = -1
-                else:
-                    if self.set_charge_freeze and (charge_limit_n == self.reserve):
-                        # Charge freeze via reserve
-                        charge_limit_n = max(soc, self.reserve)
+                if self.set_charge_freeze and (charge_limit_n == self.reserve):
+                    # Charge freeze via reserve
+                    charge_limit_n = max(soc, self.reserve)
 
-                    # When set reserve enable is on pretend the reserve is the charge limit minus the
-                    # minimum battery rate modelled as it can leak a little
-                    if self.set_reserve_enable and (soc >= charge_limit_n):
-                        reserve_expected = max(charge_limit_n, self.reserve)
+                # When set reserve enable is on pretend the reserve is the charge limit minus the
+                # minimum battery rate modelled as it can leak a little
+                if self.set_reserve_enable and (soc >= charge_limit_n):
+                    reserve_expected = max(charge_limit_n, self.reserve)
 
             # Outside the recording window?
             if minute >= end_record and record:
@@ -615,6 +615,13 @@ class Prediction:
             if export_window_n >= 0:
                 discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, self.best_soc_min)
 
+            if save == "test" and charge_window_n >= 0:
+                print(
+                    "Minute {}: set_discharge_during_charge {} charge_window_n {} charge_limit_n {} soc {} charge_limit_n {} charge_rate_now {} charge_rate_now_curve {} export_window_n {} discharge_rate_now {} discharge_rate_now_curve {}".format(
+                        minute_absolute, self.set_discharge_during_charge, charge_window_n, charge_limit_n, soc, charge_limit_n, charge_rate_now, charge_rate_now_curve, export_window_n, discharge_rate_now, discharge_rate_now_curve
+                    )
+                )
+
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc > discharge_min):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
@@ -712,13 +719,6 @@ class Prediction:
                 else:
                     pv_dc = 0
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac
-
-                if save == "test" and (minute >= 180 and minute <= 240):
-                    print(
-                        "charge minute {} pv_now {} load {} pv_ac {} pv_dc {} battery_draw {} charge_rate_now {} battery_to_max {} soc {} charge_limit_n {}".format(
-                            minute, pv_now, load_yesterday, pv_ac, pv_dc, battery_draw, charge_rate_now_curve * step, battery_to_max, soc, charge_limit_n
-                        )
-                    )
 
                 if (charge_limit_n - soc) < (charge_rate_now_curve * step):
                     # The battery will hit the charge limit in this period, so if the charge was spread over the period

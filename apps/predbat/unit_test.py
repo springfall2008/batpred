@@ -2957,7 +2957,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.set_discharge_during_charge = True
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
-        my_predbat.metric_min_improvement_export = 0.1
+        # my_predbat.metric_min_improvement_export = 0.1
+        # my_predbat.metric_min_improvement_export_freeze = 0.1
         # my_predbat.metric_min_improvement = 0.0
         # my_predbat.set_reserve_min = 0
 
@@ -2974,11 +2975,13 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.calculate_tweak_plan = False
         # my_predbat.metric_battery_cycle = 0
         # my_predbat.carbon_enable = False
-        # my_predbat.metric_battery_value_scaling = 0.90
+        # my_predbat.metric_battery_value_scaling = 0.50
         my_predbat.manual_export_times = []
         my_predbat.manual_all_times = []
         my_predbat.manual_charge_times = []
         my_predbat.manual_demand_times = []
+        # my_predbat.battery_loss = 0.97
+        # my_predbat.battery_loss_discharge = 0.97
         # my_predbat.set_export_low_power = True
         # my_predbat.combine_charge_slots = False
         # my_predbat.charge_limit_best[0] = 0
@@ -5008,6 +5011,11 @@ def run_window_sort_test(name, my_predbat, charge_window_best, export_window_bes
     my_predbat.metric_battery_cycle = metric_battery_cycle
     my_predbat.battery_loss = battery_loss
     my_predbat.battery_loss_discharge = battery_loss_discharge
+    my_predbat.prediction.pv_forecast_minute_step = {}
+
+    # Pretend we have PV all the time to allow discharge freeze to appear in the sort
+    for minute in range(end_record + my_predbat.minutes_now):
+        my_predbat.prediction.pv_forecast_minute_step[minute] = 1.0
 
     print("Starting window sort test {}".format(name))
 
@@ -5064,22 +5072,22 @@ def run_window_sort_tests(my_predbat):
     failed |= run_window_sort_test("none", my_predbat, [], [], expected=[])
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": import_rate}]
-    failed |= run_window_sort_test("single_charge", my_predbat, charge_window_best, [], expected=["c_0_10.0"])
-    failed |= run_window_sort_test("single_charge_loss", my_predbat, charge_window_best, [], expected=["c_0_20.0"], inverter_loss=0.5)
+    failed |= run_window_sort_test("single_charge", my_predbat, charge_window_best, [], expected=["c_0_10.0", "cf_0_10.0"])
+    failed |= run_window_sort_test("single_charge_loss", my_predbat, charge_window_best, [], expected=["c_0_20.0", "cf_0_10.0"], inverter_loss=0.5)
 
     export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": export_rate}]
-    failed |= run_window_sort_test("single_discharge", my_predbat, [], export_window_best, expected=["d_0_5.0"])
-    failed |= run_window_sort_test("single_charge_discharge", my_predbat, charge_window_best, export_window_best, expected=["c_0_10.0", "d_0_5.0"])
-    failed |= run_window_sort_test("single_charge_discharge_loss", my_predbat, charge_window_best, export_window_best, expected=["c_0_20.0", "d_0_2.5"], inverter_loss=0.5)
+    failed |= run_window_sort_test("single_discharge", my_predbat, [], export_window_best, expected=["d_0_5.0", "df_0_5.0"])
+    failed |= run_window_sort_test("single_charge_discharge", my_predbat, charge_window_best, export_window_best, expected=["c_0_10.0", "cf_0_10.0", "d_0_5.0", "df_0_5.0"])
+    failed |= run_window_sort_test("single_charge_discharge_loss", my_predbat, charge_window_best, export_window_best, expected=["c_0_20.0", "cf_0_10.0", "df_0_5.0", "d_0_2.5"], inverter_loss=0.5)
     export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 50.0}]
-    failed |= run_window_sort_test("single_charge_discharge_loss2", my_predbat, charge_window_best, export_window_best, expected=["d_0_25.0", "c_0_20.0"], inverter_loss=0.5)
-    failed |= run_window_sort_test("single_charge_discharge_loss3", my_predbat, charge_window_best, export_window_best, expected=["c_0_200.0", "d_0_25.0"], inverter_loss=0.5, battery_loss=0.1)
+    failed |= run_window_sort_test("single_charge_discharge_loss2", my_predbat, charge_window_best, export_window_best, expected=["df_0_50.0", "d_0_25.0", "c_0_20.0", "cf_0_10.0"], inverter_loss=0.5)
+    failed |= run_window_sort_test("single_charge_discharge_loss3", my_predbat, charge_window_best, export_window_best, expected=["c_0_200.0", "df_0_50.0", "d_0_25.0", "cf_0_10.0"], inverter_loss=0.5, battery_loss=0.1)
     failed |= run_window_sort_test(
         "single_charge_discharge_loss4",
         my_predbat,
         charge_window_best,
         export_window_best,
-        expected=["c_0_200.0", "d_0_2.5"],
+        expected=["c_0_200.0", "df_0_50.0", "cf_0_10.0", "d_0_2.5"],
         inverter_loss=0.5,
         battery_loss=0.1,
         battery_loss_discharge=0.1,
@@ -5091,14 +5099,14 @@ def run_window_sort_tests(my_predbat):
         my_predbat,
         charge_window_best,
         export_window_best,
-        expected=["c_1_400.0", "c_0_200.0", "d_0_2.5"],
+        expected=["c_1_400.0", "c_0_200.0", "df_0_50.0", "cf_1_20.0", "cf_0_10.0", "d_0_2.5"],
         inverter_loss=0.5,
         battery_loss=0.1,
         battery_loss_discharge=0.1,
     )
     export_window_best.append({"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": export_rate * 3})
-    failed |= run_window_sort_test("single_charge_discharge3", my_predbat, charge_window_best, export_window_best, expected=["d_0_50.0", "c_1_20.0", "d_1_15.0", "c_0_10.0"])
-    failed |= run_window_sort_test("single_charge_discharge3_c1", my_predbat, charge_window_best, export_window_best, expected=["d_0_49.0", "c_1_21.0", "d_1_14.0", "c_0_11.0"], metric_battery_cycle=1.0)
+    failed |= run_window_sort_test("single_charge_discharge3", my_predbat, charge_window_best, export_window_best, expected=["d_0_50.0", "df_0_50.0", "c_1_20.0", "cf_1_20.0", "d_1_15.0", "df_1_15.0", "c_0_10.0", "cf_0_10.0"])
+    failed |= run_window_sort_test("single_charge_discharge3_c1", my_predbat, charge_window_best, export_window_best, expected=["df_0_50.0", "d_0_49.0", "c_1_21.0", "cf_1_20.0", "df_1_15.0", "d_1_14.0", "c_0_11.0", "cf_0_10.0"], metric_battery_cycle=1.0)
 
     return failed
 
@@ -5526,7 +5534,6 @@ def run_optimise_levels_tests(my_predbat):
         price = 16 - n % 16
         charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
         expect_charge_limit.append(100 if price <= 5.0 * 0.9 else 0)
-    expect_charge_limit[28] = 0
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
         "created2",
         my_predbat,
@@ -5612,6 +5619,7 @@ def run_optimise_levels(
         best_import,
         best_battery_value,
         tried_list,
+        level_results,
     ) = my_predbat.optimise_charge_limit_price_threads(
         price_set,
         price_links,
