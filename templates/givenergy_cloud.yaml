@@ -94,6 +94,9 @@ pred_bat:
   load_power:
     - sensor.ge_inverter_{geserial}_consumption_power
   #  - sensor.ge_inverter_{geserial2}_consumption_power
+  grid_power:
+    - sensor.ge_inverter_{geserial}_grid_power
+  #  - sensor.ge_inverter_{geserial2}_grid_power
   soc_percent:
     - sensor.ge_inverter_{geserial}_battery_soc
   #  - sensor.ge_inverter_{geserial2}_battery_soc
