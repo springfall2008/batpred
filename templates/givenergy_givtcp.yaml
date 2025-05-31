@@ -114,6 +114,9 @@ pred_bat:
   load_power:
     - sensor.givtcp_{geserial}_load_power
   #  - sensor.givtcp2_{geserial2}_load_power
+  grid_power:
+    - sensor.givtcp_{geserial}_grid_power
+  #  - sensor.givtcp2_{geserial2}_grid_power
   soc_kw:
     - sensor.givtcp_{geserial}_soc_kwh
   #  - sensor.givtcp2_{geserial2}_soc_kwh
