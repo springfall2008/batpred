@@ -15,6 +15,7 @@ from config import MAX_INCREMENT, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBA
 from futurerate import FutureRate
 import traceback
 
+
 class Fetch:
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
