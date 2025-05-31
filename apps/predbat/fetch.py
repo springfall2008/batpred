@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp
 from config import MAX_INCREMENT, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
-
+import traceback
 
 class Fetch:
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
@@ -429,7 +429,7 @@ class Fetch:
         newest_age = 999999
 
         if not history:
-            self.log("Warning, empty history passed to minute_data_state, ignoring (check your settings)...")
+            self.log("Warn: Empty history passed to minute_data_state, ignoring (check your settings)...")
             return mdata
 
         # Process history
@@ -517,7 +517,7 @@ class Fetch:
 
         # Check history is valid
         if not history:
-            self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
+            self.log("Warn: empty history passed to minute_data, ignoring (check your settings)...")
             return mdata
 
         # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data

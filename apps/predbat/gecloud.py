@@ -1163,12 +1163,16 @@ class GECloud:
             url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=4096".format(geserial, datestr)
             while url:
                 data = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 8 * 60)
-
                 darray = data.get("data", None)
                 if darray is None:
-                    self.log("Warn: Error downloading GE data from URL {}".format(url))
-                    self.record_status("Warn: Error downloading GE data from cloud", debug=url)
-                    return False
+                    # If we are less than 8 hours into today then ignore errors for today as data may not be available yet
+                    if days_prev == 0:
+                        self.log("Info: No GE Cloud data available for today yet, continuing")
+                        continue
+                    else:
+                        self.log("Warn: Error downloading GE data from URL {}".format(url))
+                        self.record_status("Warn: Error downloading GE data from cloud", debug=url)
+                        return False
 
                 for item in darray:
                     timestamp = item["time"]
