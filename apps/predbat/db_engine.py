@@ -22,6 +22,7 @@ class DatabaseEngine:
 
         self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
         self.db_cursor = self.db.cursor()
+        self.entity_id_cache = {}
 
         self._cleanup_db()
         self.log("db_engine: Started")
@@ -77,9 +78,13 @@ class DatabaseEngine:
         """
         Get the entity index from the SQLLite database
         """
+        if entity_id in self.entity_id_cache:
+            return self.entity_id_cache[entity_id]
+
         self.db_cursor.execute("SELECT entity_index FROM entities WHERE entity_name=?", (entity_id,))
         res = self.db_cursor.fetchone()
         if res:
+            self.entity_id_cache[entity_id] = res[0]
             return res[0]
         else:
             return None
@@ -159,10 +164,18 @@ class DatabaseEngine:
                     keep,
                 ),
             )
-            # Also update the latest table
-            self.db_cursor.execute("DELETE FROM latest WHERE entity_index = ?", (entity_index,))
+            # Upsert into the latest table (replace if exists, insert if not)
             self.db_cursor.execute(
-                "INSERT INTO latest (entity_index, datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
+                """
+                INSERT INTO latest (entity_index, datetime, state, attributes, system, keep)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entity_index) DO UPDATE SET
+                    datetime=excluded.datetime,
+                    state=excluded.state,
+                    attributes=excluded.attributes,
+                    system=excluded.system,
+                    keep=excluded.keep
+                """,
                 (
                     entity_index,
                     now_utc_txt,
