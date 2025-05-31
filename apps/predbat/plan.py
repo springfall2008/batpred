@@ -2703,7 +2703,8 @@ class Plan:
                                         window_n, self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
                                     )
                                 )
-
+                            # Try to optimise the export window
+                            keep_start = self.export_window_best[window_n]["start"]
                             self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                             n_best_soc, n_best_start, n_best_metric, n_best_cost, n_soc_min, n_soc_min_minute, n_best_keep, n_best_cycle, n_best_carbon, n_best_import = self.optimise_export(
                                 window_n,
@@ -2716,6 +2717,7 @@ class Plan:
                                 freeze_only=(typ == "df") or pass_type == "freeze",
                                 allow_freeze=True,
                             )
+                            self.export_window_best[window_n]["start"] = keep_start
                             if n_best_metric <= best_metric and (n_best_soc != self.export_limits_best[window_n] or n_best_start != self.export_window_best[window_n]["start"]):
                                 best_metric = n_best_metric
                                 best_cost = n_best_cost
