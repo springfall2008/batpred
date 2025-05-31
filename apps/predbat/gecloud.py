@@ -1168,7 +1168,8 @@ class GECloud:
                     # If we are less than 8 hours into today then ignore errors for today as data may not be available yet
                     if days_prev == 0:
                         self.log("Info: No GE Cloud data available for today yet, continuing")
-                        continue
+                        url = data["links"].get("next", None)
+                        break
                     else:
                         self.log("Warn: Error downloading GE data from URL {}".format(url))
                         self.record_status("Warn: Error downloading GE data from cloud", debug=url)
