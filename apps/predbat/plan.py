@@ -2287,6 +2287,9 @@ class Plan:
                 swapped = False
 
                 for window_n_target in range(record_export_windows - 1, 0, -1):
+                    previous_end = 0
+                    if window_n_target > 0:
+                        previous_end_target = self.export_window_best[window_n_target - 1]["end"]
                     window_start_target = self.export_window_best[window_n_target]["start"]
                     window_length_target = self.export_window_best[window_n_target]["end"] - window_start_target
                     export_limit_target = self.export_limits_best[window_n_target]
@@ -2327,7 +2330,6 @@ class Plan:
                             export_limit_target = 100.0
                         else:
                             self.export_limits_best[window_n_target] = export_limit_target
-                            continue
 
                     # Try to swap into the target slot
                     for window_n in range(max(window_n_target - 32, 0), max(window_n_target - 1, 0), 1):
@@ -2341,8 +2343,11 @@ class Plan:
                         if window_start in self.manual_all_times:
                             continue
 
+                        if export_limit == export_limit_target and window_length == window_length_target:
+                            # Don't swap if the windows are the same
+                            continue
+
                         if export_limit < 99 and window_length <= window_length_target:
-                            # self.log("Trying swap window {} with window {} export limit {} onto {}".format(window_n, window_n_target, export_limit, export_limit_target))
                             # Don't optimise a charge window that hits an export window if this is disallowed
                             if not self.calculate_export_oncharge:
                                 hit_charge = self.hit_charge_window(self.charge_window_best, self.export_window_best[window_n_target]["start"], self.export_window_best[window_n_target]["end"])
@@ -2350,9 +2355,10 @@ class Plan:
                                     continue
 
                             # Set the current window to off and optimise the swap window
-                            self.export_limits_best[window_n] = 100.0
+                            self.export_limits_best[window_n] = export_limit_target
+                            self.export_window_best[window_n]["start"] = max(self.export_window_best[window_n]["end"] - window_length_target, previous_end)
                             self.export_limits_best[window_n_target] = export_limit
-                            self.export_window_best[window_n_target]["start"] = max(self.export_window_best[window_n_target]["end"] - window_length, previous_end)
+                            self.export_window_best[window_n_target]["start"] = max(self.export_window_best[window_n_target]["end"] - window_length, previous_end_target)
 
                             best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
                                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
@@ -2377,6 +2383,8 @@ class Plan:
                                             dp2(best_import),
                                         )
                                     )
+
+                                # Update best
                                 selected_metric = best_metric
                                 selected_battery_value = best_battery_value
                                 selected_cost = best_cost
@@ -2389,6 +2397,7 @@ class Plan:
                             else:
                                 # Revert the change
                                 self.export_limits_best[window_n] = export_limit
+                                self.export_window_best[window_n]["start"] = window_start
                                 self.export_limits_best[window_n_target] = export_limit_target
                                 self.export_window_best[window_n_target]["start"] = window_start_target
 
@@ -2506,7 +2515,7 @@ class Plan:
             )
         )
 
-        for pass_type in ["freeze", "normal", "low"]:
+        for pass_type in ["freeze", "trim", "normal", "low"]:
             start_at_low = False
             if pass_type in ["low"]:
                 price_set.reverse()
@@ -2518,8 +2527,8 @@ class Plan:
                 if debug_mode:
                     print("Optimise pass {} price_key {} best_metric {} best_cost {}".format(pass_type, price_key, best_metric, best_cost))
 
-                # Freeze pass should be done in time order (newest first)
-                if pass_type in ["freeze"]:
+                # Freeze/Trim pass should be done in time order (newest first)
+                if pass_type in ["freeze", "trim"]:
                     links.reverse()
 
                 printed_set = False
@@ -2536,6 +2545,10 @@ class Plan:
 
                         # Freeze pass is just export freeze
                         if pass_type in ["freeze"]:
+                            continue
+
+                        # Don't trim a window that is already off
+                        if pass_type in ["trim"] and (self.charge_limit_best[window_n] == 0):
                             continue
 
                         # Don't allow charging if the price is above the threshold and not already selected during levelling
@@ -2594,7 +2607,7 @@ class Plan:
                                 best_soc_min = n_soc_min
                                 best_soc_min_minute = n_soc_min_minute
                                 self.charge_limit_best[window_n] = best_soc
-                                self.plan_write_debug(debug_mode, "plan_main_charge_{}.html".format(window_n))
+                                self.plan_write_debug(debug_mode, "plan_{}_charge_{}.html".format(pass_type, window_n))
 
                                 if self.debug_enable:
                                     self.log(
@@ -2628,10 +2641,12 @@ class Plan:
                         if not self.set_export_freeze and pass_type == "freeze":
                             continue
 
-                        # Ignore prices below the threshold if not already selected during levelling
-                        if (price_key < best_price_export_level) and (self.export_limits_best[window_n] == 100):
-                            if self.debug_enable:
-                                self.log("Skip low window {} best limit {} price_set {} price {} level {}".format(window_n, self.export_limits_best[window_n], price_key, price, best_price_export_level))
+                        # Don't remove exports during freeze pass
+                        if pass_type == "freeze" and self.export_limits_best[window_n] == 0:
+                            continue
+
+                        # Don't trim a window that is already off
+                        if pass_type in ["trim"] and (self.export_limits_best[window_n] == 100):
                             continue
 
                         # Do highest price first
@@ -2639,8 +2654,10 @@ class Plan:
                         if pass_type == "low" and (self.export_limits_best[window_n] == 100):
                             continue
 
-                        # Don't remove exports during freeze pass
-                        if pass_type == "freeze" and self.export_limits_best[window_n] == 0:
+                        # Ignore prices below the threshold if not already selected during levelling
+                        if (price_key < best_price_export_level) and (self.export_limits_best[window_n] == 100):
+                            if self.debug_enable:
+                                self.log("Skip low window {} best limit {} price_set {} price {} level {}".format(window_n, self.export_limits_best[window_n], price_key, price, best_price_export_level))
                             continue
 
                         if self.calculate_best_export and (window_start not in self.manual_all_times):
@@ -2710,7 +2727,7 @@ class Plan:
                                     )
                                 )
 
-                                self.plan_write_debug(debug_mode, "plan_main_export_{}.html".format(window_n))
+                                self.plan_write_debug(debug_mode, "plan_{}_export_{}.html".format(pass_type, window_n))
 
                                 if self.debug_enable:
                                     self.log(
@@ -2907,6 +2924,10 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
+        # Swaps
+        self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
+        self.plan_write_debug(debug_mode, "plan_swap_levels.html")
+
         # Perform detailed optimisation
         best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_detailed_pass(
             best_price_charge,
@@ -2934,6 +2955,7 @@ class Plan:
 
         # Swaps
         self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
+        self.plan_write_debug(debug_mode, "plan_swap_final.html")
 
         # Tweak plan
         if self.calculate_tweak_plan:
@@ -3140,7 +3162,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".battery_power",
-                    state=dp3(0),
+                    state=dp3(self.battery_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_battery_power),
                         "today": self.filtered_today(predict_battery_power),
@@ -3176,7 +3198,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".grid_power",
-                    state=dp3(0),
+                    state=dp3(self.grid_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_grid_power),
                         "today": self.filtered_today(predict_grid_power),
@@ -3381,7 +3403,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".battery_power_best",
-                    state=dp3(final_soc),
+                    state=dp3(self.battery_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_battery_power),
                         "today": self.filtered_today(predict_battery_power),
@@ -3405,7 +3427,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_power_best",
-                    state=dp3(0),
+                    state=dp3(self.pv_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_pv_power),
                         "today": self.filtered_today(predict_pv_power),
@@ -3417,7 +3439,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".grid_power_best",
-                    state=dp3(0),
+                    state=dp3(self.grid_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_grid_power),
                         "today": self.filtered_today(predict_grid_power),
@@ -3429,7 +3451,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".load_power_best",
-                    state=dp3(final_soc),
+                    state=dp3(self.load_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_load_power),
                         "today": self.filtered_today(predict_load_power),
