@@ -1168,8 +1168,11 @@ class GECloud:
                     # If we are less than 8 hours into today then ignore errors for today as data may not be available yet
                     if days_prev == 0:
                         self.log("Info: No GE Cloud data available for today yet, continuing")
-                        url = data["links"].get("next", None)
-                        break
+                        days_prev += 1
+                        time_value = now_utc - timedelta(days=(self.max_days_previous - days_prev))
+                        datestr = time_value.strftime("%Y-%m-%d")
+                        url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=4096".format(geserial, datestr)
+                        continue
                     else:
                         self.log("Warn: Error downloading GE data from URL {}".format(url))
                         self.record_status("Warn: Error downloading GE data from cloud", debug=url)
