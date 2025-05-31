@@ -429,7 +429,7 @@ class Fetch:
         newest_age = 999999
 
         if not history:
-            self.log("Warning, empty history passed to minute_data_state, ignoring (check your settings)...")
+            self.log("Warn: Empty history passed to minute_data_state, ignoring (check your settings)...")
             return mdata
 
         # Process history
@@ -517,7 +517,7 @@ class Fetch:
 
         # Check history is valid
         if not history:
-            self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
+            self.log("Warn: Empty history passed to minute_data, ignoring (check your settings)...")
             return mdata
 
         # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
