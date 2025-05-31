@@ -172,6 +172,7 @@ class WebInterface:
         app.router.add_get("/api/state", self.html_api_get_state)
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
+        app.router.add_post("/api/login", self.html_api_login)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -2060,3 +2061,27 @@ window.addEventListener('resize', function() {
         if self.base.isExporting:
             text += '<span class="mdi mdi-transmission-tower-export"></span>'
         return text
+
+    async def html_api_login(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+        token = data.get("token")
+        redirect_url = data.get("redirect", "/")
+
+        if not token:
+            return web.json_response({"error": "Missing 'token'"}, status=400)
+
+        # Extract domain from Host header
+        host = request.headers.get("Host", "")
+        domain = host.split(":")[0]  # Remove port if present
+
+        if not domain:
+            return web.json_response({"error": "Could not determine request domain"}, status=400)
+
+        response = web.HTTPFound(location=redirect_url)
+        response.set_cookie(name="access-token", value=token, path="/", domain=domain, secure=True, httponly=False, samesite="Strict", max_age=60 * 60 * 24 * 7)  # 7 days
+
+        return response
