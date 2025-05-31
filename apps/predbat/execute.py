@@ -633,6 +633,7 @@ class Execute:
         self.load_power = 0
         self.battery_power = 0
         self.battery_temperature = 0
+        self.grid_power = 0
         found_first = False
 
         if create:
@@ -697,6 +698,7 @@ class Execute:
             self.pv_power += inverter.pv_power
             self.load_power += inverter.load_power
             self.battery_power += inverter.battery_power
+            self.grid_power += inverter.grid_power
             self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
             self.battery_temperature += inverter.battery_temperature
 

@@ -3162,7 +3162,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".battery_power",
-                    state=dp3(0),
+                    state=dp3(self.battery_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_battery_power),
                         "today": self.filtered_today(predict_battery_power),
@@ -3198,7 +3198,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".grid_power",
-                    state=dp3(0),
+                    state=dp3(self.grid_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_grid_power),
                         "today": self.filtered_today(predict_grid_power),
@@ -3403,7 +3403,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".battery_power_best",
-                    state=dp3(final_soc),
+                    state=dp3(self.battery_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_battery_power),
                         "today": self.filtered_today(predict_battery_power),
@@ -3427,7 +3427,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_power_best",
-                    state=dp3(0),
+                    state=dp3(self.pv_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_pv_power),
                         "today": self.filtered_today(predict_pv_power),
@@ -3439,7 +3439,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".grid_power_best",
-                    state=dp3(0),
+                    state=dp3(self.grid_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_grid_power),
                         "today": self.filtered_today(predict_grid_power),
@@ -3451,7 +3451,7 @@ class Plan:
                 )
                 self.dashboard_item(
                     self.prefix + ".load_power_best",
-                    state=dp3(final_soc),
+                    state=dp3(self.load_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_load_power),
                         "today": self.filtered_today(predict_load_power),

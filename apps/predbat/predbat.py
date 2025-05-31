@@ -421,6 +421,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.pv_power = 0
         self.load_power = 0
         self.battery_power = 0
+        self.grid_power = 0
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
         self.charge_limit = []
