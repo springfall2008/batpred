@@ -164,7 +164,6 @@ class Plan:
             self.log("All prices {}".format(all_prices))
             if region_start:
                 self.log("Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end)))
-        self.log("Current best metric {} cost {} best level score {} all level score {}".format(best_metric, best_cost, best_level_score, levels_score))
 
         # Start loop of trials
         for loop_price in all_prices:
@@ -2694,11 +2693,12 @@ class Plan:
                                 )
                                 printed_set = True
 
-                            self.log(
-                                "Optimise export window {} end_record {} best_price_charge {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
-                                    window_n, self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
+                            if self.debug_enable:
+                                self.log(
+                                    "Optimise export window {} end_record {} best_price_charge {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
+                                        window_n, self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
+                                    )
                                 )
-                            )
 
                             self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                             n_best_soc, n_best_start, n_best_metric, n_best_cost, n_soc_min, n_soc_min_minute, n_best_keep, n_best_cycle, n_best_carbon, n_best_import = self.optimise_export(
@@ -2726,12 +2726,6 @@ class Plan:
                                 self.export_limits_best[window_n] = best_soc
                                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                                 self.export_window_best[window_n]["start"] = best_start
-
-                                self.log(
-                                    "Optimised export window {} end_record {} best_price_charge {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
-                                        window_n, self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
-                                    )
-                                )
 
                                 self.plan_write_debug(debug_mode, "plan_{}_export_{}.html".format(pass_type, window_n))
 
