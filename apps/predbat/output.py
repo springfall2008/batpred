@@ -823,23 +823,23 @@ class Output:
         rate_export_str = rate_bucket_export[0]["rate"]
         rate_export_duration = rate_bucket_export[0]["end"] - rate_bucket_export[0]["start"]
 
-        midnight_today_minute = 24*60 - self.minutes_now
-        midnight_tomorrow_minute = 24*60 + midnight_today_minute
+        midnight_today_minute = 24 * 60 - self.minutes_now
+        midnight_tomorrow_minute = 24 * 60 + midnight_today_minute
 
         metric_midnight_today = self.predict_metric_best.get(midnight_today_minute, 0.0)
         metric_midnight_tomorrow = self.predict_metric_best.get(midnight_tomorrow_minute, None)
 
         if metric_midnight_tomorrow is not None:
-           metric_midnight_tomorrow -= metric_midnight_today
+            metric_midnight_tomorrow -= metric_midnight_today
 
         if metric_midnight_tomorrow is None:
-            sentence += "- Your estimated bill for today is {}{}\n".format(
-                self.currency_symbols[0], dp2(metric_midnight_today/100)
-            )
+            sentence += "- Your estimated bill for today is {}{}\n".format(self.currency_symbols[0], dp2(metric_midnight_today / 100))
         else:
             sentence += "- Your estimated bill for today is {}{} and tomorrow is {}{}\n".format(
-                self.currency_symbols[0], dp2(metric_midnight_today/100),
-                self.currency_symbols[0], dp2(metric_midnight_tomorrow/100),
+                self.currency_symbols[0],
+                dp2(metric_midnight_today / 100),
+                self.currency_symbols[0],
+                dp2(metric_midnight_tomorrow / 100),
             )
 
         if rate_import_str != "fixed":
