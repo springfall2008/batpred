@@ -884,16 +884,7 @@ class Inverter:
         if not quiet:
             self.base.log(
                 "Inverter {} SOC: {}kW {}% Current charge rate {}W Current discharge rate {}W Current battery power {}W Current battery voltage {}V Grid power {}W load power {}W PV Power {}W".format(
-                    self.id,
-                    dp2(self.soc_kw),
-                    self.soc_percent,
-                    dp0(self.charge_rate_now * MINUTE_WATT),
-                    dp0(self.discharge_rate_now * MINUTE_WATT),
-                    self.battery_power,
-                    self.battery_voltage,
-                    self.grid_power,
-                    self.load_power,
-                    self.pv_power
+                    self.id, dp2(self.soc_kw), self.soc_percent, dp0(self.charge_rate_now * MINUTE_WATT), dp0(self.discharge_rate_now * MINUTE_WATT), self.battery_power, self.battery_voltage, self.grid_power, self.load_power, self.pv_power
                 )
             )
 
