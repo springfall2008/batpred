@@ -80,7 +80,7 @@ class DatabaseEngine:
         """
         if entity_id in self.entity_id_cache:
             return self.entity_id_cache[entity_id]
-        
+
         self.db_cursor.execute("SELECT entity_index FROM entities WHERE entity_name=?", (entity_id,))
         res = self.db_cursor.fetchone()
         if res:
