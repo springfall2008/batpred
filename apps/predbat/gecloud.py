@@ -577,6 +577,7 @@ class GECloudDirect:
         self.base.args["battery_power"] = ["sensor.predbat_gecloud_" + device + "_battery_power" for device in batteries]
         self.base.args["pv_power"] = ["sensor.predbat_gecloud_" + device + "_solar_power" for device in batteries]
         self.base.args["load_power"] = ["sensor.predbat_gecloud_" + device + "_consumption_power" for device in batteries]
+        self.base.args["grid_power"] = ["sensor.predbat_gecloud_" + device + "_grid_power" for device in batteries]
         self.base.args["soc_percent"] = ["sensor.predbat_gecloud_" + device + "_battery_percent" for device in batteries]
         self.base.args["soc_max"] = ["sensor.predbat_gecloud_" + device + "_battery_size" for device in batteries]
         self.base.args["reserve"] = ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in batteries]

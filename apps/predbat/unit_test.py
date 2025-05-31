@@ -2640,6 +2640,8 @@ class ActiveTestInverter:
         self.export_limit = 1000
         self.pv_power = 0
         self.load_power = 0
+        self.battery_power = 0
+        self.grid_power = 0
         self.reserve_percent = 0
         self.reserve = 0
         self.reserve_last = -1

@@ -813,6 +813,7 @@ class Inverter:
         self.battery_power = 0
         self.pv_power = 0
         self.load_power = 0
+        self.grid_power = 0
 
         if self.rest_api:
             self.rest_data = self.rest_readData()
@@ -864,6 +865,7 @@ class Inverter:
                 self.battery_power = float(ppdetails.get("Battery_Power", 0.0))
                 self.pv_power = float(ppdetails.get("PV_Power", 0.0))
                 self.load_power = float(ppdetails.get("Load_Power", 0.0))
+                self.grid_power = float(ppdetails.get("Grid_Power", 0.0))
                 if self.rest_v3:
                     self.battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
                 else:
@@ -872,6 +874,7 @@ class Inverter:
             self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id)
             self.pv_power = self.base.get_arg("pv_power", default=0.0, index=self.id)
             self.load_power = self.base.get_arg("load_power", default=0.0, index=self.id)
+            self.grid_power = self.base.get_arg("grid_power", default=0.0, index=self.id)
 
             for i in range(1, self.inv_num_load_entities):
                 self.load_power += self.base.get_arg(f"load_power_{i}", default=0.0, index=self.id)
