@@ -2277,6 +2277,8 @@ class Plan:
         """
         Swap optimisation tries to move export windows later
         """
+        swapped_target = {}
+
         if self.calculate_best_export and record_export_windows >= 2:
             swapped = True
             while swapped:
@@ -2295,6 +2297,9 @@ class Plan:
                     export_limit_target = self.export_limits_best[window_n_target]
 
                     if window_start_target in self.manual_all_times:
+                        continue
+                    if swapped_target.get(window_n_target, False):
+                        # Skip if we already swapped this window
                         continue
 
                     # Try to drop the target
@@ -2393,6 +2398,7 @@ class Plan:
                                 selected_carbon = best_carbon
                                 selected_import = best_import
                                 swapped = True
+                                swapped_target[window_n_target] = True
                                 break
                             else:
                                 # Revert the change
