@@ -2288,7 +2288,7 @@ class Plan:
                 swapped = False
 
                 for window_n_target in range(record_export_windows - 1, 0, -1):
-                    previous_end = 0
+                    previous_end_target = 0
                     if window_n_target > 0:
                         previous_end_target = self.export_window_best[window_n_target - 1]["end"]
                     window_start_target = self.export_window_best[window_n_target]["start"]
@@ -2349,6 +2349,10 @@ class Plan:
 
                         if export_limit == export_limit_target and window_length == window_length_target:
                             # Don't swap if the windows are the same
+                            continue
+
+                        if export_limit < 100 and export_limit_target < 100 and window_length < window_length_target:
+                            # Don't swap if we move a smaller window later
                             continue
 
                         if export_limit < 99 and window_length <= window_length_target:
