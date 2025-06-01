@@ -2026,7 +2026,9 @@ window.addEventListener('resize', function() {
     <a href='./compare'>Compare</a>
     <a href='https://springfall2008.github.io/batpred/'>Docs</a>
     <div class="dark-mode-toggle">
-        """ + THIS_VERSION + """
+        """
+            + THIS_VERSION
+            + """
         <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
     </div>
 </div>
