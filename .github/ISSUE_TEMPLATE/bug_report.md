@@ -29,6 +29,11 @@ If applicable, add screenshots to help explain your problem. The most useful one
 **Log file**
 Can you capture a log file from the time of the issue, debug mode is not normally required.
 
+You can download the logfile from the WebUI on the Dash tab select **predbat_debug.log**
+
 **Predbat debug yaml file**
-Enable debug mode and let Predbat run for one cycle. Look in the 'debug' directory under the Predbat add-on and take the .yaml file for the time period in question.
-Rename the predbat_debug_XX_XX_XX.yaml to predbat_debug_XX_XX_XX.yaml.txt and upload it to Github. This will allow your plan to be reproduced and also stores all your settings for review.
+This is important for any plan related issues.
+
+Once you have captured the issue go to the Web UI, in the Dash tab click on **predbat_debug.yaml** and wait 30 seconds for it to download. Select 'keep' if your Web Browser thinks the file is dangerous.
+
+Rename the download file to predbat_debug.yaml.txt and upload it to Github. This will allow your plan to be reproduced and also stores all your settings for review.
