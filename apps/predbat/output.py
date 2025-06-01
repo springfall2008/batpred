@@ -975,7 +975,7 @@ class Output:
             charge_window_n = -1
             export_window_n = -1
             in_alert = True if self.alert_active_keep.get(minute, 0) > 0 else False
-            periods_left = int((end_plan - minute) / 30)
+            periods_left = int((end_plan - minute + 29) / 30)
 
             show_limit = ""
 
@@ -1021,7 +1021,7 @@ class Output:
 
             if export_window_n >= 0 and not in_span:
                 export_end_minute = self.export_window_best[export_window_n]["end"]
-                rowspan = int((export_end_minute - minute) / 30)
+                rowspan = min(int((export_end_minute - minute) / 30), periods_left)
                 start = self.export_window_best[export_window_n]["start"]
                 if start <= minute and rowspan > 1 and (charge_window_n < 0):
                     in_span = True

@@ -1330,7 +1330,7 @@ class Fetch:
         while minute < stop_at and not (minute >= (self.forecast_minutes + self.minutes_now) and (rate_low_start < 0)):
             if minute in rates:
                 rate = rates[minute]
-                if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or minute in self.manual_all_times or rate_low_start in self.manual_all_times:
+                if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in self.manual_all_times) or (rate_low_start in self.manual_all_times):
                     rate_diff = abs(rate - rate_low_rate)
                     if (rate_low_start >= 0) and rate_diff > self.combine_rate_threshold:
                         # Refuse mixed rates that are different by more than threshold
@@ -1369,7 +1369,7 @@ class Fetch:
                 if rate_low_start >= 0 and rate_low_end >= minute:
                     rate_low_end = minute
                 break
-            minute += 1
+            minute += 5
 
         if rate_low_count:
             rate_low_average = dp2(rate_low_average / rate_low_count)
