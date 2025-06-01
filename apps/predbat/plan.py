@@ -2545,7 +2545,7 @@ class Plan:
             )
         )
 
-        for pass_type in ["freeze", "trim", "normal", "low"]:
+        for pass_type in ["freeze", "trim", "normal", "trim", "low"]:
             start_at_low = False
             if pass_type in ["low"]:
                 price_set.reverse()
@@ -2579,6 +2579,10 @@ class Plan:
 
                         # Don't trim a window that is already off
                         if pass_type in ["trim"] and (self.charge_limit_best[window_n] == 0):
+                            continue
+
+                        # In normal don't do trimming of charge
+                        if pass_type in ["normal"] and (self.charge_limit_best[window_n] == 100):
                             continue
 
                         # Don't allow charging if the price is above the threshold and not already selected during levelling
@@ -2677,6 +2681,10 @@ class Plan:
 
                         # Don't trim a window that is already off
                         if pass_type in ["trim"] and (self.export_limits_best[window_n] == 100):
+                            continue
+
+                        # In normal don't do trimming of export
+                        if pass_type in ["normal"] and (self.export_limits_best[window_n] == 0):
                             continue
 
                         # Do highest price first
