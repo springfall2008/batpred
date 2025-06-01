@@ -2374,22 +2374,24 @@ class Plan:
                             )
 
                             if self.debug_enable:
-                                self.log("Try to swap export window {} {}-{} limit {} with {} => {}-{} metric {} (current best {}) cost {} keep {} cycle {} carbon {} import {}".format(
-                                    window_n,
-                                    self.time_abs_str(self.export_window_best[window_n]["start"]),
-                                    self.time_abs_str(self.export_window_best[window_n]["end"]),
-                                    export_limit,
-                                    window_n_target,
-                                    self.time_abs_str(self.export_window_best[window_n_target]["start"]),
-                                    self.time_abs_str(self.export_window_best[window_n_target]["end"]),
-                                    best_metric,
-                                    dp2(selected_metric),
-                                    dp2(best_cost),
-                                    dp2(best_keep),
-                                    dp2(best_cycle),
-                                    dp0(best_carbon),
-                                    dp2(best_import),
-                                ))
+                                self.log(
+                                    "Try to swap export window {} {}-{} limit {} with {} => {}-{} metric {} (current best {}) cost {} keep {} cycle {} carbon {} import {}".format(
+                                        window_n,
+                                        self.time_abs_str(self.export_window_best[window_n]["start"]),
+                                        self.time_abs_str(self.export_window_best[window_n]["end"]),
+                                        export_limit,
+                                        window_n_target,
+                                        self.time_abs_str(self.export_window_best[window_n_target]["start"]),
+                                        self.time_abs_str(self.export_window_best[window_n_target]["end"]),
+                                        best_metric,
+                                        dp2(selected_metric),
+                                        dp2(best_cost),
+                                        dp2(best_keep),
+                                        dp2(best_cycle),
+                                        dp0(best_carbon),
+                                        dp2(best_import),
+                                    )
+                                )
 
                             if best_metric <= selected_metric or (export_limit_target == 100.0 and abs(best_metric - selected_metric) <= 0.1):
                                 if self.debug_enable:
