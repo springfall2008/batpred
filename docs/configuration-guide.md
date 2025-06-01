@@ -78,6 +78,8 @@ If you are using expert mode then these options may be worth reviewing, otherwis
 
 You should set **select.predbat_mode** to 'Control charge & discharge'
 
+You may wish to use **rates_export_override** to override the night export rate to zero. This will prevent charge / discharge cycling within the cheap period, which predbatt would see as economically sensible but may not be within terms of use.
+
 With the overnight charging rate being cheaper than your export rate, you probably want to charge your EV overnight and export all your solar; and not charge the EV from Solar during the day.
 Settings for doing this vary by charger manufacturer, but for the Zappi charger, set _export margin_ to a value higher than your inverter can output (e.g. 6000W) to ensure that all solar is exported and not used to charge the EV.
 
