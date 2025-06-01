@@ -78,7 +78,7 @@ If you are using expert mode then these options may be worth reviewing, otherwis
 
 You should set **select.predbat_mode** to 'Control charge & discharge'
 
-You may wish to use **rates_export_override** to override the night export rate to zero or turn off **calculate_export_during_charge** and turn on **combine_charge**. 
+You may wish to use **rates_export_override** to override the night export rate to zero or turn off **calculate_export_during_charge** and turn on **combine_charge**.
 Either of these options will prevent charge / discharge cycling within the cheap period, which Predbat would see as economically sensible but may not be within terms of use for some Tariff's.
 
 With the overnight charging rate being cheaper than your export rate, you probably want to charge your EV overnight and export all your solar; and not charge the EV from Solar during the day.
