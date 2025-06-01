@@ -2336,12 +2336,13 @@ class Plan:
                             self.export_limits_best[window_n_target] = export_limit_target
 
                     # Try to swap into the target slot
-                    for window_n in range(max(window_n_target - 32, 0), max(window_n_target - 1, 0), 1):
+                    for window_n in range(max(window_n_target - 32, 0), max(window_n_target, 0), 1):
                         previous_end = 0
                         if window_n > 0:
                             previous_end = self.export_window_best[window_n - 1]["end"]
                         window_start = self.export_window_best[window_n]["start"]
-                        window_length = self.export_window_best[window_n]["end"] - window_start
+                        window_start_from_now = max(window_start, self.minutes_now)
+                        window_length = self.export_window_best[window_n]["end"] - window_start_from_now
                         export_limit = self.export_limits_best[window_n]
 
                         if window_start in self.manual_all_times:
@@ -2371,6 +2372,24 @@ class Plan:
                             best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
                                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                             )
+
+                            if self.debug_enable:
+                                self.log("Try to swap export window {} {}-{} limit {} with {} => {}-{} metric {} (current best {}) cost {} keep {} cycle {} carbon {} import {}".format(
+                                    window_n,
+                                    self.time_abs_str(self.export_window_best[window_n]["start"]),
+                                    self.time_abs_str(self.export_window_best[window_n]["end"]),
+                                    export_limit,
+                                    window_n_target,
+                                    self.time_abs_str(self.export_window_best[window_n_target]["start"]),
+                                    self.time_abs_str(self.export_window_best[window_n_target]["end"]),
+                                    best_metric,
+                                    dp2(selected_metric),
+                                    dp2(best_cost),
+                                    dp2(best_keep),
+                                    dp2(best_cycle),
+                                    dp0(best_carbon),
+                                    dp2(best_import),
+                                ))
 
                             if best_metric <= selected_metric or (export_limit_target == 100.0 and abs(best_metric - selected_metric) <= 0.1):
                                 if self.debug_enable:
@@ -2714,7 +2733,7 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                                freeze_only=(typ == "df") or pass_type == "freeze",
+                                freeze_only=(typ == "df") or pass_type == "freeze" or (pass_type == "trim" and self.export_limits_best[window_n] == 99),
                                 allow_freeze=True,
                             )
                             self.export_window_best[window_n]["start"] = keep_start
