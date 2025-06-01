@@ -2714,7 +2714,7 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                                freeze_only=(typ == "df") or pass_type == "freeze",
+                                freeze_only=(typ == "df") or pass_type == "freeze" or (pass_type == "trim" and self.export_limits_best[window_n] == 99),
                                 allow_freeze=True,
                             )
                             self.export_window_best[window_n]["start"] = keep_start
