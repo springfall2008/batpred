@@ -2685,7 +2685,7 @@ class Plan:
 
                         # In normal don't do trimming of export
                         if pass_type in ["normal"] and (self.export_limits_best[window_n] == 0):
-                           continue                      
+                            continue
 
                         # Do highest price first
                         # Second pass to tune down any excess exports only
