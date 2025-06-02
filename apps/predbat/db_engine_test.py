@@ -4,8 +4,10 @@ import os
 from datetime import datetime, timedelta
 from db_engine import DatabaseEngine
 
+
 class MockBase:
     """Mock base class for testing"""
+
     def __init__(self, config_root=None):
         self.config_root = config_root or tempfile.gettempdir()
         self.now_utc_real = datetime.utcnow()
@@ -30,7 +32,7 @@ class TestDatabaseEngine(unittest.TestCase):
 
     def tearDown(self):
         """Clean up after each test method."""
-        if hasattr(self, 'db_engine'):
+        if hasattr(self, "db_engine"):
             self.db_engine._close()
         # Clean up temp files
         db_path = os.path.join(self.temp_dir, "predbat.db")
@@ -62,11 +64,11 @@ class TestDatabaseEngine(unittest.TestCase):
 
         # Verify the data was stored and retrieved correctly
         self.assertIsNotNone(result)
-        self.assertEqual(result['state'], state)
-        self.assertIn('attributes', result)
-        self.assertEqual(result['attributes']['unit'], "°C")
-        self.assertEqual(result['attributes']['friendly_name'], "Living Room Temperature")
-        self.assertIn('last_updated', result)
+        self.assertEqual(result["state"], state)
+        self.assertIn("attributes", result)
+        self.assertEqual(result["attributes"]["unit"], "°C")
+        self.assertEqual(result["attributes"]["friendly_name"], "Living Room Temperature")
+        self.assertIn("last_updated", result)
 
     def test_nonexistent_entity_returns_none(self):
         """Test that requesting a non-existent entity returns None."""
@@ -86,16 +88,12 @@ class TestDatabaseEngine(unittest.TestCase):
         updated_result = self.db_engine._get_state_db(entity_id)
 
         # Verify the state was updated
-        self.assertEqual(initial_result['state'], "45")
-        self.assertEqual(updated_result['state'], "52")
+        self.assertEqual(initial_result["state"], "45")
+        self.assertEqual(updated_result["state"], "52")
 
     def test_multiple_entities_independently_stored(self):
         """Test that multiple entities can be stored and retrieved independently."""
-        entities_data = [
-            ("sensor.temp1", "22.1", {"location": "bedroom"}),
-            ("sensor.temp2", "24.5", {"location": "kitchen"}),
-            ("sensor.humidity", "45", {"unit": "%"})
-        ]
+        entities_data = [("sensor.temp1", "22.1", {"location": "bedroom"}), ("sensor.temp2", "24.5", {"location": "kitchen"}), ("sensor.humidity", "45", {"unit": "%"})]
 
         timestamp = datetime.utcnow()
 
@@ -107,9 +105,9 @@ class TestDatabaseEngine(unittest.TestCase):
         for entity_id, expected_state, expected_attributes in entities_data:
             result = self.db_engine._get_state_db(entity_id)
             self.assertIsNotNone(result)
-            self.assertEqual(result['state'], expected_state)
+            self.assertEqual(result["state"], expected_state)
             for key, value in expected_attributes.items():
-                self.assertEqual(result['attributes'][key], value)
+                self.assertEqual(result["attributes"][key], value)
 
     def test_get_all_entities_returns_stored_entities(self):
         """Test that get_all_entities returns all stored entity IDs."""
@@ -151,7 +149,7 @@ class TestDatabaseEngine(unittest.TestCase):
         # The returned history should contain our data
         if len(history) > 0 and len(history[0]) > 0:
             # Check that we have some of our states in the history
-            states_in_history = [item['state'] for item in history[0]]
+            states_in_history = [item["state"] for item in history[0]]
             self.assertIn("state_0", states_in_history)
 
     def test_history_date_filtering(self):
@@ -175,26 +173,20 @@ class TestDatabaseEngine(unittest.TestCase):
     def test_attributes_preserved_in_storage_retrieval(self):
         """Test that complex attributes are preserved correctly."""
         entity_id = "sensor.complex_attributes"
-        complex_attributes = {
-            "nested": {"inner": "value"},
-            "list": [1, 2, 3],
-            "string": "test string",
-            "number": 42.5,
-            "boolean": True
-        }
+        complex_attributes = {"nested": {"inner": "value"}, "list": [1, 2, 3], "string": "test string", "number": 42.5, "boolean": True}
 
         self.db_engine._set_state_db(entity_id, "test_state", complex_attributes, datetime.utcnow())
         result = self.db_engine._get_state_db(entity_id)
 
         self.assertIsNotNone(result)
         # Check that basic attributes are preserved
-        self.assertIn('attributes', result)
-        if 'string' in result['attributes']:
-            self.assertEqual(result['attributes']['string'], "test string")
-        if 'number' in result['attributes']:
-            self.assertEqual(result['attributes']['number'], 42.5)
-        if 'boolean' in result['attributes']:
-            self.assertEqual(result['attributes']['boolean'], True)
+        self.assertIn("attributes", result)
+        if "string" in result["attributes"]:
+            self.assertEqual(result["attributes"]["string"], "test string")
+        if "number" in result["attributes"]:
+            self.assertEqual(result["attributes"]["number"], 42.5)
+        if "boolean" in result["attributes"]:
+            self.assertEqual(result["attributes"]["boolean"], True)
 
     def test_database_persistence_across_operations(self):
         """Test that data persists across multiple database operations."""
@@ -210,7 +202,7 @@ class TestDatabaseEngine(unittest.TestCase):
         # Original entity should still be retrievable
         result = self.db_engine._get_state_db(entity_id)
         self.assertIsNotNone(result)
-        self.assertEqual(result['state'], "initial")
+        self.assertEqual(result["state"], "initial")
 
     def test_large_data_handling(self):
         """Test handling of reasonably large data sets."""
@@ -230,7 +222,7 @@ class TestDatabaseEngine(unittest.TestCase):
         # Should be able to retrieve individual entities
         test_entity = self.db_engine._get_state_db("sensor.test_025")
         self.assertIsNotNone(test_entity)
-        self.assertEqual(test_entity['state'], "state_25")
+        self.assertEqual(test_entity["state"], "state_25")
 
     def test_close_database_cleanup(self):
         """Test that database can be properly closed."""
@@ -244,5 +236,5 @@ class TestDatabaseEngine(unittest.TestCase):
         self.assertIn("db_engine: Closed", self.mock_base.log_messages)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

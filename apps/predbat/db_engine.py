@@ -33,8 +33,8 @@ class DatabaseEngine:
         """
         # Use SHA256 hash and take first 8 bytes as integer for 64-bit signed integer
         # This gives us a deterministic ID that's the same across all instances
-        hash_bytes = hashlib.sha256(entity_id.encode('utf-8')).digest()[:8]
-        return int.from_bytes(hash_bytes, byteorder='big', signed=True)
+        hash_bytes = hashlib.sha256(entity_id.encode("utf-8")).digest()[:8]
+        return int.from_bytes(hash_bytes, byteorder="big", signed=True)
 
     def _close(self):
         """
@@ -51,7 +51,8 @@ class DatabaseEngine:
         """
         # Modified schema: latest table uses hash as primary key, stores entity_id
         # history table references latest via entity_hash foreign key
-        self.db_cursor.execute("""
+        self.db_cursor.execute(
+            """
                                CREATE TABLE IF NOT EXISTS latest (
                                                                      entity_hash INTEGER PRIMARY KEY,
                                                                      entity_id TEXT UNIQUE NOT NULL,
@@ -61,9 +62,11 @@ class DatabaseEngine:
                                                                      system TEXT,
                                                                      keep TEXT
                                )
-                               """)
+                               """
+        )
 
-        self.db_cursor.execute("""
+        self.db_cursor.execute(
+            """
                                CREATE TABLE IF NOT EXISTS history (
                                                                       id INTEGER PRIMARY KEY AUTOINCREMENT,
                                                                       entity_hash INTEGER,
@@ -74,7 +77,8 @@ class DatabaseEngine:
                                                                       keep TEXT,
                                                                       FOREIGN KEY (entity_hash) REFERENCES latest(entity_hash)
                                )
-                               """)
+                               """
+        )
 
         # Create index on entity_hash for faster history queries
         self.db_cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_entity_hash ON history(entity_hash)")
