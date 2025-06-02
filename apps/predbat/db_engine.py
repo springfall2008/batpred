@@ -9,6 +9,7 @@
 
 import sqlite3
 import json
+import hashlib
 from datetime import datetime, timedelta
 
 TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
@@ -22,10 +23,18 @@ class DatabaseEngine:
 
         self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
         self.db_cursor = self.db.cursor()
-        self.entity_id_cache = {}
 
         self._cleanup_db()
         self.log("db_engine: Started")
+
+    def _entity_hash(self, entity_id):
+        """
+        Generate a consistent hash for an entity_id
+        """
+        # Use SHA256 hash and take first 8 bytes as integer for 64-bit signed integer
+        # This gives us a deterministic ID that's the same across all instances
+        hash_bytes = hashlib.sha256(entity_id.encode('utf-8')).digest()[:8]
+        return int.from_bytes(hash_bytes, byteorder='big', signed=True)
 
     def _close(self):
         """
@@ -40,11 +49,39 @@ class DatabaseEngine:
         """
         This searches all tables for data older than N days and deletes it
         """
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS entities (entity_index INTEGER PRIMARY KEY AUTOINCREMENT, entity_name TEXT KEY UNIQUE)")
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
+        # Modified schema: latest table uses hash as primary key, stores entity_id
+        # history table references latest via entity_hash foreign key
+        self.db_cursor.execute("""
+                               CREATE TABLE IF NOT EXISTS latest (
+                                                                     entity_hash INTEGER PRIMARY KEY,
+                                                                     entity_id TEXT UNIQUE NOT NULL,
+                                                                     datetime TEXT,
+                                                                     state TEXT,
+                                                                     attributes TEXT,
+                                                                     system TEXT,
+                                                                     keep TEXT
+                               )
+                               """)
+
+        self.db_cursor.execute("""
+                               CREATE TABLE IF NOT EXISTS history (
+                                                                      id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                                      entity_hash INTEGER,
+                                                                      datetime TEXT,
+                                                                      state TEXT,
+                                                                      attributes TEXT,
+                                                                      system TEXT,
+                                                                      keep TEXT,
+                                                                      FOREIGN KEY (entity_hash) REFERENCES latest(entity_hash)
+                               )
+                               """)
+
+        # Create index on entity_hash for faster history queries
+        self.db_cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_entity_hash ON history(entity_hash)")
+        self.db_cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_datetime ON history(datetime)")
+
         self.db_cursor.execute(
-            "DELETE FROM states WHERE datetime < ? AND keep != ?",
+            "DELETE FROM history WHERE datetime < ? AND keep != ?",
             (
                 self.base.now_utc_real - timedelta(days=self.db_days),
                 "D",
@@ -57,11 +94,9 @@ class DatabaseEngine:
         Get entity current state from the SQLLite database
         """
         entity_id = entity_id.lower()
-        entity_index = self._get_entity_index_db(entity_id)
-        if not entity_index:
-            return None
+        entity_hash = self._entity_hash(entity_id)
 
-        self.db_cursor.execute("SELECT datetime, state, attributes FROM latest WHERE entity_index=?", (entity_index,))
+        self.db_cursor.execute("SELECT datetime, state, attributes FROM latest WHERE entity_hash=?", (entity_hash,))
         res = self.db_cursor.fetchone()
         if res:
             state = res[1]
@@ -74,40 +109,22 @@ class DatabaseEngine:
         else:
             return None
 
-    def _get_entity_index_db(self, entity_id):
-        """
-        Get the entity index from the SQLLite database
-        """
-        if entity_id in self.entity_id_cache:
-            return self.entity_id_cache[entity_id]
-
-        self.db_cursor.execute("SELECT entity_index FROM entities WHERE entity_name=?", (entity_id,))
-        res = self.db_cursor.fetchone()
-        if res:
-            self.entity_id_cache[entity_id] = res[0]
-            return res[0]
-        else:
-            return None
-
     def _get_all_entities_db(self):
         """
         Get all entity names from the SQLLite database
         """
-        self.db_cursor.execute("SELECT entity_name FROM entities")
+        self.db_cursor.execute("SELECT entity_id FROM latest")
         rows = self.db_cursor.fetchall()
         return [row[0] for row in rows]
 
     def _set_state_db(self, entity_id, state, attributes, timestamp):
         """
         Records the state of a predbat entity into the SQLLite database
-        There is one table per Entity created with history recorded
+        Uses hash-based entity IDs for consistent references across instances
         """
         state = str(state)
-
-        # Put the entity_id into entities table if its not in already
-        self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
-        self.db.commit()
-        entity_index = self._get_entity_index_db(entity_id)
+        entity_id = entity_id.lower()
+        entity_hash = self._entity_hash(entity_id)
 
         # Convert time to GMT+0
         now_utc = timestamp
@@ -127,9 +144,8 @@ class DatabaseEngine:
         attributes_record_full_json = json.dumps(attributes_record_full)
         system_json = json.dumps(system)
 
-        # Record the state of the entity
-        # If the entity value and attributes are unchanged then don't record the new state
-        self.db_cursor.execute("SELECT datetime, state, attributes, system, keep FROM states WHERE entity_index=? ORDER BY datetime DESC LIMIT 1", (entity_index,))
+        # Check if the entity value and attributes are unchanged
+        self.db_cursor.execute("SELECT datetime, state, attributes, system, keep FROM history WHERE entity_hash=? ORDER BY datetime DESC LIMIT 1", (entity_hash,))
         last_record = self.db_cursor.fetchone()
         keep = "D"
         if last_record:
@@ -150,34 +166,24 @@ class DatabaseEngine:
                 else:
                     keep = "H"
 
-        # Insert the new state record
+        # Insert the new state record using upsert
         try:
-            self.db_cursor.execute("DELETE FROM states WHERE entity_index = ? AND datetime = ?", (entity_index, now_utc_txt))
-            self.db_cursor.execute(
-                "INSERT INTO states (datetime, entity_index, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    now_utc_txt,
-                    entity_index,
-                    state,
-                    attributes_record_json,
-                    system_json,
-                    keep,
-                ),
-            )
-            # Upsert into the latest table (replace if exists, insert if not)
+            # Upsert into the latest table
             self.db_cursor.execute(
                 """
-                INSERT INTO latest (entity_index, datetime, state, attributes, system, keep)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(entity_index) DO UPDATE SET
-                    datetime=excluded.datetime,
-                    state=excluded.state,
-                    attributes=excluded.attributes,
-                    system=excluded.system,
-                    keep=excluded.keep
+                INSERT INTO latest (entity_hash, entity_id, datetime, state, attributes, system, keep)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entity_hash) DO UPDATE SET
+                                                       entity_id=excluded.entity_id,
+                                                       datetime=excluded.datetime,
+                                                       state=excluded.state,
+                                                       attributes=excluded.attributes,
+                                                       system=excluded.system,
+                                                       keep=excluded.keep
                 """,
                 (
-                    entity_index,
+                    entity_hash,
+                    entity_id,
                     now_utc_txt,
                     state,
                     attributes_record_full_json,
@@ -185,6 +191,20 @@ class DatabaseEngine:
                     keep,
                 ),
             )
+
+            # Insert into history table using entity_hash
+            self.db_cursor.execute(
+                "INSERT INTO history (entity_hash, datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    entity_hash,
+                    now_utc_txt,
+                    state,
+                    attributes_record_json,
+                    system_json,
+                    keep,
+                ),
+            )
+
             self.db.commit()
         except sqlite3.IntegrityError:
             self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
@@ -194,17 +214,14 @@ class DatabaseEngine:
         Get the history for a sensor from the SQLLite database.
         """
         start = now - timedelta(days=days)
-
-        entity_index = self._get_entity_index_db(sensor)
-        if not entity_index:
-            self.log("Warn: Entity {} does not exist".format(sensor))
-            return None
+        sensor = sensor.lower()
+        entity_hash = self._entity_hash(sensor)
 
         # Get the history for the sensor, sorted by datetime
         self.db_cursor.execute(
-            "SELECT datetime, state, attributes FROM states WHERE entity_index = ? AND datetime >= ? ORDER BY datetime",
+            "SELECT datetime, state, attributes FROM history WHERE entity_hash = ? AND datetime >= ? ORDER BY datetime",
             (
-                entity_index,
+                entity_hash,
                 start.strftime(TIME_FORMAT_DB),
             ),
         )
