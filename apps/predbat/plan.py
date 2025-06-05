@@ -3183,6 +3183,16 @@ class Plan:
                     attributes={"friendly_name": "Current SoC kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
                 )
                 self.dashboard_item(
+                    self.prefix + ".soc_max_kw",
+                    state=dp3(self.soc_max),
+                    attributes={
+                        "friendly_name": "Total System Battery Size kWh",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
                     self.prefix + ".soc_kw",
                     state=dp3(final_soc),
                     attributes={
