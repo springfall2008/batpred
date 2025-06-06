@@ -2144,13 +2144,13 @@ window.addEventListener('resize', function() {
 """
         )
         return text
-    
+
     def get_grid_power_icon(self):
         """
         Returns a visual indicator showing if the grid is importing or exporting power
         """
         if not self.base.dashboard_index:
-            return ''
+            return ""
 
         power = self.base.grid_power
         if power >= 10:
@@ -2170,7 +2170,7 @@ window.addEventListener('resize', function() {
         Returns a visual indicator showing if the battery is charging or discharging
         """
         if not self.base.dashboard_index:
-            return ''
+            return ""
 
         power = self.base.battery_power
         if power >= 10:
@@ -2190,8 +2190,8 @@ window.addEventListener('resize', function() {
         Returns a visual indicator showing if the PV is producing power
         """
         if not self.base.dashboard_index:
-            return ''
-        
+            return ""
+
         power = self.base.pv_power
         if power > 0:
             icon_text = "solar-power"
