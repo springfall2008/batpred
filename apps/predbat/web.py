@@ -17,7 +17,7 @@ import re
 from datetime import datetime, timedelta
 import json
 
-from utils import calc_percent_limit, str2time, dp2
+from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 from predbat import THIS_VERSION
 
@@ -236,6 +236,10 @@ class WebInterface:
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
         text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
         text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
+        text += "<tr><td>Battery Power</td><td>{}</td></tr>\n".format(self.get_battery_power_icon())
+        text += "<tr><td>PV Power</td><td>{}</td></tr>\n".format(self.get_pv_power_icon())
+        text += "<tr><td>Load Power</td><td>{} W</td></tr>\n".format(dp0(self.base.load_power))
+        text += "<tr><td>Grid Power</td><td>{}</td></tr>\n".format(self.get_grid_power_icon())
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
         text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
         if self.base.arg_errors:
@@ -2034,6 +2038,64 @@ window.addEventListener('resize', function() {
 </div>
 """
         )
+        return text
+    
+    def get_grid_power_icon(self):
+        """
+        Returns a visual indicator showing if the grid is importing or exporting power
+        """
+        if not self.base.dashboard_index:
+            return ''
+
+        power = self.base.grid_power
+        if power >= 10:
+            icon_text = "transmission-tower-export"
+        elif power <= -10:
+            icon_text = "transmission-tower-import"
+        else:
+            icon_text = "transmission-tower-outline"
+
+        text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
+        text += str(dp0(power)) + " W"
+
+        return text
+
+    def get_battery_power_icon(self):
+        """
+        Returns a visual indicator showing if the battery is charging or discharging
+        """
+        if not self.base.dashboard_index:
+            return ''
+
+        power = self.base.battery_power
+        if power >= 10:
+            icon_text = "battery-arrow-down"
+        elif power <= -10:
+            icon_text = "battery-arrow-up"
+        else:
+            icon_text = "battery-outline"
+
+        text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
+        text += str(dp0(power)) + " W"
+
+        return text
+
+    def get_pv_power_icon(self):
+        """
+        Returns a visual indicator showing if the PV is producing power
+        """
+        if not self.base.dashboard_index:
+            return ''
+        
+        power = self.base.pv_power
+        if power > 0:
+            icon_text = "solar-power"
+        else:
+            icon_text = "solar-power-outline"
+
+        text = '<span class="mdi mdi-{}"></span>'.format(icon_text)
+        text += str(dp0(power)) + " W"
+
         return text
 
     def get_battery_status_icon(self):
