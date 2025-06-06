@@ -2085,6 +2085,6 @@ window.addEventListener('resize', function() {
             return web.json_response({"error": "Could not determine request domain"}, status=400)
 
         response = web.HTTPFound(location=redirect_url)
-        response.set_cookie(name="access-token", value=token, path="/", domain=domain, secure=True, httponly=False, samesite="Strict", max_age=60 * 60 * 24 * 7)  # 7 days
+        response.set_cookie(name="access-token", value=token, path="/", domain=domain, secure=True, httponly=True, samesite="Lax", max_age=60 * 60 * 24 * 7)  # 7 days
 
         return response
