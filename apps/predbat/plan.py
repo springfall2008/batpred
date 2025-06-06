@@ -3184,7 +3184,7 @@ class Plan:
                 )
 
                 soc_percent = 0
-                if len(predict_soc_time)>0:
+                if len(predict_soc_time) > 0:
                     first_ts = min(predict_soc_time.keys())
                     first_value = float(predict_soc_time[first_ts])
                     if self.soc_max > 0:
@@ -3201,8 +3201,8 @@ class Plan:
                         "unit_of_measurement": "kWh",
                         "first_charge_kwh": first_charge_soc,
                         "icon": "mdi:battery",
-                        "max_kw":dp3(self.soc_max),
-                        "percent": dp3(soc_percent)
+                        "max_kw": dp3(self.soc_max),
+                        "percent": dp3(soc_percent),
                     },
                 )
                 self.dashboard_item(
