@@ -13,7 +13,7 @@ import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from config import PREDICT_STEP, TIME_FORMAT
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows
+from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_export
 
 """
@@ -3195,6 +3195,7 @@ class Plan:
                         "icon": "mdi:battery",
                         "soc_now": dp3(self.soc_kw),
                         "soc_max": dp3(self.soc_max),
+                        "soc_now_percent": dp2(calc_percent_limit(self.soc_kw, self.soc_max)),
                     },
                 )
                 self.dashboard_item(
@@ -3437,6 +3438,7 @@ class Plan:
                         "icon": "mdi:battery",
                         "soc_now": dp3(self.soc_kw),
                         "soc_max": dp3(self.soc_max),
+                        "soc_now_percent": dp2(calc_percent_limit(self.soc_kw, self.soc_max)),
                     },
                 )
                 self.dashboard_item(
