@@ -239,14 +239,14 @@ class WebInterface:
         battery_power = self.base.battery_power
         pv_power = self.base.pv_power
         load_power = self.base.load_power
-        
+
         # Determine flow directions
         grid_importing = grid_power <= -10  # Grid is importing power (negative value)
-        grid_exporting = grid_power >= 10   # Grid is exporting power (positive value)
-        
-        battery_charging = battery_power >= 10     # Battery is charging (positive value)
-        battery_discharging = battery_power <= -10 # Battery is discharging (negative value)
-        
+        grid_exporting = grid_power >= 10  # Grid is exporting power (positive value)
+
+        battery_charging = battery_power >= 10  # Battery is charging (positive value)
+        battery_discharging = battery_power <= -10  # Battery is discharging (negative value)
+
         pv_generating = pv_power > 0  # PV is generating power
         html = ""
 
@@ -256,15 +256,15 @@ class WebInterface:
                 <!-- Grid Circle -->
                 <circle cx="450" cy="300" r="50" fill="#4CAF50" />
                 <text x="450" y="300" text-anchor="middle" dy=".3em" fill="#fff">Grid</text>
-                
+
                 <!-- Battery Circle -->
                 <circle cx="150" cy="300" r="50" fill="#FF9800" />
                 <text x="150" y="300" text-anchor="middle" dy=".3em" fill="#fff">Battery</text>
-                
+
                 <!-- PV Circle -->
                 <circle cx="150" cy="100" r="50" fill="#2196F3" />
                 <text x="150" y="100" text-anchor="middle" dy=".3em" fill="#fff">PV</text>
-                
+
                 <!-- House Circle -->
                 <circle cx="300" cy="200" r="50" fill="#9C27B0" />
                 <text x="300" y="200" text-anchor="middle" dy=".3em" fill="#fff">House</text>
@@ -275,38 +275,50 @@ class WebInterface:
                 <!-- PV to House Arrow -->
                 <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#arrowhead)" />
                 <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
-            """.format(dp0(pv_power))
+            """.format(
+                dp0(pv_power)
+            )
         else:
             # Make the PV to House line dashed if not generating
             html += """
                 <!-- PV to House Arrow (dashed) -->
                 <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#arrowhead)" />
                 <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
-            """.format(dp0(pv_power))
+            """.format(
+                dp0(pv_power)
+            )
         if battery_charging:
             html += """
                 <!-- Battery to House Arrow -->
                 <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#arrowhead)" />
                 <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
-            """.format(dp0(battery_power))
+            """.format(
+                dp0(battery_power)
+            )
         else:
             html += """
                 <!-- House to Battery Arrow -->
                 <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#arrowhead)" />
                 <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
-            """.format(dp0(battery_power))
+            """.format(
+                dp0(battery_power)
+            )
         if grid_importing:
             html += """
                 <!-- Grid to House Arrow -->
                 <line x1="400" y1="300" x2="350" y2="250" stroke="#4CAF50" stroke-width="2" marker-end="url(#arrowhead)" />
                 <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
-            """.format(dp0(grid_power))
+            """.format(
+                dp0(grid_power)
+            )
         else:
             html += """
                 <!-- House to Grid Arrow -->
                 <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#arrowhead)" />
                 <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
-            """.format(dp0(grid_power))
+            """.format(
+                dp0(grid_power)
+            )
         html += """
                 <!-- Arrowhead Marker -->
                 <defs>
@@ -318,9 +330,8 @@ class WebInterface:
         </div>
         """
 
-
         return html
-        
+
     def get_status_html(self, status, debug_enable, read_only, mode, version):
         text = ""
         if not self.base.dashboard_index:
@@ -336,10 +347,10 @@ class WebInterface:
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
         text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
         text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
-        #text += "<tr><td>Battery Power</td><td>{}</td></tr>\n".format(self.get_battery_power_icon())
-        #text += "<tr><td>PV Power</td><td>{}</td></tr>\n".format(self.get_pv_power_icon())
-        #text += "<tr><td>Load Power</td><td>{} W</td></tr>\n".format(dp0(self.base.load_power))
-        #text += "<tr><td>Grid Power</td><td>{}</td></tr>\n".format(self.get_grid_power_icon())
+        # text += "<tr><td>Battery Power</td><td>{}</td></tr>\n".format(self.get_battery_power_icon())
+        # text += "<tr><td>PV Power</td><td>{}</td></tr>\n".format(self.get_pv_power_icon())
+        # text += "<tr><td>Load Power</td><td>{} W</td></tr>\n".format(dp0(self.base.load_power))
+        # text += "<tr><td>Grid Power</td><td>{}</td></tr>\n".format(self.get_grid_power_icon())
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
         text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
         if self.base.arg_errors:
@@ -348,11 +359,11 @@ class WebInterface:
         else:
             text += "<tr><td>Config</td><td>OK</td></tr>\n"
         text += "</table>\n"
-        
+
         # Add power flow diagram
         text += "<h2>Power Flow</h2>\n"
         text += self.get_power_flow_diagram()
-        
+
         text += "<table>\n"
         text += "<h2>Debug</h2>\n"
         text += "<tr><td>Download</td><td><a href='./debug_apps'>apps.yaml</a></td></tr>\n"
