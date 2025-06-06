@@ -3182,16 +3182,14 @@ class Plan:
                     state=dp3(self.predict_soc[0]),
                     attributes={"friendly_name": "Current SoC kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
                 )
-                self.dashboard_item(
-                    self.prefix + ".soc_max_kw",
-                    state=dp3(self.soc_max),
-                    attributes={
-                        "friendly_name": "Total System Battery Size kWh",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kWh",
-                        "icon": "mdi:battery",
-                    },
-                )
+
+                soc_percent = 0
+                if len(predict_soc_time)>0:
+                    first_ts = min(predict_soc_time.keys())
+                    first_value = float(predict_soc_time[first_ts])
+                    if self.soc_max > 0:
+                        soc_percent = (first_value / self.soc_max) * 100
+
                 self.dashboard_item(
                     self.prefix + ".soc_kw",
                     state=dp3(final_soc),
@@ -3203,6 +3201,8 @@ class Plan:
                         "unit_of_measurement": "kWh",
                         "first_charge_kwh": first_charge_soc,
                         "icon": "mdi:battery",
+                        "max_kw":dp3(self.soc_max),
+                        "percent": dp3(soc_percent)
                     },
                 )
                 self.dashboard_item(
