@@ -42,6 +42,7 @@ Daeamon
 darkgreen
 darkred
 darray
+dasharray
 datain
 datap
 datapoints
