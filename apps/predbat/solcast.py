@@ -310,7 +310,7 @@ class Solcast:
                     power_now = pv_estimate * power_scale
                     power_now10 = pv_estimate10 * power_scale
                     power_now90 = pv_estimate90 * power_scale
-                    
+
                     # Add this slot into the total left today but scaled for the time since this point
                     if this_point < now:
                         left_this_slot_scale = (now - this_point).total_seconds() / 3600.0
