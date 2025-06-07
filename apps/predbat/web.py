@@ -253,6 +253,7 @@ class WebInterface:
         html += """
         <div style="text-align: left; margin: 0px;">
             <svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
+
                 <!-- Grid Circle -->
                 <circle cx="450" cy="300" r="50" fill="#4CAF50" />
                 <text x="450" y="300" text-anchor="middle" dy=".3em" fill="#fff">Grid</text>
@@ -267,13 +268,16 @@ class WebInterface:
 
                 <!-- House Circle -->
                 <circle cx="300" cy="200" r="50" fill="#9C27B0" />
-                <text x="300" y="200" text-anchor="middle" dy=".3em" fill="#fff">House</text>
-        """
+                <text x="300" y="190" text-anchor="middle" dy=".3em" fill="#fff">House</text>
+                <text x="300" y="215" text-anchor="middle" dy=".3em" fill="#fff">{} W</text>
+        """.format(
+            dp0(load_power)
+        )
         # Draw arrows and labels
         if pv_generating:
             html += """
                 <!-- PV to House Arrow -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#arrowhead)" />
+                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#pv-arrow)" />
                 <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
             """.format(
                 dp0(pv_power)
@@ -282,7 +286,7 @@ class WebInterface:
             # Make the PV to House line dashed if not generating
             html += """
                 <!-- PV to House Arrow (dashed) -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#arrowhead)" />
+                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
                 <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
             """.format(
                 dp0(pv_power)
@@ -290,7 +294,7 @@ class WebInterface:
         if battery_charging:
             html += """
                 <!-- Battery to House Arrow -->
-                <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#arrowhead)" />
+                <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
                 <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
             """.format(
                 dp0(battery_power)
@@ -298,23 +302,24 @@ class WebInterface:
         else:
             html += """
                 <!-- House to Battery Arrow -->
-                <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#arrowhead)" />
+                <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
                 <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
             """.format(
                 dp0(battery_power)
             )
+
         if grid_importing:
             html += """
                 <!-- Grid to House Arrow -->
-                <line x1="400" y1="300" x2="350" y2="250" stroke="#4CAF50" stroke-width="2" marker-end="url(#arrowhead)" />
-                <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="410" y1="290" x2="355" y2="240" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="350" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
             """.format(
                 dp0(grid_power)
             )
         else:
             html += """
                 <!-- House to Grid Arrow -->
-                <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#arrowhead)" />
+                <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
                 <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
             """.format(
                 dp0(grid_power)
@@ -322,8 +327,14 @@ class WebInterface:
         html += """
                 <!-- Arrowhead Marker -->
                 <defs>
-                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                        <polygon points="0 0, 10 3.5, 0 7" fill="#000" />
+                    <marker id="pv-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#2196F3"/>
+                    </marker>
+                    <marker id="battery-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#FF9800"/>
+                    </marker>
+                    <marker id="grid-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#4CAF50"/>
                     </marker>
                 </defs>
             </svg>

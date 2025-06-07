@@ -365,11 +365,11 @@ def run_nordpool_test(my_predbat):
     # Obtain Agile octopus data
     rates_agile = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/")
     if not rates_agile:
-        print("ERROR: No import rate data from Octopus url {}".format(url))
+        print("ERROR: No import rate data from Octopus url {}".format("https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/"))
         failed = True
     rates_agile_export = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/")
     if not rates_agile_export:
-        print("ERROR: No export rate data from Octopus url {}".format(url))
+        print("ERROR: No export rate data from Octopus url {}".format("https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"))
         failed = True
     print("Agile rates downloaded...")
 
@@ -1433,16 +1433,13 @@ def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=
     if total_kwh != expect_kwh:
         print("ERROR: Car charging total kwh should be {} got {}".format(expect_kwh, total_kwh))
         failed = True
-        print(slots)
     total_pd = my_predbat.car_charge_slot_kwh(my_predbat.minutes_now, my_predbat.minutes_now + my_predbat.forecast_minutes)
     if total_pd != expect_kwh:
         print("ERROR: Car charging total calculated with car_charge_slot_kwh should be {} got {}".format(expect_kwh, total_pd))
         failed = True
-        print(slots)
     if total_cost != expect_cost:
         print("ERROR: Car charging total cost should be {} got {}".format(expect_cost, total_cost))
         failed = True
-        print(slots)
 
     return failed
 
