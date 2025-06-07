@@ -3052,6 +3052,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.charge_limit_best[0] = 0
         # my_predbat.charge_limit_best[1] = 0
         pass
+    print("Min4 improve swap {}".format(my_predbat.metric_min_improvement_swap))
 
     if re_do_rates:
         # Set rate thresholds
@@ -3062,7 +3063,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
         # Find discharging windows
         if my_predbat.rate_export:
-            my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True)
+            my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
             print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
             print("Export windows {}".format(my_predbat.high_export_rates))
             # Update threshold automatically
@@ -3073,7 +3074,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         if my_predbat.rate_import:
             # Find charging window
             print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
-            my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False)
+            my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export)
             # Update threshold automatically
             if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
                 my_predbat.rate_import_cost_threshold = highest
@@ -3143,8 +3144,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     if not expected_file:
         for item in my_predbat.CONFIG_ITEMS:
             name = item["name"]
-            value = item.get("value", None)
             default = item.get("default", None)
+            value = item.get("value", default)
             enable = item.get("enable", None)
             enabled = my_predbat.user_config_item_enabled(item)
             if enabled and value != default:

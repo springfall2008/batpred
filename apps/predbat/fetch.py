@@ -1135,7 +1135,7 @@ class Fetch:
 
         # Find discharging windows
         if self.rate_export:
-            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True)
+            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=self.rate_import)
             # Update threshold automatically
             self.log("High export rate found rates in range {} to {}".format(lowest, highest))
             if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
@@ -1144,7 +1144,7 @@ class Fetch:
         # Find charging windows
         if self.rate_import:
             # Find charging window
-            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False)
+            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=self.rate_export)
             self.log("Low Import rate found rates in range {} to {}".format(lowest, highest))
             # Update threshold automatically
             if self.rate_low_threshold == 0 and highest >= self.rate_min:
@@ -1315,7 +1315,7 @@ class Fetch:
             minute += 1
         return rates, replicated_rates
 
-    def find_charge_window(self, rates, minute, threshold_rate, find_high):
+    def find_charge_window(self, rates, minute, threshold_rate, find_high, alt_rates={}):
         """
         Find the charging windows based on the low rate threshold (percent below average)
         """
@@ -1324,10 +1324,22 @@ class Fetch:
         rate_low_average = 0
         rate_low_rate = 0
         rate_low_count = 0
+        alternate_rate_boundary = False
+        alt_rate_last = None
+        alt_rate_last = None
+
+        # Work out alternate rate threshold
+        alt_rate_max = max(alt_rates.values()) if alt_rates else 0
+        alt_rate_min = min(alt_rates.values()) if alt_rates else 0
+        alt_rate_threshold = abs(alt_rate_max - alt_rate_min) * 0.1
 
         stop_at = self.forecast_minutes + self.minutes_now + 12 * 60
         # Scan for lower rate start and end
         while minute < stop_at and not (minute >= (self.forecast_minutes + self.minutes_now) and (rate_low_start < 0)):
+            alt_rate = alt_rates.get(minute, None)
+            if (alt_rate is not None) and (alt_rate_last is not None) and (abs(alt_rate - alt_rate_last) >= alt_rate_threshold):
+                # Create alternate rate boundary if the rate is different
+                alternate_rate_boundary = True
             if minute in rates:
                 rate = rates[minute]
                 if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in self.manual_all_times) or (rate_low_start in self.manual_all_times):
@@ -1348,7 +1360,7 @@ class Fetch:
                         # Manual slot
                         rate_low_end = minute
                         break
-                    if find_high and (rate_low_start >= 0) and ((minute - rate_low_start) >= 60 * 4):
+                    if find_high and (rate_low_start >= 0) and (((minute - rate_low_start) >= 60 * 4) or (((minute - rate_low_start) >= 30) and alternate_rate_boundary)):
                         # Export slot can never be bigger than 4 hours
                         rate_low_end = minute
                         break
@@ -1370,6 +1382,7 @@ class Fetch:
                     rate_low_end = minute
                 break
             minute += 5
+            alt_rate_last = alt_rate
 
         if rate_low_count:
             rate_low_average = dp2(rate_low_average / rate_low_count)
@@ -1594,7 +1607,7 @@ class Fetch:
 
         return rate_min_forward
 
-    def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False):
+    def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates={}):
         """
         Scan for the next high/low rate window
         """
@@ -1605,7 +1618,7 @@ class Fetch:
         upcoming_period = self.minutes_now + 4 * 60
 
         while True:
-            rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high)
+            rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high, alt_rates=alt_rates)
             window = {}
             window["start"] = rate_low_start
             window["end"] = rate_low_end
@@ -1884,6 +1897,7 @@ class Fetch:
         # Metric config
         self.metric_min_improvement = self.get_arg("metric_min_improvement")
         self.metric_min_improvement_export = self.get_arg("metric_min_improvement_export")
+        self.metric_min_improvement_swap = self.get_arg("metric_min_improvement_swap")
         self.metric_min_improvement_plan = self.get_arg("metric_min_improvement_plan")
         self.metric_min_improvement_export_freeze = self.get_arg("metric_min_improvement_export_freeze")
         self.metric_battery_cycle = self.get_arg("metric_battery_cycle")

@@ -299,6 +299,11 @@ A value of 0.1 is the default which prevents any marginal freezes as they must b
 If you increase this value (e.g. you only want to freeze export if very profitable), then freeze exports will become less common.
 The value is in pence per 30 minutes of export time.
 
+**input_number.predbat_metric_min_improvement_swap** (_expert mode_) Sets the minimum improvement in cost to swap an export slot to a later time in the day.
+The default for this setting is -0.25p, meaning that export will be moved later even if it costs up to an extra 0.25p on the plan.
+The advantage of having late exports means that you are less likely to run out of battery earlier in the day.
+Values of between -1p and 0p would be recommended.
+
 **input_number.predbat_rate_low_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future import rates in the plan
 and determine the import rate threshold below which a slot will be considered to be a potential charging slot.<BR>
 If rate_low_threshold is set to a non-zero value this will set the threshold below future average import rates as the minimum to consider for a charge window,
