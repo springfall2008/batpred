@@ -253,7 +253,7 @@ class WebInterface:
         html += """
         <div style="text-align: left; margin: 0px;">
             <svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
-                
+
                 <!-- Grid Circle -->
                 <circle cx="450" cy="300" r="50" fill="#4CAF50" />
                 <text x="450" y="300" text-anchor="middle" dy=".3em" fill="#fff">Grid</text>
@@ -332,10 +332,10 @@ class WebInterface:
                     </marker>
                     <marker id="battery-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
                     <polygon points="0 0, 10 3.5, 0 7" fill="#FF9800"/>
-                    </marker>            
+                    </marker>
                     <marker id="grid-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
                     <polygon points="0 0, 10 3.5, 0 7" fill="#4CAF50"/>
-                    </marker>            
+                    </marker>
                 </defs>
             </svg>
         </div>
