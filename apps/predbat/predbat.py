@@ -1338,11 +1338,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
         self.check_entity_refresh()
         if self.update_pending and not self.prediction_started:
+            self.update_pending = False
             self.prediction_started = True
             self.ha_interface.update_states()
             self.load_user_config()
             self.validate_config()
-            self.update_pending = False
             try:
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
@@ -1391,6 +1391,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         if not self.prediction_started:
             config_changed = False
             self.prediction_started = True
+            self.update_pending = False
+            
             self.ha_interface.update_states()
             self.check_entity_refresh()
 
@@ -1399,7 +1401,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.validate_config()
                 config_changed = True
 
-            self.update_pending = False
             try:
                 self.update_pred(scheduled=True)
             except Exception as e:
