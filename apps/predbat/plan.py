@@ -1747,7 +1747,7 @@ class Plan:
                 average = window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
                 if self.carbon_enable:
                     carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
-                    average += carbon_intensity * self.carbon_metric / 1000.0
+                    average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
                 average += self.metric_self_sufficiency
                 average = dp2(average)  # Round to nearest 0.01 penny to avoid too many bands
                 if calculate_import_low_export:
@@ -1760,14 +1760,14 @@ class Plan:
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "c"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
+                window_links[sort_key]["average"] = dp1(average*2)/2  # Round to nearest 0.2 penny to avoid too many bands
                 window_links[sort_key]["average_secondary"] = dp1(average_export)  # Round to nearest 0.1 penny to avoid too many bands
 
                 if self.set_charge_freeze:
                     average = window["average"]
                     if self.carbon_enable:
                         carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
-                        average += carbon_intensity * self.carbon_metric / 1000.0
+                        average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
                     average += self.metric_self_sufficiency
                     average = dp2(average)  # Round to nearest 0.01 penny to avoid too many bands
                     sort_key = "%04.2f_%04.2f_%04d_cf%02d" % (5000 - average, 5000 - average_export, 9999 - window_start, id)
@@ -1775,7 +1775,7 @@ class Plan:
                     window_links[sort_key] = {}
                     window_links[sort_key]["type"] = "cf"
                     window_links[sort_key]["id"] = id
-                    window_links[sort_key]["average"] = dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
+                    window_links[sort_key]["average"] = dp1(average*2)/2  # Round to nearest 0.2 penny to avoid too many bands
                     window_links[sort_key]["average_secondary"] = dp1(average_export)  # Round to nearest 0.1 penny to avoid too many bands
 
                 id += 1
@@ -1788,8 +1788,8 @@ class Plan:
                 average = window["average"] * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle
                 if self.carbon_enable:
                     carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
-                    average += carbon_intensity * self.carbon_metric / 1000.0
-                average = dp2(average)  # Round to nearest 0.01 penny to avoid too many bands
+                    average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
+                average = dp1(average)  # Round to nearest 0.01 penny to avoid too many bands
                 if calculate_export_high_import:
                     average_import = dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
@@ -1803,7 +1803,7 @@ class Plan:
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "d"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
+                window_links[sort_key]["average"] = dp1(average*2)/2  # Round to nearest 0.2 penny to avoid too many bands
                 window_links[sort_key]["average_secondary"] = dp1(average_import)  # Round to nearest 0.1 penny to avoid too many bands
 
                 if self.set_export_freeze:
@@ -1815,7 +1815,7 @@ class Plan:
                         average = window["average"]
                         if self.carbon_enable:
                             carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
-                            average += carbon_intensity * self.carbon_metric / 1000.0
+                            average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
                         average = dp2(average)  # Round to nearest 0.01 penny to avoid too many bands
                         sort_key = "%04.2f_%04.2f_%04d_df%02d" % (5000 - average, 5000 - average_import, 9999 - window_start, id)
                         if not self.calculate_export_first:
@@ -1825,7 +1825,7 @@ class Plan:
                         window_links[sort_key] = {}
                         window_links[sort_key]["type"] = "df"
                         window_links[sort_key]["id"] = id
-                        window_links[sort_key]["average"] = dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
+                        window_links[sort_key]["average"] = dp1(average*2)/2  # Round to nearest 0.2 penny to avoid too many bands
                         window_links[sort_key]["average_secondary"] = dp1(average_import)  # Round to nearest 0.1 penny to avoid too many bands
 
                 id += 1
