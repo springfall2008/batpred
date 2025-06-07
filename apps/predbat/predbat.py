@@ -176,7 +176,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                     PREDBAT_UPDATE_OPTIONS.append(full_name)
                     if this_tag == tag:
                         this_tag = full_name
-                if len(PREDBAT_UPDATE_OPTIONS) >= 10:
+                if len(PREDBAT_UPDATE_OPTIONS) >= 25:
                     break
 
             # Update the drop down menu
