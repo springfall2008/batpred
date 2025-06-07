@@ -1392,7 +1392,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             config_changed = False
             self.prediction_started = True
             self.update_pending = False
-            
+
             self.ha_interface.update_states()
             self.check_entity_refresh()
 
