@@ -1386,7 +1386,6 @@ class Octopus:
                     required_minutes = int(required_extra_soc / (kwh_original * self.car_charging_loss) * (end_minutes - start_minutes) + 0.5)
                     required_minutes = min(required_minutes, end_minutes - start_minutes)
                     end_minutes = start_minutes + required_minutes
-                    end_minutes = int((end_minutes + 29) / 30) * 30  # Round up to 30 minutes
 
                     car_soc = min(car_soc + kwh_expected, limit)
                     new_slot = {}
