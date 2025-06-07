@@ -2337,16 +2337,17 @@ class Plan:
                         else:
                             self.export_limits_best[window_n_target] = export_limit_target
 
-                    self.log(
-                        "Try target window {} {}-{} limit {} length {} orig_length {}".format(
-                            window_n_target,
-                            self.time_abs_str(self.export_window_best[window_n_target]["start"]),
-                            self.time_abs_str(self.export_window_best[window_n_target]["end"]),
-                            export_limit_target,
-                            window_length_target,
-                            orig_length_target,
+                    if self.debug_enable:
+                        self.log(
+                            "Try target window {} {}-{} limit {} length {} orig_length {}".format(
+                                window_n_target,
+                                self.time_abs_str(self.export_window_best[window_n_target]["start"]),
+                                self.time_abs_str(self.export_window_best[window_n_target]["end"]),
+                                export_limit_target,
+                                window_length_target,
+                                orig_length_target,
+                            )
                         )
-                    )
                     # Try to swap into the target slot
                     for window_n in range(max(window_n_target - 32, 0), max(window_n_target, 0), 1):
                         previous_end = 0
