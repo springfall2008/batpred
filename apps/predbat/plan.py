@@ -2303,6 +2303,10 @@ class Plan:
                         # Skip if we already swapped this window
                         continue
 
+                    # Can not swap into car charging slot
+                    if not self.car_charging_from_battery and self.hit_car_window(window_start_target, self.export_window_best[window_n_target]["end"]):
+                        continue
+
                     # Try to drop the target
                     if export_limit_target < 100:
                         self.export_limits_best[window_n_target] = 100.0
