@@ -3052,6 +3052,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.charge_limit_best[0] = 0
         # my_predbat.charge_limit_best[1] = 0
         pass
+    print("Min4 improve swap {}".format(my_predbat.metric_min_improvement_swap))
 
     if re_do_rates:
         # Set rate thresholds
@@ -3143,8 +3144,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     if not expected_file:
         for item in my_predbat.CONFIG_ITEMS:
             name = item["name"]
-            value = item.get("value", None)
             default = item.get("default", None)
+            value = item.get("value", default)
             enable = item.get("enable", None)
             enabled = my_predbat.user_config_item_enabled(item)
             if enabled and value != default:

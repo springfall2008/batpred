@@ -356,6 +356,18 @@ CONFIG_ITEMS = [
         "default": 0.1,
     },
     {
+        "name": "metric_min_improvement_swap",
+        "friendly_name": "Metric Min Improvement Swap",
+        "type": "input_number",
+        "min": -50,
+        "max": 50.0,
+        "step": 0.1,
+        "unit": "p",
+        "icon": "mdi:currency-usd",
+        "enable": "expert_mode",
+        "default": -0.25,
+    },
+    {
         "name": "metric_min_improvement_export_freeze",
         "friendly_name": "Metric Min Improvement Export Freeze",
         "type": "input_number",
