@@ -1760,7 +1760,7 @@ class Plan:
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "c"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = dp1(average/2)*2  # Round to nearest 0.2 penny to avoid too many bands
+                window_links[sort_key]["average"] = dp1(average / 2) * 2  # Round to nearest 0.2 penny to avoid too many bands
                 window_links[sort_key]["average_secondary"] = dp1(average_export)  # Round to nearest 0.1 penny to avoid too many bands
 
                 if self.set_charge_freeze:
@@ -1775,7 +1775,7 @@ class Plan:
                     window_links[sort_key] = {}
                     window_links[sort_key]["type"] = "cf"
                     window_links[sort_key]["id"] = id
-                    window_links[sort_key]["average"] = dp1(average/2)*2  # Round to nearest 0.2 penny to avoid too many bands
+                    window_links[sort_key]["average"] = dp1(average / 2) * 2  # Round to nearest 0.2 penny to avoid too many bands
                     window_links[sort_key]["average_secondary"] = dp1(average_export)  # Round to nearest 0.1 penny to avoid too many bands
 
                 id += 1
@@ -1803,7 +1803,7 @@ class Plan:
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "d"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = dp1(average/2)*2  # Round to nearest 0.2 penny to avoid too many bands
+                window_links[sort_key]["average"] = dp1(average / 2) * 2  # Round to nearest 0.2 penny to avoid too many bands
                 window_links[sort_key]["average_secondary"] = dp1(average_import)  # Round to nearest 0.1 penny to avoid too many bands
 
                 if self.set_export_freeze:
@@ -1825,7 +1825,7 @@ class Plan:
                         window_links[sort_key] = {}
                         window_links[sort_key]["type"] = "df"
                         window_links[sort_key]["id"] = id
-                        window_links[sort_key]["average"] = dp1(average/2)*2  # Round to nearest 0.2 penny to avoid too many bands
+                        window_links[sort_key]["average"] = dp1(average / 2) * 2  # Round to nearest 0.2 penny to avoid too many bands
                         window_links[sort_key]["average_secondary"] = dp1(average_import)  # Round to nearest 0.1 penny to avoid too many bands
 
                 id += 1
