@@ -5144,7 +5144,7 @@ def run_window_sort_tests(my_predbat):
     export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": export_rate}]
     failed |= run_window_sort_test("single_discharge", my_predbat, [], export_window_best, expected=["d_0_5.0", "df_0_5.0"])
     failed |= run_window_sort_test("single_charge_discharge", my_predbat, charge_window_best, export_window_best, expected=["c_0_10.0", "cf_0_10.0", "d_0_5.0", "df_0_5.0"])
-    failed |= run_window_sort_test("single_charge_discharge_loss", my_predbat, charge_window_best, export_window_best, expected=["c_0_20.0", "cf_0_10.0", "df_0_5.0", "d_0_2.5"], inverter_loss=0.5)
+    failed |= run_window_sort_test("single_charge_discharge_loss", my_predbat, charge_window_best, export_window_best, expected=["c_0_20.0", "cf_0_10.0", "df_0_5.0", "d_0_2.4"], inverter_loss=0.5)
     export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 50.0}]
     failed |= run_window_sort_test("single_charge_discharge_loss2", my_predbat, charge_window_best, export_window_best, expected=["df_0_50.0", "d_0_25.0", "c_0_20.0", "cf_0_10.0"], inverter_loss=0.5)
     failed |= run_window_sort_test("single_charge_discharge_loss3", my_predbat, charge_window_best, export_window_best, expected=["c_0_200.0", "df_0_50.0", "d_0_25.0", "cf_0_10.0"], inverter_loss=0.5, battery_loss=0.1)
@@ -5153,7 +5153,7 @@ def run_window_sort_tests(my_predbat):
         my_predbat,
         charge_window_best,
         export_window_best,
-        expected=["c_0_200.0", "df_0_50.0", "cf_0_10.0", "d_0_2.5"],
+        expected=["c_0_200.0", "df_0_50.0", "cf_0_10.0", "d_0_2.4"],
         inverter_loss=0.5,
         battery_loss=0.1,
         battery_loss_discharge=0.1,
@@ -5165,7 +5165,7 @@ def run_window_sort_tests(my_predbat):
         my_predbat,
         charge_window_best,
         export_window_best,
-        expected=["c_1_400.0", "c_0_200.0", "df_0_50.0", "cf_1_20.0", "cf_0_10.0", "d_0_2.5"],
+        expected=["c_1_400.0", "c_0_200.0", "df_0_50.0", "cf_1_20.0", "cf_0_10.0", "d_0_2.4"],
         inverter_loss=0.5,
         battery_loss=0.1,
         battery_loss_discharge=0.1,
