@@ -1533,6 +1533,10 @@ class Octopus:
                 scale = 100.0
             if rate_key not in data_all[0]:
                 rate_key = "value"
+            if rate_key not in data_all[0]:
+                rate_key = "price"
+                from_key = "from"
+                to_key = "till"
             rate_data = self.minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale)
 
         return rate_data
