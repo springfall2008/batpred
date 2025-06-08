@@ -708,10 +708,16 @@ class Output:
         """
         if export_window_n >= 0:
             target_export = self.export_window_best[export_window_n].get("target", self.export_limits_best[export_window_n])
-            text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
+            if self.export_limits_best[export_window_n] == 99:
+                text = "freeze exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
+            else:
+                text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
         elif charge_window_n >= 0:
             target_charge = calc_percent_limit(self.charge_window_best[charge_window_n].get("target", self.charge_limit_best[charge_window_n]), self.soc_max)
-            text = "charging to {}% for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
+            if self.charge_limit_best[charge_window_n] == self.reserve:
+                text = "freeze charging to {}% for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
+            else:
+                text = "charging to {}% for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
         else:
             charge_window_n = self.get_next_charge_window(minutes_now)
             export_window_n = self.get_next_export_window(minutes_now)
