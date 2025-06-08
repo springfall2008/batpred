@@ -1134,9 +1134,7 @@ class GECloud:
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Error downloading GE data from URL {}".format(url))
-            self.record_status("Warn: Error downloading GE data from cloud", debug=url, had_errors=True)
-            return False
+            return {}
 
         self.ge_url_cache[url] = {}
         self.ge_url_cache[url]["stamp"] = now_utc
