@@ -2059,6 +2059,12 @@ class Plan:
                         charge_limit_best[window_n] = self.soc_max
                         if self.debug_enable:
                             self.log("Clip up charge window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
+                    elif limit == self.reserve and (dp1(soc_min) == dp1(self.soc_max)) and (dp1(soc_max) == dp1(self.soc_max)):
+                        # Reserve slot, so set to 100% if we are already at 100%
+                        window["target"] = soc_max
+                        charge_limit_best[window_n] = self.soc_max
+                        if self.debug_enable:
+                            self.log("Change freeze charge into charge, already at 100% - window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
 
             else:
                 self.log("Warn: Clip charge window {} as it's already passed".format(window_n))
@@ -2079,8 +2085,8 @@ class Plan:
             window_length = window_end - window_start
             window["target"] = limit
 
-            if limit == 100 or limit == 99:
-                # Ignore disabled windows & export freeze slots
+            if limit == 100:
+                # Ignore disabled windows
                 pass
             elif window_length > 0:
                 predict_minute_start = max(int((window_start - minutes_now) / 5) * 5, 0)
@@ -2097,7 +2103,14 @@ class Plan:
                         self.log("Examine export window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_min, soc_max))
 
                     # Export level adjustments for safety
-                    if soc_min > limit_soc:
+                    if limit == 99.0:
+                        if dp1(soc_min) == dp1(self.soc_max) and dp1(soc_max) == dp1(self.soc_max):
+                            # Reserve slot, so set to 100% if we are already at 100%
+                            window["target"] = 100
+                            export_limits_best[window_n] = 100.0
+                            if self.debug_enable:
+                                self.log("Clip freeze export off as already at 100% - window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
+                    elif soc_min > limit_soc:
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge_scaled)
