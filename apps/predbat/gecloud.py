@@ -615,10 +615,10 @@ class GECloudDirect:
             self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + ems + "_export_end_time_slot_1" for _ in range(num_inverters)]
 
             # EMS Produces the data for all inverters
-            self.base.args["battery_power"] = ["sensor.predbat_gecloud_" + device + "_battery_power"] + [0 for _ in range(num_inverters - 1)]
-            self.base.args["pv_power"] = ["sensor.predbat_gecloud_" + device + "_solar_power"] + [0 for _ in range(num_inverters - 1)]
-            self.base.args["load_power"] = ["sensor.predbat_gecloud_" + device + "_consumption_power"] + [0 for _ in range(num_inverters - 1)]
-            self.base.args["grid_power"] = ["sensor.predbat_gecloud_" + device + "_grid_power"] + [0 for _ in range(num_inverters - 1)]
+            self.base.args["battery_power"] = ["sensor.predbat_gecloud_" + "GEE" + "_battery_power"] + [0 for _ in range(num_inverters - 1)]
+            self.base.args["pv_power"] = ["sensor.predbat_gecloud_" + "GEE" + "_solar_power"] + [0 for _ in range(num_inverters - 1)]
+            self.base.args["load_power"] = ["sensor.predbat_gecloud_" + "GEE" + "_consumption_power"] + [0 for _ in range(num_inverters - 1)]
+            self.base.args["grid_power"] = ["sensor.predbat_gecloud_" + "GEE" + "_grid_power"] + [0 for _ in range(num_inverters - 1)]
 
         self.log("GECloud: Automatic configuration complete")
 
