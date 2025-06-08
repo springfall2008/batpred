@@ -1495,7 +1495,12 @@ class Octopus:
             else:
                 current_rate_id = entity_id
 
-            data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="rates") or self.get_state_wrapper(entity_id=current_rate_id, attribute="all_rates") or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today") or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
+            data_import = (
+                self.get_state_wrapper(entity_id=current_rate_id, attribute="rates")
+                or self.get_state_wrapper(entity_id=current_rate_id, attribute="all_rates")
+                or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
+                or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
+            )
             if data_import:
                 data_all += data_import
             else:
