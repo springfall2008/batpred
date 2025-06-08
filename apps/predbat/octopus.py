@@ -1499,7 +1499,7 @@ class Octopus:
             if data_import:
                 data_all += data_import
             else:
-                self.log("Warn: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today / prices'".format(current_rate_id))
+                self.log("Warn: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today' / 'prices'".format(current_rate_id))
 
             # Next rates
             if "_current_rate" in entity_id:
