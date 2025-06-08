@@ -3,8 +3,8 @@ rm predbat.log
 mkdir -p predbat_standalone
 cp ../apps/predbat/*.py predbat_standalone
 #cp /Volumes/addon_configs/6adb4f0d_predbat/*.py predbat_standalone
-#cp /Volumes/addon_configs/6adb4f0d_predbat/apps_direct.yaml predbat_standalone/apps.yaml
+cp /Volumes/addon_configs/6adb4f0d_predbat/apps_direct.yaml predbat_standalone/apps.yaml
 cp /Volumes/addon_configs/6adb4f0d_predbat/hass.py predbat_standalone/hass.py
-cp apps.yaml.mark predbat_standalone/apps.yaml
+#cp apps.yaml.mark predbat_standalone/apps.yaml
 cd predbat_standalone
 python3 hass.py
