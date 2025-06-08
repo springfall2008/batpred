@@ -1495,11 +1495,16 @@ class Octopus:
             else:
                 current_rate_id = entity_id
 
-            data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="rates") or self.get_state_wrapper(entity_id=current_rate_id, attribute="all_rates") or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
+            data_import = (
+                self.get_state_wrapper(entity_id=current_rate_id, attribute="rates")
+                or self.get_state_wrapper(entity_id=current_rate_id, attribute="all_rates")
+                or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
+                or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
+            )
             if data_import:
                 data_all += data_import
             else:
-                self.log("Warn: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today'".format(current_rate_id))
+                self.log("Warn: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today' / 'prices'".format(current_rate_id))
 
             # Next rates
             if "_current_rate" in entity_id:
