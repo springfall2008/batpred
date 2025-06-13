@@ -1733,6 +1733,11 @@ document.addEventListener("DOMContentLoaded", function() {
         text = self.get_header("Predbat Compare", refresh=5 * 60)
 
         text += "<body>\n"
+
+        text += "<style>\n"
+        text += "body.dark-mode .comparison-table font { color: #000; }\n"
+        text += "</style>\n"
+
         text += '<form class="form-inline" action="./compare" method="post" enctype="multipart/form-data" id="compareform">\n'
         active = self.base.get_arg("compare_active", False)
 
@@ -1744,7 +1749,7 @@ document.addEventListener("DOMContentLoaded", function() {
         text += '<input type="hidden" name="run" value="run">\n'
         text += "</form>"
 
-        text += "<table>\n"
+        text += "<table class='comparison-table'>\n"
         text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th>"
         if self.base.iboost_enable:
             text += "<th>Iboost</th>"
