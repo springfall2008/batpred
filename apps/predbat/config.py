@@ -22,6 +22,7 @@ RUN_EVERY = 5
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
+TIME_FORMAT_DAILY = "%Y-%m-%d"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
 
@@ -452,6 +453,12 @@ CONFIG_ITEMS = [
         "type": "switch",
         "default": True,
         "enable": "expert_mode",
+    },
+    {
+        "name": "metric_pv_calibration_enable",
+        "friendly_name": "Enable use of Calibrated PV data",
+        "type": "switch",
+        "default": False,
     },
     {
         "name": "metric_self_sufficiency",
