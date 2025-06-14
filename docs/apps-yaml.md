@@ -748,7 +748,7 @@ The latitude and longitude can be found from your postcode if you are unsure, e.
 The azmiuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
 
-```
+```yaml
   forecast_solar:
     - latitude: 51.5072
       longitude: -0.1276
