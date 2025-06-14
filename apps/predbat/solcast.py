@@ -124,6 +124,7 @@ class Solcast:
             az = config.get("azimuth", 45.0)
             az = self.convert_azimuth(az)  # Convert azimuth to degrees if needed
             kwp = config.get("kwp", 3.0)
+            efficiency = config.get("efficiency", 0.95)
             api_key = config.get("api_key", None)
 
             if api_key:
@@ -150,7 +151,7 @@ class Solcast:
                 period_end_stamp = datetime.strptime(period_end, TIME_FORMAT_FORECAST_SOLAR)
                 # Convert period_end_stamp to a offset aware time using current_time_offset as the timezone
                 period_end_stamp = period_end_stamp.replace(tzinfo=pytz.utc) - current_time_offset
-                pv50 = watts[period_end]
+                pv50 = watts[period_end] * efficiency  # Apply efficiency to the watt hours
                 if period_start_stamp:
                     minutes_start = (period_start_stamp - self.midnight_utc).total_seconds() / 60
                     minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
