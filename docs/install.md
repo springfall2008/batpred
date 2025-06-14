@@ -148,6 +148,7 @@ The latitude and longitude can be found from your postcode if you are unsure, e.
 
 The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
+The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
 
 ```yaml
   forecast_solar:
