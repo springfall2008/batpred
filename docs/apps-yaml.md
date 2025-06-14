@@ -745,7 +745,7 @@ You can create one or more rooftops by providing a list of the data for each one
 
 The latitude and longitude can be found from your postcode if you are unsure, e.g: <https://api.postcodes.io/postcodes/SW1A2AB>
 
-The azmiuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
+The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
 
 ```yaml
