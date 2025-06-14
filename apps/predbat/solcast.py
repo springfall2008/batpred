@@ -625,6 +625,7 @@ class Solcast:
 
         pv_estimateCL = {}
         pv_estimate10 = {}
+        pv_estimate90 = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, 30):
             pv_value = 0
             for offset in range(0, 30, 1):
@@ -633,6 +634,7 @@ class Solcast:
             period_start = (self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)).strftime(TIME_FORMAT)
             pv_estimateCL[period_start] = dp4(pv_value)
             pv_estimate10[period_start] = dp4(pv_value * worst_day_scaling)
+            pv_estimate90[period_start] = dp4(pv_value * best_day_scaling)
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
@@ -640,8 +642,11 @@ class Solcast:
             if calibrated is not None:
                 entry["pv_estimateCL"] = calibrated
             calibrated10 = pv_estimate10.get(period_start, None)
+            calibrated90 = pv_estimate90.get(period_start, None)
             if create_pv10 and (calibrated10 is not None):
                 entry["pv_estimate10"] = calibrated10
+            if create_pv10 and (calibrated90 is not None):
+                entry["pv_estimate90"] = calibrated90
 
         # Creation of PV10 data using worst day scaling factor
         if create_pv10:
@@ -649,7 +654,7 @@ class Solcast:
                 pv_value = pv_forecast_minute_adjusted.get(minute, 0)
                 # Use the worst day scaling factor to create pv_estimate10
                 pv_forecast_minute10[minute] = dp4(pv_value * worst_day_scaling)
-            self.log("PV Calibration: Created pv_estimate10 data using worst day scaling factor {}".format(dp2(worst_day_scaling)))
+            self.log("PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {}".format(dp2(worst_day_scaling)))
 
         # Do we use calibrated or raw data?
         if self.metric_pv_calibration_enable:
