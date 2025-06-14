@@ -4129,7 +4129,10 @@ class Plan:
                 for window in self.car_charging_slots[car_n]:
                     start = window["start"]
                     end = window["end"]
-                    kwh = dp2(window["kwh"]) / (end - start)
+                    if end != start:
+                        kwh = dp2(window["kwh"]) / (end - start)
+                    else:
+                        kwh = dp2(window["kwh"])
                     for minute_offset in range(minute_start, minute_end, PREDICT_STEP):
                         if minute_offset >= start and minute_offset < end:
                             car_charging_kwh += kwh * PREDICT_STEP
