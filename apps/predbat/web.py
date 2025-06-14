@@ -18,10 +18,8 @@ from datetime import datetime, timedelta
 import json
 
 from utils import calc_percent_limit, str2time, dp0, dp2
-from config import TIME_FORMAT, TIME_FORMAT_SECONDS
+from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
-
-TIME_FORMAT_DAILY = "%Y-%m-%d"
 
 
 class WebInterface:
@@ -40,78 +38,6 @@ class WebInterface:
         self.web_port = self.base.get_arg("web_port", 5052)
         self.default_log = "warnings"
 
-    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, print=False, daily=False, offset_days=0, first=True, pounds=False):
-        results = {}
-        last_updated_time = None
-        last_day_stamp = None
-        if history and len(history) >= 1:
-            history = history[0]
-
-        if not history:
-            return results
-
-        # Process history
-        for item in history:
-            if last_updated_key not in item:
-                continue
-
-            if print:
-                self.log("Item {}".format(item))
-
-            if attributes:
-                if state_key not in item["attributes"]:
-                    continue
-                state = item["attributes"][state_key]
-            else:
-                # Ignore data without correct keys
-                if state_key not in item:
-                    continue
-
-                # Unavailable or bad values
-                if item[state_key] == "unavailable" or item[state_key] == "unknown":
-                    continue
-
-                state = item[state_key]
-
-            # Get the numerical key and the timestamp and ignore if in error
-            try:
-                state = float(state) * scale
-                if pounds:
-                    state = dp2(state / 100)
-            except (ValueError, TypeError):
-                if isinstance(state, str):
-                    if state.lower() in ["on", "true", "yes"]:
-                        state = 1
-                    elif state.lower() in ["off", "false", "no"]:
-                        state = 0
-                    else:
-                        continue
-                else:
-                    continue
-
-            try:
-                last_updated_time = item[last_updated_key]
-                last_updated_stamp = str2time(last_updated_time)
-            except (ValueError, TypeError):
-                continue
-
-            day_stamp = last_updated_stamp.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
-            if offset_days:
-                day_stamp += timedelta(days=offset_days)
-
-            if first and daily and day_stamp == last_day_stamp:
-                continue
-            last_day_stamp = day_stamp
-
-            # Add the state to the result
-            if daily:
-                # Convert day stamp from UTC into localtime
-                results[day_stamp.strftime(TIME_FORMAT_DAILY)] = state
-            else:
-                results[last_updated_time] = state
-
-        return results
-
     def subtract_daily(self, hist1, hist2):
         """
         Subtract the values in hist2 from hist1
@@ -129,14 +55,14 @@ class WebInterface:
         Update the history data
         """
         self.log("Web interface history update")
-        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7, required=False))
-        self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False))
-        self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
-        self.cost_hour_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
-        self.cost_yesterday_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+        self.pv_power_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7, required=False))
+        self.pv_forecast_hist = self.base.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False))
+        self.cost_today_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
+        self.cost_hour_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
+        self.cost_yesterday_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
 
         if self.base.num_cars > 0:
-            self.cost_yesterday_car_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            self.cost_yesterday_car_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
             self.cost_yesterday_no_car = self.subtract_daily(self.cost_yesterday_hist, self.cost_yesterday_car_hist)
         else:
             self.cost_yesterday_no_car = self.cost_yesterday_hist
@@ -148,8 +74,8 @@ class WebInterface:
                 self.compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
-                    self.compare_hist[id]["cost"] = self.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
-                    self.compare_hist[id]["metric"] = self.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
+                    self.compare_hist[id]["cost"] = self.base.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
+                    self.compare_hist[id]["metric"] = self.base.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
 
     async def start(self):
         # Start the web server
@@ -549,7 +475,7 @@ class WebInterface:
             text += '<div id="chart"></div>'
             now_str = self.base.now_utc.strftime(TIME_FORMAT)
             history = self.base.get_history_wrapper(entity, days, required=False)
-            history_chart = self.history_attribute(history)
+            history_chart = self.base.history_attribute(history)
             series_data = []
             series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "3", "stroke_curve": "stepline"})
             text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)
@@ -1277,35 +1203,6 @@ body.dark-mode .log-menu a.active {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-    def prune_today(self, data, prune=True, group=15, prune_future=False, intermediate=False):
-        """
-        Remove data from before today
-        """
-        results = {}
-        last_time = None
-        prev_value = None
-        for key in data:
-            # Convert key in format '2024-09-07T15:40:09.799567+00:00' into a datetime
-            if "." in key:
-                timekey = datetime.strptime(key, TIME_FORMAT_SECONDS)
-            else:
-                timekey = datetime.strptime(key, TIME_FORMAT)
-            if last_time and (timekey - last_time).seconds < group * 60:
-                continue
-            if intermediate and last_time and ((timekey - last_time).seconds > group * 60):
-                # Large gap, introduce intermediate data point
-                seconds_gap = (timekey - last_time).seconds
-                for i in range(1, seconds_gap // (group * 60)):
-                    new_time = last_time + timedelta(seconds=i * group * 60)
-                    results[new_time.strftime(TIME_FORMAT)] = prev_value
-            if not prune or (timekey > self.base.midnight_utc):
-                if prune_future and (timekey > self.base.now_utc):
-                    continue
-                results[key] = data[key]
-                last_time = timekey
-                prev_value = data[key]
-        return results
-
     def get_chart(self, chart):
         """
         Return the HTML for a chart
@@ -1389,8 +1286,8 @@ body.dark-mode .log-menu a.active {
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
-            cost_pkwh_today = self.prune_today(self.cost_today_hist, prune=False, prune_future=False)
-            cost_pkwh_hour = self.prune_today(self.cost_hour_hist, prune=False, prune_future=False)
+            cost_pkwh_today = self.base.prune_today(self.cost_today_hist, prune=False, prune_future=False)
+            cost_pkwh_hour = self.base.prune_today(self.cost_hour_hist, prune=False, prune_future=False)
             series_data = [
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
@@ -1411,17 +1308,19 @@ body.dark-mode .log-menu a.active {
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
         elif chart == "PV" or chart == "PV7":
-            pv_power = self.prune_today(self.pv_power_hist, prune=chart == "PV")
-            pv_forecast = self.prune_today(self.pv_forecast_hist, prune=chart == "PV", intermediate=True)
-            pv_today_forecast = self.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate"), prune=False)
-            pv_today_forecast10 = self.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate10"), prune=False)
-            pv_today_forecast90 = self.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate90"), prune=False)
+            pv_power = self.base.prune_today(self.pv_power_hist, prune=chart == "PV")
+            pv_forecast = self.base.prune_today(self.pv_forecast_hist, prune=chart == "PV", intermediate=True)
+            pv_today_forecast = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate"), prune=False)
+            pv_today_forecast10 = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate10"), prune=False)
+            pv_today_forecast90 = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate90"), prune=False)
+            pv_today_forecastCL = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimateCL"), prune=False)
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
                 {"name": "Forecast History", "data": pv_forecast, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7", "chart_type": "area"},
                 {"name": "Forecast", "data": pv_today_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
                 {"name": "Forecast 10%", "data": pv_today_forecast10, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
                 {"name": "Forecast 90%", "data": pv_today_forecast90, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},
+                {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
         else:

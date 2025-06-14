@@ -15,8 +15,8 @@ import requests
 import traceback
 import pytz
 from datetime import datetime, timedelta
-from config import TIME_FORMAT, TIME_FORMAT_SOLCAST
-from utils import dp1, dp2
+from config import TIME_FORMAT, TIME_FORMAT_SOLCAST, TIME_FORMAT_FORECAST_SOLAR
+from utils import dp1, dp2, dp4
 
 """
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
@@ -78,6 +78,129 @@ class Solcast:
             with open(cache_filename, "w") as f:
                 json.dump(data, f)
         return data
+
+    URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}"
+    URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}"
+
+    def convert_azimuth(self, az):
+        """
+        Convert azimuth from solcast format to forecast solar format
+        solcast format is        0 = North, -90 = East, 90 = West, 180 = South
+        forecast solar format is 0 = South, -90 = East, 90 = West, 180 = North
+        """
+        if az >= 0:
+            az = 180 - az
+        else:
+            az = -180 - az
+
+        return az
+
+    def download_forecast_solar_data(self):
+        cache_path = self.config_root + "/cache"
+        cache_path_p = self.config_root_p + "/cache"
+
+        self.forecast_solar_data = {}
+        cache_file = cache_path + "/forecast_solar.json"
+        cache_file_p = cache_path_p + "/forecast_solar.json"
+
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file) as f:
+                    self.forecast_solar_data = json.load(f)
+            except Exception as e:
+                self.log("Warn: Error loading forecast.solar cache file {}, error {}".format(cache_file_p, e))
+                self.log("Warn: " + traceback.format_exc())
+                os.remove(cache_file)
+
+        configs = self.args.get("forecast_solar", [])
+        if not isinstance(configs, list):
+            configs = [configs]
+
+        period_data = {}
+        for config in configs:
+            lat = config.get("latitude", 51.5072)
+            lon = config.get("longitude", -0.1276)
+            dec = config.get("declination", 45.0)
+            az = config.get("azimuth", 45.0)
+            az = self.convert_azimuth(az)  # Convert azimuth to degrees if needed
+            kwp = config.get("kwp", 3.0)
+            efficiency = config.get("efficiency", 0.95)
+            api_key = config.get("api_key", None)
+
+            if api_key:
+                url = self.URL_PERSONAL
+                url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp, api_key=api_key)
+            else:
+                url = self.URL_FREE
+                url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp)
+
+            data = self.cache_get_url(url, params={}, max_age=self.get_arg("forecast_solar_max_age", 8.0) * 60)
+            watts = data.get("result", {}).get("watt_hours_period", {})
+            info = data.get("message", {}).get("info", {})
+            if not watts or not info:
+                self.log("Warn: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings, got {}".format(lat, lon, data))
+                continue
+
+            current_time = info.get("time", None)
+            current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
+            current_time_offset = current_time_stamp.utcoffset()
+
+            period_start_stamp = None
+            forecast_watt_data = {}
+            for period_end in watts:
+                period_end_stamp = datetime.strptime(period_end, TIME_FORMAT_FORECAST_SOLAR)
+                # Convert period_end_stamp to a offset aware time using current_time_offset as the timezone
+                period_end_stamp = period_end_stamp.replace(tzinfo=pytz.utc) - current_time_offset
+                pv50 = watts[period_end] * efficiency  # Apply efficiency to the watt hours
+                if period_start_stamp:
+                    minutes_start = (period_start_stamp - self.midnight_utc).total_seconds() / 60
+                    minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
+                    duration = (minutes_end - minutes_start) / 60.0
+                    for minute in range(int(minutes_start), int(minutes_end) + 1):
+                        forecast_watt_data[minute] = pv50 / duration
+                period_start_stamp = period_end_stamp
+
+            for minute in range(0, 2 * 24 * 60, 30):
+                pv50 = dp4(forecast_watt_data.get(minute, 0) / 1000.0)
+                period_start_stamp = self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)
+                data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}
+                if period_start_stamp in period_data:
+                    period_data[period_start_stamp]["pv_estimate"] += pv50
+                else:
+                    period_data[period_start_stamp] = data_item
+
+        # Merge the new data into the cached data
+        new_data = {}
+        for key in period_data:
+            self.forecast_solar_data[key.strftime(TIME_FORMAT)] = period_data[key]
+
+        # Prune old data from the cache
+        for key_txt in self.forecast_solar_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            if key >= self.midnight_utc:
+                new_data[key_txt] = self.forecast_solar_data[key_txt]
+        self.forecast_solar_data = new_data
+
+        # Save to cache file
+        with open(cache_file, "w") as f:
+            json.dump(self.forecast_solar_data, f)
+
+        # Fetch the final cached data as timestamps
+        period_data = {}
+        for key_txt in self.forecast_solar_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            period_data[key] = self.forecast_solar_data[key_txt]
+
+        # Sort data and return
+        sorted_data = []
+        if period_data:
+            period_keys = list(period_data.keys())
+            period_keys.sort()
+            for key in period_keys:
+                sorted_data.append(period_data[key])
+
+        self.log("Forecast solar returned {} data points".format(len(sorted_data)))
+        return sorted_data
 
     def download_solcast_data(self):
         """
@@ -251,10 +374,12 @@ class Solcast:
         total_left_today = 0
         total_left_today10 = 0
         total_left_today90 = 0
+        total_left_todayCL = 0
         forecast_day = {}
         total_day = {}
         total_day10 = {}
         total_day90 = {}
+        total_dayCL = {}
         days = 0
 
         days = min(days, 7)
@@ -262,6 +387,7 @@ class Solcast:
             total_day[day] = 0
             total_day10[day] = 0
             total_day90[day] = 0
+            total_dayCL[day] = 0
             forecast_day[day] = []
 
         midnight_today = self.midnight_utc
@@ -271,6 +397,7 @@ class Solcast:
         power_now = 0
         power_now10 = 0
         power_now90 = 0
+        power_nowCL = 0
 
         for entry in pv_forecast_data:
             if "period_start" not in entry:
@@ -286,30 +413,36 @@ class Solcast:
                     total_day[day] = 0
                     total_day10[day] = 0
                     total_day90[day] = 0
+                    total_dayCL[day] = 0
                     forecast_day[day] = []
                     days = max(days, day + 1)
 
                 pv_estimate = entry.get("pv_estimate", 0)
                 pv_estimate10 = entry.get("pv_estimate10", pv_estimate)
                 pv_estimate90 = entry.get("pv_estimate90", pv_estimate)
+                pv_estimateCL = entry.get("pv_estimateCL", pv_estimate)
 
                 pv_estimate /= divide_by
                 pv_estimate10 /= divide_by
                 pv_estimate90 /= divide_by
+                pv_estimateCL /= divide_by
 
                 total_day[day] += pv_estimate
                 total_day10[day] += pv_estimate10
                 total_day90[day] += pv_estimate90
+                total_dayCL[day] += pv_estimateCL
 
                 if day == 0 and this_point >= now:
                     total_left_today += pv_estimate
                     total_left_today10 += pv_estimate10
                     total_left_today90 += pv_estimate90
+                    total_left_todayCL += pv_estimateCL
 
                 if this_point <= now and (this_point + timedelta(minutes=30)) > now:
                     power_now = pv_estimate * power_scale
                     power_now10 = pv_estimate10 * power_scale
                     power_now90 = pv_estimate90 * power_scale
+                    power_nowCL = pv_estimateCL * power_scale
 
                     # Add this slot into the total left today but scaled for the time since this point
                     if this_point < now:
@@ -317,12 +450,14 @@ class Solcast:
                         total_left_today += pv_estimate * power_scale * left_this_slot_scale
                         total_left_today10 += pv_estimate10 * power_scale * left_this_slot_scale
                         total_left_today90 += pv_estimate90 * power_scale * left_this_slot_scale
+                        total_left_todayCL += pv_estimateCL * power_scale * left_this_slot_scale
 
                 fentry = {
                     "period_start": entry["period_start"],
                     "pv_estimate": dp2(pv_estimate * power_scale),
                     "pv_estimate10": dp2(pv_estimate10 * power_scale),
                     "pv_estimate90": dp2(pv_estimate90 * power_scale),
+                    "pv_estimateCL": dp2(pv_estimateCL * power_scale),
                 }
                 forecast_day[day].append(fentry)
 
@@ -330,13 +465,15 @@ class Solcast:
         for day in range(days):
             if day == 0:
                 self.log(
-                    "PV Forecast for today is {} ({} 10% {} 90%) kWh and left today is {} ({} 10% {} 90%) kWh".format(
+                    "PV Forecast for today is {} ({} 10% {} 90% {} calib) kWh and left today is {} ({} 10% {} 90% {} calib) kWh".format(
                         dp2(total_day[day]),
                         dp2(total_day10[day]),
                         dp2(total_day90[day]),
+                        dp2(total_dayCL[day]),
                         dp2(total_left_today),
                         dp2(total_left_today10),
                         dp2(total_left_today90),
+                        dp2(total_left_todayCL),
                     )
                 )
                 self.dashboard_item(
@@ -351,9 +488,11 @@ class Solcast:
                         "total": dp2(total_day[day]),
                         "total10": dp2(total_day10[day]),
                         "total90": dp2(total_day90[day]),
+                        "totalCL": dp2(total_dayCL[day]),
                         "remaining": dp2(total_left_today),
                         "remaining10": dp2(total_left_today10),
                         "remaining90": dp2(total_left_today90),
+                        "remainingCL": dp2(total_left_todayCL),
                         "detailedForecast": forecast_day[day],
                         "api_limit": self.solcast_api_limit,
                         "api_used": self.solcast_api_used,
@@ -370,12 +509,13 @@ class Solcast:
                         "device_class": "power",
                         "now10": dp2(power_now10),
                         "now90": dp2(power_now90),
+                        "nowCL": dp2(power_nowCL),
                     },
                 )
             else:
                 day_name = "tomorrow" if day == 1 else "d{}".format(day)
                 day_name_long = day_name if day == 1 else "day {}".format(day)
-                self.log("PV Forecast for day {} is {} ({} 10% {} 90%) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day])))
+                self.log("PV Forecast for day {} is {} ({} 10% {} 90% {} CL) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day])))
 
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_" + day_name,
@@ -389,9 +529,140 @@ class Solcast:
                         "total": dp2(total_day[day]),
                         "total10": dp2(total_day10[day]),
                         "total90": dp2(total_day90[day]),
+                        "totalCL": dp2(total_dayCL[day]),
                         "detailedForecast": forecast_day[day],
                     },
                 )
+
+    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10):
+        self.log("PV Calibration: Fetching PV data for calibration")
+
+        days = 14
+        pv_power_hist = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False))
+        pv_forecast = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False))
+
+        pv_power_hist_by_slot = {}
+        pv_power_hist_by_slot_count = {}
+        pv_forecast_by_slot = {}
+        pv_forecast_by_slot_count = {}
+        past_day_forecast = {}
+        past_day_actual = {}
+
+        for minute in pv_power_hist:
+            minute_absolute = self.minutes_now - minute
+            days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+            slot_abs = minute_absolute % (24 * 60)
+            slot = int(slot_abs / 30) * 30
+            pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
+            pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
+            past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
+
+        for slot in pv_power_hist_by_slot:
+            if pv_power_hist_by_slot_count[slot] > 0:
+                pv_power_hist_by_slot[slot] = dp4(pv_power_hist_by_slot[slot] / pv_power_hist_by_slot_count[slot])
+
+        for minute in pv_forecast:
+            minute_absolute = self.minutes_now - minute
+            if minute_absolute < 0:
+                slot_abs = minute_absolute % (24 * 60)
+                slot = int(slot_abs / 30) * 30
+                pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute]
+                pv_forecast_by_slot_count[slot] = pv_forecast_by_slot_count.get(slot, 0) + 1
+
+                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+                past_day_forecast[days_prev] = past_day_forecast.get(days_prev, 0) + pv_forecast[minute]
+
+        worst_day_scaling = 1.0
+        best_day_scaling = 1.0
+        for day in past_day_forecast:
+            past_day_forecast[day] = dp4(past_day_forecast[day] / 60.0)  # Convert to kWh
+            past_day_actual[day] = dp4(past_day_actual.get(day, 0) / 60.0)  # Convert to kWh
+            scaling_factor = dp4(past_day_actual[day] / past_day_forecast[day] if past_day_forecast[day] > 0 else 1.0)
+            worst_day_scaling = min(worst_day_scaling, scaling_factor)
+            best_day_scaling = max(best_day_scaling, scaling_factor)
+            self.log("PV Calibration: Past day {} had {} kWh of PV forecast data and actual {} kWh".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day])))
+
+        # Clamp best and worst day scaling factors to sensible values
+        worst_day_scaling = max(worst_day_scaling, 0.5)
+        best_day_scaling = min(best_day_scaling, 1.5)
+        self.log("PV Calibration: Worst day scaling factor {} best day scaling factor {}".format(dp2(worst_day_scaling), dp2(best_day_scaling)))
+
+        for slot in pv_forecast_by_slot:
+            if pv_forecast_by_slot_count[slot] > 0:
+                pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_count[slot])
+
+        total_production = 0
+        for slot in range(0, 24 * 60, 30):
+            total_production += pv_power_hist_by_slot.get(slot, 0)
+
+        total_forecast = 0
+        for slot in range(0, 24 * 60, 30):
+            total_forecast += pv_forecast_by_slot.get(slot, 0)
+
+        pv_distribution = {}
+        forecast_distribution = {}
+        slot_adjustment = {}
+        for slot in range(0, 24 * 60, 30):
+            pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0 else 0)
+            forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
+
+            slot_adjustment[slot] = dp4(pv_distribution[slot] / forecast_distribution[slot] if (forecast_distribution[slot] > 0.01) else 1.0)
+
+            if self.debug_enable:
+                self.log(
+                    "PV slot {}: production {} kWh, forecast {} kWh, distribution {}%, forecast distribution {}% slot adjustment {}x".format(
+                        slot, dp2(pv_power_hist_by_slot.get(slot, 0)), dp2(pv_forecast_by_slot.get(slot, 0)), dp2(pv_distribution[slot] * 100), dp2(forecast_distribution[slot] * 100), slot_adjustment[slot]
+                    )
+                )
+        total_adjustment = dp4(total_production / total_forecast if total_forecast > 0 else 1.0)
+        self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh adjustment {}x slot adjustments {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, slot_adjustment))
+
+        # Look at PV forecast today and an adjusted version
+        pv_forecast_minute_adjusted = {}
+        for minute in range(0, max(pv_forecast_minute.keys()) + 1):
+            pv_value = pv_forecast_minute.get(minute, 0)
+            slot = (int(minute / 30) * 30) % (24 * 60)
+            pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(slot, 1.0) * total_adjustment
+
+        pv_estimateCL = {}
+        pv_estimate10 = {}
+        pv_estimate90 = {}
+        for minute in range(0, max(pv_forecast_minute.keys()) + 1, 30):
+            pv_value = 0
+            for offset in range(0, 30, 1):
+                pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
+            # Force timezone to UTC
+            period_start = (self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)).strftime(TIME_FORMAT)
+            pv_estimateCL[period_start] = dp4(pv_value)
+            pv_estimate10[period_start] = dp4(pv_value * worst_day_scaling)
+            pv_estimate90[period_start] = dp4(pv_value * best_day_scaling)
+
+        for entry in pv_forecast_data:
+            period_start = entry.get("period_start", "")
+            calibrated = pv_estimateCL.get(period_start, None)
+            if calibrated is not None:
+                entry["pv_estimateCL"] = calibrated
+            calibrated10 = pv_estimate10.get(period_start, None)
+            calibrated90 = pv_estimate90.get(period_start, None)
+            if create_pv10 and (calibrated10 is not None):
+                entry["pv_estimate10"] = calibrated10
+            if create_pv10 and (calibrated90 is not None):
+                entry["pv_estimate90"] = calibrated90
+
+        # Creation of PV10 data using worst day scaling factor
+        if create_pv10:
+            for minute in range(0, max(pv_forecast_minute_adjusted.keys()) + 1):
+                pv_value = pv_forecast_minute_adjusted.get(minute, 0)
+                # Use the worst day scaling factor to create pv_estimate10
+                pv_forecast_minute10[minute] = dp4(pv_value * worst_day_scaling)
+            self.log("PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {}".format(dp2(worst_day_scaling)))
+
+        # Do we use calibrated or raw data?
+        if self.metric_pv_calibration_enable:
+            self.log("PV Calibration: Using calibrated PV data")
+            return pv_forecast_minute_adjusted, pv_forecast_minute10
+        else:
+            return pv_forecast_minute, pv_forecast_minute10
 
     def fetch_pv_forecast(self):
         """
@@ -403,8 +674,14 @@ class Solcast:
         pv_forecast_data = []
         pv_forecast_total_data = 0
         pv_forecast_total_sensor = 0
+        create_pv10 = False
 
-        if "solcast_host" in self.args:
+        if "forecast_solar" in self.args:
+            self.log("Obtaining solar forecast from Forecast Solar API")
+            pv_forecast_data = self.download_forecast_solar_data()
+            divide_by = 30.0
+            create_pv10 = True
+        elif "solcast_host" in self.args:
             self.log("Obtaining solar forecast from Solcast API")
             pv_forecast_data = self.download_solcast_data()
             divide_by = 30.0
@@ -431,8 +708,6 @@ class Solcast:
                 self.log("Warn: PV Forecast data adds up to {} kWh but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
-            self.publish_pv_stats(pv_forecast_data, divide_by / 30.0, 30)
-
             pv_estimate = self.get_arg("pv_estimate", default="")
             if pv_estimate is None:
                 pv_estimate = "pv_estimate"
@@ -461,6 +736,10 @@ class Solcast:
                 scale=self.pv_scaling,
                 spreading=30,
             )
+
+            # Run calibration on the data
+            pv_forecast_minute, pv_forecast_minute10 = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10)
+            self.publish_pv_stats(pv_forecast_data, divide_by / 30.0, 30)
         else:
             self.log("Warn: No solar data has been configured.")
 
