@@ -1308,8 +1308,8 @@ body.dark-mode .log-menu a.active {
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
         elif chart == "PV" or chart == "PV7":
-            pv_power = self.base.prune_today(self.pv_power_hist, prune=chart=="PV")
-            pv_forecast = self.base.prune_today(self.pv_forecast_hist, prune=chart=="PV", intermediate=True)
+            pv_power = self.base.prune_today(self.pv_power_hist, prune=chart == "PV")
+            pv_forecast = self.base.prune_today(self.pv_forecast_hist, prune=chart == "PV", intermediate=True)
             pv_today_forecast = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate"), prune=False)
             pv_today_forecast10 = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate10"), prune=False)
             pv_today_forecast90 = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate90"), prune=False)
