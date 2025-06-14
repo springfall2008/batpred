@@ -96,7 +96,6 @@ class Solcast:
         return az
 
     def download_forecast_solar_data(self):
-
         cache_path = self.config_root + "/cache"
         cache_path_p = self.config_root_p + "/cache"
 
@@ -140,7 +139,7 @@ class Solcast:
             if not watts or not info:
                 self.log("Warn: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings, got {}".format(lat, lon, data))
                 continue
-                
+
             current_time = info.get("time", None)
             current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
             current_time_offset = current_time_stamp.utcoffset()
@@ -162,7 +161,7 @@ class Solcast:
 
             for minute in range(0, 2 * 24 * 60, 30):
                 pv50 = dp4(forecast_watt_data.get(minute, 0) / 1000.0)
-                period_start_stamp = (self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute))
+                period_start_stamp = self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)
                 data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}
                 if period_start_stamp in period_data:
                     period_data[period_start_stamp]["pv_estimate"] += pv50
@@ -201,7 +200,6 @@ class Solcast:
 
         self.log("Forecast solar returned {} data points".format(len(sorted_data)))
         return sorted_data
-
 
     def download_solcast_data(self):
         """
