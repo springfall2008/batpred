@@ -516,7 +516,7 @@ class Solcast:
             else:
                 day_name = "tomorrow" if day == 1 else "d{}".format(day)
                 day_name_long = day_name if day == 1 else "day {}".format(day)
-                self.log("PV Forecast for day {} is {} ({} 10% {} 90% {} CL) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]),  dp2(total_dayCL[day])))
+                self.log("PV Forecast for day {} is {} ({} 10% {} 90% {} CL) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day])))
 
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_" + day_name,
@@ -540,7 +540,7 @@ class Solcast:
 
         days = 14
         pv_power_hist = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False))
-        pv_forecast   = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False))
+        pv_forecast = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False))
 
         pv_power_hist_by_slot = {}
         pv_power_hist_by_slot_count = {}
@@ -549,7 +549,7 @@ class Solcast:
 
         for minute in pv_power_hist:
             minute_absolute = self.minutes_now - minute
-            slot_abs = minute_absolute % (24*60)
+            slot_abs = minute_absolute % (24 * 60)
             slot = int(slot_abs / 30) * 30
             pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
             pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
@@ -561,7 +561,7 @@ class Solcast:
         for minute in pv_forecast:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
-                slot_abs = minute_absolute % (24*60)
+                slot_abs = minute_absolute % (24 * 60)
                 slot = int(slot_abs / 30) * 30
                 pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute]
                 pv_forecast_by_slot_count[slot] = pv_forecast_by_slot_count.get(slot, 0) + 1
@@ -571,31 +571,28 @@ class Solcast:
                 pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_count[slot])
 
         total_production = 0
-        for slot in range(0, 24*60, 30):
+        for slot in range(0, 24 * 60, 30):
             total_production += pv_power_hist_by_slot.get(slot, 0)
 
         total_forecast = 0
-        for slot in range(0, 24*60, 30):
+        for slot in range(0, 24 * 60, 30):
             total_forecast += pv_forecast_by_slot.get(slot, 0)
 
         pv_distribution = {}
         forecast_distribution = {}
         slot_adjustment = {}
-        for slot in range(0, 24*60, 30):
+        for slot in range(0, 24 * 60, 30):
             pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0 else 0)
             forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
 
             slot_adjustment[slot] = dp4(pv_distribution[slot] / forecast_distribution[slot] if forecast_distribution[slot] > 0 else 1.0)
 
             if self.debug_enable:
-                self.log("PV slot {}: production {} kWh, forecast {} kWh, distribution {}%, forecast distribution {}% slot adjustment {}x".format(
-                    slot,
-                    dp2(pv_power_hist_by_slot.get(slot, 0)),
-                    dp2(pv_forecast_by_slot.get(slot, 0)),
-                    dp2(pv_distribution[slot] * 100),
-                    dp2(forecast_distribution[slot] * 100),
-                    slot_adjustment[slot]
-                ))
+                self.log(
+                    "PV slot {}: production {} kWh, forecast {} kWh, distribution {}%, forecast distribution {}% slot adjustment {}x".format(
+                        slot, dp2(pv_power_hist_by_slot.get(slot, 0)), dp2(pv_forecast_by_slot.get(slot, 0)), dp2(pv_distribution[slot] * 100), dp2(forecast_distribution[slot] * 100), slot_adjustment[slot]
+                    )
+                )
         total_adjustment = dp4(total_production / total_forecast if total_forecast > 0 else 1.0)
         self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh adjustment {}x slot adjustments {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, slot_adjustment))
 
