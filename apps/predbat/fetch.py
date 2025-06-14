@@ -16,7 +16,6 @@ from futurerate import FutureRate
 
 
 class Fetch:
-
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
         Work out approximated cloud factor
@@ -500,7 +499,6 @@ class Fetch:
         max_days = max(max_age.days, 1)
         return self.minute_data(history, max_days, self.now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
 
-
     def minute_data(
         self,
         history,
@@ -888,7 +886,6 @@ class Fetch:
                 results[last_updated_time] = state
 
         return results
-
 
     def fetch_sensor_data(self):
         """
@@ -1337,7 +1334,6 @@ class Fetch:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
         else:
             self.load_inday_adjustment = 1.0
-
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """
