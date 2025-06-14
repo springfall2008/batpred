@@ -602,13 +602,18 @@ class Solcast:
         forecast_distribution = {}
         slot_adjustment = {}
         for slot in range(0, 24 * 60, 30):
-            pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0 else 0)
-            forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
+            pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0.1 else 0)
+            forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0.1 else 0)
 
             slot_adjustment[slot] = dp4(pv_distribution[slot] / forecast_distribution[slot] if forecast_distribution[slot] > 0 else 1.0)
 
             if self.debug_enable:
                 self.log(
+                    "PV slot {}: production {} kWh, forecast {} kWh, distribution {}%, forecast distribution {}% slot adjustment {}x".format(
+                        slot, dp2(pv_power_hist_by_slot.get(slot, 0)), dp2(pv_forecast_by_slot.get(slot, 0)), dp2(pv_distribution[slot] * 100), dp2(forecast_distribution[slot] * 100), slot_adjustment[slot]
+                    )
+                )
+                print(
                     "PV slot {}: production {} kWh, forecast {} kWh, distribution {}%, forecast distribution {}% slot adjustment {}x".format(
                         slot, dp2(pv_power_hist_by_slot.get(slot, 0)), dp2(pv_forecast_by_slot.get(slot, 0)), dp2(pv_distribution[slot] * 100), dp2(forecast_distribution[slot] * 100), slot_adjustment[slot]
                     )
