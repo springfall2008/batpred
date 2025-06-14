@@ -156,9 +156,10 @@ The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for 
       kwp: 3
       azimuth: 45
       declination: 45
+      efficiency: 0.95
 ```
 
-This does not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
+Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
 ### Solcast Home Assistant integration method
 
