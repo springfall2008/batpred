@@ -59,7 +59,7 @@ but does require HACS (the Home Assistant Community Store) to be installed first
 
 If you do not have one of these file editors already installed in Home Assistant:
 
-- For Studio Code Server you will need to [install HACS](#hacs-install) first if you don't currently have it installed
+- For Studio Code Server you will need to install HACS first.
 - Go to Settings / Add-ons / Add-on Store (bottom right)
 - Scroll down the add-on store list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the add-on, click 'INSTALL'
 - Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the add-on
@@ -68,7 +68,7 @@ Thereafter whenever you need to edit a configuration file in Home Assistant you 
 You can also turn the 'Show in sidebar' option on to give a quicker way to directly access the editor.
 
 If you are using the File Editor to edit Predbat's configuration files, you will need to turn **OFF** the **Enforce Basepath** option
-to access files in different directories (i.e. within the appdaemon directory):
+to access files in different directories (i.e. within the add-ons directory):
 
 - From the File editor add-on page, click on the 'Configuration' tab to change this setting). It is set to 'On' by default:<BR>
 ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
@@ -318,9 +318,6 @@ Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will autom
 Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
 or by enabling the **switch.predbat_auto_update** to auto-update Predbat.
 
-Please note that using the internal update mechanism of Predbat will not inform HACS that Predbat has been updated. If you used HACS to install Predbat you do not need
-to use it again unless your system is in need of repair.
-
 ## Upgrading from AppDaemon to Predbat add-on
 
 These steps assume you already have a working Predbat system and want to upgrade to using the Predbat add-on instead of using either the AppDaemon or the AppDaemon-predbat add-on.
@@ -353,7 +350,7 @@ The Predbat code that runs is the same and the configuration is exactly the same
     - If you are using the old 'combined AppDaemon/Predbat add-on installation method' it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
     or
 
-    - with the [HACS, Appdaemon add-on then Predbat installation method](#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`
+    - with the old HACS Appdaemon add-on then Predbat installation method it's in `/config/appdaemon/apps/batpred/config/`
 
 8. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
 
