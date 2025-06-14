@@ -146,7 +146,7 @@ You will need to define your array in apps.yaml directly, can you have one or mo
 
 The latitude and longitude can be found from your postcode if you are unsure, e.g: <https://api.postcodes.io/postcodes/SW1A2AB>
 
-The azmiuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
+The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
 
 ```yaml
@@ -156,7 +156,7 @@ The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for 
       kwp: 3
       azimuth: 45
       declination: 45
-``
+```
 
 This does not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
