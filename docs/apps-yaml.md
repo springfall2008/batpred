@@ -747,6 +747,7 @@ The latitude and longitude can be found from your postcode if you are unsure, e.
 
 The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
+The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
 
 ```yaml
   forecast_solar:
@@ -755,9 +756,10 @@ The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for 
       kwp: 3
       azimuth: 45
       declination: 45
-``
+      efficiency: 0.95
+```
 
-This will be used instead of Solcast to provide similar data.
+Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
 ## Energy Rates
 
