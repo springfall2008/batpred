@@ -63,21 +63,62 @@ pred_bat:
   # **** Start of Outputs to Sunsynk Inverter ****
 
   charge_start_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_work_mode" # Inverter work mode
-    option: "Limited to Home"
-    repeat: True
-
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog1_charge_option"
+      option: "Allow Grid & Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog2_charge_option"
+      option: "Allow Grid & Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog3_charge_option"
+      option: "Allow Grid & Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog4_charge_option"
+      option: "Allow Grid & Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog5_charge_option"
+      option: "Allow Grid & Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_work_mode" # Inverter work mode
+      option: "Limited to Home"
   charge_stop_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_work_mode" # Inverter work mode
-    option: "Limited to Home"
-
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog1_charge_option"
+      option: "Allow Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog2_charge_option"
+      option: "Allow Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog3_charge_option"
+      option: "Allow Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog4_charge_option"
+      option: "Allow Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog5_charge_option"
+      option: "Allow Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_work_mode" # Inverter work mode
+      option: "Limited to Home"
   discharge_start_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_work_mode"  # Inverter work mode
-    option: "Selling First"
-    repeat: True
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog1_charge_option"
+      option: "No Grid or Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog2_charge_option"
+      option: "No Grid or Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog3_charge_option"
+      option: "No Grid or Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog4_charge_option"
+      option: "No Grid or Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_prog5_charge_option"
+      option: "No Grid or Gen"
+    - service: select.select_option
+      entity_id: "select.sunsynk_work_mode"  # Inverter work mode
+      option: "Selling First"
 
   timed_charge_current:
     - number.sunsynk_battery_max_charge_current # Inverter battery max charge setting in A
