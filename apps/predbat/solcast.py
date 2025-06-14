@@ -602,18 +602,13 @@ class Solcast:
         forecast_distribution = {}
         slot_adjustment = {}
         for slot in range(0, 24 * 60, 30):
-            pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0.1 else 0)
-            forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0.1 else 0)
+            pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0 else 0)
+            forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
 
-            slot_adjustment[slot] = dp4(pv_distribution[slot] / forecast_distribution[slot] if forecast_distribution[slot] > 0 else 1.0)
+            slot_adjustment[slot] = dp4(pv_distribution[slot] / forecast_distribution[slot] if (forecast_distribution[slot] > 0.01) else 1.0)
 
             if self.debug_enable:
                 self.log(
-                    "PV slot {}: production {} kWh, forecast {} kWh, distribution {}%, forecast distribution {}% slot adjustment {}x".format(
-                        slot, dp2(pv_power_hist_by_slot.get(slot, 0)), dp2(pv_forecast_by_slot.get(slot, 0)), dp2(pv_distribution[slot] * 100), dp2(forecast_distribution[slot] * 100), slot_adjustment[slot]
-                    )
-                )
-                print(
                     "PV slot {}: production {} kWh, forecast {} kWh, distribution {}%, forecast distribution {}% slot adjustment {}x".format(
                         slot, dp2(pv_power_hist_by_slot.get(slot, 0)), dp2(pv_forecast_by_slot.get(slot, 0)), dp2(pv_distribution[slot] * 100), dp2(forecast_distribution[slot] * 100), slot_adjustment[slot]
                     )
@@ -625,7 +620,7 @@ class Solcast:
         pv_forecast_minute_adjusted = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
             pv_value = pv_forecast_minute.get(minute, 0)
-            slot = int(minute / 30) * 30
+            slot = (int(minute / 30) * 30) % (24 * 60)
             pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(slot, 1.0) * total_adjustment
 
         pv_estimateCL = {}
@@ -634,10 +629,9 @@ class Solcast:
             pv_value = 0
             for offset in range(0, 30, 1):
                 pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
-            pv_value = dp4(pv_value)
             # Force timezone to UTC
             period_start = (self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)).strftime(TIME_FORMAT)
-            pv_estimateCL[period_start] = dp4(pv_value * slot_adjustment.get(minute, 1.0) * total_adjustment)
+            pv_estimateCL[period_start] = dp4(pv_value)
             pv_estimate10[period_start] = dp4(pv_value * worst_day_scaling)
 
         for entry in pv_forecast_data:
