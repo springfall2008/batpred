@@ -15,7 +15,7 @@ import requests
 import traceback
 import pytz
 from datetime import datetime, timedelta
-from config import TIME_FORMAT, TIME_FORMAT_SOLCAST
+from config import TIME_FORMAT, TIME_FORMAT_SOLCAST, TIME_FORMAT_FORECAST_SOLAR
 from utils import dp1, dp2, dp4
 
 """
@@ -78,6 +78,130 @@ class Solcast:
             with open(cache_filename, "w") as f:
                 json.dump(data, f)
         return data
+
+    URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}"
+    URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}"
+
+    def convert_azimuth(self, az):
+        """
+        Convert azimuth from solcast format to forecast solar format
+        solcast format is        0 = North, -90 = East, 90 = West, 180 = South
+        forecast solar format is 0 = South, -90 = East, 90 = West, 180 = North
+        """
+        if az >= 0:
+            az = 180 - az
+        else:
+            az = -180 - az
+
+        return az
+
+    def download_forecast_solar_data(self):
+
+        cache_path = self.config_root + "/cache"
+        cache_path_p = self.config_root_p + "/cache"
+
+        self.forecast_solar_data = {}
+        cache_file = cache_path + "/forecast_solar.json"
+        cache_file_p = cache_path_p + "/forecast_solar.json"
+
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file) as f:
+                    self.forecast_solar_data = json.load(f)
+            except Exception as e:
+                self.log("Warn: Error loading forecast.solar cache file {}, error {}".format(cache_file_p, e))
+                self.log("Warn: " + traceback.format_exc())
+                os.remove(cache_file)
+
+        configs = self.args.get("forecast_solar", [])
+        if not isinstance(configs, list):
+            configs = [configs]
+
+        period_data = {}
+        for config in configs:
+            lat = config.get("latitude", 51.5072)
+            lon = config.get("longitude", -0.1276)
+            dec = config.get("declination", 45.0)
+            az = config.get("azimuth", 45.0)
+            az = self.convert_azimuth(az)  # Convert azimuth to degrees if needed
+            kwp = config.get("kwp", 3.0)
+            api_key = config.get("api_key", None)
+
+            if api_key:
+                url = self.URL_PERSONAL
+                url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp, api_key=api_key)
+            else:
+                url = self.URL_FREE
+                url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp)
+
+            data = self.cache_get_url(url, params={}, max_age=self.get_arg("forecast_solar_max_age", 8.0) * 60)
+            watts = data.get("result", {}).get("watt_hours_period", {})
+            info = data.get("message", {}).get("info", {})
+            if not watts or not info:
+                self.log("Warn: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings, got {}".format(lat, lon, data))
+                continue
+                
+            current_time = info.get("time", None)
+            current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
+            current_time_offset = current_time_stamp.utcoffset()
+
+            period_start_stamp = None
+            forecast_watt_data = {}
+            for period_end in watts:
+                period_end_stamp = datetime.strptime(period_end, TIME_FORMAT_FORECAST_SOLAR)
+                # Convert period_end_stamp to a offset aware time using current_time_offset as the timezone
+                period_end_stamp = period_end_stamp.replace(tzinfo=pytz.utc) - current_time_offset
+                pv50 = watts[period_end]
+                if period_start_stamp:
+                    minutes_start = (period_start_stamp - self.midnight_utc).total_seconds() / 60
+                    minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
+                    duration = (minutes_end - minutes_start) / 60.0
+                    for minute in range(int(minutes_start), int(minutes_end) + 1):
+                        forecast_watt_data[minute] = pv50 / duration
+                period_start_stamp = period_end_stamp
+
+            for minute in range(0, 2 * 24 * 60, 30):
+                pv50 = dp4(forecast_watt_data.get(minute, 0) / 1000.0)
+                period_start_stamp = (self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute))
+                data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}
+                if period_start_stamp in period_data:
+                    period_data[period_start_stamp]["pv_estimate"] += pv50
+                else:
+                    period_data[period_start_stamp] = data_item
+
+        # Merge the new data into the cached data
+        new_data = {}
+        for key in period_data:
+            self.forecast_solar_data[key.strftime(TIME_FORMAT)] = period_data[key]
+
+        # Prune old data from the cache
+        for key_txt in self.forecast_solar_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            if key >= self.midnight_utc:
+                new_data[key_txt] = self.forecast_solar_data[key_txt]
+        self.forecast_solar_data = new_data
+
+        # Save to cache file
+        with open(cache_file, "w") as f:
+            json.dump(self.forecast_solar_data, f)
+
+        # Fetch the final cached data as timestamps
+        period_data = {}
+        for key_txt in self.forecast_solar_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            period_data[key] = self.forecast_solar_data[key_txt]
+
+        # Sort data and return
+        sorted_data = []
+        if period_data:
+            period_keys = list(period_data.keys())
+            period_keys.sort()
+            for key in period_keys:
+                sorted_data.append(period_data[key])
+
+        self.log("Forecast solar returned {} data points".format(len(sorted_data)))
+        return sorted_data
+
 
     def download_solcast_data(self):
         """
@@ -479,7 +603,8 @@ class Solcast:
         pv_forecast_minute_adjusted = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
             pv_value = pv_forecast_minute.get(minute, 0)
-            pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(minute, 1.0) * total_adjustment
+            slot = int(minute / 30) * 30
+            pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(slot, 1.0) * total_adjustment
 
         pv_estimateCL = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, 30):
@@ -515,7 +640,11 @@ class Solcast:
         pv_forecast_total_data = 0
         pv_forecast_total_sensor = 0
 
-        if "solcast_host" in self.args:
+        if "forecast_solar" in self.args:
+            self.log("Obtaining solar forecast from Forecast Solar API")
+            pv_forecast_data = self.download_forecast_solar_data()
+            divide_by = 30.0
+        elif "solcast_host" in self.args:
             self.log("Obtaining solar forecast from Solcast API")
             pv_forecast_data = self.download_solcast_data()
             divide_by = 30.0
