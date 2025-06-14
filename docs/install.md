@@ -59,7 +59,7 @@ but does require HACS (the Home Assistant Community Store) to be installed first
 
 If you do not have one of these file editors already installed in Home Assistant:
 
-- For Studio Code Server you will need to [install HACS](#hacs-install) first if you don't currently have it installed
+- For Studio Code Server you will need to install HACS first.
 - Go to Settings / Add-ons / Add-on Store (bottom right)
 - Scroll down the add-on store list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the add-on, click 'INSTALL'
 - Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the add-on
@@ -68,7 +68,7 @@ Thereafter whenever you need to edit a configuration file in Home Assistant you 
 You can also turn the 'Show in sidebar' option on to give a quicker way to directly access the editor.
 
 If you are using the File Editor to edit Predbat's configuration files, you will need to turn **OFF** the **Enforce Basepath** option
-to access files in different directories (i.e. within the appdaemon directory):
+to access files in different directories (i.e. within the add-ons directory):
 
 - From the File editor add-on page, click on the 'Configuration' tab to change this setting). It is set to 'On' by default:<BR>
 ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
@@ -95,121 +95,16 @@ These are located under the Home Assistant directory `/addon_configs/6adb4f0d_pr
 
 You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on) to open the directory `/addon_configs/6adb4f0d_predbat` and view these files.
 
-If you have used the Predbat add-on installation method you do not need to install HACS or AppDaemon so you can skip directly to [Solcast install](#solcast-install) below.
-
 The Predbat web interface will work through the Predbat add-on, you can click on the 'Web UI' button to open it once Predbat is running.
 
-If you wish to use Docker with Predbat it is recommended you read the Docker installation instructions inside the Predbat add-on rather than going down the AppDaemon route
-listed below.
-
-## Predbat installation into AppDaemon
-
-**Not Recommended**
-
-**NOTE:** The Predbat web interface will not work with the AppDaemon installation method.
-
-This is the old way of installing Predbat, firstly install HACS (the Home Assistant Community Store), then install the AppDaemon add-on,
-and finally, install Predbat from HACS to run within AppDaemon.
-
-**NOTE:** If you are using AppDaemon you now *must* set **ha_key** and **ha_url** in apps.yaml to point to your Home Assistant. The key can be obtained from HA by creating an access token.
-
-### HACS install
-
-Predbat and AppDaemon are available through the Home Assistant Community Store (HACS). You can install Predbat manually (see below) but its usually easier to install it through HACS.
-
-- Install HACS if you haven't already ([https://hacs.xyz/docs/setup/download](https://hacs.xyz/docs/setup/download))
-- Enable AppDaemon in HACS: [https://hacs.xyz/docs/categories/appdaemon_apps/](https://hacs.xyz/docs/categories/appdaemon_apps/)
-
-### AppDaemon install
-
-Predbat is written in Python and runs on a continual loop (default every 5 minutes) within the AppDaemon add-on to Home Assistant.
-The next task therefore is to install and configure AppDaemon.
-
-- Install the AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
-- Once AppDaemon has finished installing, ensure that the 'Start on boot' option is turned on, then click 'START'
-- You will need to edit the `appdaemon.yaml` configuration file for AppDaemon and so will need to have either
-[the File Editor or Studio Code Server add-ons installed](#editing-configuration-files-in-home-assistant) first
-- Find the `appdaemon.yaml` file in the directory `/addon_configs/a0d7b954_appdaemon`: ![image](https://github.com/springfall2008/batpred/assets/48591903/bf8bf9cf-75b1-4a8d-a1c5-fbb7b3b17521)
-- Add to the `appdaemon.yaml` configuration file:
-    - A section **app_dir** which should refer to the directory `/homeassistant/appdaemon/apps` where Predbat will be installed
-    - Ensure that the **time_zone** is set correctly (e.g. Europe/London)
-    - Add **thread_duration_warning_threshold: 120** in the appdaemon section
-- It's recommended you also add a **logs** section and specify a new logfile location so that you can see the complete logs, I set mine
-to `/homeassistant/appdaemon/appdaemon.log` and increase the logfile maximum size and number of logfile generations to capture a few days worth of logs.
-
-Example AppDaemon config in `appdaemon.yaml`:
-
-```yaml
-appdaemon:
-  latitude: 52.379189
-  longitude: 4.899431
-  elevation: 2
-  time_zone: Europe/London
-  thread_duration_warning_threshold: 120
-  plugins:
-    HASS:
-      type: hass
-  app_dir: /homeassistant/appdaemon/apps
-http:
-  url: http://homeassistant.local:5050
-admin:
-api:
-hadashboard:
-
-# write log records to a file, retaining 9 versions, rather than the standard appdaemon log
-logs:
-  main_log:
-    filename: /homeassistant/appdaemon/appdaemon.log
-    log_generations: 9
-    log_size: 10000000
-```
-
-CAUTION: If you are upgrading AppDaemon from an older version to version 0.15.2 or above you need to follow these steps to ensure Predbat continues working.
-These are only required if you are upgrading AppDaemon from an old version, they're not required for new installations of AppDaemon:
-
-- Make sure you have access to the HA filesystem, e.g. I use the Samba add-on and connect to the drives on my Mac, but you can use ssh also.
-- Update AppDaemon to the latest version
-- Go into the directory `/addon_configs/a0d7b954_appdaemon` and edit `appdaemon.yaml`. You need to add app_dir (see above) to point to the
-old location and update your logfile location (if you have set it). You should remove the line that points to secrets.yaml
-(most people don't use this file) or adjust it's path to the new location (`/homeassistant/secrets.yaml`)
-- Move the entire 'apps' directory from `/addon_configs/a0d7b954_appdaemon` (new location) to `/config/appdaemon` (the old location)
-- Restart AppDaemon
-- Check it has started and confirm Predbat is running correctly again.
-
-### Install Predbat through HACS
-
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
-
-If you install Predbat through HACS, once installed you will get automatic updates for each new release of Predbat!
-
-- In HACS, click on Automation
-- Click on the three dots in the top right corner, and choose *Custom Repositories*
-- Add <https://github.com/springfall2008/batpred> as a custom repository of Category 'AppDaemon' and click 'Add'
-- Click *Explore and download repositories* (bottom right), type 'Predbat' in the search box, select the Predbat Repository, then click 'Download' to install the Predbat app.
-
-**NOTE:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
-
-As you are following the 'install Predbat through HACS' installation method these are located under the Home Assistant directory `/config/appdaemon/` which contains:
-
-- **appdaemon.log** - AppDaemon and Predbat's active logfile that reports details of what Predbat is doing, and details of any errors
-- **apps/batpred/config/apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
-
-### Predbat manual install
-
-A manual install is suitable for those running Docker type systems where HACS does not function correctly and you had to manually install AppDaemon.
-
-Note: **Not recommended if you are using HACS**
-
-- Copy all the .py files to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
-- Copy apps/predbat/apps.yaml to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
-- Edit in Home Assistant the `/config/appdaemon/apps/apps.yaml` file to configure Predbat
-
-- If you later install with HACS then you must move the `apps.yaml` into `/config/appdaemon/apps/predbat/config`
+If you wish to use Docker with Predbat it is recommended you read the Docker installation instructions inside the Predbat.
 
 ## Solcast Install
 
 Predbat needs a solar forecast to predict solar generation and battery charging.
 If you do have solar panels it's recommended to use the Solcast integration to retrieve your forecast solar generation.
+
+If you do not want to use Solcast you can also use Forecast.solar (less accurate) - see below.
 
 If you don't have one already, register for a free [Solcast hobbyist account](https://solcast.com/) and enter the details of your system.
 You can create 2 sites maximum under one (free hobbyist) account, if you have more aspects then it suggests you average the angle based on the number of panels
@@ -242,6 +137,29 @@ NB: If you use Predbat to obtain your Solcast solar forecast then you can't
 as you can with the Solcast integration described below.<BR>
 The Solcast integration also contains a 'solar dampening' feature that may be useful to reduce the solar forecast that Predbat receives at certain times of day,
 e.g. if your panels are shaded by trees or buildings.
+
+### Predbat direct to forecast.solar
+
+Predbat can obtain solar forecast directly from Forecast.solar.
+
+You will need to define your array in apps.yaml directly, can you have one or more entries in the list.
+
+The latitude and longitude can be found from your postcode if you are unsure, e.g: <https://api.postcodes.io/postcodes/SW1A2AB>
+
+The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
+The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
+
+```yaml
+  forecast_solar:
+    - latitude: 51.5072
+      longitude: -0.1276
+      kwp: 3
+      azimuth: 45
+      declination: 45
+      efficiency: 0.95
+```
+
+Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
 ### Solcast Home Assistant integration method
 
@@ -309,7 +227,6 @@ You will see this check in the log, should it fail a warning will be issued and 
 While the above warning might not prevent Predbat from starting up, you should fix the issue ASAP as it may cause future problems.
 
 **Note:** If you are running the Predbat through the Predbat add-on or via Docker you will get a logfile warning message
-"Warn: unable to find /addon_configs/6adb4f0d_predbat/appdaemon.yaml skipping checks as Predbat maybe running outside of AppDaemon" - this is normal and can be ignored.
 
 ## Predbat Output and Configuration Controls
 
@@ -402,29 +319,6 @@ Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will autom
 Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
 or by enabling the **switch.predbat_auto_update** to auto-update Predbat.
 
-Please note that using the internal update mechanism of Predbat will not inform HACS that Predbat has been updated. If you used HACS to install Predbat you do not need
-to use it again unless your system is in need of repair.
-
-## HACS Update
-
-**Not Recommended**
-
-HACS checks for updates and new releases only once a day by default, you can however force it to check again or download a specific version
-by using the 'Redownload' option from the top-right three dots menu for Predbat in the HACS Automation section.
-
-**NOTE:** If you update Predbat through HACS you may need to restart AppDaemon as it sometimes reads the config wrongly during the update.
-(If this happens you will get a template configuration error in the entity **predbat.status**).<BR>
-Go to Settings, Add-ons, AppDaemon, and click 'Restart'.
-
-If you update Predbat via Home Assistant or Predbat's build-in update then HACS will not know about this and you'll continue to get messages in HACS about updating Predbat.
-
-## Manual update of Predbat
-
-**Expert only**
-
-You can go to GitHub and download all the .py files from the releases tab and then manually copy these files
-over the existing version in `/config/appdaemon/apps/batpred/` manually.
-
 ## Upgrading from AppDaemon to Predbat add-on
 
 These steps assume you already have a working Predbat system and want to upgrade to using the Predbat add-on instead of using either the AppDaemon or the AppDaemon-predbat add-on.
@@ -457,7 +351,7 @@ The Predbat code that runs is the same and the configuration is exactly the same
     - If you are using the old 'combined AppDaemon/Predbat add-on installation method' it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
     or
 
-    - with the [HACS, Appdaemon add-on then Predbat installation method](#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`
+    - with the old HACS Appdaemon add-on then Predbat installation method it's in `/config/appdaemon/apps/batpred/config/`
 
 8. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
 
@@ -504,7 +398,7 @@ you can get Predbat working quickly again by copying it back again.
 
 Incredible though it may be to imagine, its possible you may want to uninstall Predbat.
 
-Removing the Predbat (or AppDaemon) add-on is easy, System / Add-ons / Predbat then select 'Uninstall'.
+Removing the Predbat add-on is easy, System / Add-ons / Predbat then select 'Uninstall'.
 
 Its recommended that you do a full restart of Home Assistant and all add-on's after removing Predbat.
 

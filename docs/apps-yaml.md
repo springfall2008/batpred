@@ -736,6 +736,31 @@ If **pv_estimate** is set to 10 then **input_number.predbat_pv_metric10_weight**
 
 See also [PV configuration options in Home Assistant](customisation.md#solar-pv-adjustment-options).
 
+## Forecast.solar Solar Forecast
+
+The Forecast.solar service can also be used in Predbat, the free version offer access without an API Key but is limited to hourly data and does not provide any 10% or 90% data.
+Predbat Solar calibration can use past data to improve this information and provide the 10% data.
+
+You can create one or more rooftops by providing a list of the data for each one, they will be summed up automatically.
+
+The latitude and longitude can be found from your postcode if you are unsure, e.g: <https://api.postcodes.io/postcodes/SW1A2AB>
+
+The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
+The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
+The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
+
+```yaml
+  forecast_solar:
+    - latitude: 51.5072
+      longitude: -0.1276
+      kwp: 3
+      azimuth: 45
+      declination: 45
+      efficiency: 0.95
+```
+
+Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
+
 ## Energy Rates
 
 There are a number of configuration items in `apps.yaml` for telling Predbat what your import and export rates are.
