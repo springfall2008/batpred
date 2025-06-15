@@ -153,11 +153,17 @@ class Solcast:
                 period_end_stamp = period_end_stamp.replace(tzinfo=pytz.utc) - current_time_offset
                 pv50 = watts[period_end] * efficiency  # Apply efficiency to the watt hours
                 if period_start_stamp:
-                    minutes_start = (period_start_stamp - self.midnight_utc).total_seconds() / 60
-                    minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
-                    duration = (minutes_end - minutes_start) / 60.0
-                    for minute in range(int(minutes_start), int(minutes_end) + 1):
-                        forecast_watt_data[minute] = pv50 / duration
+                    if period_end_stamp - period_start_stamp > timedelta(minutes=60):
+                        period_start_stamp = None
+                if period_start_stamp is None:
+                    period_start_stamp = period_end_stamp.replace(minute=0, second=0, microsecond=0)  # Start at the beginning of the hour
+                    if period_start_stamp == period_end_stamp:
+                        period_start_stamp = period_start_stamp - timedelta(minutes=60)
+                minutes_start = (period_start_stamp - self.midnight_utc).total_seconds() / 60
+                minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
+                duration = (minutes_end - minutes_start) / 60.0
+                for minute in range(int(minutes_start), int(minutes_end) + 1):
+                    forecast_watt_data[minute] = pv50 / duration
                 period_start_stamp = period_end_stamp
 
             for minute in range(0, 2 * 24 * 60, 30):
@@ -538,8 +544,8 @@ class Solcast:
         self.log("PV Calibration: Fetching PV data for calibration")
 
         days = 14
-        pv_power_hist = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False))
-        pv_forecast = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False))
+        pv_power_hist = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False, intermediate=True))
+        pv_forecast = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False, intermediate=True))
 
         pv_power_hist_by_slot = {}
         pv_power_hist_by_slot_count = {}
