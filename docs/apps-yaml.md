@@ -758,7 +758,7 @@ The efficiency relates to the aging of your panels, 0.95 is for newer systems bu
       efficiency: 0.95
 ```
 
-or you can set logitude and latitude if you are not in the UK or postcode doesnt work:
+or you can set longitude and latitude if you are not in the UK or postcode does not work:
 
 ```yaml
       latitude: 51.5072
