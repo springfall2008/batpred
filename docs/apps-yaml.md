@@ -748,6 +748,7 @@ The latitude and longitude are your location in world, or for the UK you can set
 The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
 The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
+The optional forecast_solar_max_age setting sets the number of hours between updates to PV data, the default is 8.
 
 ```yaml
   forecast_solar:
@@ -756,6 +757,7 @@ The efficiency relates to the aging of your panels, 0.95 is for newer systems bu
       azimuth: 45
       declination: 45
       efficiency: 0.95
+  forecast_solar_max_age: 4
 ```
 
 or you can set longitude and latitude if you are not in the UK or postcode does not work:
