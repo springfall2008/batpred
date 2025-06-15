@@ -120,12 +120,23 @@ class Solcast:
         for config in configs:
             lat = config.get("latitude", 51.5072)
             lon = config.get("longitude", -0.1276)
+            postcode = config.get("postcode", None)
             dec = config.get("declination", 45.0)
             az = config.get("azimuth", 45.0)
             az = self.convert_azimuth(az)  # Convert azimuth to degrees if needed
             kwp = config.get("kwp", 3.0)
             efficiency = config.get("efficiency", 0.95)
             api_key = config.get("api_key", None)
+
+            if postcode:
+                result = self.cache_get_url("https://api.postcodes.io/postcodes/{}".format(postcode), params={}, max_age=24*60*30)  # Cache postcode data for 30 days
+                result = result.get("result", {})
+                if 'longitude' not in result or 'latitude' not in result:
+                    self.log("Warn: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
+                else:
+                    lon = result.get("longitude", lon)
+                    lat = result.get("latitude", lat)
+                    self.log("Postcode {} resolved to latitude {} longitude {}".format(postcode, lat, lon))
 
             if api_key:
                 url = self.URL_PERSONAL
