@@ -731,7 +731,7 @@ class WebInterface:
             for item in detailedForecast:
                 sub = item.get(subitem, None)
                 start = item.get("period_start", None)
-                if sub and start:
+                if (sub is not None) and (start is not None):
                     results[start] = sub
         return results
 
@@ -779,7 +779,7 @@ if (width < 600) {
     width = 600
 }
 width = width - 50;
-height = height - 50;
+height = height - 120;
 
 if (height * 1.68 > width) {
    height = width / 1.68;
