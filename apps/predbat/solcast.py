@@ -129,7 +129,7 @@ class Solcast:
             efficiency = config.get("efficiency", 0.95)
             api_key = config.get("api_key", None)
 
-            max_kwh += kwp * efficiency  # Total kWh for this configuration            
+            max_kwh += kwp * efficiency  # Total kWh for this configuration
 
             if postcode:
                 result = self.cache_get_url("https://api.postcodes.io/postcodes/{}".format(postcode), params={}, max_age=24 * 60 * 30)  # Cache postcode data for 30 days
@@ -666,7 +666,7 @@ class Solcast:
             if period_start:
                 minutes_since_midnight = (datetime.strptime(period_start, TIME_FORMAT) - self.midnight_utc).total_seconds() / 60
                 slot = int(minutes_since_midnight / 30) * 30
-                calibrated   = pv_estimateCL.get(slot, None)
+                calibrated = pv_estimateCL.get(slot, None)
                 calibrated10 = pv_estimate10.get(slot, None)
                 calibrated90 = pv_estimate90.get(slot, None)
 
