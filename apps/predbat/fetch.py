@@ -806,8 +806,8 @@ class Fetch:
                 continue
             if intermediate and last_time and ((timekey - last_time).seconds > group * 60):
                 # Large gap, introduce intermediate data point
-                seconds_gap = (timekey - last_time).seconds
-                for i in range(1, seconds_gap // (group * 60)):
+                seconds_gap = int((timekey - last_time).total_seconds())
+                for i in range(1, seconds_gap // int(group * 60)):
                     new_time = last_time + timedelta(seconds=i * group * 60)
                     results[new_time.strftime(TIME_FORMAT)] = prev_value
             if not prune or (timekey > self.midnight_utc):
