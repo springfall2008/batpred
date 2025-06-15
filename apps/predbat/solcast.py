@@ -711,8 +711,10 @@ class Solcast:
                 if data:
                     self.log("PV Data for {} total {} kWh".format(argname, total_sensor))
                     pv_forecast_data += data
-                    pv_forecast_total_data += total_data
-                    pv_forecast_total_sensor += total_sensor
+
+                    if argname == "pv_forecast_today":
+                        pv_forecast_total_data += total_data
+                        pv_forecast_total_sensor += total_sensor
 
             # Work out data scale factor so it adds up (New Solcast is in kW but old was kWH)
             factor = 1.0
@@ -722,7 +724,7 @@ class Solcast:
             divide_by = dp2(30 * factor)
 
             if factor != 1.0 and factor != 2.0:
-                self.log("Warn: PV Forecast data adds up to {} kWh but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
+                self.log("Warn: PV Forecast today adds up to {} kWh but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
             pv_estimate = self.get_arg("pv_estimate", default="")
