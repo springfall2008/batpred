@@ -117,15 +117,29 @@ class Solcast:
             configs = [configs]
 
         period_data = {}
+        max_kwh = 0
         for config in configs:
             lat = config.get("latitude", 51.5072)
             lon = config.get("longitude", -0.1276)
+            postcode = config.get("postcode", None)
             dec = config.get("declination", 45.0)
             az = config.get("azimuth", 45.0)
             az = self.convert_azimuth(az)  # Convert azimuth to degrees if needed
             kwp = config.get("kwp", 3.0)
             efficiency = config.get("efficiency", 0.95)
             api_key = config.get("api_key", None)
+
+            max_kwh += kwp * efficiency  # Total kWh for this configuration
+
+            if postcode:
+                result = self.cache_get_url("https://api.postcodes.io/postcodes/{}".format(postcode), params={}, max_age=24 * 60 * 30)  # Cache postcode data for 30 days
+                result = result.get("result", {})
+                if "longitude" not in result or "latitude" not in result:
+                    self.log("Warn: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
+                else:
+                    lon = result.get("longitude", lon)
+                    lat = result.get("latitude", lat)
+                    self.log("Postcode {} resolved to latitude {} longitude {}".format(postcode, lat, lon))
 
             if api_key:
                 url = self.URL_PERSONAL
@@ -153,11 +167,17 @@ class Solcast:
                 period_end_stamp = period_end_stamp.replace(tzinfo=pytz.utc) - current_time_offset
                 pv50 = watts[period_end] * efficiency  # Apply efficiency to the watt hours
                 if period_start_stamp:
-                    minutes_start = (period_start_stamp - self.midnight_utc).total_seconds() / 60
-                    minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
-                    duration = (minutes_end - minutes_start) / 60.0
-                    for minute in range(int(minutes_start), int(minutes_end) + 1):
-                        forecast_watt_data[minute] = pv50 / duration
+                    if period_end_stamp - period_start_stamp > timedelta(minutes=60):
+                        period_start_stamp = None
+                if period_start_stamp is None:
+                    period_start_stamp = period_end_stamp.replace(minute=0, second=0, microsecond=0)  # Start at the beginning of the hour
+                    if period_start_stamp == period_end_stamp:
+                        period_start_stamp = period_start_stamp - timedelta(minutes=60)
+                minutes_start = (period_start_stamp - self.midnight_utc).total_seconds() / 60
+                minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
+                duration = (minutes_end - minutes_start) / 60.0
+                for minute in range(int(minutes_start), int(minutes_end) + 1):
+                    forecast_watt_data[minute] = pv50 / duration
                 period_start_stamp = period_end_stamp
 
             for minute in range(0, 2 * 24 * 60, 30):
@@ -200,7 +220,7 @@ class Solcast:
                 sorted_data.append(period_data[key])
 
         self.log("Forecast solar returned {} data points".format(len(sorted_data)))
-        return sorted_data
+        return sorted_data, max_kwh
 
     def download_solcast_data(self):
         """
@@ -534,12 +554,17 @@ class Solcast:
                     },
                 )
 
-    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10):
+    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by, max_kwh):
+        """
+        Perform PV calibration based on historical data and forecast data.
+        This will adjust the forecast data based on historical PV production and forecast data.
+        It will also create pv_estimate10 and pv_estimate90 data if create_pv10 is True.
+        """
         self.log("PV Calibration: Fetching PV data for calibration")
 
         days = 14
-        pv_power_hist = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False))
-        pv_forecast = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False))
+        pv_power_hist = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False, intermediate=True))
+        pv_forecast = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False, intermediate=True))
 
         pv_power_hist_by_slot = {}
         pv_power_hist_by_slot_count = {}
@@ -632,22 +657,26 @@ class Solcast:
             for offset in range(0, 30, 1):
                 pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
             # Force timezone to UTC
-            period_start = (self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)).strftime(TIME_FORMAT)
-            pv_estimateCL[period_start] = dp4(pv_value)
-            pv_estimate10[period_start] = dp4(pv_value * worst_day_scaling)
-            pv_estimate90[period_start] = dp4(pv_value * best_day_scaling)
+            pv_estimateCL[minute] = min(dp4(pv_value), max_kwh / 2)  # Clamp to max_kwh, divide max by 2 due to 30 minute slots
+            pv_estimate10[minute] = min(dp4(pv_value * worst_day_scaling), max_kwh / 2)
+            pv_estimate90[minute] = min(dp4(pv_value * best_day_scaling), max_kwh / 2)
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
-            calibrated = pv_estimateCL.get(period_start, None)
-            if calibrated is not None:
-                entry["pv_estimateCL"] = calibrated
-            calibrated10 = pv_estimate10.get(period_start, None)
-            calibrated90 = pv_estimate90.get(period_start, None)
-            if create_pv10 and (calibrated10 is not None):
-                entry["pv_estimate10"] = calibrated10
-            if create_pv10 and (calibrated90 is not None):
-                entry["pv_estimate90"] = calibrated90
+            if period_start:
+                minutes_since_midnight = (datetime.strptime(period_start, TIME_FORMAT) - self.midnight_utc).total_seconds() / 60
+                slot = int(minutes_since_midnight / 30) * 30
+                calibrated = pv_estimateCL.get(slot, None)
+                calibrated10 = pv_estimate10.get(slot, None)
+                calibrated90 = pv_estimate90.get(slot, None)
+
+                # When we store the data we have to reverse the divide_by factor
+                if calibrated is not None:
+                    entry["pv_estimateCL"] = calibrated * divide_by
+                if create_pv10 and (calibrated10 is not None):
+                    entry["pv_estimate10"] = calibrated10 * divide_by
+                if create_pv10 and (calibrated90 is not None):
+                    entry["pv_estimate90"] = calibrated90 * divide_by
 
         # Creation of PV10 data using worst day scaling factor
         if create_pv10:
@@ -660,9 +689,9 @@ class Solcast:
         # Do we use calibrated or raw data?
         if self.metric_pv_calibration_enable:
             self.log("PV Calibration: Using calibrated PV data")
-            return pv_forecast_minute_adjusted, pv_forecast_minute10
+            return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_data
         else:
-            return pv_forecast_minute, pv_forecast_minute10
+            return pv_forecast_minute, pv_forecast_minute10, pv_forecast_data
 
     def fetch_pv_forecast(self):
         """
@@ -675,10 +704,11 @@ class Solcast:
         pv_forecast_total_data = 0
         pv_forecast_total_sensor = 0
         create_pv10 = False
+        max_kwh = 9999
 
         if "forecast_solar" in self.args:
             self.log("Obtaining solar forecast from Forecast Solar API")
-            pv_forecast_data = self.download_forecast_solar_data()
+            pv_forecast_data, max_kwh = self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
         elif "solcast_host" in self.args:
@@ -694,8 +724,10 @@ class Solcast:
                 if data:
                     self.log("PV Data for {} total {} kWh".format(argname, total_sensor))
                     pv_forecast_data += data
-                    pv_forecast_total_data += total_data
-                    pv_forecast_total_sensor += total_sensor
+
+                    if argname == "pv_forecast_today":
+                        pv_forecast_total_data += total_data
+                        pv_forecast_total_sensor += total_sensor
 
             # Work out data scale factor so it adds up (New Solcast is in kW but old was kWH)
             factor = 1.0
@@ -705,7 +737,9 @@ class Solcast:
             divide_by = dp2(30 * factor)
 
             if factor != 1.0 and factor != 2.0:
-                self.log("Warn: PV Forecast data adds up to {} kWh but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
+                self.log("Warn: PV Forecast today adds up to {} kWh but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
+            else:
+                self.log("PV Forecast today adds up to {} kWh and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
             pv_estimate = self.get_arg("pv_estimate", default="")
@@ -738,7 +772,7 @@ class Solcast:
             )
 
             # Run calibration on the data
-            pv_forecast_minute, pv_forecast_minute10 = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10)
+            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / 30.0, max_kwh)
             self.publish_pv_stats(pv_forecast_data, divide_by / 30.0, 30)
         else:
             self.log("Warn: No solar data has been configured.")
