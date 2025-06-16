@@ -477,6 +477,9 @@ class OctopusAPI:
         Update the intelligent device
         """
         import_tariff = self.tariffs.get("import", {})
+        tariffCode = import_tariff.get("tariffCode", "")
+        if 'INTELLI-' not in tariffCode:
+            return
         deviceID = import_tariff.get("deviceID", None)
         if deviceID:
             completed_dispatches = self.get_intelligent_completed_dispatches()
