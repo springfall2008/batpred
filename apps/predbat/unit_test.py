@@ -73,7 +73,7 @@ class TestHAInterface:
             result = self.dummy_items[entity_id]
             if isinstance(result, dict):
                 if attribute:
-                    result = result.get(attribute, default)
+                    result = result.get(attribute, "")
                 else:
                     result = result.get("state", default)
             else:
@@ -83,8 +83,10 @@ class TestHAInterface:
             return result
         else:
             # print("Getting state: {} attribute {} => default".format(entity_id, default))
-
-            return default
+            if attribute:
+                return ""
+            else:
+                return default
 
     def call_service(self, service, **kwargs):
         print("Calling service: {} {}".format(service, kwargs))
@@ -3029,7 +3031,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        # my_predbat.best_soc_keep = 0
+        my_predbat.best_soc_keep = 1
         # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
         # my_predbat.inverter_loss = 0.97

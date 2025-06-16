@@ -497,7 +497,7 @@ class Fetch:
             history.append({"last_updated": key, "state": value})
         max_age = self.now_utc - oldest_date
         max_days = max(max_age.days, 1)
-        return self.minute_data(history, max_days, self.now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
+        return [self.minute_data(history, max_days, self.now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None), max_days]
 
     def minute_data(
         self,
@@ -1368,7 +1368,7 @@ class Fetch:
                 "temperature_h8": battery_temperature_history.get(60 * 8, 20),
                 "friendly_name": "Battery temperature",
                 "state_class": "measurement",
-                "unit_of_measurement": "c",
+                "unit_of_measurement": "°C",
                 "icon": "mdi:temperature-celsius",
             },
         )
