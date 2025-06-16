@@ -570,7 +570,7 @@ class Solcast:
         enabled_calibration = True
         if hist_days < 3:
             enabled_calibration = False
-            self.log("PV Clibration: Not enough historical data for calibration, only {} days of history".format(hist_days))
+            self.log("PV Calibration: Not enough historical data for calibration, only {} days of history".format(hist_days))
 
         pv_power_hist_by_slot = {}
         pv_power_hist_by_slot_count = {}
