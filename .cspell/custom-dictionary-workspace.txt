@@ -113,6 +113,7 @@ idag
 idetails
 iflux
 inday
+INTELLI
 intelligentdevice
 invbatpower
 invname
