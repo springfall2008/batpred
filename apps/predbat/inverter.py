@@ -129,8 +129,8 @@ class Inverter:
         self.inverter_limit = 7500.0
         self.export_limit = 99999.0
         self.inverter_time = None
-        self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
-        self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
+        self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
+        self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
 
         self.reserve_max = 100
@@ -327,7 +327,7 @@ class Inverter:
             elif "Invertor_Max_Rate" in idetails:
                 self.battery_rate_max_raw = idetails["Invertor_Max_Rate"]
             else:
-                self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0)
+                self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
 
             # Max invertor rate
             if "Invertor_Max_Inv_Rate" in idetails:
@@ -337,14 +337,14 @@ class Inverter:
             if "Invertor_Time" in idetails:
                 ivtime = idetails["Invertor_Time"]
         else:
-            self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id)
+            self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id, required_unit="°C")
             self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.battery_scaling
             self.nominal_capacity = self.soc_max
 
             if self.inverter_type in ["GE", "GEC", "GEE"]:
-                self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0)
+                self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
             elif "battery_rate_max" in self.base.args:
-                self.battery_rate_max_raw = self.base.get_arg("battery_rate_max", index=self.id, default=2600.0)
+                self.battery_rate_max_raw = self.base.get_arg("battery_rate_max", index=self.id, default=2600.0, required_unit="W")
             else:
                 self.battery_rate_max_raw = 2600.0
 
@@ -356,11 +356,11 @@ class Inverter:
             raise ValueError
 
         # Battery rate max charge, discharge (all converted to kW/min)
-        self.battery_rate_max_charge = min(self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / MINUTE_WATT
-        self.battery_rate_max_discharge = min(self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / MINUTE_WATT
+        self.battery_rate_max_charge = min(self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
+        self.battery_rate_max_discharge = min(self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_max_charge_scaled = self.battery_rate_max_charge * self.base.battery_rate_max_scaling
         self.battery_rate_max_discharge_scaled = self.battery_rate_max_discharge * self.base.battery_rate_max_scaling_discharge
-        self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id), self.battery_rate_max_raw) / MINUTE_WATT
+        self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 
         # Convert inverter time into timestamp
         if ivtime:
@@ -415,7 +415,7 @@ class Inverter:
         if self.rest_data and ("Control" in self.rest_data) and ("Battery_Power_Reserve" in self.rest_data["Control"]):
             self.reserve_percent_current = float(self.rest_data["Control"]["Battery_Power_Reserve"])
         else:
-            self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id), battery_min_soc)
+            self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id, required_unit="kWh"), battery_min_soc)
         self.reserve_current = dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         if self.reserve_min < battery_min_soc:
@@ -432,9 +432,9 @@ class Inverter:
 
         # Max inverter rate override
         if "inverter_limit" in self.base.args:
-            self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit, index=self.id) / MINUTE_WATT
+            self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:
-            self.export_limit = self.base.get_arg("export_limit", self.inverter_limit, index=self.id) / MINUTE_WATT
+            self.export_limit = self.base.get_arg("export_limit", self.inverter_limit, index=self.id, required_unit="W") / MINUTE_WATT
 
         # Log inverter details
         if not quiet:
@@ -507,13 +507,13 @@ class Inverter:
         if discharge:
             curve_type = "discharge"
 
-        soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
+        soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id, required_unit="kWh")
         if discharge:
-            charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
+            charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id, required_unit="W")
         else:
-            charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+            charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W")
         predbat_status_sensor = self.base.prefix + ".status"
-        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
+        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id, required_unit="W")
         final_curve = {}
         final_curve_count = {}
 
@@ -828,14 +828,14 @@ class Inverter:
             self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
 
             if "charge_rate" in self.base.args:
-                self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0) / MINUTE_WATT
+                self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0, required_unit='W') / MINUTE_WATT
             elif "charge_rate_percent" in self.base.args:
-                self.charge_rate_now = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
+                self.charge_rate_now = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit='%') * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
             else:
                 self.charge_rate_now = self.battery_rate_max_raw
 
             if "discharge_rate" in self.base.args:
-                self.discharge_rate_now = self.base.get_arg("discharge_rate", index=self.id, default=2600.0) / MINUTE_WATT
+                self.discharge_rate_now = self.base.get_arg("discharge_rate", index=self.id, default=2600.0, required_unit='W') / MINUTE_WATT
             elif "discharge_rate_percent" in self.base.args:
                 self.discharge_rate_now = self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
             else:
@@ -849,9 +849,9 @@ class Inverter:
             self.soc_kw = dp3(self.rest_data["Power"]["Power"]["SOC_kWh"] * self.battery_scaling)
         else:
             if "soc_percent" in self.base.args:
-                self.soc_kw = dp3(self.base.get_arg("soc_percent", default=0.0, index=self.id) * self.soc_max / 100.0)
+                self.soc_kw = dp3(self.base.get_arg("soc_percent", default=0.0, index=self.id, required_unit='%') * self.soc_max / 100.0)
             else:
-                self.soc_kw = dp3(self.base.get_arg("soc_kw", default=0.0, index=self.id) * self.battery_scaling)
+                self.soc_kw = dp3(self.base.get_arg("soc_kw", default=0.0, index=self.id, required_unit='kWh') * self.battery_scaling)
 
         if self.soc_max <= 0.0:
             self.soc_percent = 0
@@ -869,17 +869,17 @@ class Inverter:
                 if self.rest_v3:
                     self.battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
                 else:
-                    self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id)
+                    self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id, required_unit="V")
         else:
-            self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id)
-            self.pv_power = self.base.get_arg("pv_power", default=0.0, index=self.id)
-            self.load_power = self.base.get_arg("load_power", default=0.0, index=self.id)
-            self.grid_power = self.base.get_arg("grid_power", default=0.0, index=self.id)
+            self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id, required_unit='W')
+            self.pv_power = self.base.get_arg("pv_power", default=0.0, index=self.id, required_unit='W')
+            self.load_power = self.base.get_arg("load_power", default=0.0, index=self.id, required_unit='W')
+            self.grid_power = self.base.get_arg("grid_power", default=0.0, index=self.id, required_unit='W')
 
             for i in range(1, self.inv_num_load_entities):
-                self.load_power += self.base.get_arg(f"load_power_{i}", default=0.0, index=self.id)
+                self.load_power += self.base.get_arg(f"load_power_{i}", default=0.0, index=self.id, required_unit='W')
 
-            self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id)
+            self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id, required_unit='V')
 
         if not quiet:
             self.base.log(
@@ -982,7 +982,7 @@ class Inverter:
             if self.rest_data:
                 self.current_charge_limit = float(self.rest_data["Control"]["Target_SOC"])
             else:
-                self.current_charge_limit = float(self.base.get_arg("charge_limit", index=self.id, default=100.0))
+                self.current_charge_limit = float(self.base.get_arg("charge_limit", index=self.id, default=100.0, required_unit="%"))
         else:
             self.current_charge_limit = 0.0
 
@@ -1122,8 +1122,8 @@ class Inverter:
         Returns:
             None
         """
-        charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
-        discharge_power = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
+        charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0, required_unit="W")
+        discharge_power = self.base.get_arg("discharge_rate", index=self.id, default=2600.0, required_unit="W")
 
         if discharge:
             if current_charge_limit == 100:
@@ -1169,7 +1169,7 @@ class Inverter:
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
                     self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
-                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
+                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65, required_unit="A"):0.2f}")
 
     def adjust_reserve(self, reserve):
         """
@@ -1192,7 +1192,7 @@ class Inverter:
         if self.rest_data:
             current_reserve = float(self.rest_data["Control"]["Battery_Power_Reserve"])
         else:
-            current_reserve = self.base.get_arg("reserve", index=self.id, default=0.0)
+            current_reserve = self.base.get_arg("reserve", index=self.id, default=0.0, required_unit="kWh")
 
         # Round to integer and clamp to minimum
         reserve = int(reserve + 0.5)
@@ -1207,7 +1207,7 @@ class Inverter:
             if self.rest_data:
                 self.rest_setReserve(reserve)
             else:
-                self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id), reserve)
+                self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="kWh"), reserve)
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {} at {}".format(self.id, reserve, self.base.time_now_str()))
             self.mqtt_message(topic="set/reserve", payload=reserve)
@@ -1222,9 +1222,9 @@ class Inverter:
             current_rate = int(self.rest_data["Control"]["Battery_Charge_Rate"])
         else:
             if "charge_rate_percent" in self.base.args:
-                current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100
+                current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100
             else:
-                current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
+                current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0, required_unit="W")
         try:
             current_rate = int(current_rate)
         except (ValueError, TypeError) as e:
@@ -1263,9 +1263,9 @@ class Inverter:
                 self.rest_setChargeRate(new_rate)
             else:
                 if "charge_rate" in self.base.args:
-                    self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20))
+                    self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20))
                 if "charge_rate_percent" in self.base.args:
-                    self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5)
+                    self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", new_rate)
 
@@ -1298,9 +1298,9 @@ class Inverter:
             current_rate = self.rest_data["Control"]["Battery_Discharge_Rate"]
         else:
             if "discharge_rate_percent" in self.base.args:
-                current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100)
+                current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
             else:
-                current_rate = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
+                current_rate = self.base.get_arg("discharge_rate", index=self.id, default=2600.0, required_unit="W")
 
         if abs(current_rate - new_rate) > (self.battery_rate_max_discharge * MINUTE_WATT / 20):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
@@ -1315,7 +1315,7 @@ class Inverter:
                         fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20),
                     )
                 if "discharge_rate_percent" in self.base.args:
-                    self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5)
+                    self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", new_rate)
 
@@ -1351,7 +1351,7 @@ class Inverter:
         if self.rest_data:
             current_soc = int(float(self.rest_data["Control"]["Target_SOC"]))
         else:
-            current_soc = int(float(self.base.get_arg("charge_limit", index=self.id, default=100.0)))
+            current_soc = int(float(self.base.get_arg("charge_limit", index=self.id, default=100.0, required_unit="%")))
 
         if current_soc != soc:
             self.base.log("Inverter {} Current charge limit is {}% and new target is {}%".format(self.id, current_soc, soc))
@@ -1359,7 +1359,7 @@ class Inverter:
             if self.rest_data:
                 self.rest_setChargeTarget(soc)
             else:
-                self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id), soc)
+                self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id, required_unit="%"), soc)
 
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Target SOC has been changed to {}% at {}".format(self.id, soc, self.base.time_now_str()))
@@ -1898,13 +1898,13 @@ class Inverter:
                     else:
                         self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
-                current = self.base.get_arg("discharge_target_soc", index=self.id)
+                current = self.base.get_arg("discharge_target_soc", index=self.id, required_unit="%")
                 try:
                     current = float(current)
                 except (ValueError, TypeError) as e:
                     current = 0
                 if current > self.reserve_percent:
-                    self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id), int(self.reserve_percent))
+                    self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id, required_unit="%"), int(self.reserve_percent))
                 else:
                     self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
 

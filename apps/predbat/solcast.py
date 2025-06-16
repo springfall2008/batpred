@@ -174,7 +174,7 @@ class Solcast:
                     if period_start_stamp == period_end_stamp:
                         period_start_stamp = period_start_stamp - timedelta(minutes=60)
                 minutes_start = (period_start_stamp - self.midnight_utc).total_seconds() / 60
-                minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
+                minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60                
                 duration = (minutes_end - minutes_start) / 60.0
                 for minute in range(int(minutes_start), int(minutes_end) + 1):
                     forecast_watt_data[minute] = pv50 / duration
@@ -563,8 +563,14 @@ class Solcast:
         self.log("PV Calibration: Fetching PV data for calibration")
 
         days = 14
-        pv_power_hist = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False, intermediate=True))
-        pv_forecast = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False, intermediate=True))
+        pv_power_hist, pv_power_hist_days = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False, intermediate=True))
+        pv_forecast, pv_forecast_hist_days = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False, intermediate=True))
+
+        hist_days = min(pv_power_hist_days, pv_forecast_hist_days)
+        enabled_calibration = True
+        if hist_days < 3:
+            enabled_calibration = False
+            self.log("PV Clibration: Not enough historical data for calibration, only {} days of history".format(hist_days))
 
         pv_power_hist_by_slot = {}
         pv_power_hist_by_slot_count = {}
@@ -609,7 +615,10 @@ class Solcast:
 
         # Clamp best and worst day scaling factors to sensible values
         worst_day_scaling = max(worst_day_scaling, 0.5)
-        best_day_scaling = min(best_day_scaling, 1.5)
+        best_day_scaling = min(best_day_scaling, 1.7)
+        if not enabled_calibration:
+            worst_day_scaling = 0.7
+            best_day_scaling = 1.3
         self.log("PV Calibration: Worst day scaling factor {} best day scaling factor {}".format(dp2(worst_day_scaling), dp2(best_day_scaling)))
 
         for slot in pv_forecast_by_slot:
@@ -633,6 +642,10 @@ class Solcast:
 
             slot_adjustment[slot] = dp4(pv_distribution[slot] / forecast_distribution[slot] if (forecast_distribution[slot] > 0.01) else 1.0)
 
+            # Override if we don't have enough data
+            if not enabled_calibration:
+                slot_adjustment[slot] = 1.0
+
             if self.debug_enable:
                 self.log(
                     "PV slot {}: production {} kWh, forecast {} kWh, distribution {}%, forecast distribution {}% slot adjustment {}x".format(
@@ -640,6 +653,9 @@ class Solcast:
                     )
                 )
         total_adjustment = dp4(total_production / total_forecast if total_forecast > 0 else 1.0)
+        total_adjustment = max(min(total_adjustment, 2.0), 0.5)
+        if not enabled_calibration:
+            total_adjustment = 1.0
         self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh adjustment {}x slot adjustments {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, slot_adjustment))
 
         # Look at PV forecast today and an adjusted version

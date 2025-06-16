@@ -68,7 +68,7 @@ class UserInterface:
             await self.run_in_executor(self.call_service_wrapper_stub2, "notify/" + device, message)
         return True
 
-    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None, quiet=False):
+    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None, quiet=False, required_unit=None):
         """
         Resolve argument templates and state instances
         """
@@ -135,12 +135,12 @@ class UserInterface:
                 value, attribute = value.split("$")
 
             if attribute:
-                value = self.get_state_wrapper(entity_id=value, default=default, attribute=attribute)
+                value = self.get_state_wrapper(entity_id=value, default=default, attribute=attribute, required_unit=required_unit)
             else:
-                value = self.get_state_wrapper(entity_id=value, default=default)
+                value = self.get_state_wrapper(entity_id=value, default=default, required_unit=required_unit)
         return value
 
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True):
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Argument getter that can use HA state as well as fixed values
         """
@@ -213,7 +213,7 @@ class UserInterface:
                 value = self.args.get(domain, {}).get(arg, default)
             else:
                 value = self.args.get(arg, default)
-            value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index)
+            value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, required_unit=required_unit)
 
         if isinstance(default, float):
             # Convert to float?

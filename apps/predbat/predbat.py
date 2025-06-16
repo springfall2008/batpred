@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.21.0"
+THIS_VERSION = "v8.21.1"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py"]
@@ -214,7 +214,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
         return self.releases
 
-    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False):
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None):
         """
         Wrapper function to get state from HA
         """
@@ -226,7 +226,31 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         if entity_id and "$" in entity_id:
             entity_id, attribute = entity_id.split("$")
 
-        return self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
+        state = self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
+
+        if required_unit:
+            units = self.ha_interface.get_state(entity_id=entity_id, default="", attribute="unit_of_measurement", refresh=refresh)
+            units = str(units).strip().lower()
+            required_unit = str(required_unit).strip().lower()
+
+            try:
+                state = float(state)
+            except (ValueError, TypeError):
+                pass
+
+            if isinstance(state, float) and units and required_unit and units != required_unit:
+                if units.startswith('k') and not required_unit.startswith('k'):
+                    # Convert kWh to Wh
+                    state *= 1000.0
+                    units = units[1:]  # Remove 'k' from units
+                elif not units.startswith('k') and required_unit.startswith('k'):
+                    # Convert Wh to kWh
+                    state /= 1000.0
+                    required_unit = required_unit[1:]  # Remove 'k' from units
+                if units != required_unit:
+                    self.log("Warn: get_state_wrapper - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
+
+        return state
 
     def set_state_wrapper(self, entity_id, state, attributes={}):
         """
