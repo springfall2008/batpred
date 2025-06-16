@@ -858,14 +858,14 @@ class Inverter:
             self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
 
             if "charge_rate" in self.base.args:
-                self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0, required_unit='W') / MINUTE_WATT
+                self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0, required_unit="W") / MINUTE_WATT
             elif "charge_rate_percent" in self.base.args:
-                self.charge_rate_now = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit='%') * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
+                self.charge_rate_now = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
             else:
                 self.charge_rate_now = self.battery_rate_max_raw
 
             if "discharge_rate" in self.base.args:
-                self.discharge_rate_now = self.base.get_arg("discharge_rate", index=self.id, default=2600.0, required_unit='W') / MINUTE_WATT
+                self.discharge_rate_now = self.base.get_arg("discharge_rate", index=self.id, default=2600.0, required_unit="W") / MINUTE_WATT
             elif "discharge_rate_percent" in self.base.args:
                 self.discharge_rate_now = self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
             else:
@@ -879,9 +879,9 @@ class Inverter:
             self.soc_kw = dp3(self.rest_data["Power"]["Power"]["SOC_kWh"] * self.battery_scaling)
         else:
             if "soc_percent" in self.base.args:
-                self.soc_kw = dp3(self.base.get_arg("soc_percent", default=0.0, index=self.id, required_unit='%') * self.soc_max / 100.0)
+                self.soc_kw = dp3(self.base.get_arg("soc_percent", default=0.0, index=self.id, required_unit="%") * self.soc_max / 100.0)
             else:
-                self.soc_kw = dp3(self.base.get_arg("soc_kw", default=0.0, index=self.id, required_unit='kWh') * self.battery_scaling)
+                self.soc_kw = dp3(self.base.get_arg("soc_kw", default=0.0, index=self.id, required_unit="kWh") * self.battery_scaling)
 
         if self.soc_max <= 0.0:
             self.soc_percent = 0
@@ -901,15 +901,15 @@ class Inverter:
                 else:
                     self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id, required_unit="V")
         else:
-            self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id, required_unit='W')
-            self.pv_power = self.base.get_arg("pv_power", default=0.0, index=self.id, required_unit='W')
-            self.load_power = self.base.get_arg("load_power", default=0.0, index=self.id, required_unit='W')
-            self.grid_power = self.base.get_arg("grid_power", default=0.0, index=self.id, required_unit='W')
+            self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id, required_unit="W")
+            self.pv_power = self.base.get_arg("pv_power", default=0.0, index=self.id, required_unit="W")
+            self.load_power = self.base.get_arg("load_power", default=0.0, index=self.id, required_unit="W")
+            self.grid_power = self.base.get_arg("grid_power", default=0.0, index=self.id, required_unit="W")
 
             for i in range(1, self.inv_num_load_entities):
-                self.load_power += self.base.get_arg(f"load_power_{i}", default=0.0, index=self.id, required_unit='W')
+                self.load_power += self.base.get_arg(f"load_power_{i}", default=0.0, index=self.id, required_unit="W")
 
-            self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id, required_unit='V')
+            self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id, required_unit="V")
 
         if not quiet:
             self.base.log(
