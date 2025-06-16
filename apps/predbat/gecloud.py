@@ -1130,10 +1130,14 @@ class GECloud:
                 return pdata
 
         self.log("Fetching {}".format(url))
-        r = requests.get(url, headers=headers)
+        try:
+            r = requests.get(url, headers=headers)
+        except (requests.Timeout, requests.exceptions.ReadTimeout, requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
+            return {}
+
         try:
             data = r.json()
-        except requests.exceptions.JSONDecodeError:
+        except requests.exceptions.JSONDecodeError as e:
             return {}
 
         self.ge_url_cache[url] = {}
@@ -1173,10 +1177,7 @@ class GECloud:
                     if days_prev == 0:
                         self.log("Info: No GE Cloud data available for today yet, continuing")
                         days_prev += 1
-                        time_value = now_utc - timedelta(days=(self.max_days_previous - days_prev))
-                        datestr = time_value.strftime("%Y-%m-%d")
-                        url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=4096".format(geserial, datestr)
-                        continue
+                        break
                     else:
                         self.log("Warn: Error downloading GE data from URL {}".format(url))
                         self.record_status("Warn: Error downloading GE data from cloud", debug=url)
