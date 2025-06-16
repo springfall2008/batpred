@@ -507,13 +507,22 @@ class Inverter:
         if discharge:
             curve_type = "discharge"
 
-        soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id, required_unit="kWh")
-        if discharge:
-            charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id, required_unit="W")
-        else:
-            charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W")
         predbat_status_sensor = self.base.prefix + ".status"
-        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id, required_unit="W")
+
+        if "soc_percent" in self.base.args:
+            soc_kwh_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
+            soc_kwh_percent = True
+        else:
+            soc_kwh_percent = False
+            soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
+
+        if discharge:
+            charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
+        else:
+            charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+            
+        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
+
         final_curve = {}
         final_curve_count = {}
 
@@ -525,25 +534,46 @@ class Inverter:
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
             self.log("Find {} curve with sensors {} and {} and {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
-            soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
+            if soc_kwh_percent:
+                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
+            else:
+                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
             charge_rate_data = self.base.get_history_wrapper(entity_id=charge_rate_sensor, days=self.base.max_days_previous)
-            predbat_status_data = self.base.get_history_wrapper(entity_id=predbat_status_sensor, days=self.base.max_days_previous)
             battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous)
+            predbat_status_data = self.base.get_history_wrapper(entity_id=predbat_status_sensor, days=self.base.max_days_previous)
 
             if soc_kwh_data and charge_rate_data and charge_rate_data and battery_power_data:
-                soc_kwh = self.base.minute_data(
-                    soc_kwh_data[0],
-                    self.base.max_days_previous,
-                    self.base.now_utc,
-                    "state",
-                    "last_updated",
-                    backwards=True,
-                    clean_increment=False,
-                    smoothing=False,
-                    divide_by=1.0,
-                    scale=self.battery_scaling,
-                    required_unit="kWh",
-                )
+                if soc_kwh_percent:
+                    # If its in percent convert to kWh
+                    soc_kwh = self.base.minute_data(
+                        soc_kwh_data[0],
+                        self.base.max_days_previous,
+                        self.base.now_utc,
+                        "state",
+                        "last_updated",
+                        backwards=True,
+                        clean_increment=False,
+                        smoothing=False,
+                        divide_by=1.0,
+                        scale=self.battery_scaling,
+                        required_unit="%",
+                    )
+                    for entry in soc_kwh:
+                        soc_kwh[entry] = calc_percent_limit(soc_kwh[entry], self.soc_max)
+                else:
+                    soc_kwh = self.base.minute_data(
+                        soc_kwh_data[0],
+                        self.base.max_days_previous,
+                        self.base.now_utc,
+                        "state",
+                        "last_updated",
+                        backwards=True,
+                        clean_increment=False,
+                        smoothing=False,
+                        divide_by=1.0,
+                        scale=self.battery_scaling,
+                        required_unit="kWh",
+                    )
                 charge_rate = self.base.minute_data(
                     charge_rate_data[0],
                     self.base.max_days_previous,
