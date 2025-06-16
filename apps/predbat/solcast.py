@@ -174,7 +174,7 @@ class Solcast:
                     if period_start_stamp == period_end_stamp:
                         period_start_stamp = period_start_stamp - timedelta(minutes=60)
                 minutes_start = (period_start_stamp - self.midnight_utc).total_seconds() / 60
-                minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60                
+                minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
                 duration = (minutes_end - minutes_start) / 60.0
                 for minute in range(int(minutes_start), int(minutes_end) + 1):
                     forecast_watt_data[minute] = pv50 / duration

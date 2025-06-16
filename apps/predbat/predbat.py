@@ -239,11 +239,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 pass
 
             if isinstance(state, float) and units and required_unit and units != required_unit:
-                if units.startswith('k') and not required_unit.startswith('k'):
+                if units.startswith("k") and not required_unit.startswith("k"):
                     # Convert kWh to Wh
                     state *= 1000.0
                     units = units[1:]  # Remove 'k' from units
-                elif not units.startswith('k') and required_unit.startswith('k'):
+                elif not units.startswith("k") and required_unit.startswith("k"):
                     # Convert Wh to kWh
                     state /= 1000.0
                     required_unit = required_unit[1:]  # Remove 'k' from units

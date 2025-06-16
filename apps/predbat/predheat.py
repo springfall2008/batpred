@@ -459,7 +459,9 @@ class PredHeat:
                 state=dp2(self.external_temperature[0]),
                 attributes={"results": external_temp_predict_stamp, "friendly_name": "External Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "°C"},
             )
-            self.set_state(self.prefix + ".target_temp", state=dp2(target_temp_predict_minute[0]), attributes={"results": target_temp_predict_stamp, "friendly_name": "Target Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "°C"})
+            self.set_state(
+                self.prefix + ".target_temp", state=dp2(target_temp_predict_minute[0]), attributes={"results": target_temp_predict_stamp, "friendly_name": "Target Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "°C"}
+            )
             self.set_state(self.prefix + ".heat_to_temp", state=dp2(heat_to_predict_temperature[0]), attributes={"results": heat_to_predict_stamp, "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": "°C"})
             self.set_state(self.prefix + ".internal_temp_h1", state=dp2(internal_temp_predict_minute[60]), attributes={"friendly_name": "Internal Temperature Predicted +1hr", "state_class": "measurement", "unit_of_measurement": "°C"})
             self.set_state(self.prefix + ".internal_temp_h2", state=dp2(internal_temp_predict_minute[60 * 2]), attributes={"friendly_name": "Internal Temperature Predicted +2hr", "state_class": "measurement", "unit_of_measurement": "°C"})

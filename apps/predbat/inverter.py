@@ -520,7 +520,7 @@ class Inverter:
             charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
         else:
             charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
-            
+
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
 
         final_curve = {}
