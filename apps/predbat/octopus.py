@@ -478,7 +478,7 @@ class OctopusAPI:
         """
         import_tariff = self.tariffs.get("import", {})
         tariffCode = import_tariff.get("tariffCode", "")
-        if 'INTELLI-' not in tariffCode:
+        if "INTELLI-" not in tariffCode:
             return
         deviceID = import_tariff.get("deviceID", None)
         if deviceID:

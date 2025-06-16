@@ -1137,7 +1137,7 @@ class GECloud:
 
         try:
             data = r.json()
-        except (requests.exceptions.JSONDecodeError) as e:
+        except requests.exceptions.JSONDecodeError as e:
             return {}
 
         self.ge_url_cache[url] = {}
