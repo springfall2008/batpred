@@ -767,6 +767,15 @@ or you can set longitude and latitude if you are not in the UK or postcode does 
       longitude: -0.1276
 ```
 
+Optionally you can set an api_key for personal or professional accounts and you can also set 'days' to define how many future days of data the forecast includes (2 for free, 3 for personal or 6 for professional)
+
+``` yaml
+  forecast_solar:
+    - postcode: SW1A 2AB
+      api_key: 'xxxxx'
+      days: 3
+```
+
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
 ## Energy Rates
