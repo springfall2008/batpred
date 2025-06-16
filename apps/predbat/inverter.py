@@ -415,7 +415,7 @@ class Inverter:
         if self.rest_data and ("Control" in self.rest_data) and ("Battery_Power_Reserve" in self.rest_data["Control"]):
             self.reserve_percent_current = float(self.rest_data["Control"]["Battery_Power_Reserve"])
         else:
-            self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id, required_unit="kWh"), battery_min_soc)
+            self.reserve_percent_current = max(self.base.get_arg("reserve", default=battery_min_soc, index=self.id, required_unit="%"), battery_min_soc)
         self.reserve_current = dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         if self.reserve_min < battery_min_soc:
@@ -1222,7 +1222,7 @@ class Inverter:
         if self.rest_data:
             current_reserve = float(self.rest_data["Control"]["Battery_Power_Reserve"])
         else:
-            current_reserve = self.base.get_arg("reserve", index=self.id, default=0.0, required_unit="kWh")
+            current_reserve = self.base.get_arg("reserve", index=self.id, default=0.0, required_unit="%")
 
         # Round to integer and clamp to minimum
         reserve = int(reserve + 0.5)
@@ -1237,7 +1237,7 @@ class Inverter:
             if self.rest_data:
                 self.rest_setReserve(reserve)
             else:
-                self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="kWh"), reserve)
+                self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%"), reserve)
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {} at {}".format(self.id, reserve, self.base.time_now_str()))
             self.mqtt_message(topic="set/reserve", payload=reserve)
