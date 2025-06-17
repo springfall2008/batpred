@@ -1337,7 +1337,6 @@ class Octopus:
             return 0, 0, 0, source, location
 
         cap_minutes = end_minutes - start_minutes
-        cap_hours = cap_minutes / 60
 
         # The load expected is stored in chargeKwh for the period in use
         if "charge_in_kwh" in slot:
@@ -1347,10 +1346,10 @@ class Octopus:
         else:
             kwh = abs(float(slot.get("chargeKwh", 0.0)))
 
-        if not kwh:
-            kwh = self.car_charging_rate[0] * cap_hours
-        else:
+        if org_minutes > 0:
             kwh = kwh * cap_minutes / org_minutes
+        else:
+            kwh = 0
 
         return start_minutes, end_minutes, kwh, source, location
 
@@ -1367,7 +1366,8 @@ class Octopus:
         # Decode the slots
         for slot in octopus_slots:
             start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot)
-            slots_decoded.append((start_minutes, end_minutes, kwh, source, location))
+            if kwh > 0:
+                slots_decoded.append((start_minutes, end_minutes, kwh, source, location))
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])
