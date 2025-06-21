@@ -222,7 +222,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         if not required_unit:
             return state
 
-        units = self.ha_interface.get_state(entity_id=entity_id, default="", attribute="unit_of_measurement", refresh=refresh)
+        units = self.ha_interface.get_state(entity_id=entity_id, default="", attribute="unit_of_measurement")
         if not units:
             return state
 
@@ -237,6 +237,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         # Swap order for going to conversion
         if going_to:
             units, required_unit = required_unit, units
+
+        print("unit_conversion: {} from {} {} to {}".format(entity_id, state, units, required_unit))
 
         if isinstance(state, float) and units and required_unit and units != required_unit:
             if units.startswith("k") and not required_unit.startswith("k"):
@@ -256,6 +258,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
             if units != required_unit:
                 self.log("Warn: unit_conversion - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
+        print("unit_conversion: {} converted to {} {}".format(entity_id, state, required_unit))
         return state
 
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None):
