@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.21.3"
+THIS_VERSION = "v8.21.4"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py"]
@@ -214,6 +214,53 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
         return self.releases
 
+    def unit_conversion(self, entity_id, state, units, required_unit, going_to=False):
+        """
+        Convert state to the required unit if necessary
+        """
+
+        if not required_unit:
+            return state
+
+        units = self.ha_interface.get_state(entity_id=entity_id, default="", attribute="unit_of_measurement")
+        if not units:
+            return state
+
+        units = str(units).strip().lower()
+        required_unit = str(required_unit).strip().lower()
+
+        try:
+            state = float(state)
+        except (ValueError, TypeError):
+            pass
+
+        # Swap order for going to conversion
+        if going_to:
+            units, required_unit = required_unit, units
+
+        print("unit_conversion: {} from {} {} to {}".format(entity_id, state, units, required_unit))
+
+        if isinstance(state, float) and units and required_unit and units != required_unit:
+            if units.startswith("k") and not required_unit.startswith("k"):
+                # Convert kWh to Wh
+                state *= 1000.0
+                units = units[1:]  # Remove 'k' from units
+            elif not units.startswith("k") and required_unit.startswith("k"):
+                # Convert Wh to kWh
+                state /= 1000.0
+                required_unit = required_unit[1:]  # Remove 'k' from units
+            elif units.startswith("m") and not required_unit.startswith("m"):
+                # Convert mW to W
+                state /= 1000.0
+            elif not units.startswith("m") and required_unit.startswith("m"):
+                # Convert W to mW
+                state *= 1000.0
+
+            if units != required_unit:
+                self.log("Warn: unit_conversion - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
+        print("unit_conversion: {} converted to {} {}".format(entity_id, state, required_unit))
+        return state
+
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None):
         """
         Wrapper function to get state from HA
@@ -227,38 +274,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             entity_id, attribute = entity_id.split("$")
 
         state = self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
-
-        if required_unit:
-            units = self.ha_interface.get_state(entity_id=entity_id, default="", attribute="unit_of_measurement", refresh=refresh)
-            units = str(units).strip().lower()
-            required_unit = str(required_unit).strip().lower()
-
-            try:
-                state = float(state)
-            except (ValueError, TypeError):
-                pass
-
-            if isinstance(state, float) and units and required_unit and units != required_unit:
-                if units.startswith("k") and not required_unit.startswith("k"):
-                    # Convert kWh to Wh
-                    state *= 1000.0
-                    units = units[1:]  # Remove 'k' from units
-                elif not units.startswith("k") and required_unit.startswith("k"):
-                    # Convert Wh to kWh
-                    state /= 1000.0
-                    required_unit = required_unit[1:]  # Remove 'k' from units
-                if units != required_unit:
-                    self.log("Warn: get_state_wrapper - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
+        state = self.unit_conversion(entity_id, state, None, required_unit)
 
         return state
 
-    def set_state_wrapper(self, entity_id, state, attributes={}):
+    def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
         """
         Wrapper function to get state from HA
         """
         if not self.ha_interface:
             self.log("Error: set_state_wrapper - No HA interface available")
             return False
+
+        state = self.unit_conversion(entity_id, state, None, required_unit, going_to=True)
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
 
     def call_service_wrapper(self, service, **kwargs):
