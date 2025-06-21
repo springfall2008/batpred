@@ -459,7 +459,7 @@ class Solcast:
                 total_day90[day] += pv_estimate90
                 total_dayCL[day] += pv_estimateCL
 
-                if day == 0 and this_point >= now:
+                if day == 0 and this_point > now:
                     total_left_today += pv_estimate
                     total_left_today10 += pv_estimate10
                     total_left_today90 += pv_estimate90

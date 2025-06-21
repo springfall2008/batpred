@@ -3148,11 +3148,12 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
 
-    if reload_octopus_slots:
-        my_predbat.car_charging_slots[0] = my_predbat.load_octopus_slots(my_predbat.octopus_slots, my_predbat.octopus_intelligent_consider_full)
-        print("Re-loaded car charging slots {}".format(my_predbat.car_charging_slots[0]))
-    else:
-        print("Current car charging slots {}".format(my_predbat.car_charging_slots[0]))
+    if my_predbat.num_cars > 0 and my_predbat.octopus_slots:
+        if reload_octopus_slots:
+            my_predbat.car_charging_slots[0] = my_predbat.load_octopus_slots(my_predbat.octopus_slots, my_predbat.octopus_intelligent_consider_full)
+            print("Re-loaded car charging slots {}".format(my_predbat.car_charging_slots[0]))
+        else:
+            print("Current car charging slots {}".format(my_predbat.car_charging_slots[0]))
 
     # Show setting changes
     if not expected_file:
