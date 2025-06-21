@@ -825,7 +825,7 @@ class Fetch:
         if history and len(history) >= 1:
             history = history[0]
 
-        if not history:
+        if not isinstance(history, list):
             return results
 
         # Process history

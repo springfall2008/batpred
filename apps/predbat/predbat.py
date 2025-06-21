@@ -310,7 +310,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         if not self.ha_interface:
             self.log("Error: get_history_wrapper - No HA interface available")
-            return False
+            return None
 
         history = self.ha_interface.get_history(entity_id, days=days, now=self.now_utc)
 
