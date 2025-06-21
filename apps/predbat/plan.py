@@ -1512,6 +1512,7 @@ class Plan:
         best_start = window["start"]
         best_size = window["end"] - best_start
         export_step = 5
+        export_step_large = 15
 
         if not self.set_export_freeze:
             allow_freeze = False
@@ -1541,7 +1542,12 @@ class Plan:
                 start = loop_start
 
                 # Move the loop start back to full size
-                loop_start -= export_step
+                current_len = window["end"] - start
+                if current_len >= 120 and (current_len % export_step_large) == 0:
+                    # Large window, step back by 15 minutes
+                    loop_start -= export_step_large
+                else:
+                    loop_start -= export_step
 
                 # Can't optimise all window start slot
                 if all_n and (start != window["start"]):
