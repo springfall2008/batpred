@@ -1338,13 +1338,7 @@ class Inverter:
                 self.rest_setDischargeRate(new_rate)
             else:
                 if "discharge_rate" in self.base.args:
-                    self.write_and_poll_value(
-                        "discharge_rate",
-                        self.base.get_arg("discharge_rate", indirect=False, index=self.id),
-                        new_rate,
-                        fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20),
-                        required_unit="W"
-                    )
+                    self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
                 if "discharge_rate_percent" in self.base.args:
                     self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="W")
                 if self.inv_output_charge_control == "current":

@@ -79,10 +79,10 @@ class TestHAInterface:
             else:
                 if attribute:
                     result = default
-            #print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
+            # print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
             return result
         else:
-            #print("Getting state: {} attribute {} => default".format(entity_id, default))
+            # print("Getting state: {} attribute {} => default".format(entity_id, default))
             if attribute:
                 return ""
             else:
@@ -124,7 +124,7 @@ class TestHAInterface:
         return None
 
     def set_state(self, entity_id, state, attributes=None):
-        #print("Setting state: {} to {} attributes {}".format(entity_id, state, str(attributes)))
+        # print("Setting state: {} to {} attributes {}".format(entity_id, state, str(attributes)))
         if attributes:
             self.dummy_items[entity_id] = attributes.copy()
             self.dummy_items[entity_id]["state"] = state
@@ -8445,6 +8445,7 @@ def run_test_manual_api(my_predbat):
 
     return failed
 
+
 def run_test_units(my_predbat):
     """
     Run the unit tests
@@ -8453,71 +8454,71 @@ def run_test_units(my_predbat):
     failed = False
     ha = my_predbat.ha_interface
 
-    ha.dummy_items['fred'] = {
+    ha.dummy_items["fred"] = {
         "state": 2,
         "unit_of_measurement": "kWh",
     }
-    ha.dummy_items['joe'] = {
+    ha.dummy_items["joe"] = {
         "state": 2000,
         "unit_of_measurement": "W",
     }
     print("Test units 1")
-    value = my_predbat.get_state_wrapper('fred')
+    value = my_predbat.get_state_wrapper("fred")
     if float(value) != 2:
         print("ERROR: Expecting fred to be 2 got {}".format(value))
         failed = True
     print("Test units 2")
-    value = my_predbat.get_state_wrapper('fred', required_unit="kWh")
+    value = my_predbat.get_state_wrapper("fred", required_unit="kWh")
     if float(value) != 2:
         print("ERROR: Expecting fred to be 2 got {}".format(value))
         failed = True
     print("Test units 3")
-    value = my_predbat.get_state_wrapper('fred', required_unit="Wh")
+    value = my_predbat.get_state_wrapper("fred", required_unit="Wh")
     if float(value) != 2000:
         print("ERROR: Expecting fred to be 2000 got {}".format(value))
         failed = True
     print("Test units 4")
-    value = my_predbat.get_state_wrapper('joe')
+    value = my_predbat.get_state_wrapper("joe")
     if float(value) != 2000:
         print("ERROR: Expecting joe to be 2000 got {}".format(value))
         failed = True
     print("Test units 5")
-    value = my_predbat.get_state_wrapper('joe', required_unit="W")
+    value = my_predbat.get_state_wrapper("joe", required_unit="W")
     if float(value) != 2000:
         print("ERROR: Expecting joe to be 2000 got {}".format(value))
         failed = True
     print("Test units 6")
-    value = my_predbat.get_state_wrapper('joe', required_unit="kW")
+    value = my_predbat.get_state_wrapper("joe", required_unit="kW")
     if float(value) != 2:
         print("ERROR: Expecting joe to be 2 got {}".format(value))
         failed = True
     print("Test units 7")
-    my_predbat.set_state_wrapper('fred', 3, required_unit="kWh", attributes={"unit_of_measurement": "kWh"})
-    value = my_predbat.get_state_wrapper('fred')
+    my_predbat.set_state_wrapper("fred", 3, required_unit="kWh", attributes={"unit_of_measurement": "kWh"})
+    value = my_predbat.get_state_wrapper("fred")
     if float(value) != 3:
         print("ERROR: Expecting fred to be 3 got {}".format(value))
         failed = True
     print("Test units 8")
-    my_predbat.set_state_wrapper('fred', 4000, required_unit="Wh", attributes={"unit_of_measurement": "kWh"})
-    value = my_predbat.get_state_wrapper('fred')
+    my_predbat.set_state_wrapper("fred", 4000, required_unit="Wh", attributes={"unit_of_measurement": "kWh"})
+    value = my_predbat.get_state_wrapper("fred")
     if float(value) != 4:
         print("ERROR: Expecting fred to be 4 got {}".format(value))
         failed = True
     print("Test units 9")
-    my_predbat.set_state_wrapper('joe', 3, required_unit="kW", attributes={"unit_of_measurement": "W"})
-    value = my_predbat.get_state_wrapper('joe')
+    my_predbat.set_state_wrapper("joe", 3, required_unit="kW", attributes={"unit_of_measurement": "W"})
+    value = my_predbat.get_state_wrapper("joe")
     if float(value) != 3000:
         print("ERROR: Expecting joe to be 3000 got {}".format(value))
         failed = True
     print("Test units 10")
-    my_predbat.set_state_wrapper('joe', 4000, required_unit="W", attributes={"unit_of_measurement": "W"})
-    value = my_predbat.get_state_wrapper('joe')
+    my_predbat.set_state_wrapper("joe", 4000, required_unit="W", attributes={"unit_of_measurement": "W"})
+    value = my_predbat.get_state_wrapper("joe")
     if float(value) != 4000:
         print("ERROR: Expecting joe to be 4000 got {}".format(value))
         failed = True
-    
 
     return failed
+
 
 def main():
     # Parse command line arguments
