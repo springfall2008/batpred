@@ -125,7 +125,12 @@ class TestHAInterface:
 
     def set_state(self, entity_id, state, attributes=None):
         # print("Setting state: {} to {} attributes {}".format(entity_id, state, str(attributes)))
-        self.dummy_items[entity_id] = state
+        if attributes:
+            self.dummy_items[entity_id] = attributes.copy()
+            self.dummy_items[entity_id]["state"] = state
+        else:
+            self.dummy_items[entity_id] = state
+        # print("Item now: {}".format(self.dummy_items[entity_id]))
         return None
 
     def get_history(self, entity_id, now=None, days=30):
@@ -2999,9 +3004,11 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     if not expected_file:
         re_do_rates = True
         reset_load_model = True
+        reload_octopus_slots = True
     else:
         reset_load_model = False
         re_do_rates = False
+        reload_octopus_slots = False
     load_override = 1.0
     my_predbat.load_user_config()
     failed = False
@@ -3054,10 +3061,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.charge_limit_best[0] = 0
         # my_predbat.charge_limit_best[1] = 0
         pass
-
-    reset_load_model = False
-    re_do_rates = False
-    my_predbat.debug_enabe = False
 
     if re_do_rates:
         # Set rate thresholds
@@ -3144,6 +3147,12 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
+
+    if reload_octopus_slots:
+        my_predbat.car_charging_slots[0] = my_predbat.load_octopus_slots(my_predbat.octopus_slots, my_predbat.octopus_intelligent_consider_full)
+        print("Re-loaded car charging slots {}".format(my_predbat.car_charging_slots[0]))
+    else:
+        print("Current car charging slots {}".format(my_predbat.car_charging_slots[0]))
 
     # Show setting changes
     if not expected_file:
@@ -8437,6 +8446,99 @@ def run_test_manual_api(my_predbat):
     return failed
 
 
+def run_test_units(my_predbat):
+    """
+    Run the unit tests
+    """
+    print("Test units")
+    failed = False
+    ha = my_predbat.ha_interface
+
+    ha.dummy_items["fred"] = {
+        "state": 2,
+        "unit_of_measurement": "kWh",
+    }
+    ha.dummy_items["joe"] = {
+        "state": 2000,
+        "unit_of_measurement": "W",
+    }
+    print("Test units 1")
+    value = my_predbat.get_state_wrapper("fred")
+    if float(value) != 2:
+        print("ERROR: Expecting fred to be 2 got {}".format(value))
+        failed = True
+    print("Test units 2")
+    value = my_predbat.get_state_wrapper("fred", required_unit="kWh")
+    if float(value) != 2:
+        print("ERROR: Expecting fred to be 2 got {}".format(value))
+        failed = True
+    print("Test units 3")
+    value = my_predbat.get_state_wrapper("fred", required_unit="Wh")
+    if float(value) != 2000:
+        print("ERROR: Expecting fred to be 2000 got {}".format(value))
+        failed = True
+    print("Test units 4")
+    value = my_predbat.get_state_wrapper("joe")
+    if float(value) != 2000:
+        print("ERROR: Expecting joe to be 2000 got {}".format(value))
+        failed = True
+    print("Test units 5")
+    value = my_predbat.get_state_wrapper("joe", required_unit="W")
+    if float(value) != 2000:
+        print("ERROR: Expecting joe to be 2000 got {}".format(value))
+        failed = True
+    print("Test units 6")
+    value = my_predbat.get_state_wrapper("joe", required_unit="kW")
+    if float(value) != 2:
+        print("ERROR: Expecting joe to be 2 got {}".format(value))
+        failed = True
+    print("Test units 7")
+    my_predbat.set_state_wrapper("fred", 3, required_unit="kWh", attributes={"unit_of_measurement": "kWh"})
+    value = my_predbat.get_state_wrapper("fred")
+    if float(value) != 3:
+        print("ERROR: Expecting fred to be 3 got {}".format(value))
+        failed = True
+    print("Test units 8")
+    my_predbat.set_state_wrapper("fred", 4000, required_unit="Wh", attributes={"unit_of_measurement": "kWh"})
+    value = my_predbat.get_state_wrapper("fred")
+    if float(value) != 4:
+        print("ERROR: Expecting fred to be 4 got {}".format(value))
+        failed = True
+    print("Test units 9")
+    my_predbat.set_state_wrapper("joe", 3, required_unit="kW", attributes={"unit_of_measurement": "W"})
+    value = my_predbat.get_state_wrapper("joe")
+    if float(value) != 3000:
+        print("ERROR: Expecting joe to be 3000 got {}".format(value))
+        failed = True
+    print("Test units 10")
+    my_predbat.set_state_wrapper("joe", 4000, required_unit="W", attributes={"unit_of_measurement": "W"})
+    value = my_predbat.get_state_wrapper("joe")
+    if float(value) != 4000:
+        print("ERROR: Expecting joe to be 4000 got {}".format(value))
+        failed = True
+    value = my_predbat.get_state_wrapper("joe", required_unit="kW")
+    if float(value) != 4:
+        print("ERROR: Expecting joe to be 4 got {}".format(value))
+        failed = True
+
+    print("Test units 11")
+    ha.dummy_items["pete"] = {
+        "state": 2000,
+        "unit_of_measurement": "mA",
+    }
+    my_predbat.set_state_wrapper("pete", 5, required_unit="A", attributes={"unit_of_measurement": "mA"})
+    value = my_predbat.get_state_wrapper("pete", required_unit="A")
+    if float(value) != 5:
+        print("ERROR: Expecting pete to be 5 got {}".format(value))
+        failed = True
+    value = my_predbat.get_state_wrapper("pete", required_unit="mA")
+    if float(value) != 5000:
+        print("ERROR: Expecting pete to be 5000 got {}".format(value))
+        failed = True
+
+    return failed
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
@@ -8476,6 +8578,8 @@ def main():
         failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
 
+    if not failed:
+        failed |= run_test_units(my_predbat)
     if not failed:
         failed |= run_test_manual_api(my_predbat)
     if not failed:
