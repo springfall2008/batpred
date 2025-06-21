@@ -145,10 +145,12 @@ class Solcast:
                 url = self.URL_PERSONAL
                 url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp, api_key=api_key)
                 days_data = config.get("days", 3)
+                period_gap = 15
             else:
                 url = self.URL_FREE
                 url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp)
                 days_data = config.get("days", 2)
+                period_gap = 30
 
             data = self.cache_get_url(url, params={}, max_age=self.get_arg("forecast_solar_max_age", 8.0) * 60)
             watts = data.get("result", {}).get("watt_hours_period", {})
@@ -180,9 +182,10 @@ class Solcast:
                 duration = (minutes_end - minutes_start) / 60.0
                 for minute in range(int(minutes_start), int(minutes_end) + 1):
                     forecast_watt_data[minute] = pv50 / duration
+
                 period_start_stamp = period_end_stamp
 
-            for minute in range(0, days_data * 24 * 60, 30):
+            for minute in range(0, days_data * 24 * 60, period_gap):
                 pv50 = dp4(forecast_watt_data.get(minute, 0) / 1000.0)
                 period_start_stamp = self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)
                 data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}

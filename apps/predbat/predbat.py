@@ -238,8 +238,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         if going_to:
             units, required_unit = required_unit, units
 
-        print("unit_conversion: {} from {} {} to {}".format(entity_id, state, units, required_unit))
-
         if isinstance(state, float) and units and required_unit and units != required_unit:
             if units.startswith("k") and not required_unit.startswith("k"):
                 # Convert kWh to Wh
