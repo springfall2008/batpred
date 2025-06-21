@@ -1083,4 +1083,3 @@ series:
       let res = []; for (const item of entity.attributes.detailedForecast) {
       res.push([new Date(item.period_start).getTime(), item.pv_estimateCL]); }
       return res.sort((a, b) => a[0] - b[0]);
-
