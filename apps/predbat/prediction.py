@@ -580,6 +580,15 @@ class Prediction:
                 # Iboost load added
                 load_yesterday += iboost_amount
 
+                # iBoost Solar diversion model
+                if self.iboost_solar:
+                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (pv_now > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
+                        iboost_pv_amount = min(pv_now, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
+                        pv_now -= iboost_pv_amount
+                        iboost_amount += iboost_pv_amount
+                        if iboost_pv_amount > 0 and minute == 0:
+                            self.iboost_running_solar = True
+
             # Count load
             load_kwh += load_yesterday
             if record:
@@ -831,15 +840,6 @@ class Prediction:
 
             # Iboost finally count
             if self.iboost_enable:
-                # iBoost Solar diversion model
-                if self.iboost_solar:
-                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
-                        iboost_pv_amount = min(pv_ac, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
-                        pv_ac -= iboost_pv_amount
-                        iboost_amount += iboost_pv_amount
-                        if iboost_pv_amount > 0 and minute == 0:
-                            self.iboost_running_solar = True
-
                 # Cumulative iBoost energy
                 iboost_today_kwh += iboost_amount
 
