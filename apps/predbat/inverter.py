@@ -1293,7 +1293,7 @@ class Inverter:
                 self.rest_setChargeRate(new_rate)
             else:
                 if "charge_rate" in self.base.args:
-                    self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20))
+                    self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
                 if "charge_rate_percent" in self.base.args:
                     self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5)
                 if self.inv_output_charge_control == "current":
@@ -1343,9 +1343,10 @@ class Inverter:
                         self.base.get_arg("discharge_rate", indirect=False, index=self.id),
                         new_rate,
                         fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20),
+                        required_unit="W"
                     )
                 if "discharge_rate_percent" in self.base.args:
-                    self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5)
+                    self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="W")
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", new_rate)
 
@@ -1454,11 +1455,11 @@ class Inverter:
             self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
 
-    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False):
+    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
         domain, entity_name = entity_id.split(".")
-        current_state = self.base.get_state_wrapper(entity_id)
+        current_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
 
         if isinstance(new_value, str):
             matched = current_state == new_value
@@ -1469,7 +1470,7 @@ class Inverter:
         while (not matched) and (retry < 6):
             retry += 1
             if domain == "sensor":
-                self.base.set_state_wrapper(entity_id, state=new_value, attributes=self.created_attributes.get(entity_id, {}))
+                self.base.set_state_wrapper(entity_id, state=new_value, attributes=self.created_attributes.get(entity_id, {}), required_unit=required_unit)
             else:
                 entity_base = entity_id.split(".")[0]
                 service = entity_base + "/set_value"
@@ -1479,7 +1480,7 @@ class Inverter:
                 return True
 
             self.sleep(self.inv_write_and_poll_sleep)
-            current_state = self.base.get_state_wrapper(entity_id, refresh=True)
+            current_state = self.base.get_state_wrapper(entity_id, refresh=True, required_unit=required_unit)
             if isinstance(new_value, str):
                 matched = current_state == new_value
             else:

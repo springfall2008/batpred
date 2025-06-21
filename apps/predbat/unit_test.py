@@ -2999,9 +2999,11 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     if not expected_file:
         re_do_rates = True
         reset_load_model = True
+        reload_octopus_slots = True
     else:
         reset_load_model = False
         re_do_rates = False
+        reload_octopus_slots = False
     load_override = 1.0
     my_predbat.load_user_config()
     failed = False
@@ -3031,7 +3033,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        my_predbat.best_soc_keep = 1
+        # my_predbat.best_soc_keep = 1
         # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
         # my_predbat.inverter_loss = 0.97
@@ -3054,7 +3056,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.charge_limit_best[0] = 0
         # my_predbat.charge_limit_best[1] = 0
         pass
-    print("Min4 improve swap {}".format(my_predbat.metric_min_improvement_swap))
 
     if re_do_rates:
         # Set rate thresholds
@@ -3141,6 +3142,12 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
+
+    if reload_octopus_slots:
+        my_predbat.car_charging_slots[0] = my_predbat.load_octopus_slots(my_predbat.octopus_slots, my_predbat.octopus_intelligent_consider_full)
+        print("Re-loaded car charging slots {}".format(my_predbat.car_charging_slots[0]))
+    else:
+        print("Current car charging slots {}".format(my_predbat.car_charging_slots[0]))
 
     # Show setting changes
     if not expected_file:
@@ -8433,6 +8440,13 @@ def run_test_manual_api(my_predbat):
 
     return failed
 
+def run_test_units(my_predbat):
+    """
+    Run the unit tests
+    """
+    print("Test units")
+    failed = False
+    return failed
 
 def main():
     # Parse command line arguments
@@ -8473,6 +8487,8 @@ def main():
         failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
 
+    if not failed:
+        failed |= run_test_units(my_predbat)
     if not failed:
         failed |= run_test_manual_api(my_predbat)
     if not failed:
