@@ -130,7 +130,7 @@ class TestHAInterface:
             self.dummy_items[entity_id]["state"] = state
         else:
             self.dummy_items[entity_id] = state
-        print("Item now: {}".format(self.dummy_items[entity_id]))
+        #print("Item now: {}".format(self.dummy_items[entity_id]))
         return None
 
     def get_history(self, entity_id, now=None, days=30):
@@ -8514,6 +8514,25 @@ def run_test_units(my_predbat):
     value = my_predbat.get_state_wrapper('joe')
     if float(value) != 4000:
         print("ERROR: Expecting joe to be 4000 got {}".format(value))
+        failed = True
+    value = my_predbat.get_state_wrapper('joe', required_unit="kW")
+    if float(value) != 4:
+        print("ERROR: Expecting joe to be 4 got {}".format(value))
+        failed = True
+
+    print("Test units 11")
+    ha.dummy_items['pete'] = {
+        "state": 2000,
+        "unit_of_measurement": "mA",
+    }    
+    my_predbat.set_state_wrapper('pete', 5, required_unit="A", attributes={"unit_of_measurement": "mA"})
+    value = my_predbat.get_state_wrapper('pete', required_unit="A")
+    if float(value) != 5:
+        print("ERROR: Expecting pete to be 5 got {}".format(value))
+        failed = True
+    value = my_predbat.get_state_wrapper('pete', required_unit="mA")
+    if float(value) != 5000:
+        print("ERROR: Expecting pete to be 5000 got {}".format(value))
         failed = True
     
 
