@@ -822,10 +822,15 @@ class Fetch:
         results = {}
         last_updated_time = None
         last_day_stamp = None
+
+        if not isinstance(history, list):
+            return results
+
         if history and len(history) >= 1:
             history = history[0]
 
-        if not history:
+        if not isinstance(history, list):
+            self.log("Warn: history_attribute expects a list of history items, got {}".format(type(history)))
             return results
 
         # Process history
