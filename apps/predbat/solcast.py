@@ -180,10 +180,14 @@ class Solcast:
                 duration = (minutes_end - minutes_start) / 60.0
                 for minute in range(int(minutes_start), int(minutes_end) + 1):
                     forecast_watt_data[minute] = pv50 / duration
+
                 period_start_stamp = period_end_stamp
 
             for minute in range(0, days_data * 24 * 60, 30):
-                pv50 = dp4(forecast_watt_data.get(minute, 0) / 1000.0)
+                pv50 = 0
+                for offset in range(0, 30, 1):
+                    pv50 += dp4(forecast_watt_data.get(minute + offset, 0) / 1000.0)
+                pv50 /= 30
                 period_start_stamp = self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)
                 data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}
                 if period_start_stamp in period_data:
@@ -421,6 +425,7 @@ class Solcast:
         power_now90 = 0
         power_nowCL = 0
 
+        point_gap = 30
         for entry in pv_forecast_data:
             if "period_start" not in entry:
                 continue
@@ -460,15 +465,15 @@ class Solcast:
                     total_left_today90 += pv_estimate90
                     total_left_todayCL += pv_estimateCL
 
-                if this_point <= now and (this_point + timedelta(minutes=30)) > now:
+                if this_point <= now and (this_point + timedelta(minutes=point_gap)) >= now:
                     power_now = pv_estimate * power_scale
                     power_now10 = pv_estimate10 * power_scale
                     power_now90 = pv_estimate90 * power_scale
                     power_nowCL = pv_estimateCL * power_scale
 
                     # Add this slot into the total left today but scaled for the time since this point
-                    if this_point < now:
-                        left_this_slot_scale = (now - this_point).total_seconds() / 3600.0
+                    if day == 0:
+                        left_this_slot_scale = (point_gap - ((now - this_point).total_seconds() / 60)) / point_gap
                         total_left_today += pv_estimate * power_scale * left_this_slot_scale
                         total_left_today10 += pv_estimate10 * power_scale * left_this_slot_scale
                         total_left_today90 += pv_estimate90 * power_scale * left_this_slot_scale
