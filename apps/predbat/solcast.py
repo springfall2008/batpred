@@ -475,10 +475,10 @@ class Solcast:
                     # Add this slot into the total left today but scaled for the time since this point
                     if day == 0:
                         left_this_slot_scale = (point_gap - ((now - this_point).total_seconds() / 60)) / point_gap
-                        total_left_today += pv_estimate * power_scale * left_this_slot_scale
-                        total_left_today10 += pv_estimate10 * power_scale * left_this_slot_scale
-                        total_left_today90 += pv_estimate90 * power_scale * left_this_slot_scale
-                        total_left_todayCL += pv_estimateCL * power_scale * left_this_slot_scale
+                        total_left_today += pv_estimate * left_this_slot_scale
+                        total_left_today10 += pv_estimate10 * left_this_slot_scale
+                        total_left_today90 += pv_estimate90 * left_this_slot_scale
+                        total_left_todayCL += pv_estimateCL *  left_this_slot_scale
 
                 fentry = {
                     "period_start": entry["period_start"],
