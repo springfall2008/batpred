@@ -465,7 +465,8 @@ Different boost modes can be selected:
 #### Solar
 
 - **switch.predbat_iboost_solar** When enabled assume the diverter will use solar power to boost the hot water heating.
-Only excess solar will be used, this is solar that will be otherwise exported and not stored in your battery.
+- **switch.predbat_iboost_solar_excess** When disabled will allow any solar power to be diverted while if enabled only excess power (power that would otherwise be exported) will be used. The default is Off.
+- By default iboost will not run the battery is in force export mode unless you turn on **switch.predbat_iboost_on_export**
 
 - **input_number.predbat_iboost_min_soc** sets the minimum home battery SoC percentage that must be in the battery before the solar diverter is turned on.
 The default is 0 meaning hot water heating can occur regardless of what SoC level the battery is at.

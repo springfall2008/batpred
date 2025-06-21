@@ -2204,6 +2204,7 @@ class Fetch:
         self.iboost_on_export = self.get_arg("iboost_on_export")
         self.iboost_prevent_discharge = self.get_arg("iboost_prevent_discharge")
         self.iboost_solar = self.get_arg("iboost_solar")
+        self.iboost_solar_excess = self.get_arg("iboost_solar_excess")
         self.iboost_rate_threshold = self.get_arg("iboost_rate_threshold")
         self.iboost_rate_threshold_export = self.get_arg("iboost_rate_threshold_export")
         self.iboost_charging = self.get_arg("iboost_charging")
