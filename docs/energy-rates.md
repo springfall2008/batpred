@@ -156,11 +156,13 @@ simply delete or comment out the **octopus_saving_session** entry in apps.yaml.
 
 ### Octopus free (power up) events
 
-Predbat can automatically detect Octopus free events and adjust your battery plan according.
+Predbat can automatically detect Octopus free events and adjust your battery plan according. Note that this is derived from external sources, which do not verify your eligibility for free sessions.
 
 For Predbat to automatically manage Octopus free sessions the following additional configuration item in apps.yaml is used.
 
-Note: **You must have signed up to Octoplus to benefit from these events**
+Note: **You must have signed up to Octoplus and eligible to benefit from these events**
+
+Warning: **Octopus Intelligent customers are not eligible for free energy, Intelligent customers should leave this line commented out**
 
 Like the electricity rates, this is set in the apps.yaml template to a regular expression that should auto-discover the Octopus Energy integration.
 
