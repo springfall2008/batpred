@@ -93,17 +93,17 @@ pred_bat:
     - number.ge_inverter_{geserial}_battery_discharge_power
     - number.ge_inverter_{geserial2}_battery_discharge_power
   battery_power:
-    - sensor.ge_inverter_{geserial}_battery_power
-    - sensor.ge_inverter_{geserial2}_battery_power
+    - sensor.ge_inverter_{geseriale}_battery_power
+    - 0
   pv_power:
-    - sensor.ge_inverter_{geserial}_solar_power
-    - sensor.ge_inverter_{geserial2}_solar_power
+    - sensor.ge_inverter_{geseriale}_solar_power
+    - 0
   load_power:
-    - sensor.ge_inverter_{geserial}_consumption_power
-    - sensor.ge_inverter_{geserial2}_consumption_power
+    - sensor.ge_inverter_{geseriale}_consumption_power
+    - 0
   grid_power:
-    - sensor.ge_inverter_{geserial}_grid_power
-    - sensor.ge_inverter_{geserial2}_grid_power
+    - sensor.ge_inverter_{geseriale}_grid_power
+    - 0
   soc_percent:
     - sensor.ge_inverter_{geserial}_battery_soc
     - sensor.ge_inverter_{geserial2}_battery_soc
