@@ -433,7 +433,7 @@ class Solcast:
                 continue
 
             if previous_point and this_point:
-                point_gap = (int((this_point - previous_point).total_seconds() / 60))
+                point_gap = int((this_point - previous_point).total_seconds() / 60)
                 break
 
             previous_point = this_point
