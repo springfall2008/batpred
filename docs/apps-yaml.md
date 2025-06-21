@@ -528,6 +528,7 @@ One entry per inverter:
 Grid power should be negative for import and positive for export, if your sensor is the other way around then set **grid_power_inverter** to True
 
 e.g:
+
 ```yaml
   battery_power:
     - sensor.givtcp_{geserial}_battery_power
