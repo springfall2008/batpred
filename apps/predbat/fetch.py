@@ -1477,7 +1477,7 @@ class Fetch:
                         # Manual slot
                         rate_low_end = minute
                         break
-                    if find_high and (rate_low_start >= 0) and (((minute - rate_low_start) >= 60 * 4) or (((minute - rate_low_start) >= 30) and alternate_rate_boundary)):
+                    if find_high and (rate_low_start >= 0) and (((minute - rate_low_start) >= 60 * 24) or (((minute - rate_low_start) >= 30) and alternate_rate_boundary)):
                         # Export slot can never be bigger than 4 hours
                         rate_low_end = minute
                         break
