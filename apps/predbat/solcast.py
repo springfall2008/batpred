@@ -465,7 +465,8 @@ class Solcast:
                     total_left_today90 += pv_estimate90
                     total_left_todayCL += pv_estimateCL
 
-                if this_point <= now and (this_point + timedelta(minutes=point_gap)) >= now:
+                next_point = this_point + timedelta(minutes=point_gap)
+                if this_point <= now and next_point > now:
                     power_now = pv_estimate * power_scale
                     power_now10 = pv_estimate10 * power_scale
                     power_now90 = pv_estimate90 * power_scale

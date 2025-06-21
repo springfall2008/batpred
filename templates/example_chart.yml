@@ -886,3 +886,200 @@ series:
     curve: stepline
     stroke_width: 2
     extend_to: now
+###############################################
+# PV Forecast chart
+###############################################
+type: custom:apexcharts-card
+header:
+  show: true
+  title: PV Forecast
+  show_states: true
+  colorize_states: true
+graph_span: 48h
+span:
+  start: day
+now:
+  show: true
+series:
+  - entity: sensor.predbat_pv_forecast_h0
+    stroke_width: 3
+    opacity: 1
+    unit: w
+    extend_to: now
+    type: area
+    color: "#a8a8a7"
+    name: PV Forecast Hist
+  - entity: predbat.pv_power_best
+    stroke_width: 3
+    opacity: 0.3
+    unit: w
+    extend_to: now
+    type: area
+    color: "#f5c43d"
+    name: PV Power Actual
+  - entity: sensor.predbat_pv_today
+    curve: smooth
+    name: Forecast
+    unit: w
+    opacity: 0.3
+    color: "#a8a8a7"
+    stroke_width: 2
+    type: area
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimate]); }
+      return res.sort((a, b) => a[0] - b[0]);
+  - entity: sensor.predbat_pv_today
+    curve: smooth
+    opacity: 0.3
+    color: "#6b6b6b"
+    type: area
+    stroke_width: 2
+    name: Forecast 10%
+    unit: w
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimate10]); }
+      return res.sort((a, b) => a[0] - b[0]);
+  - entity: sensor.predbat_pv_today
+    curve: smooth
+    opacity: 0.3
+    color: "#cccccc"
+    type: area
+    stroke_width: 2
+    name: Forecast 90%
+    unit: w
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimate90]); }
+      return res.sort((a, b) => a[0] - b[0]);
+  - entity: sensor.predbat_pv_today
+    curve: smooth
+    opacity: 0.3
+    type: area
+    color: "#e90a0a"
+    stroke_width: 2
+    name: Forecast CL
+    unit: w
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimateCL]); }
+      return res.sort((a, b) => a[0] - b[0]);
+  - entity: sensor.predbat_pv_tomorrow
+    curve: smooth
+    opacity: 0.3
+    color: "#6b6b6b"
+    type: area
+    stroke_width: 2
+    name: Forecast 10% Tomorrow
+    unit: w
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimate10]); }
+      return res.sort((a, b) => a[0] - b[0]);
+  - entity: sensor.predbat_pv_tomorrow
+    curve: smooth
+    opacity: 0.3
+    color: "#cccccc"
+    type: area
+    stroke_width: 2
+    name: Forecast 90% Tomorrow
+    unit: w
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimate90]); }
+      return res.sort((a, b) => a[0] - b[0]);
+  - entity: sensor.predbat_pv_tomorrow
+    curve: smooth
+    opacity: 0.3
+    type: area
+    color: "#e90a0a"
+    stroke_width: 2
+    name: Forecast CL Tomorrow
+    unit: w
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimateCL]); }
+      return res.sort((a, b) => a[0] - b[0]);
+###############################################
+# PV Forecast History Chart
+###############################################
+type: custom:apexcharts-card
+header:
+  show: true
+  title: PV Forecast History
+  show_states: true
+  colorize_states: true
+graph_span: 8d
+span:
+  start: day
+  offset: "-7d"
+now:
+  show: true
+yaxis:
+  - max: 4
+series:
+  - entity: sensor.predbat_pv_forecast_h0
+    stroke_width: 3
+    opacity: 1
+    unit: w
+    extend_to: now
+    type: area
+    color: "#a8a8a7"
+    name: PV Forecast Hist
+  - entity: predbat.pv_power_best
+    stroke_width: 3
+    opacity: 0.3
+    unit: w
+    extend_to: now
+    type: area
+    color: "#f5c43d"
+    name: PV Power Actual
+  - entity: sensor.predbat_pv_today
+    curve: smooth
+    name: Forecast
+    unit: w
+    opacity: 0.3
+    color: "#a8a8a7"
+    stroke_width: 2
+    type: area
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimate]); }
+      return res.sort((a, b) => a[0] - b[0]);
+  - entity: sensor.predbat_pv_today
+    curve: smooth
+    opacity: 0.3
+    color: "#6b6b6b"
+    type: area
+    stroke_width: 2
+    name: Forecast 10%
+    unit: w
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimate10]); }
+      return res.sort((a, b) => a[0] - b[0]);
+  - entity: sensor.predbat_pv_today
+    curve: smooth
+    opacity: 0.3
+    color: "#cccccc"
+    type: area
+    stroke_width: 2
+    name: Forecast 90%
+    unit: w
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimate90]); }
+      return res.sort((a, b) => a[0] - b[0]);
+  - entity: sensor.predbat_pv_today
+    curve: smooth
+    opacity: 0.3
+    type: area
+    color: "#e90a0a"
+    stroke_width: 2
+    name: Forecast CL
+    unit: w
+    data_generator: >
+      let res = []; for (const item of entity.attributes.detailedForecast) {
+      res.push([new Date(item.period_start).getTime(), item.pv_estimateCL]); }
+      return res.sort((a, b) => a[0] - b[0]);
