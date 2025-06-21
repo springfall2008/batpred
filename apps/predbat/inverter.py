@@ -905,6 +905,9 @@ class Inverter:
             self.pv_power = self.base.get_arg("pv_power", default=0.0, index=self.id, required_unit="W")
             self.load_power = self.base.get_arg("load_power", default=0.0, index=self.id, required_unit="W")
             self.grid_power = self.base.get_arg("grid_power", default=0.0, index=self.id, required_unit="W")
+            if self.base.get_arg("grid_power_invert", default=False, index=self.id):
+                # If grid power is inverted then invert it
+                self.grid_power = -self.grid_power
 
             for i in range(1, self.inv_num_load_entities):
                 self.load_power += self.base.get_arg(f"load_power_{i}", default=0.0, index=self.id, required_unit="W")

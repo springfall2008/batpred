@@ -518,10 +518,27 @@ or
 
 Note this are not required for normal operation, only to produce power flow data or for battery curve calculations.
 
-- **battery_power** - Current battery power in watts
-- **pv_power** - Current PV power in watts
-- **load_power** - Current load power in watts
-- **grid_power** - Current grid power in watts
+One entry per inverter:
+
+- **battery_power** - Current battery power in W or kW
+- **pv_power** - Current PV power in W or kW
+- **load_power** - Current load power in W or kW
+- **grid_power** - Current grid power in W or kW
+
+Grid power should be negative for import and positive for export, if your sensor is the other way around then set **grid_power_inverter** to True
+
+e.g:
+
+```yaml
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  grid_power:
+    - sensor.givtcp_{geserial}_grid_power
+  pv_power:
+    - sensor.givtcp_{geserial}_pv_power
+  load_power:
+    - sensor.givtcp_{geserial}_load_power
+```
 
 #### Battery SoC
 

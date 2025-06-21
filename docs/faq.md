@@ -55,6 +55,10 @@ especially if you have a small battery. If you set it to zero then Predbat may n
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
 
+## In my power flow diagram my grid power is the wrong way around
+
+You may need to set '**grid_power_invert** to True if your **grid_power** is positive when importing.
+
 ## My plan is freeze charging or holding at 100% battery a lot
 
 **Round trip losses**
