@@ -258,7 +258,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
             if units != required_unit:
                 self.log("Warn: unit_conversion - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
-        print("unit_conversion: {} converted to {} {}".format(entity_id, state, required_unit))
         return state
 
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None):

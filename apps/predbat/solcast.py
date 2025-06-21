@@ -421,6 +421,23 @@ class Solcast:
         power_now90 = 0
         power_nowCL = 0
 
+        # Find the point gap in the forecast data
+        point_gap = 30
+        previous_point = None
+        for entry in pv_forecast_data:
+            if "period_start" not in entry:
+                continue
+            try:
+                this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
+            except (ValueError, TypeError):
+                continue
+
+            if previous_point and this_point:
+                point_gap = (int((this_point - previous_point).total_seconds() / 60))
+                break
+
+            previous_point = this_point
+
         for entry in pv_forecast_data:
             if "period_start" not in entry:
                 continue
@@ -460,19 +477,18 @@ class Solcast:
                     total_left_today90 += pv_estimate90
                     total_left_todayCL += pv_estimateCL
 
-                if this_point <= now and (this_point + timedelta(minutes=30)) > now:
+                if this_point <= now and (this_point + timedelta(minutes=point_gap)) >= now:
                     power_now = pv_estimate * power_scale
                     power_now10 = pv_estimate10 * power_scale
                     power_now90 = pv_estimate90 * power_scale
                     power_nowCL = pv_estimateCL * power_scale
 
                     # Add this slot into the total left today but scaled for the time since this point
-                    if this_point < now:
-                        left_this_slot_scale = (now - this_point).total_seconds() / 3600.0
-                        total_left_today += pv_estimate * power_scale * left_this_slot_scale
-                        total_left_today10 += pv_estimate10 * power_scale * left_this_slot_scale
-                        total_left_today90 += pv_estimate90 * power_scale * left_this_slot_scale
-                        total_left_todayCL += pv_estimateCL * power_scale * left_this_slot_scale
+                    left_this_slot_scale = (point_gap - ((now - this_point).total_seconds() / 60)) / point_gap
+                    total_left_today += pv_estimate * power_scale * left_this_slot_scale
+                    total_left_today10 += pv_estimate10 * power_scale * left_this_slot_scale
+                    total_left_today90 += pv_estimate90 * power_scale * left_this_slot_scale
+                    total_left_todayCL += pv_estimateCL * power_scale * left_this_slot_scale
 
                 fentry = {
                     "period_start": entry["period_start"],
