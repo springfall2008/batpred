@@ -11,7 +11,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | [Huawei inverters](#huawei-inverters) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
    | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
    | [Givenergy with GE Cloud](#givenergy-with-ge_cloud) | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
-   | [Givenergy with GE Cloud EMC](#givenergy-with-emc) | [ge_cloud EMC](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
+   | [Givenergy with GE Cloud EMS](#givenergy-with-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergyoctopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
@@ -327,10 +327,10 @@ This is an experimental system, please discuss it on the ticket: <https://github
     - Set geserial to your inverter serial number
 - Make sure that the 'discharge down to' registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled in the portal (if you have them)
 
-## GivEnergy with EMC
+## GivEnergy with EMS
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
-- Now copy the template givenergy_emc.yaml from templates into your apps.yaml and edit
+- Now copy the template givenergy_ems.yaml from templates into your apps.yaml and edit
     - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
     - Set geseriale to the EMS inverter serial number (look in HA for the entity names)
 - Turn off charge, export and discharge slots 2, 3 and 4 as Predbat will only use slot 1 - set the start and end times for these to 00:00
@@ -932,7 +932,7 @@ Sets the number of seconds between polls of inverter settings
 
 ### has_idle_time
 
-When True the inverter has an idle time register which must be set to the start and end times for ECO mode (GivEnergy EMC)
+When True the inverter has an idle time register which must be set to the start and end times for ECO mode (GivEnergy EMS)
 
 ### can_span_midnight
 
