@@ -478,7 +478,7 @@ class Solcast:
                         total_left_today += pv_estimate * left_this_slot_scale
                         total_left_today10 += pv_estimate10 * left_this_slot_scale
                         total_left_today90 += pv_estimate90 * left_this_slot_scale
-                        total_left_todayCL += pv_estimateCL *  left_this_slot_scale
+                        total_left_todayCL += pv_estimateCL * left_this_slot_scale
 
                 fentry = {
                     "period_start": entry["period_start"],
