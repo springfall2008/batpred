@@ -944,6 +944,13 @@ CONFIG_ITEMS = [
         "enable": "iboost_enable",
     },
     {
+        "name": "iboost_solar_excess",
+        "friendly_name": "iBoost solar only runs when exporting excess",
+        "type": "switch",
+        "default": False,
+        "enable": "iboost_enable",
+    },
+    {
         "name": "iboost_gas",
         "friendly_name": "iBoost when import electricity cheaper than gas",
         "type": "switch",

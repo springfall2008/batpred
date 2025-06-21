@@ -571,6 +571,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.carbon_enable = False
         self.iboost_enable = False
         self.iboost_gas = False
+        self.iboost_solar = False
+        self.iboost_solar_excess = False
         self.iboost_gas_export = False
         self.iboost_smart = False
         self.iboost_smart_min_length = 30

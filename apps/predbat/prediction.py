@@ -128,6 +128,7 @@ class Prediction:
             self.iboost_min_power = base.iboost_min_power
             self.iboost_min_soc = base.iboost_min_soc
             self.iboost_solar = base.iboost_solar
+            self.iboost_solar_excess = base.iboost_solar_excess
             self.iboost_charging = base.iboost_charging
             self.iboost_plan = base.iboost_plan
             self.iboost_gas = base.iboost_gas
@@ -581,7 +582,7 @@ class Prediction:
                 load_yesterday += iboost_amount
 
                 # iBoost Solar diversion model
-                if self.iboost_solar:
+                if self.iboost_solar and not self.iboost_solar_excess:
                     if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (pv_now > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
                         iboost_pv_amount = min(pv_now, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         pv_now -= iboost_pv_amount
@@ -840,6 +841,18 @@ class Prediction:
 
             # Iboost finally count
             if self.iboost_enable:
+                # iBoost Solar diversion model
+                if self.iboost_solar and self.iboost_solar_excess:
+                    excess = 0
+                    if diff < 0:
+                        excess = min(-diff, pv_ac)
+                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (excess > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
+                        iboost_pv_amount = min(excess, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
+                        pv_ac -= iboost_pv_amount
+                        iboost_amount += iboost_pv_amount
+                        if iboost_pv_amount > 0 and minute == 0:
+                            self.iboost_running_solar = True
+
                 # Cumulative iBoost energy
                 iboost_today_kwh += iboost_amount
 
