@@ -3031,7 +3031,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        my_predbat.best_soc_keep = 1
+        # my_predbat.best_soc_keep = 1
         # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
         # my_predbat.inverter_loss = 0.97
@@ -3054,7 +3054,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.charge_limit_best[0] = 0
         # my_predbat.charge_limit_best[1] = 0
         pass
-    print("Min4 improve swap {}".format(my_predbat.metric_min_improvement_swap))
+
+    reset_load_model = False
+    re_do_rates = False
+    my_predbat.debug_enabe = False
 
     if re_do_rates:
         # Set rate thresholds
