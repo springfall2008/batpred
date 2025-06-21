@@ -145,12 +145,10 @@ class Solcast:
                 url = self.URL_PERSONAL
                 url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp, api_key=api_key)
                 days_data = config.get("days", 3)
-                period_gap = 15
             else:
                 url = self.URL_FREE
                 url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp)
                 days_data = config.get("days", 2)
-                period_gap = 30
 
             data = self.cache_get_url(url, params={}, max_age=self.get_arg("forecast_solar_max_age", 8.0) * 60)
             watts = data.get("result", {}).get("watt_hours_period", {})
@@ -185,8 +183,11 @@ class Solcast:
 
                 period_start_stamp = period_end_stamp
 
-            for minute in range(0, days_data * 24 * 60, period_gap):
-                pv50 = dp4(forecast_watt_data.get(minute, 0) / 1000.0)
+            for minute in range(0, days_data * 24 * 60, 30):
+                pv50 = 0
+                for offset in range(0, 30, 1):
+                    pv50 += dp4(forecast_watt_data.get(minute + offset, 0) / 1000.0)
+                pv50 /= 30
                 period_start_stamp = self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)
                 data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}
                 if period_start_stamp in period_data:
@@ -424,23 +425,7 @@ class Solcast:
         power_now90 = 0
         power_nowCL = 0
 
-        # Find the point gap in the forecast data
         point_gap = 30
-        previous_point = None
-        for entry in pv_forecast_data:
-            if "period_start" not in entry:
-                continue
-            try:
-                this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
-            except (ValueError, TypeError):
-                continue
-
-            if previous_point and this_point:
-                point_gap = int((this_point - previous_point).total_seconds() / 60)
-                break
-
-            previous_point = this_point
-
         for entry in pv_forecast_data:
             if "period_start" not in entry:
                 continue
@@ -487,11 +472,12 @@ class Solcast:
                     power_nowCL = pv_estimateCL * power_scale
 
                     # Add this slot into the total left today but scaled for the time since this point
-                    left_this_slot_scale = (point_gap - ((now - this_point).total_seconds() / 60)) / point_gap
-                    total_left_today += pv_estimate * power_scale * left_this_slot_scale
-                    total_left_today10 += pv_estimate10 * power_scale * left_this_slot_scale
-                    total_left_today90 += pv_estimate90 * power_scale * left_this_slot_scale
-                    total_left_todayCL += pv_estimateCL * power_scale * left_this_slot_scale
+                    if day == 0:
+                        left_this_slot_scale = (point_gap - ((now - this_point).total_seconds() / 60)) / point_gap
+                        total_left_today += pv_estimate * power_scale * left_this_slot_scale
+                        total_left_today10 += pv_estimate10 * power_scale * left_this_slot_scale
+                        total_left_today90 += pv_estimate90 * power_scale * left_this_slot_scale
+                        total_left_todayCL += pv_estimateCL * power_scale * left_this_slot_scale
 
                 fentry = {
                     "period_start": entry["period_start"],
