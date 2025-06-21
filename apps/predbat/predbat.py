@@ -277,7 +277,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         state = self.unit_conversion(entity_id, state, None, required_unit)
 
         return state
-    
+
     def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
         """
         Wrapper function to get state from HA
