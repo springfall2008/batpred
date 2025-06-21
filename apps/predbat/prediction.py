@@ -845,10 +845,10 @@ class Prediction:
                 if self.iboost_solar and self.iboost_solar_excess:
                     excess = 0
                     if diff < 0:
-                        excess = min(-diff, pv_ac)
+                        excess = -diff
                     if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (excess > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
                         iboost_pv_amount = min(excess, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
-                        pv_ac -= iboost_pv_amount
+                        load_yesterday += iboost_pv_amount
                         iboost_amount += iboost_pv_amount
                         if iboost_pv_amount > 0 and minute == 0:
                             self.iboost_running_solar = True
