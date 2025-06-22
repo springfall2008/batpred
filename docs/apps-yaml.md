@@ -521,6 +521,9 @@ Note this are not required for normal operation, only to produce power flow data
 One entry per inverter:
 
 - **battery_power** - Current battery power in W or kW
+
+Battery power should be positive for discharge and negative for charge, if your sensor is the other way around then set **battery_power_invert** to True
+
 - **pv_power** - Current PV power in W or kW
 - **load_power** - Current load power in W or kW
 - **grid_power** - Current grid power in W or kW
@@ -532,6 +535,8 @@ e.g:
 ```yaml
   battery_power:
     - sensor.givtcp_{geserial}_battery_power
+  battery_power_invert:
+    - False
   grid_power:
     - sensor.givtcp_{geserial}_grid_power
   grid_power_invert:

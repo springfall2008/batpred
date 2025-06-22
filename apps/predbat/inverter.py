@@ -522,6 +522,7 @@ class Inverter:
             charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
 
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
+        battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
 
         final_curve = {}
         final_curve_count = {}
@@ -601,6 +602,10 @@ class Inverter:
                     scale=1.0,
                     required_unit="W",
                 )
+                if battery_power_invert:
+                    # Invert the battery power if required
+                    for minute in battery_power:
+                        battery_power[minute] = -battery_power[minute]
                 min_len = min(len(soc_kwh), len(charge_rate), len(predbat_status), len(battery_power))
                 self.log("Find {} curve has {} days of data, max days {}".format(curve_type, min_len / 60 / 24.0, self.base.max_days_previous))
 
@@ -902,6 +907,9 @@ class Inverter:
                     self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id, required_unit="V")
         else:
             self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id, required_unit="W")
+            if self.base.get_arg("battery_power_invert", default=False, index=self.id):
+                # If battery power is inverted then invert it
+                self.battery_power = -self.battery_power
             self.pv_power = self.base.get_arg("pv_power", default=0.0, index=self.id, required_unit="W")
             self.load_power = self.base.get_arg("load_power", default=0.0, index=self.id, required_unit="W")
             self.grid_power = self.base.get_arg("grid_power", default=0.0, index=self.id, required_unit="W")
