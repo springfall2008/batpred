@@ -1032,7 +1032,7 @@ var options = {
         if not self.base.dashboard_index:
             text += "<body>"
             text += "<h2>Loading please wait...</h2>"
-            text += "</body><html>\n"
+            text += "</body></html>\n"
             return web.Response(content_type="text/html", text=text)
 
         """ The table html_plan is already generated in the base class and is in the format
