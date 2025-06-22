@@ -389,7 +389,7 @@ state class: Measurement
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
 
-Copy the template solar_assistant_growatt.yaml from templates into your apps.yaml and edit inverter and battery settings as required (the template has growatt, yours might/will have different entity IDs on Home Assistant)
+Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates into your apps.yaml and edit inverter and battery settings as required (the template has growatt, yours might/will have different entity IDs on Home Assistant).
 
 ## Sunsynk
 
