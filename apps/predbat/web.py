@@ -1629,7 +1629,7 @@ document.addEventListener("DOMContentLoaded", function() {
         function saveFilterValue() {
             localStorage.setItem('configFilterValue', document.getElementById('configFilter').value);
         }
-        
+
         function restoreFilterValue() {
             const savedFilter = localStorage.getItem('configFilterValue');
             if (savedFilter) {
@@ -1637,25 +1637,25 @@ document.addEventListener("DOMContentLoaded", function() {
                 filterConfig();
             }
         }
-        
+
         function filterConfig() {
             const filterValue = document.getElementById('configFilter').value.toLowerCase();
             const rows = document.querySelectorAll('#configTable tr');
-            
+
             // Save filter value for persistence
             saveFilterValue();
-            
+
             // Skip header row
             for(let i = 1; i < rows.length; i++) {
                 const row = rows[i];
                 const nameCell = row.querySelector('td:nth-child(2)');
                 const entityCell = row.querySelector('td:nth-child(3)');
-                
+
                 if (!nameCell || !entityCell) continue;
-                
+
                 const nameText = nameCell.textContent.toLowerCase();
                 const entityText = entityCell.textContent.toLowerCase();
-                
+
                 if (nameText.includes(filterValue) || entityText.includes(filterValue)) {
                     row.style.display = '';
                 } else {
@@ -1663,11 +1663,11 @@ document.addEventListener("DOMContentLoaded", function() {
                 }
             }
         }
-        
+
         // Register event to restore filter value after page load
         document.addEventListener('DOMContentLoaded', restoreFilterValue);
         </script>
-        
+
         <div class="filter-container">
             <label for="configFilter"><strong>Filter settings:</strong></label>
             <input type="text" id="configFilter" class="filter-input" placeholder="Type to filter settings..." oninput="filterConfig()" />

@@ -50,7 +50,7 @@ class Plan:
         Find the highest and lowest price levels for charge and export windows
         """
         highest_price_charge = None
-        lowest_price_export = None        
+        lowest_price_export = None
         highest_price_charge_level = None
         lowest_price_export_level = None
 
