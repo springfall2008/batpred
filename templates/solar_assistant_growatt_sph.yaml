@@ -41,49 +41,45 @@ pred_bat:
   # Solar Assistant specific parameters (This is for a Growatt inverter configured, change to yours):
 
   load_today:
-    - sensor.growatt_spa_load_energy
+    - sensor.growatt_sph_load_energy
   import_today:
-    - sensor.growatt_spa_grid_energy_in
+    - sensor.growatt_sph_grid_energy_in
   export_today:
-    - sensor.growatt_spa_grid_energy_out
+    - sensor.growatt_sph_grid_energy_out
   pv_today:
-    - sensor.growatt_spa_pv_energy
+    - sensor.growatt_sph_pv_energy
   battery_voltage:
-    - sensor.growatt_spa_battery_voltage
-
-  # This is disabled by default in the Solax integration so it must be manually enabled.
-  inverter_time:
-    - sensor.date_time
+    - sensor.growatt_sph_battery_voltage
 
   # This is disabled by default in the Solax integration so it must be manually enabled.
   battery_power:
-    - sensor.growatt_spa_battery_power
+    - sensor.growatt_sph_battery_power
   pv_power:
-    - sensor.growatt_spa_pv_power
+    - sensor.growatt_sph_pv_power
   soc_percent:
-    - sensor.growatt_spa_battery_state_of_charge
+    - sensor.growatt_sph_battery_state_of_charge
 
-#  reserve:
-#    - number.growatt_spa_grid_first_stop_discharge
+  reserve:
+    - number.growatt_sph_grid_first_stop_discharge
 
   battery_min_soc:
-    - number.growatt_spa_grid_first_stop_discharge
+    - number.growatt_sph_grid_first_stop_discharge
 
-#  energy_control_switch:
-    - select.growatt_spa_work_mode_priority
+    #  energy_control_switch:
+    - select.growatt_sph_work_mode_priority
 
   # Service for start/stop
   charge_start_service:
     service: select.select_option
-    entity_id: select.growatt_spa_work_mode_priority
+    entity_id: select.growatt_sph_work_mode_priority
     option: "Battery first"
   charge_stop_service:
     service: select.select_option
-    entity_id: select.growatt_spa_work_mode_priority
+    entity_id: select.growatt_sph_work_mode_priority
     option: "Load first"
   discharge_start_service:
     service: select.select_option
-    entity_id: select.growatt_spa_work_mode_priority
+    entity_id: select.growatt_sph_work_mode_priority
     option: "Grid first"
 
   # Inverter max AC limit (one per inverter)
@@ -107,7 +103,6 @@ pred_bat:
     - 3000
   inverter_limit_discharge:
     - 3000
-
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
   # The value can be set here in watts to model this (doesn't change operation)
@@ -284,7 +279,6 @@ pred_bat:
   # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
   days_previous:
     - 7
-
 
   # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
   # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
