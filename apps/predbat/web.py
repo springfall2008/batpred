@@ -1069,21 +1069,16 @@ var options = {
             background-color: #f1f1f1;
         }
 
-        .time-btn {
-            background-color: #4CAF50;
-            color: white;
-            padding: 4px 8px;
-            border: none;
+        .clickable-time-cell {
             cursor: pointer;
-            border-radius: 4px;
-            margin-left: 8px;
-            font-size: 12px;
+            position: relative;
+            transition: background-color 0.2s;
         }
 
-        .time-btn:hover, .time-btn:focus {
-            background-color: #3e8e41;
+        .clickable-time-cell:hover {
+            background-color: #f5f5f5 !important;
         }
-
+        
         /* Dark mode styles */
         body.dark-mode .dropdown-content {
             background-color: #333;
@@ -1098,12 +1093,17 @@ var options = {
             background-color: #444;
         }
 
-        body.dark-mode .time-btn {
-            background-color: #2c652f;
+        body.dark-mode .clickable-time-cell:hover {
+            background-color: #444 !important;
         }
-
-        body.dark-mode .time-btn:hover, body.dark-mode .time-btn:focus {
-            background-color: #4CAF50;
+        
+        /* Override cell styling */
+        .override-active {
+            position: relative;
+        }
+        
+        body.dark-mode .override-active {
+            background-color: #93264c !important; /* Darker pink for dark mode */
         }
         </style>
 
@@ -1188,7 +1188,7 @@ var options = {
 
         // Close dropdowns when clicking outside
         document.addEventListener("click", function(event) {
-            if (!event.target.matches('.time-btn')) {
+            if (!event.target.matches('.clickable-time-cell') && !event.target.closest('.dropdown-content')) {
                 closeDropdowns();
             }
         });
@@ -1211,7 +1211,7 @@ var options = {
         manual_demand_times = self.base.manual_times("manual_demand")
         manual_all_times = manual_charge_times + manual_export_times + manual_demand_times + manual_freeze_charge_times + manual_freeze_export_times
 
-        # Function to replace time cells with cells containing buttons and dropdowns
+        # Function to replace time cells with cells containing dropdowns
         def add_button_to_time(match):
             nonlocal dropdown_counter
             time_text = match.group(1)
@@ -1221,17 +1221,17 @@ var options = {
             time_stamp = self.get_override_time_from_string(time_text)
             minutes_from_midnight = (time_stamp - self.base.midnight_utc).total_seconds() / 60
             in_override = False
+            cell_bg_color = "#FFFFFF"
+            override_class = ""
             if minutes_from_midnight in manual_all_times:
                 in_override = True
+                cell_bg_color = "#FFC0CB"  # Pink background for cells with active overrides
+                override_class = "override-active"
 
-            # Create button and dropdown HTML
-            button_icon = "&#9744;"  # Default icon for manual override
-            if in_override:
-                button_icon = "&#9881;"
-            button_html = f"""<td bgcolor=#FFFFFF>
+            # Create clickable cell and dropdown HTML
+            button_html = f"""<td bgcolor={cell_bg_color} onclick="toggleDropdown('{dropdown_id}')" class="clickable-time-cell {override_class}">
                 {time_text}
                 <div class="dropdown">
-                    <button onclick="event.stopPropagation(); toggleDropdown('{dropdown_id}')" class="time-btn">{button_icon}</button>
                     <div id="{dropdown_id}" class="dropdown-content">
             """
 
