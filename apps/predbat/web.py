@@ -1603,8 +1603,79 @@ document.addEventListener("DOMContentLoaded", function() {
         self.default_page = "./config"
         text = self.get_header("Predbat Config", refresh=60)
         text += "<body>\n"
+        text += """
+        <style>
+        .filter-container {
+            margin: 20px 0;
+            display: flex;
+            align-items: center;
+        }
+        .filter-input {
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 16px;
+            width: 300px;
+            margin-left: 10px;
+        }
+        body.dark-mode .filter-input {
+            background-color: #333;
+            color: #e0e0e0;
+            border-color: #555;
+        }
+        </style>
+        <script>
+        // Save and restore filter value between page loads
+        function saveFilterValue() {
+            localStorage.setItem('configFilterValue', document.getElementById('configFilter').value);
+        }
+
+        function restoreFilterValue() {
+            const savedFilter = localStorage.getItem('configFilterValue');
+            if (savedFilter) {
+                document.getElementById('configFilter').value = savedFilter;
+                filterConfig();
+            }
+        }
+
+        function filterConfig() {
+            const filterValue = document.getElementById('configFilter').value.toLowerCase();
+            const rows = document.querySelectorAll('#configTable tr');
+
+            // Save filter value for persistence
+            saveFilterValue();
+
+            // Skip header row
+            for(let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                const nameCell = row.querySelector('td:nth-child(2)');
+                const entityCell = row.querySelector('td:nth-child(3)');
+
+                if (!nameCell || !entityCell) continue;
+
+                const nameText = nameCell.textContent.toLowerCase();
+                const entityText = entityCell.textContent.toLowerCase();
+
+                if (nameText.includes(filterValue) || entityText.includes(filterValue)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+        }
+
+        // Register event to restore filter value after page load
+        document.addEventListener('DOMContentLoaded', restoreFilterValue);
+        </script>
+
+        <div class="filter-container">
+            <label for="configFilter"><strong>Filter settings:</strong></label>
+            <input type="text" id="configFilter" class="filter-input" placeholder="Type to filter settings..." oninput="filterConfig()" />
+            <button type="button" style="margin-left: 10px; padding: 8px 12px;" onclick="document.getElementById('configFilter').value=''; filterConfig();">Clear</button>
+        </div>
+        """
         text += '<form class="form-inline" action="./config" method="post" enctype="multipart/form-data" id="configform">\n'
-        text += "<table>\n"
+        text += '<table id="configTable">\n'
         text += "<tr><th></th><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th><th>Select</th></tr>\n"
 
         input_number = """
@@ -1636,17 +1707,18 @@ document.addEventListener("DOMContentLoaded", function() {
                     text += '<td class="cfg_modified">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
 
                 if itemtype == "switch":
-                    text += '<td><select name="{}" id="{}" onchange="javascript: this.form.submit();">'.format(useid, useid)
+                    text += '<td><select name="{}" id="{}" onchange="saveFilterValue(); this.form.submit();">'.format(useid, useid)
                     text += '<option value={} label="{}" {}>{}</option>'.format("off", "off", "selected" if not value else "", "off")
                     text += '<option value={} label="{}" {}>{}</option>'.format("on", "on", "selected" if value else "", "on")
                     text += "</select></td>\n"
                 elif itemtype == "input_number":
-                    text += "<td>{}</td>\n".format(input_number.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
+                    input_number_with_save = input_number.replace('onchange="javascript: this.form.submit();"', 'onchange="saveFilterValue(); this.form.submit();"')
+                    text += "<td>{}</td>\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
                 elif itemtype == "select":
                     options = item.get("options", [])
                     if value not in options:
                         options.append(value)
-                    text += '<td><select name="{}" id="{}" onchange="javascript: this.form.submit();">'.format(useid, useid)
+                    text += '<td><select name="{}" id="{}" onchange="saveFilterValue(); this.form.submit();">'.format(useid, useid)
                     for option in options:
                         selected = option == value
                         option_label = option if option else "None"
