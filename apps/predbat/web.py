@@ -20,6 +20,9 @@ import json
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
+DAY_OF_WEEK_MAP = {
+    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6
+}
 
 
 class WebInterface:
@@ -95,6 +98,7 @@ class WebInterface:
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
+        app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_get("/api/state", self.html_api_get_state)
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
@@ -517,6 +521,10 @@ class WebInterface:
         """
         Return the HTML header for a page
         """
+        calculating = self.base.get_arg("active", False)
+        if self.base.update_pending:
+            calculating = True
+
         text = '<!doctype html><html><head><meta charset="utf-8"><title>Predbat Web Interface</title>'
 
         text += """
@@ -787,7 +795,7 @@ class WebInterface:
         if refresh:
             text += '<meta http-equiv="refresh" content="{}" >'.format(refresh)
         text += "</head><body>"
-        text += self.get_menu_html()
+        text += self.get_menu_html(calculating)
         return text
 
     def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
@@ -1020,8 +1028,229 @@ var options = {
         Return the Predbat plan as an HTML page
         """
         self.default_page = "./plan"
-        text = self.get_header("Predbat Plan", refresh=60)
-        text += "<body>{}</body></html>\n".format(self.base.html_plan)
+        text = self.get_header("Predbat Plan", refresh=30)
+
+        if not self.base.dashboard_index:
+            text += "<body>"
+            text += "<h2>Loading please wait...</h2>"
+            text += "</body><html>\n"
+            return web.Response(content_type="text/html", text=text)
+
+        """ The table html_plan is already generated in the base class and is in the format
+        <table><tr><tr><th><b>Time</b></th><th><b>Import p (w/loss)</b></th><th><b>Export p (w/loss)</b></th><th colspan=2><b>State</b></th><th><b>Limit %</b></th><th><b>PV kWh (10%)</b></th><th><b>Load kWh (10%)</b></th><th><b>Clip kWh</b></th><th><b>XLoad kWh</b></th><th><b>Car kWh</b></th><th><b>SoC %</b></th><th><b>Cost</b></th><th><b>Total</b></th><th><b>CO2 g/kWh</b></th><th><b>CO2 kg</b></th></tr><tr style="color:black"><td bgcolor=#FFFFFF>Sun 16:00</td><td style="padding: 4px;" bgcolor=#3AEE85><b>7.00 (7.52)</b> </td><td style="padding: 4px;" bgcolor=#FFFFAA>15.00 (13.97) </td><td colspan=2 style="padding: 4px;" bgcolor=#3AEE85>Chrg&nearr;</td><td bgcolor=#FFFFFF> 95 (95)</td><td bgcolor=#FFAAAA>0.83 (0.45)&#9728;</td><td bgcolor=#FFFF00>0.47 (0.57)</td><td bgcolor=#FFFFFF>&#9866;</td><td bgcolor=#FFFF00>0.42</td><td bgcolor=FFFF00>3.84</td><td bgcolor=#3AEE85>92&nearr;</td><td bgcolor=#F18261>+26 p  &nearr;</td><td bgcolor=#FFFFFF>&#163;1.06</td><td bgcolor=#90EE90>57 </td><td bgcolor=#FFAA00> 3.39 &nearr; </td></tr>
+        <tr style="color:black"><td bgcolor=#FFFFFF>Sun 16:30</td><td style="padding: 4px;" bgcolor=#3AEE85><b>7.00 (7.52)</b> </td><td style="padding: 4px;" bgcolor=#FFFFAA>15.00 (13.97) </td><td colspan=2 style="padding: 4px;" rowspan=2 bgcolor=#EEEEEE>FrzChrg&rarr;</td><td rowspan=2 bgcolor=#FFFFFF> 95 (4)</td><td bgcolor=#FFAAAA>0.84 (0.46)&#9728;</td><td bgcolor=#F18261>0.54 (0.64)</td><td bgcolor=#FFFFFF>&#9866;</td><td bgcolor=#FFFF00>0.47</td><td bgcolor=FFFF00>3.84</td><td bgcolor=#3AEE85>95&rarr;</td><td bgcolor=#F18261>+24 p  &nearr;</td><td bgcolor=#FFFFFF>&#163;1.33</td><td bgcolor=#90EE90>60 </td><td bgcolor=#FFAA00> 3.6 &nearr; </td></tr>
+        </table>
+        """
+        text += """<body>
+        <style>
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: #f9f9f9;
+            min-width: 160px;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 1;
+            border-radius: 4px;
+        }
+        
+        .dropdown-content a {
+            color: black;
+            padding: 12px 16px;
+            text-decoration: none;
+            display: block;
+            cursor: pointer;
+        }
+        
+        .dropdown-content a:hover {
+            background-color: #f1f1f1;
+        }
+        
+        .time-btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 4px 8px;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-left: 8px;
+            font-size: 12px;
+        }
+        
+        .time-btn:hover, .time-btn:focus {
+            background-color: #3e8e41;
+        }
+        
+        /* Dark mode styles */
+        body.dark-mode .dropdown-content {
+            background-color: #333;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.5);
+        }
+        
+        body.dark-mode .dropdown-content a {
+            color: #e0e0e0;
+        }
+        
+        body.dark-mode .dropdown-content a:hover {
+            background-color: #444;
+        }
+        
+        body.dark-mode .time-btn {
+            background-color: #2c652f;
+        }
+        
+        body.dark-mode .time-btn:hover, body.dark-mode .time-btn:focus {
+            background-color: #4CAF50;
+        }
+        </style>
+        
+        <script>
+        // Close all dropdown menus
+        function closeDropdowns() {
+            var dropdowns = document.getElementsByClassName("dropdown-content");
+            for (var i = 0; i < dropdowns.length; i++) {
+                if (dropdowns[i].style.display === "block") {
+                    dropdowns[i].style.display = "none";
+                }
+            }
+        }
+        
+        // Toggle dropdown menu
+        function toggleDropdown(id) {
+            closeDropdowns();
+            var dropdown = document.getElementById(id);
+            if (dropdown.style.display === "block") {
+                dropdown.style.display = "none";
+            } else {
+                dropdown.style.display = "block";
+            }
+        }
+        
+        // Handle option selection
+        function handleTimeOverride(time, action) {
+            console.log("Time override:", time, "Action:", action);
+            
+            // Create a form data object to send the override parameters
+            const formData = new FormData();
+            formData.append('time', time);
+            formData.append('action', action);
+            
+            // Send the override request to the server
+            fetch('./plan_override', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.json();
+                }
+                throw new Error('Failed to set plan override');
+            })
+            .then(data => {
+                if (data.success) {
+                    // Show success message
+                    const messageElement = document.createElement('div');
+                    messageElement.textContent = `${action} override set for ${time}`;
+                    messageElement.style.position = 'fixed';
+                    messageElement.style.top = '65px';
+                    messageElement.style.right = '10px';
+                    messageElement.style.padding = '10px';
+                    messageElement.style.backgroundColor = '#4CAF50';
+                    messageElement.style.color = 'white';
+                    messageElement.style.borderRadius = '4px';
+                    messageElement.style.zIndex = '1000';
+                    document.body.appendChild(messageElement);
+                    
+                    // Auto-remove message after 3 seconds
+                    setTimeout(() => {
+                        messageElement.style.opacity = '0';
+                        messageElement.style.transition = 'opacity 0.5s';
+                        setTimeout(() => messageElement.remove(), 500);
+                    }, 3000);
+                    
+                    // Reload the page to show the updated plan
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    alert('Error setting override: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error setting override: ' + error.message);
+            });
+            
+            // Close dropdown after selection
+            closeDropdowns();
+        }
+        
+        // Close dropdowns when clicking outside
+        document.addEventListener("click", function(event) {
+            if (!event.target.matches('.time-btn')) {
+                closeDropdowns();
+            }
+        });
+        </script>
+        """
+        
+        # Process HTML table to add buttons to time cells
+        html_plan = self.base.html_plan
+        
+        # Regular expression to find time cells in the table
+        time_pattern = r'<td .*>((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2})</td>'
+        
+        # Counter for creating unique IDs for dropdowns
+        dropdown_counter = 0
+
+        manual_charge_times = self.base.manual_times("manual_charge")
+        manual_export_times = self.base.manual_times("manual_export")
+        manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
+        manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
+        manual_demand_times = self.base.manual_times("manual_demand")
+        manual_all_times = manual_charge_times + manual_export_times + manual_demand_times + manual_freeze_charge_times + manual_freeze_export_times        
+        
+        # Function to replace time cells with cells containing buttons and dropdowns
+        def add_button_to_time(match):
+            nonlocal dropdown_counter
+            time_text = match.group(1)
+            dropdown_id = f"dropdown_{dropdown_counter}"
+            dropdown_counter += 1
+
+            time_stamp = self.get_override_time_from_string(time_text)
+            minutes_from_midnight = (time_stamp - self.base.midnight_utc).total_seconds() / 60
+            in_override = False
+            if minutes_from_midnight in manual_all_times:
+                in_override = True
+            
+            # Create button and dropdown HTML
+            button_icon = "&#9744;"  # Default icon for manual override
+            if in_override:
+                button_icon = "&#9881;"
+            button_html = f'''<td bgcolor=#FFFFFF>
+                {time_text}
+                <div class="dropdown">
+                    <button onclick="event.stopPropagation(); toggleDropdown('{dropdown_id}')" class="time-btn">{button_icon}</button>
+                    <div id="{dropdown_id}" class="dropdown-content">
+                        <a onclick="handleTimeOverride('{time_text}', 'Clear')">Clear</a>
+                        <a onclick="handleTimeOverride('{time_text}', 'Manual Demand')">Manual Demand</a>
+                        <a onclick="handleTimeOverride('{time_text}', 'Manual Charge')">Manual Charge</a>
+                        <a onclick="handleTimeOverride('{time_text}', 'Manual Export')">Manual Export</a>
+                        <a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Charge')">Manual Freeze Charge</a>
+                        <a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Export')">Manual Freeze Export</a>
+                    </div>
+                </div>
+            </td>'''
+            
+            return button_html
+        
+        # Process the HTML plan to add buttons to time cells
+        import re
+        processed_html = re.sub(time_pattern, add_button_to_time, html_plan)
+        
+        text += processed_html + "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
     async def html_log(self, request):
@@ -1897,7 +2126,7 @@ document.addEventListener("DOMContentLoaded", function() {
         """
         return web.HTTPFound(self.default_page)
 
-    def get_menu_html(self):
+    def get_menu_html(self, calculating=False):
         """
         Return the Predbat Menu page as HTML
         """
@@ -1906,6 +2135,13 @@ document.addEventListener("DOMContentLoaded", function() {
         config_warning = ""
         if self.base.arg_errors:
             config_warning = '<span style="color: #ffcc00; margin-left: 5px;">&#9888;</span>'
+            
+        # Define status icon based on calculating state
+        status_icon = ""
+        if calculating:
+            status_icon = '<span class="mdi mdi-sync mdi-spin calculating-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="Calculation in progress..."></span>'
+        else:
+            status_icon = '<span class="mdi mdi-check-circle idle-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="System idle"></span>'
 
         text += (
             """
@@ -1924,7 +2160,7 @@ document.addEventListener("DOMContentLoaded", function() {
     top: 0; /* Stick to the top */
     left: 0; /* Ensure it starts from the left edge */
     right: 0; /* Ensure it extends to the right edge */
-    width:  100%; /* Make sure it spans the full width */
+    width: 100%; /* Make sure it spans the full width */
     z-index: 1000; /* Ensure it's above other content */
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); /* Add subtle shadow for visual separation */
 }
@@ -2024,6 +2260,14 @@ body.dark-mode .menu-bar a:hover {
 body.dark-mode .menu-bar a.active {
     background-color: #4CAF50;
     color: white;
+}
+
+body.dark-mode .calculating-icon {
+    color: #6CFF72 !important;
+}
+
+body.dark-mode .idle-icon {
+    color: #6CFF72 !important;
 }
 
 body.dark-mode .dark-mode-toggle button {
@@ -2187,6 +2431,9 @@ window.addEventListener('resize', function() {
              onclick="flyBat()"
              style="cursor: pointer;"
         >
+        """
+        + status_icon
+        + """
         <div class="battery-wrapper">
             """
             + self.get_battery_status_icon()
@@ -2325,3 +2572,82 @@ window.addEventListener('resize', function() {
         response.set_cookie(name="access-token", value=token, path="/", domain=domain, secure=True, httponly=True, samesite="Lax", max_age=60 * 60 * 24 * 7)  # 7 days
 
         return response
+
+
+    def get_override_time_from_string(self, time_str):
+        """ 
+        Convert a time string like "Sun 13:00" into a datetime object
+        """
+        now_utc = self.base.now_utc
+        # Parse the time string into a datetime object
+        # Format is Sun 13:00
+        try:
+            override_time = datetime.strptime(time_str, "%a %H:%M")
+        except ValueError:
+            override_time = now_utc
+        
+        # Convert day of week text to a number (0=Monday, 6=Sunday)
+        day_of_week_text = time_str.split()[0].lower()
+        day_of_week = DAY_OF_WEEK_MAP.get(day_of_week_text, 0)
+        day_of_week_today = now_utc.weekday()
+
+        override_time = now_utc.replace(hour=override_time.hour, minute=override_time.minute, second=0, microsecond=0)
+        add_days = day_of_week - day_of_week_today
+        if add_days < 0:
+            add_days += 7
+        override_time += timedelta(days=add_days)
+        return override_time
+
+    async def html_plan_override(self, request):
+        """
+        Handle POST request for plan overrides
+        """
+        try:
+            # Parse form data
+            data = await request.post()
+            time_str = data.get('time')
+            action = data.get('action')
+            
+            # Log the override request
+            self.log(f"Plan override requested: {action} at {time_str}")
+            
+            # Validate inputs
+            if not time_str or not action:
+                return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
+                
+            now_utc = self.base.now_utc
+            override_time = self.get_override_time_from_string(time_str)
+
+            minutes_from_now = (override_time - now_utc).total_seconds() / 60
+            if minutes_from_now >= 17*60:
+                return web.json_response({"success": False, "message": "Override time must be within 17 hours from now."}, status=400)
+            
+            selection_option = "{}".format(override_time.strftime("%H:%M:%S"))
+            clear_option = "[{}]".format(override_time.strftime("%H:%M:%S"))
+            if action == "Clear":
+                await self.base.async_manual_select("manual_demand", selection_option)
+                await self.base.async_manual_select("manual_demand", clear_option)
+            else:
+                if action == "Manual Demand":
+                    await self.base.async_manual_select("manual_demand", selection_option)
+                elif action == "Manual Charge":
+                    await self.base.async_manual_select("manual_charge", selection_option)
+                elif action == "Manual Export":
+                    await self.base.async_manual_select("manual_export", selection_option)
+                elif action == "Manual Freeze Charge":
+                    await self.base.async_manual_select("manual_freeze_charge", selection_option)
+                elif action == "Manual Freeze Export":
+                    await self.base.async_manual_select("manual_freeze_export", selection_option)
+                else:
+                    return web.json_response({"success": False, "message": "Unknown action"}, status=400)
+                
+            # Refresh plan
+            self.base.update_pending = True
+            self.base.plan_valid = False
+
+            # Return html plan again
+            return web.json_response({"success": True}, status=200)
+                
+        except Exception as e:
+            self.log(f"ERROR: Failed to process plan override: {str(e)}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
