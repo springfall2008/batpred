@@ -243,13 +243,13 @@ You will need to make a number of changes to the solaredge apps.yaml, replacing 
 ```yaml
   battery_rate_max:
     - sensor.calc_power_batteries_max_charge_power # maximum charge power of all the batteries
-  battery_power:  
-    - sensor.calc_power_batteries_dc_power  
+  battery_power:
+    - sensor.calc_power_batteries_dc_power
   soc_percent:
     - sensor.calc_battery_all_state # average SoC of the batteries
   soc_max:
     - sensor.calc_battery_total_capacity # combined kWh maximum value of all the batteries
-  soc_kw:  
+  soc_kw:
     - sensor.calc_battery_current_capacity
 ```
 
@@ -389,7 +389,7 @@ state class: Measurement
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
 
-Copy the template solar_assistant_growatt.yaml from templates into your apps.yaml and edit inverter and battery settings as required (the template has growatt, yours might/will have different entity IDs on Home Assistant)
+Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates into your apps.yaml and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
 
 ## Sunsynk
 
@@ -571,10 +571,10 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
               slave: 247
               address: 40031
               value: >
-                {% if is_state('input_select.set_ems_mode', "Maximum self-consumption") %} 2  
-                {% elif is_state('input_select.set_ems_mode', "Command charging Grid") %} 3  
-                {% elif is_state('input_select.set_ems_mode', "Command charging PV") %} 4  
-                {% elif is_state('input_select.set_ems_mode', "Command discharging PV") %} 5  
+                {% if is_state('input_select.set_ems_mode', "Maximum self-consumption") %} 2
+                {% elif is_state('input_select.set_ems_mode', "Command charging Grid") %} 3
+                {% elif is_state('input_select.set_ems_mode', "Command charging PV") %} 4
+                {% elif is_state('input_select.set_ems_mode', "Command discharging PV") %} 5
                 {% elif is_state('input_select.set_ems_mode', "Command discharging Bat") %} 6
                 {% elif is_state('input_select.set_ems_mode', "Command freeze charge") %} 4
                 {% elif is_state('input_select.set_ems_mode', "Command freeze discharge") %} 6
