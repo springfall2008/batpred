@@ -2365,6 +2365,7 @@ def simple_scenario(
     charge_car=0,
     car_charging_from_battery=True,
     iboost_solar=False,
+    iboost_solar_excess=False,
     iboost_gas=False,
     iboost_gas_export=False,
     rate_gas=0,
@@ -2469,6 +2470,7 @@ def simple_scenario(
     my_predbat.iboost_gas = iboost_gas
     my_predbat.iboost_gas_export = iboost_gas_export
     my_predbat.iboost_solar = iboost_solar
+    my_predbat.iboost_solar_excess = iboost_solar_excess
     my_predbat.iboost_smart = iboost_smart
     my_predbat.iboost_rate_threshold = iboost_rate_threshold
     my_predbat.iboost_rate_threshold_export = iboost_rate_threshold_export
@@ -3050,16 +3052,18 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.metric_battery_cycle = 0
         # my_predbat.carbon_enable = False
         # my_predbat.metric_battery_value_scaling = 0.50
-        my_predbat.manual_export_times = []
-        my_predbat.manual_all_times = []
-        my_predbat.manual_charge_times = []
-        my_predbat.manual_demand_times = []
+        # my_predbat.manual_export_times = []
+        # my_predbat.manual_all_times = []
+        # my_predbat.manual_charge_times = []
+        # my_predbat.manual_demand_times = []
         # my_predbat.battery_loss = 0.97
         # my_predbat.battery_loss_discharge = 0.97
         # my_predbat.set_export_low_power = True
         # my_predbat.combine_charge_slots = False
         # my_predbat.charge_limit_best[0] = 0
         # my_predbat.charge_limit_best[1] = 0
+        # my_predbat.iboost_solar_excess = True
+        # my_predbat.iboost_min_power = 500 / MINUTE_WATT
         pass
 
     if re_do_rates:
@@ -6741,14 +6745,93 @@ def run_model_tests(my_predbat):
         0,
         1,
         assert_final_metric=0,
-        assert_final_soc=0,
-        with_battery=False,
+        assert_final_soc=50,
+        battery_soc=50,
+        battery_size=100,
+        with_battery=True,
         iboost_enable=True,
         iboost_solar=True,
         assert_final_iboost=24,
         assert_iboost_running=True,
         assert_iboost_running_solar=True,
     )
+    if failed:
+        return failed
+    failed |= simple_scenario(
+        "iboost_pv2",
+        my_predbat,
+        1,
+        1,
+        assert_final_metric=0,
+        assert_final_soc=50-24,
+        battery_soc=50,
+        battery_size=100,
+        with_battery=True,
+        iboost_enable=True,
+        iboost_solar=True,
+        assert_final_iboost=24,
+        assert_iboost_running=True,
+        assert_iboost_running_solar=True,
+    )
+    if failed:
+        return failed
+    failed |= simple_scenario(
+        "iboost_pv3",
+        my_predbat,
+        1,
+        1,
+        assert_final_metric=0,
+        assert_final_soc=50,
+        battery_soc=50,
+        battery_size=100,
+        with_battery=True,
+        iboost_enable=True,
+        iboost_solar=True,
+        iboost_solar_excess=True,
+        assert_final_iboost=0,
+        assert_iboost_running=False,
+        assert_iboost_running_solar=False,
+    )
+    if failed:
+        return failed
+    failed |= simple_scenario(
+        "iboost_pv4",
+        my_predbat,
+        0,
+        1,
+        assert_final_metric=0,
+        assert_final_soc=100,
+        battery_soc=90,
+        battery_size=100,
+        with_battery=True,
+        iboost_enable=True,
+        iboost_solar=True,
+        iboost_solar_excess=True,
+        assert_final_iboost=24-10,
+        assert_iboost_running=False,
+        assert_iboost_running_solar=False,
+    )
+    if failed:
+        return failed
+    failed |= simple_scenario(
+        "iboost_pv5",
+        my_predbat,
+        0,
+        1,
+        assert_final_metric=0,
+        assert_final_soc=100,
+        battery_soc=100,
+        battery_size=100,
+        with_battery=True,
+        iboost_enable=True,
+        iboost_solar=True,
+        iboost_solar_excess=True,
+        assert_final_iboost=24,
+        assert_iboost_running=True,
+        assert_iboost_running_solar=True,
+    )
+    if failed:
+        return failed
     failed |= simple_scenario(
         "iboost_gas1",
         my_predbat,
