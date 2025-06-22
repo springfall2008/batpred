@@ -316,10 +316,11 @@ class Execute:
                             inverter.adjust_charge_rate(0)
                             resetCharge = False
                         isExporting = True
-                        self.isExporting_Target = int(self.export_limits_best[0])
+                        target = self.export_window_best[0].get("target", self.export_limits_best[0])
+                        self.isExporting_Target = int(target)
 
                         status = "Exporting"
-                        status_extra = " target {}%-{}%".format(inverter.soc_percent, int(self.export_limits_best[0]))
+                        status_extra = " target {}%-{}%".format(inverter.soc_percent, int(target))
                         # Immediate export mode
                     else:
                         inverter.adjust_force_export(False)
@@ -339,10 +340,12 @@ class Execute:
                             status = "Freeze exporting"
                             status_extra = " current SoC {}%".format(inverter.soc_percent)  # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
                             isExporting = True
-                            self.isExporting_Target = int(self.export_limits_best[0])
+                            target = self.export_window_best[0].get("target", self.export_limits_best[0])
+                            self.isExporting_Target = int(target)
                         else:
                             status = "Hold exporting"
-                            status_extra = " target {}%-{}%".format(inverter.soc_percent, int(self.export_limits_best[0]))
+                            target = self.export_window_best[0].get("target", self.export_limits_best[0])
+                            status_extra = " target {}%-{}%".format(inverter.soc_percent, int(target))
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {} and target {}".format(self.soc_kw, discharge_soc))
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 100):
