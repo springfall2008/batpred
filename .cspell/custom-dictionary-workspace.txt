@@ -171,6 +171,7 @@ octopoints
 Ohme
 onchange
 oncharge
+oninput
 openweathermap
 pdata
 pdetails
