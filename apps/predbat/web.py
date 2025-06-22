@@ -1234,12 +1234,21 @@ var options = {
                 <div class="dropdown">
                     <button onclick="event.stopPropagation(); toggleDropdown('{dropdown_id}')" class="time-btn">{button_icon}</button>
                     <div id="{dropdown_id}" class="dropdown-content">
-                        <a onclick="handleTimeOverride('{time_text}', 'Clear')">Clear</a>
-                        <a onclick="handleTimeOverride('{time_text}', 'Manual Demand')">Manual Demand</a>
-                        <a onclick="handleTimeOverride('{time_text}', 'Manual Charge')">Manual Charge</a>
-                        <a onclick="handleTimeOverride('{time_text}', 'Manual Export')">Manual Export</a>
-                        <a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Charge')">Manual Freeze Charge</a>
-                        <a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Export')">Manual Freeze Export</a>
+            '''
+
+            if minutes_from_midnight in manual_all_times:
+                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Clear')">Clear</a>'''
+            if minutes_from_midnight not in manual_demand_times:
+                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Demand')">Manual Demand</a>'''
+            if minutes_from_midnight not in manual_charge_times:
+                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Charge')">Manual Charge</a>'''
+            if minutes_from_midnight not in manual_export_times:
+                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Export')">Manual Export</a>'''
+            if minutes_from_midnight not in manual_freeze_charge_times:
+                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Charge')">Manual Freeze Charge</a>'''
+            if minutes_from_midnight not in manual_freeze_export_times:
+                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Export')">Manual Freeze Export</a>'''
+            button_html += f'''
                     </div>
                 </div>
             </td>'''
