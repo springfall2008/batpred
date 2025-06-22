@@ -20,9 +20,8 @@ import json
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
-DAY_OF_WEEK_MAP = {
-    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6
-}
+
+DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
 class WebInterface:
@@ -1047,7 +1046,7 @@ var options = {
             position: relative;
             display: inline-block;
         }
-        
+
         .dropdown-content {
             display: none;
             position: absolute;
@@ -1057,7 +1056,7 @@ var options = {
             z-index: 1;
             border-radius: 4px;
         }
-        
+
         .dropdown-content a {
             color: black;
             padding: 12px 16px;
@@ -1065,11 +1064,11 @@ var options = {
             display: block;
             cursor: pointer;
         }
-        
+
         .dropdown-content a:hover {
             background-color: #f1f1f1;
         }
-        
+
         .time-btn {
             background-color: #4CAF50;
             color: white;
@@ -1080,34 +1079,34 @@ var options = {
             margin-left: 8px;
             font-size: 12px;
         }
-        
+
         .time-btn:hover, .time-btn:focus {
             background-color: #3e8e41;
         }
-        
+
         /* Dark mode styles */
         body.dark-mode .dropdown-content {
             background-color: #333;
             box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.5);
         }
-        
+
         body.dark-mode .dropdown-content a {
             color: #e0e0e0;
         }
-        
+
         body.dark-mode .dropdown-content a:hover {
             background-color: #444;
         }
-        
+
         body.dark-mode .time-btn {
             background-color: #2c652f;
         }
-        
+
         body.dark-mode .time-btn:hover, body.dark-mode .time-btn:focus {
             background-color: #4CAF50;
         }
         </style>
-        
+
         <script>
         // Close all dropdown menus
         function closeDropdowns() {
@@ -1118,7 +1117,7 @@ var options = {
                 }
             }
         }
-        
+
         // Toggle dropdown menu
         function toggleDropdown(id) {
             closeDropdowns();
@@ -1129,16 +1128,16 @@ var options = {
                 dropdown.style.display = "block";
             }
         }
-        
+
         // Handle option selection
         function handleTimeOverride(time, action) {
             console.log("Time override:", time, "Action:", action);
-            
+
             // Create a form data object to send the override parameters
             const formData = new FormData();
             formData.append('time', time);
             formData.append('action', action);
-            
+
             // Send the override request to the server
             fetch('./plan_override', {
                 method: 'POST',
@@ -1164,14 +1163,14 @@ var options = {
                     messageElement.style.borderRadius = '4px';
                     messageElement.style.zIndex = '1000';
                     document.body.appendChild(messageElement);
-                    
+
                     // Auto-remove message after 3 seconds
                     setTimeout(() => {
                         messageElement.style.opacity = '0';
                         messageElement.style.transition = 'opacity 0.5s';
                         setTimeout(() => messageElement.remove(), 500);
                     }, 3000);
-                    
+
                     // Reload the page to show the updated plan
                     setTimeout(() => location.reload(), 1000);
                 } else {
@@ -1182,11 +1181,11 @@ var options = {
                 console.error('Error:', error);
                 alert('Error setting override: ' + error.message);
             });
-            
+
             // Close dropdown after selection
             closeDropdowns();
         }
-        
+
         // Close dropdowns when clicking outside
         document.addEventListener("click", function(event) {
             if (!event.target.matches('.time-btn')) {
@@ -1195,13 +1194,13 @@ var options = {
         });
         </script>
         """
-        
+
         # Process HTML table to add buttons to time cells
         html_plan = self.base.html_plan
-        
+
         # Regular expression to find time cells in the table
-        time_pattern = r'<td .*>((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2})</td>'
-        
+        time_pattern = r"<td .*>((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2})</td>"
+
         # Counter for creating unique IDs for dropdowns
         dropdown_counter = 0
 
@@ -1210,8 +1209,8 @@ var options = {
         manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge")
         manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
         manual_demand_times = self.base.manual_times("manual_demand")
-        manual_all_times = manual_charge_times + manual_export_times + manual_demand_times + manual_freeze_charge_times + manual_freeze_export_times        
-        
+        manual_all_times = manual_charge_times + manual_export_times + manual_demand_times + manual_freeze_charge_times + manual_freeze_export_times
+
         # Function to replace time cells with cells containing buttons and dropdowns
         def add_button_to_time(match):
             nonlocal dropdown_counter
@@ -1224,41 +1223,42 @@ var options = {
             in_override = False
             if minutes_from_midnight in manual_all_times:
                 in_override = True
-            
+
             # Create button and dropdown HTML
             button_icon = "&#9744;"  # Default icon for manual override
             if in_override:
                 button_icon = "&#9881;"
-            button_html = f'''<td bgcolor=#FFFFFF>
+            button_html = f"""<td bgcolor=#FFFFFF>
                 {time_text}
                 <div class="dropdown">
                     <button onclick="event.stopPropagation(); toggleDropdown('{dropdown_id}')" class="time-btn">{button_icon}</button>
                     <div id="{dropdown_id}" class="dropdown-content">
-            '''
+            """
 
             if minutes_from_midnight in manual_all_times:
-                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Clear')">Clear</a>'''
+                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Clear')">Clear</a>"""
             if minutes_from_midnight not in manual_demand_times:
-                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Demand')">Manual Demand</a>'''
+                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Demand')">Manual Demand</a>"""
             if minutes_from_midnight not in manual_charge_times:
-                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Charge')">Manual Charge</a>'''
+                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Charge')">Manual Charge</a>"""
             if minutes_from_midnight not in manual_export_times:
-                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Export')">Manual Export</a>'''
+                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Export')">Manual Export</a>"""
             if minutes_from_midnight not in manual_freeze_charge_times:
-                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Charge')">Manual Freeze Charge</a>'''
+                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Charge')">Manual Freeze Charge</a>"""
             if minutes_from_midnight not in manual_freeze_export_times:
-                button_html += f'''<a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Export')">Manual Freeze Export</a>'''
-            button_html += f'''
+                button_html += f"""<a onclick="handleTimeOverride('{time_text}', 'Manual Freeze Export')">Manual Freeze Export</a>"""
+            button_html += f"""
                     </div>
                 </div>
-            </td>'''
-            
+            </td>"""
+
             return button_html
-        
+
         # Process the HTML plan to add buttons to time cells
         import re
+
         processed_html = re.sub(time_pattern, add_button_to_time, html_plan)
-        
+
         text += processed_html + "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -2144,7 +2144,7 @@ document.addEventListener("DOMContentLoaded", function() {
         config_warning = ""
         if self.base.arg_errors:
             config_warning = '<span style="color: #ffcc00; margin-left: 5px;">&#9888;</span>'
-            
+
         # Define status icon based on calculating state
         status_icon = ""
         if calculating:
@@ -2441,8 +2441,8 @@ window.addEventListener('resize', function() {
              style="cursor: pointer;"
         >
         """
-        + status_icon
-        + """
+            + status_icon
+            + """
         <div class="battery-wrapper">
             """
             + self.get_battery_status_icon()
@@ -2582,9 +2582,8 @@ window.addEventListener('resize', function() {
 
         return response
 
-
     def get_override_time_from_string(self, time_str):
-        """ 
+        """
         Convert a time string like "Sun 13:00" into a datetime object
         """
         now_utc = self.base.now_utc
@@ -2594,7 +2593,7 @@ window.addEventListener('resize', function() {
             override_time = datetime.strptime(time_str, "%a %H:%M")
         except ValueError:
             override_time = now_utc
-        
+
         # Convert day of week text to a number (0=Monday, 6=Sunday)
         day_of_week_text = time_str.split()[0].lower()
         day_of_week = DAY_OF_WEEK_MAP.get(day_of_week_text, 0)
@@ -2614,23 +2613,23 @@ window.addEventListener('resize', function() {
         try:
             # Parse form data
             data = await request.post()
-            time_str = data.get('time')
-            action = data.get('action')
-            
+            time_str = data.get("time")
+            action = data.get("action")
+
             # Log the override request
             self.log(f"Plan override requested: {action} at {time_str}")
-            
+
             # Validate inputs
             if not time_str or not action:
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
-                
+
             now_utc = self.base.now_utc
             override_time = self.get_override_time_from_string(time_str)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 17*60:
+            if minutes_from_now >= 17 * 60:
                 return web.json_response({"success": False, "message": "Override time must be within 17 hours from now."}, status=400)
-            
+
             selection_option = "{}".format(override_time.strftime("%H:%M:%S"))
             clear_option = "[{}]".format(override_time.strftime("%H:%M:%S"))
             if action == "Clear":
@@ -2649,14 +2648,14 @@ window.addEventListener('resize', function() {
                     await self.base.async_manual_select("manual_freeze_export", selection_option)
                 else:
                     return web.json_response({"success": False, "message": "Unknown action"}, status=400)
-                
+
             # Refresh plan
             self.base.update_pending = True
             self.base.plan_valid = False
 
             # Return html plan again
             return web.json_response({"success": True}, status=200)
-                
+
         except Exception as e:
             self.log(f"ERROR: Failed to process plan override: {str(e)}")
             return web.json_response({"success": False, "message": str(e)}, status=500)
