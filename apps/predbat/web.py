@@ -222,12 +222,12 @@ class WebInterface:
         if pv_generating:
             # Calculate animation speed based on power flow - faster for higher power
             pv_speed = max(0.5, min(3.0, 2.0 - (abs(pv_power) / 3000)))
-            
+
             html += """
                 <!-- PV to House Arrow -->
                 <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#pv-arrow)" />
                 <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
-                
+
                 <!-- Moving dots for PV to House -->
                 <circle r="4" fill="#2196F3" opacity="0.8">
                     <animateMotion dur="{}s" repeatCount="indefinite" path="M200,100 L250,150" />
@@ -254,12 +254,12 @@ class WebInterface:
         if battery_charging:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
-            
+
             html += """
                 <!-- Battery to House Arrow -->
                 <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
                 <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
-                
+
                 <!-- Moving dots for Battery to House -->
                 <circle r="4" fill="#FF9800" opacity="0.8">
                     <animateMotion dur="{}s" repeatCount="indefinite" path="M200,300 L250,250" />
@@ -276,12 +276,12 @@ class WebInterface:
         else:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
-            
+
             html += """
                 <!-- House to Battery Arrow -->
                 <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
                 <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
-                
+
                 <!-- Moving dots for House to Battery -->
                 <circle r="4" fill="#FF9800" opacity="0.8">
                     <animateMotion dur="{}s" repeatCount="indefinite" path="M265,235 L215,275" />
@@ -299,12 +299,12 @@ class WebInterface:
         if grid_importing:
             # Calculate animation speed based on power flow - faster for higher power
             grid_speed = max(0.5, min(3.0, 2.0 - (abs(grid_power) / 3000)))
-            
+
             html += """
                 <!-- Grid to House Arrow -->
                 <line x1="410" y1="290" x2="355" y2="240" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
                 <text x="350" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
-                
+
                 <!-- Moving dots for Grid to House -->
                 <circle r="4" fill="#4CAF50" opacity="0.8">
                     <animateMotion dur="{}s" repeatCount="indefinite" path="M410,290 L355,240" />
@@ -321,12 +321,12 @@ class WebInterface:
         else:
             # Calculate animation speed based on power flow - faster for higher power
             grid_speed = max(0.5, min(3.0, 2.0 - (abs(grid_power) / 3000)))
-            
+
             html += """
                 <!-- House to Grid Arrow -->
                 <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
                 <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
-                
+
                 <!-- Moving dots for House to Grid -->
                 <circle r="4" fill="#4CAF50" opacity="0.8">
                     <animateMotion dur="{}s" repeatCount="indefinite" path="M340,230 L390,270" />
@@ -360,11 +360,11 @@ class WebInterface:
         // Ensure the animations work correctly in both light and dark modes
         function adjustFlowAnimations() {
             const isDarkMode = document.body.classList.contains('dark-mode');
-            
+
             // Could add additional animation adjustments here if needed for dark mode
             // This function is called when the page loads and can be extended for other special effects
         }
-        
+
         // Run when page loads
         adjustFlowAnimations();
         </script>
