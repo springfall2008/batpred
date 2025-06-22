@@ -1178,7 +1178,7 @@ var options = {
         .clickable-time-cell:hover {
             background-color: #f5f5f5 !important;
         }
-        
+
         /* Dark mode styles */
         body.dark-mode .dropdown-content {
             background-color: #333;
@@ -1196,12 +1196,12 @@ var options = {
         body.dark-mode .clickable-time-cell:hover {
             background-color: #444 !important;
         }
-        
+
         /* Override cell styling */
         .override-active {
             position: relative;
         }
-        
+
         body.dark-mode .override-active {
             background-color: #93264c !important; /* Darker pink for dark mode */
         }
