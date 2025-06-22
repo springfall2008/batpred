@@ -681,6 +681,47 @@ class WebInterface:
             margin-left: 10px;
         }
 
+        /* Flying bat animation */
+        @keyframes flyAcross {
+            0% {
+                left: 10px;
+                top: 30px;
+                transform: translateY(0) scale(1.5);
+            }
+            25% {
+                left: 25%;
+                top: 65%;
+                transform: translateY(0) scale(2.0) rotate(45deg);
+            }
+            50% {
+                left: 50%;
+                top: 30px;
+                transform: translateY(0) scale(1.5) rotate(-45deg);
+            }
+            75% {
+                left: 75%;
+                top: 65%;
+                transform: translateY(0) scale(2.0) rotate(45deg);
+            }
+            100% {
+                left: 100%;
+                top: 30px;
+                transform: translateY(0) scale(1.5);
+            }
+        }
+
+        .flying-bat {
+            position: fixed;
+            z-index: 9999;
+            width: 60px;
+            height: 60px;
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            pointer-events: none;
+            animation: flyAcross 3s linear forwards;
+        }
+
     </style>
     <script>
     // Check and apply the saved dark mode preference on page load
@@ -714,6 +755,31 @@ class WebInterface:
         localStorage.setItem('darkMode', isDarkMode);
         // Force reload to apply dark mode styles
         location.reload();
+    }
+
+    function flyBat() {
+        // Remove any existing flying bats
+        document.querySelectorAll('.flying-bat').forEach(bat => bat.remove());
+
+        // Create a new bat element
+        const bat = document.createElement('div');
+        bat.className = 'flying-bat';
+
+        // Get the appropriate bat image based on dark/light mode
+        const isDarkMode = document.body.classList.contains('dark-mode');
+        const batImage = isDarkMode
+            ? 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png'
+            : 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png';
+
+        bat.style.backgroundImage = `url('${batImage}')`;
+
+        // Add to document
+        document.body.appendChild(bat);
+
+        // Remove after animation completes
+        setTimeout(() => {
+            bat.remove();
+        }, 4100);  // Slightly longer than the animation duration
     }
     </script>
     """
@@ -2042,10 +2108,12 @@ window.addEventListener('resize', function() {
 <div class="menu-bar">
     <div class="logo">
         <img id="logo-image"
-             src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
-             data-light-src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
+             src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
+             data-light-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
              data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
              alt="Predbat Logo"
+             onclick="flyBat()"
+             style="cursor: pointer;"
         >
         <div class="battery-wrapper">
             """
