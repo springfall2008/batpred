@@ -199,17 +199,47 @@ class WebInterface:
                 <circle cx="300" cy="200" r="50" fill="#9C27B0" />
                 <text x="300" y="190" text-anchor="middle" dy=".3em" fill="#fff">House</text>
                 <text x="300" y="215" text-anchor="middle" dy=".3em" fill="#fff">{} W</text>
+
+                <!-- Define animation paths -->
+                <defs>
+                    <!-- PV to House path -->
+                    <path id="pv-house-path" d="M200,100 L250,150" stroke="transparent" fill="none" />
+                    <!-- House to PV path -->
+                    <path id="house-pv-path" d="M250,150 L200,100" stroke="transparent" fill="none" />
+                    <!-- Battery to House path -->
+                    <path id="battery-house-path" d="M200,300 L250,250" stroke="transparent" fill="none" />
+                    <!-- House to Battery path -->
+                    <path id="house-battery-path" d="M265,235 L215,275" stroke="transparent" fill="none" />
+                    <!-- Grid to House path -->
+                    <path id="grid-house-path" d="M410,290 L355,240" stroke="transparent" fill="none" />
+                    <!-- House to Grid path -->
+                    <path id="house-grid-path" d="M340,230 L390,270" stroke="transparent" fill="none" />
+                </defs>
         """.format(
             dp0(load_power)
         )
         # Draw arrows and labels
         if pv_generating:
+            # Calculate animation speed based on power flow - faster for higher power
+            pv_speed = max(0.5, min(3.0, 2.0 - (abs(pv_power) / 3000)))
+            
             html += """
                 <!-- PV to House Arrow -->
                 <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#pv-arrow)" />
                 <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                
+                <!-- Moving dots for PV to House -->
+                <circle r="4" fill="#2196F3" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,100 L250,150" />
+                </circle>
+                <circle r="3" fill="#2196F3" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,100 L250,150" />
+                </circle>
+                <circle r="2" fill="#2196F3" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,100 L250,150" />
+                </circle>
             """.format(
-                dp0(pv_power)
+                dp0(pv_power), pv_speed, pv_speed, pv_speed
             )
         else:
             # Make the PV to House line dashed if not generating
@@ -217,41 +247,98 @@ class WebInterface:
                 <!-- PV to House Arrow (dashed) -->
                 <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
                 <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <!-- No moving dot when PV is not generating -->
             """.format(
                 dp0(pv_power)
             )
         if battery_charging:
+            # Calculate animation speed based on power flow - faster for higher power
+            battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
+            
             html += """
                 <!-- Battery to House Arrow -->
                 <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
                 <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                
+                <!-- Moving dots for Battery to House -->
+                <circle r="4" fill="#FF9800" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,300 L250,250" />
+                </circle>
+                <circle r="3" fill="#FF9800" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,300 L250,250" />
+                </circle>
+                <circle r="2" fill="#FF9800" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,300 L250,250" />
+                </circle>
             """.format(
-                dp0(battery_power)
+                dp0(battery_power), battery_speed, battery_speed, battery_speed
             )
         else:
+            # Calculate animation speed based on power flow - faster for higher power
+            battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
+            
             html += """
                 <!-- House to Battery Arrow -->
                 <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
                 <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                
+                <!-- Moving dots for House to Battery -->
+                <circle r="4" fill="#FF9800" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M265,235 L215,275" />
+                </circle>
+                <circle r="3" fill="#FF9800" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M265,235 L215,275" />
+                </circle>
+                <circle r="2" fill="#FF9800" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M265,235 L215,275" />
+                </circle>
             """.format(
-                dp0(battery_power)
+                dp0(battery_power), battery_speed, battery_speed, battery_speed
             )
 
         if grid_importing:
+            # Calculate animation speed based on power flow - faster for higher power
+            grid_speed = max(0.5, min(3.0, 2.0 - (abs(grid_power) / 3000)))
+            
             html += """
                 <!-- Grid to House Arrow -->
                 <line x1="410" y1="290" x2="355" y2="240" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
                 <text x="350" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                
+                <!-- Moving dots for Grid to House -->
+                <circle r="4" fill="#4CAF50" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M410,290 L355,240" />
+                </circle>
+                <circle r="3" fill="#4CAF50" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M410,290 L355,240" />
+                </circle>
+                <circle r="2" fill="#4CAF50" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M410,290 L355,240" />
+                </circle>
             """.format(
-                dp0(grid_power)
+                dp0(grid_power), grid_speed, grid_speed, grid_speed
             )
         else:
+            # Calculate animation speed based on power flow - faster for higher power
+            grid_speed = max(0.5, min(3.0, 2.0 - (abs(grid_power) / 3000)))
+            
             html += """
                 <!-- House to Grid Arrow -->
                 <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
                 <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                
+                <!-- Moving dots for House to Grid -->
+                <circle r="4" fill="#4CAF50" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M340,230 L390,270" />
+                </circle>
+                <circle r="3" fill="#4CAF50" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M340,230 L390,270" />
+                </circle>
+                <circle r="2" fill="#4CAF50" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M340,230 L390,270" />
+                </circle>
             """.format(
-                dp0(grid_power)
+                dp0(grid_power), grid_speed, grid_speed, grid_speed
             )
         html += """
                 <!-- Arrowhead Marker -->
@@ -268,6 +355,19 @@ class WebInterface:
                 </defs>
             </svg>
         </div>
+
+        <script>
+        // Ensure the animations work correctly in both light and dark modes
+        function adjustFlowAnimations() {
+            const isDarkMode = document.body.classList.contains('dark-mode');
+            
+            // Could add additional animation adjustments here if needed for dark mode
+            // This function is called when the page loads and can be extended for other special effects
+        }
+        
+        // Run when page loads
+        adjustFlowAnimations();
+        </script>
         """
 
         return html
