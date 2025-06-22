@@ -6763,7 +6763,7 @@ def run_model_tests(my_predbat):
         1,
         1,
         assert_final_metric=0,
-        assert_final_soc=50-24,
+        assert_final_soc=50 - 24,
         battery_soc=50,
         battery_size=100,
         with_battery=True,
@@ -6807,7 +6807,7 @@ def run_model_tests(my_predbat):
         iboost_enable=True,
         iboost_solar=True,
         iboost_solar_excess=True,
-        assert_final_iboost=24-10,
+        assert_final_iboost=24 - 10,
         assert_iboost_running=False,
         assert_iboost_running_solar=False,
     )
