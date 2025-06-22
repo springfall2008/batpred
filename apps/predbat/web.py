@@ -680,36 +680,36 @@ class WebInterface:
             align-items: center;
             margin-left: 10px;
         }
-        
+
         /* Flying bat animation */
         @keyframes flyAcross {
-            0% { 
-                left: 10px; 
-                top: 30px; 
+            0% {
+                left: 10px;
+                top: 30px;
                 transform: translateY(0) scale(1.5);
             }
-            25% { 
-                left: 25%; 
-                top: 65%; 
-                transform: translateY(0) scale(2.0) rotate(45deg); 
+            25% {
+                left: 25%;
+                top: 65%;
+                transform: translateY(0) scale(2.0) rotate(45deg);
             }
-            50% { 
-                left: 50%; 
-                top: 30px; 
-                transform: translateY(0) scale(1.5) rotate(-45deg); 
+            50% {
+                left: 50%;
+                top: 30px;
+                transform: translateY(0) scale(1.5) rotate(-45deg);
             }
-            75% { 
-                left: 75%; 
-                top: 65%; 
-                transform: translateY(0) scale(2.0) rotate(45deg); 
+            75% {
+                left: 75%;
+                top: 65%;
+                transform: translateY(0) scale(2.0) rotate(45deg);
             }
-            100% { 
-                left: 100%; 
-                top: 30px; 
-                transform: translateY(0) scale(1.5); 
+            100% {
+                left: 100%;
+                top: 30px;
+                transform: translateY(0) scale(1.5);
             }
         }
-        
+
         .flying-bat {
             position: fixed;
             z-index: 9999;
@@ -756,26 +756,26 @@ class WebInterface:
         // Force reload to apply dark mode styles
         location.reload();
     }
-    
+
     function flyBat() {
         // Remove any existing flying bats
         document.querySelectorAll('.flying-bat').forEach(bat => bat.remove());
-        
+
         // Create a new bat element
         const bat = document.createElement('div');
         bat.className = 'flying-bat';
-        
+
         // Get the appropriate bat image based on dark/light mode
         const isDarkMode = document.body.classList.contains('dark-mode');
-        const batImage = isDarkMode 
+        const batImage = isDarkMode
             ? 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png'
             : 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png';
-            
+
         bat.style.backgroundImage = `url('${batImage}')`;
-        
+
         // Add to document
         document.body.appendChild(bat);
-        
+
         // Remove after animation completes
         setTimeout(() => {
             bat.remove();
