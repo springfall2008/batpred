@@ -769,7 +769,7 @@ class WebInterface:
         const isDarkMode = document.body.classList.contains('dark-mode');
         const batImage = isDarkMode 
             ? 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png'
-            : 'https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png';
+            : 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png';
             
         bat.style.backgroundImage = `url('${batImage}')`;
         
@@ -2108,8 +2108,8 @@ window.addEventListener('resize', function() {
 <div class="menu-bar">
     <div class="logo">
         <img id="logo-image"
-             src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
-             data-light-src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png"
+             src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
+             data-light-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
              data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
              alt="Predbat Logo"
              onclick="flyBat()"
