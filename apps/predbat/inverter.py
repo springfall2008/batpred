@@ -1479,7 +1479,8 @@ class Inverter:
             else:
                 entity_base = entity_id.split(".")[0]
                 service = entity_base + "/set_value"
-                self.base.call_service_wrapper(service, value=new_value, entity_id=entity_id)
+                new_value_conv = self.base.unit_conversion(entity_id, new_value, None, required_unit, going_to=True)
+                self.base.call_service_wrapper(service, value=new_value_conv, entity_id=entity_id)
 
             if ignore_fail:
                 return True
