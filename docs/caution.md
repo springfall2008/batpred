@@ -4,11 +4,13 @@ Predbat is a powerful hobbyist system that can control many home battery and sol
 
 ## Increased energy costs
 
-While Predbat will normally save you money, an incorrectly configured system can cause your battery to be poorly managed and may increase your electricity bills. I recommend carefully reviewing what your installation is doing once you have enabled it for the first time.
+While Predbat will normally save you money, an incorrectly configured system can cause your battery to be poorly managed and may increase your electricity bills. I recommend carefully reviewing what your installation is doing once you have enabled it
+for the first time.
 
 ## Flash memory
 
-Some inverters use flash memory with a limited lifespan. Depending on how register writes are managed, the controller can reduce this lifespan. In normal operation, this should not be an issue, but if your setup performs a large number of register writes continuously, you could eventually encounter problems.
+Some inverters use flash memory with a limited lifespan. Depending on how register writes are managed, the controller can reduce this lifespan. In normal operation, this should not be an issue, but if your setup performs a large number of register
+writes continuously, you could eventually encounter problems.
 
 - For example, on a current GivEnergy inverter, it's estimated that the usable limit is around 1 million register writes (although firmware changes may increase this limit).
 - This would allow approximately 270 writes per day, or one every 5 minutes.
