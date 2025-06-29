@@ -32,7 +32,7 @@ pred_bat:
 
   #
   # Sensors, currently more than one can be specified and they will be summed up automatically
-  # however if you have two inverters only set one of them as they will both read the same.
+  # however if you have two inverters only set one of them as they will both read the same.
   #
   load_today:
     - sensor.solaredge_i1_ac_energy_kwh
@@ -164,6 +164,12 @@ pred_bat:
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
   car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
 
+  # Car charging rate in kW, one per car
+  #car_charging_rate:
+  #  - 7.4
+  #  - 3.6
+
+  # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 1
 
   # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
@@ -312,7 +318,7 @@ pred_bat:
   # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
   run_every: 5
 
-  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
+  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
   battery_scaling: 1.0
 
@@ -320,7 +326,7 @@ pred_bat:
   import_export_scaling: 1.0
 
   # Export triggers:
-  # For each trigger give a name, the minutes of export needed and the energy required in that time
+  # For each trigger give a name, the minutes of export needed and the energy required in that time
   # Multiple triggers can be set at once so in total you could use too much energy if all run
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger

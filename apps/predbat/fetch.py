@@ -202,7 +202,8 @@ class Fetch:
 
         if self.car_charging_hold and (not self.car_charging_energy) and (load_yesterday >= (self.car_charging_threshold * step)):
             # Car charging hold - ignore car charging in computation based on threshold
-            load_yesterday = max(load_yesterday - (self.car_charging_rate[0] * step / 60.0), 0)
+            average_rate = sum(self.car_charging_rate) / len(self.car_charging_rate) if self.car_charging_rate else 0
+            load_yesterday = max(load_yesterday - (average_rate * step / 60.0), 0)
 
         # Apply base load
         base_load = self.base_load * step / 60.0
@@ -1857,7 +1858,14 @@ class Fetch:
             self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
             self.car_charging_battery_size[car_n] = float(self.get_arg("car_charging_battery_size", 100.0, index=car_n))
-            self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate"))
+            
+            # Get car charging rate from input_number first, otherwise from apps.yaml
+            ha_rate = self.get_arg(f"car_charging_rate_{car_n + 1}", 0.0)
+            if ha_rate > 0:
+                self.car_charging_rate[car_n] = ha_rate
+            else:
+                self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate", 7.4, index=car_n))
+
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
             self.car_charging_exclusive[car_n] = self.get_arg("car_charging_exclusive", False, index=car_n)
 
