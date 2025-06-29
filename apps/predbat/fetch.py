@@ -41,16 +41,17 @@ class Fetch:
         else:
             return None
 
-    def filtered_today(self, time_data, resetmidnight=False):
+    def filtered_today(self, time_data, resetmidnight=False, stamp=None):
         """
         Grab figure for today (midnight)
         """
-        today = self.midnight_utc
-        tomorrow = today + timedelta(days=1)
+        if stamp is None:
+            stamp = self.midnight_utc + timedelta(days=1)
+
+        stamp_minus = stamp - timedelta(minutes=PREDICT_STEP)
         if resetmidnight:
-            tomorrow = tomorrow - timedelta(minutes=PREDICT_STEP)
-        tomorrow_stamp = tomorrow.strftime(TIME_FORMAT)
-        tomorrow_value = time_data.get(tomorrow_stamp, None)
+            stamp = stamp_minus
+        tomorrow_value = time_data.get(stamp.strftime(TIME_FORMAT), time_data.get(stamp_minus.strftime(TIME_FORMAT), None))
         return tomorrow_value
 
     def filtered_times(self, time_data):

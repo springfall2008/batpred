@@ -2382,24 +2382,41 @@ class Output:
                 "icon": "mdi:percent",
             },
         )
+        load_so_far = self.filtered_today(load_actual_stamp, stamp=self.now_utc)
+        load_today = self.filtered_today(load_predict_stamp)
+        load_today_remaining = None
+        if (load_so_far is not None) and (load_today is not None):
+            load_today_remaining = load_today - load_so_far
+
         self.dashboard_item(
             self.prefix + ".load_energy_predicted",
             state=dp3(load_total_pred),
             attributes={
                 "results": self.filtered_times(load_predict_stamp),
-                "today": self.filtered_today(load_predict_stamp),
+                "today": dp2(load_today),
+                "today_so_far": dp2(load_so_far),
+                "today_remaining": dp2(load_today_remaining),
                 "friendly_name": "Load energy predicted (filtered)",
                 "state_class": "measurement",
                 "unit_of_measurement": "kWh",
                 "icon": "mdi:percent",
             },
         )
+
+        load_so_far = self.filtered_today(load_adjusted_stamp, stamp=self.now_utc)
+        load_today = self.filtered_today(load_adjusted_stamp)
+        load_today_remaining = None
+        if (load_so_far is not None) and (load_today is not None):
+            load_today_remaining = load_today - load_so_far
+
         self.dashboard_item(
             self.prefix + ".load_energy_adjusted",
             state=dp3(load_adjusted),
             attributes={
                 "results": self.filtered_times(load_adjusted_stamp),
-                "today": self.filtered_today(load_adjusted_stamp),
+                "today": dp2(load_today),
+                "today_so_far": dp2(load_so_far),
+                "today_remaining": dp2(load_today_remaining),
                 "friendly_name": "Load energy prediction adjusted",
                 "state_class": "measurement",
                 "unit_of_measurement": "kWh",
