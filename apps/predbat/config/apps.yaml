@@ -284,8 +284,8 @@ pred_bat:
 
   # Car charging rate in kW, one per car
   car_charging_rate:
-  #  - 7.4
-  #  - 3.6
+    - 7.4
+    - 3.6
 
   # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 0
