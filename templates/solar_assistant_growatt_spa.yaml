@@ -162,6 +162,12 @@ pred_bat:
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
   # car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
 
+  # Car charging rate in kW, one per car
+  #car_charging_rate:
+  #  - 7.4
+  #  - 3.6
+
+  # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 0
 
   # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
