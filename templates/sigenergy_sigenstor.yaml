@@ -53,7 +53,7 @@ pred_bat:
   load_power:
     - sensor.sigen_plant_consumed_power
   grid_power:
-    - sensor.sigen_plant_grid_import_power
+    - sensor.sigen_plant_grid_active_power
 
   battery_power_invert: true
   grid_power_invert: true
