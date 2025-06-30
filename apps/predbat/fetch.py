@@ -1858,7 +1858,7 @@ class Fetch:
             self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
             self.car_charging_battery_size[car_n] = float(self.get_arg("car_charging_battery_size", 100.0, index=car_n))
-            
+
             # Get car charging rate from input_number first, otherwise from apps.yaml
             ha_rate = self.get_arg(f"car_charging_rate_{car_n + 1}", 0.0)
             if ha_rate > 0:
