@@ -328,6 +328,7 @@ CONFIG_ITEMS = [
         "step": 0.10,
         "unit": "*",
         "icon": "mdi:multiplication",
+        "enable": "expert_mode",
         "default": 0.5,
     },
     {
