@@ -238,13 +238,13 @@ NOTE: This feature is quite slow so may need a higher-performance machine.
 
 This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs in which you want to force export late.
 
-**switch.calculate_import_low_export** (_expert_mode_) When True import slots of the same value are sorted by export price.
+**switch.calculate_import_low_export** (_expert mode_) When True import slots of the same value are sorted by export price.
 When False they are sorted just by price and then time. The default is True.
 
 By default with this option enabled if there are multiple charge slots of the same price Predbat will try to charge when the export rates are the lowest
 thus leaving the higher export slots available.
 
-**switch.calculate_export_high_import** (_expert_mode_) When True export slots of the same value are sorted by import price (to avoid the low import slots for export).
+**switch.calculate_export_high_import** (_expert mode_) When True export slots of the same value are sorted by import price (to avoid the low import slots for export).
 When False they are sorted just by price and then time. The default is True.
 
 By default with this option disabled the latest export slot of the same value will be picked, this is useful for fixed-price export tariffs where

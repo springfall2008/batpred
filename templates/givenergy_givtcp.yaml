@@ -260,7 +260,7 @@ pred_bat:
   #  - 3.6
 
   # Defines the number of cars modelled by the system, set to 0 for no car
-  num_cars: 1
+  num_cars: 0
 
   # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
   # This should not be needed if you use Intelligent Octopus slots which will take priority if enabled

@@ -240,7 +240,7 @@ class Plan:
                                             elif count_d < max_export_slots and (window_n not in all_d):
                                                 all_d.append(window_n)
                                                 if typ == "d":
-                                                    export_option[window_n] = self.best_soc_min
+                                                    export_option[window_n] = calc_percent_limit(self.best_soc_min, self.soc_max)
                                                 else:
                                                     export_option[window_n] = 99.0
                                                 count_d += 1
