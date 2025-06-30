@@ -1481,3 +1481,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.log("Error: " + traceback.format_exc())
                 self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
                 raise e
+
+    def balance_inverters(self):
+        """
+        Balance inverters
+        """
+        txt = "Battery rate min {} w".format(self.battery_rate_min)
+        txt += " ac limit {} kW".format(dp1(self.ac_limit_kw))
+        for ibat in self.inverters:
+            txt += " export limit {} kW".format(dp1(ibat.export_limit / 1000.0))
+            txt += " loss charge {} %".format(int(ibat.battery_loss * 100.0))
+            txt += " loss discharge {} %".format(int(ibat.battery_loss_discharge * 100.0))
+        self.log(txt)
