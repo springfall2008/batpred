@@ -109,10 +109,13 @@ htmlcov
 husforbrukning
 hypervolt
 iboost
+iBoost
+iBoost's
 idag
 idetails
 iflux
 inday
+in-day
 INTELLI
 intelligentdevice
 invbatpower
@@ -266,3 +269,6 @@ yaxis
 yaxistooltip
 ylabel
 zappi
+IOG
+ibat
+in-house
