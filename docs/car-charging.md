@@ -54,7 +54,7 @@ and through that, Predbat gets most of the information it needs.
     NB2: If you have **car_charging_soc** set and working for your car SoC sensor in apps.yaml, **switch.predbat_car_charging_manual_soc** must be set to Off
     as otherwise the car SoC sensor will be ignored
     - Ensure **switch.predbat_octopus_intelligent_charging** in Home Assistant is set to Off
-    - Set **input_number.predbat_car_charging_rate** to the car's charging rate in kW per hour (e.g. 7.5 for 7.5kWh)
+    - Set **car_charging_rate** in `apps.yaml` to the car's charging rate in kW per hour (e.g. 7.4 for 7.4kW). This is a list and can support more than one car.
     - Set **select.predbat_car_charging_plan_time** to the time you want the car charging to be completed by
     - Turn on **switch.predbat_car_charging_plan_smart** if you want to use the cheapest slots only. When disabled (turned off) all low-rate slots will be used in time order
     - You can set **input_number.predbat_car_charging_plan_max_price** if you want to set a maximum price in pence per kWh to charge your car (e.g. 10p).

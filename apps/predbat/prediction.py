@@ -429,9 +429,9 @@ class Prediction:
 
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
-                keep_minute_scaling = min((minute / (4 * 60)), 1.0) * self.best_soc_keep_weight
+                keep_minute_scaling = min((minute / (4 * 60)), 1.0) * best_soc_keep_weight
             else:
-                keep_minute_scaling = self.best_soc_keep_weight
+                keep_minute_scaling = best_soc_keep_weight
 
             # Get soc keep value
             best_soc_keep = self.best_soc_keep
