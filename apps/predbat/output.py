@@ -2382,7 +2382,7 @@ class Output:
                 "icon": "mdi:percent",
             },
         )
-        load_so_far = self.filtered_today(load_actual_stamp, stamp=self.now_utc)
+        load_so_far = self.filtered_today(load_predict_stamp, stamp=self.now_utc)
         load_today = self.filtered_today(load_predict_stamp)
         load_today_remaining = None
         if (load_so_far is not None) and (load_today is not None):
