@@ -1,26 +1,24 @@
 # Some words of caution
 
-Predbat is a powerful hobbyist system that can control many home battery and solar systems. While every attempt has been made to make it as easy to use as possible it does require
-a certain amount of technical skills.
+Predbat is a powerful hobbyist system that can control many home battery and solar systems. While every attempt has been made to make it as easy to use as possible, it does require a certain amount of technical skill.
 
 ## Increased energy costs
 
-While Predbat normally will save you money an incorrectly configured Predbat can cause your battery to be badly managed and thus increase your electricity bills, I'd recommend carefully changing what you install is doing
-once you have enabled it for the first time.
+While Predbat will normally save you money, an incorrectly configured system can cause your battery to be poorly managed and may increase your electricity bills. I recommend carefully reviewing what your installation is doing once you have enabled it
+for the first time.
 
 ## Flash memory
 
-Some inverters have a flash memory which has a limited lifespan and so depending on the way register writes are managed controller your inverter can act to reduce this lifespan.
-In normal operation, this should not be an issue but if you have a setup that performs a large number of register writes all the time it's possible you could eventually run into
-this issue.
+Some inverters use flash memory with a limited lifespan. Depending on how register writes are managed, the controller can reduce this lifespan. In normal operation, this should not be an issue, but if your setup performs a large number of register
+writes continuously, you could eventually encounter problems.
 
-- For example, on a current GivEnergy inverter it's assumed around 1 million register writes could be the current usable limit (although firmware changes may increase this limit)
-- This would give you around 270 writes per day or around 1 every 5 minutes.
-- Each change of inverter mode requires more than one register write, e.g. charge start time, end time, scheduled charge enable, set battery pause mode etc - this could be around 6 registers.
-- This means one change of mode every 30 minutes on average would be okay.
-- However given most plans will have larger gaps (often hours) where the battery is either in Demand mode, Charging or Exporting where registers are not changing it is unlikely to hit this limit.
+- For example, on a current GivEnergy inverter, it's estimated that the usable limit is around 1 million register writes (although firmware changes may increase this limit).
+- This would allow approximately 270 writes per day, or one every 5 minutes.
+- Each change of inverter mode requires multiple register writes — e.g. charge start time, end time, scheduled charge enable, set battery pause mode, etc. — which could total around 6 registers.
+- This means one change of mode every 30 minutes, on average, would be acceptable.
+- However, as most plans include longer intervals (often hours) where the battery is in Demand mode, Charging, or Exporting — during which registers are not updated — it is unlikely that this limit will be exceeded.
 
-Given different inverter designs may have different limits it is a wise precaution to avoid your plan being too busy if it doesn't gain you very much.
+As different inverter designs may have different limits, it's wise to avoid making your plan too complex if it doesn't result in meaningful gains.
 
 Things you can do to have a less complex plan include:
 

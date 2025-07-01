@@ -34,61 +34,68 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
   load_today:
-    - sensor.sigen_daily_energy_consumption
+    - sensor.sigen_plant_daily_consumed_energy
   import_today:
-    - sensor.sigen_daily_import_energy
+    - sensor.sigen_plant_daily_grid_import_energy
   export_today:
-    - sensor.sigen_daily_grid_energy_export
+    - sensor.sigen_plant_daily_grid_export_energy
   pv_today:
-    - sensor.sigen_daily_pv_energy_production
+    - sensor.sigen_plant_daily_pv_energy
 
   charge_rate:
     - input_number.charge_rate
   discharge_rate:
     - input_number.discharge_rate
   battery_power:
-    - sensor.sigen_battery_power_w
+    - sensor.sigen_plant_battery_power
   pv_power:
-    - sensor.sigen_pv_power
+    - sensor.sigen_plant_pv_power
   load_power:
-    - sensor.sigen_consumed_power
-  soc_percent:
-    - sensor.sigen_energy_storage_system_soc
+    - sensor.sigen_plant_consumed_power
+  grid_power:
+    - sensor.sigen_plant_grid_import_power
 
+  battery_power_invert: true
+  grid_power_invert: true
+
+  soc_percent:
+    - sensor.sigen_plant_battery_state_of_charge
+  soc_kw:
+    - sensor.sigen_plant_available_max_discharging_capacity
   soc_max:
-    - sensor.sigen_rated_battery_capacity
+    - sensor.sigen_plant_rated_energy_capacity
   battery_temperature:
-    - sensor.sigen_ess_average_cell_temperature
+    - sensor.sigen_inverter_battery_average_cell_temperature
 
   # Services to control the inverter
   charge_start_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Command charging PV"
+    - service: input_select.select_option
+      entity_id: input_select.predbat_requested_mode
+      option: "Charging"
   charge_stop_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Maximum self-consumption"
+    - service: input_select.select_option
+      entity_id: input_select.predbat_requested_mode
+      option: "Demand"
   discharge_start_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Command discharging PV"
+    - service: input_select.select_option
+      entity_id: input_select.predbat_requested_mode
+      option: "Discharging"
   charge_freeze_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Command freeze charge"
+    - service: input_select.select_option
+      entity_id: input_select.predbat_requested_mode
+      option: "Freeze Charging"
   discharge_freeze_service:
-    service: input_select.select_option
-    entity_id: "input_select.set_ems_mode"
-    option: "Command freeze discharge"
+    - service: input_select.select_option
+      entity_id: input_select.predbat_requested_mode
+      option: "Freeze Discharging"
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
-  inverter_limit: 4000
+  inverter_limit: 6950 # For a 6kW inverter
 
   # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
-    - 6000
+    - 8000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit

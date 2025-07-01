@@ -12,6 +12,7 @@ Home battery prediction and automatic charging for Home Assistant supporting mul
 - Sofar
 - LuxPower
 - Solar Assistant
+- Sigenergy Sigenstor
 
 Also known by some as Batpred or Batman!
 
