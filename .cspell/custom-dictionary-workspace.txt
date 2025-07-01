@@ -108,7 +108,6 @@ houseb
 htmlcov
 husforbrukning
 hypervolt
-ibat
 iBoost
 iboost
 iBoost's

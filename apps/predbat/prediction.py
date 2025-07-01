@@ -414,15 +414,6 @@ class Prediction:
         inverter_loss = self.inverter_loss
         inverter_hybrid = self.inverter_hybrid
 
-        # Can we do better than the base plan?
-        best_soc_keep = self.best_soc_keep
-        if best_soc_keep is None:
-            best_soc_keep = 0.0
-
-        best_soc_keep_weight = self.best_soc_keep_weight
-        if best_soc_keep_weight is None:
-            best_soc_keep_weight = 0.0
-
         # Simulate each forward minute
         while minute < self.forecast_minutes:
             # Minute yesterday can wrap if days_previous is only 1

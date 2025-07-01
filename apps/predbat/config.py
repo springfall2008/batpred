@@ -252,7 +252,7 @@ CONFIG_ITEMS = [
         "default": 6.0,
     },
     {
-        "name": "car_charging_rate_1",
+        "name": "car_charging_rate",
         "friendly_name": "Car charging rate car 1",
         "type": "input_number",
         "min": 1,
