@@ -1164,9 +1164,10 @@ class GECloud:
 
         headers = {"Authorization": "Bearer  " + gekey, "Content-Type": "application/json", "Accept": "application/json"}
         mdata = []
-        days_prev = 0
-        while days_prev <= self.max_days_previous:
-            time_value = now_utc - timedelta(days=(self.max_days_previous - days_prev))
+        days_prev_count = 0
+        while days_prev_count <= self.max_days_previous:
+            days_prev = self.max_days_previous - days_prev_count
+            time_value = now_utc - timedelta(days=days_prev)
             datestr = time_value.strftime("%Y-%m-%d")
             url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=4096".format(geserial, datestr)
             while url:
@@ -1176,12 +1177,12 @@ class GECloud:
                     # If we are less than 8 hours into today then ignore errors for today as data may not be available yet
                     if days_prev == 0:
                         self.log("Info: No GE Cloud data available for today yet, continuing")
-                        days_prev += 1
+                        days_prev_count += 1
                         break
                     else:
                         self.log("Warn: Error downloading GE data from URL {}".format(url))
                         self.record_status("Warn: Error downloading GE data from cloud", debug=url)
-                        return False
+                        continue
 
                 for item in darray:
                     timestamp = item["time"]
@@ -1198,14 +1199,16 @@ class GECloud:
                     new_data["pv"] = dpv
                     mdata.append(new_data)
                 url = data["links"].get("next", None)
-            days_prev += 1
+            days_prev_count += 1
 
         # Find how old the data is
-        item = mdata[0]
-        try:
-            last_updated_time = str2time(item["last_updated"])
-        except (ValueError, TypeError):
-            last_updated_time = now_utc
+        last_updated_time = now_utc
+        if len(mdata) > 0:
+            item = mdata[0]
+            try:
+                last_updated_time = str2time(item["last_updated"])
+            except (ValueError, TypeError):
+                pass
 
         age = now_utc - last_updated_time
         self.load_minutes_age = age.days
