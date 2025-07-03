@@ -140,7 +140,7 @@ class Fetch:
                     values[minute] -= subtract
                     cloud_diff = 0
                 values[minute] = dp4(values[minute])
-        
+
         return values
 
     def clean_incrementing_reverse(self, data, max_increment=0):
