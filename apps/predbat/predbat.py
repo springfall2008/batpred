@@ -1392,7 +1392,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         if self.update_pending and not self.prediction_started:
             self.update_pending = False
             self.prediction_started = True
-            self.ha_interface.update_states()
             self.load_user_config()
             self.validate_config()
             try:
@@ -1440,19 +1439,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.fatal_error = True
             raise Exception("HA interface not active")
 
+        self.check_entity_refresh()
         if not self.prediction_started:
+            was_update_pending = self.update_pending
             config_changed = False
             self.prediction_started = True
             self.update_pending = False
 
-            self.ha_interface.update_states()
-            self.check_entity_refresh()
-
-            if self.update_pending:
+            if was_update_pending:
+                self.ha_interface.update_states()
                 self.load_user_config()
                 self.validate_config()
                 config_changed = True
-
+                
             try:
                 self.update_pred(scheduled=True)
             except Exception as e:

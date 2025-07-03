@@ -98,6 +98,7 @@ class WebInterface:
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         app.router.add_post("/plan_override", self.html_plan_override)
+        app.router.add_post("/restart", self.html_restart)
         app.router.add_get("/api/state", self.html_api_get_state)
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
@@ -410,6 +411,7 @@ class WebInterface:
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
+        text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
         text += "</table>\n"
         text += "<h2>Plan textual description</h2>\n"
         text += "<table>\n"
@@ -758,6 +760,16 @@ class WebInterface:
             color: #e0e0e0 !important;
         }
 
+        /* Dark mode styles for restart button */
+        body.dark-mode button {
+            background-color: #cc3333 !important;
+            color: #e0e0e0 !important;
+        }
+        
+        body.dark-mode button:hover {
+            background-color: #aa2222 !important;
+        }
+
         .menu-bar {
             background-color: #ffffff;
             overflow-x: auto; /* Enable horizontal scrolling */
@@ -887,6 +899,33 @@ class WebInterface:
         setTimeout(() => {
             bat.remove();
         }, 4100);  // Slightly longer than the animation duration
+    }
+
+    function restartPredbat() {
+        if (confirm('Are you sure you want to restart Predbat?')) {
+            fetch('./restart', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Restart initiated. Predbat will restart shortly.');
+                    // Reload the page after a short delay to show the restart status
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                } else {
+                    alert('Error initiating restart: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error initiating restart: ' + error.message);
+            });
+        }
     }
     </script>
     """
@@ -1643,6 +1682,8 @@ body.dark-mode .log-menu a.active {
         rates_export = self.get_entity_results(self.base.prefix + ".rates_export")
         rates_gas = self.get_entity_results(self.base.prefix + ".rates_gas")
         record = self.get_entity_results(self.base.prefix + ".record")
+
+
 
         text = ""
 
@@ -2758,4 +2799,16 @@ window.addEventListener('resize', function() {
 
         except Exception as e:
             self.log(f"ERROR: Failed to process plan override: {str(e)}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
+
+    async def html_restart(self, request):
+        """
+        Handle restart request by setting fatal_error to trigger restart
+        """
+        try:
+            self.log("Restart requested from web interface")
+            self.base.fatal_error = True
+            return web.json_response({"success": True, "message": "Restart initiated"})
+        except Exception as e:
+            self.log(f"ERROR: Failed to initiate restart: {str(e)}")
             return web.json_response({"success": False, "message": str(e)}, status=500)
