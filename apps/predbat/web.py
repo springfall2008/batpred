@@ -381,7 +381,7 @@ class WebInterface:
 
         # Create a two-column layout for Status and Debug tables
         text += '<div style="display: flex; gap: 5px; margin-bottom: 20px; max-width: 800px;">\n'
-        
+
         # Left column - Status table
         text += '<div style="flex: 1;">\n'
         text += "<h2>Status</h2>\n"
@@ -405,8 +405,8 @@ class WebInterface:
         else:
             text += "<tr><td>Config</td><td>OK</td></tr>\n"
         text += "</table>\n"
-        text += '</div>\n'
-        
+        text += "</div>\n"
+
         # Right column - Debug table
         text += '<div style="flex: 1;">\n'
         text += "<h2>Debug</h2>\n"
@@ -417,10 +417,10 @@ class WebInterface:
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
         text += "</table>\n"
-        text += '</div>\n'
-        
+        text += "</div>\n"
+
         # Close the two-column layout
-        text += '</div>\n'
+        text += "</div>\n"
 
         # Add power flow diagram
         text += "<h2>Power Flow</h2>\n"
