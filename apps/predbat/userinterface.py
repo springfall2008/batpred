@@ -528,7 +528,7 @@ class UserInterface:
                 return enabled
             else:
                 enabled = True if enabled_value else False
-            
+
         return enabled
 
     async def async_update_save_restore_list(self):
