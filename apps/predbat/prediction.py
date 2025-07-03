@@ -542,7 +542,7 @@ class Prediction:
             # Get load and pv forecast, total up for all values in the step
             pv_now = pv_forecast_minute_step_flat[minute]
             load_yesterday = load_minutes_step_flat[minute]
-            #for offset in range(0, step, PREDICT_STEP):
+            # for offset in range(0, step, PREDICT_STEP):
             #    pv_now += pv_forecast_minute_step[minute + offset]
             #    load_yesterday += load_minutes_step[minute + offset]
 
@@ -649,16 +649,14 @@ class Prediction:
                     discharge_rate_now = battery_rate_min
 
             # Current real charge rate
-            charge_rate_now_curve = (
-                get_charge_rate_curve(soc, charge_rate_now, soc_max, battery_rate_max_charge, self.battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_charge_curve) * self.battery_rate_max_scaling
-            )
+            charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, soc_max, battery_rate_max_charge, self.battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_charge_curve) * self.battery_rate_max_scaling
             charge_rate_now_curve_step = charge_rate_now_curve * step
             discharge_rate_now_curve = (
                 get_discharge_rate_curve(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, self.battery_discharge_power_curve, battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
                 * self.battery_rate_max_scaling_discharge
             )
             discharge_rate_now_curve_step = discharge_rate_now_curve * step
-            
+
             battery_to_min = max(soc - reserve_expected, 0) * battery_loss_discharge
             battery_to_max = max(soc_max - soc, 0) * battery_loss
 
