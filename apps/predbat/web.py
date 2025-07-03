@@ -405,6 +405,13 @@ class WebInterface:
         text += "<h2>Power Flow</h2>\n"
         text += self.get_power_flow_diagram()
 
+        # Text description of the plan
+        text += "<h2>Plan textual description</h2>\n"
+        text += "<table>\n"
+        text += "<tr><td>{}</td></tr>\n".format(self.base.text_plan)
+        text += "</table>\n"
+
+        # Debug downloads and restart button
         text += "<table>\n"
         text += "<h2>Debug</h2>\n"
         text += "<tr><td>Download</td><td><a href='./debug_apps'>apps.yaml</a></td></tr>\n"
@@ -412,10 +419,6 @@ class WebInterface:
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
-        text += "</table>\n"
-        text += "<h2>Plan textual description</h2>\n"
-        text += "<table>\n"
-        text += "<tr><td>{}</td></tr>\n".format(self.base.text_plan)
         text += "</table>\n"
 
         # Form the app list
