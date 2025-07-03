@@ -511,17 +511,25 @@ class UserInterface:
         Check if user config item is enable
         """
         enable = item.get("enable", None)
+        enable_condition = item.get("enable_condition", None)
+        enabled = True
+
         if enable:
+            enabled_value = self.get_arg(enable, default=False)
             citem = self.config_index.get(enable, None)
-            if citem:
-                enabled_value = citem.get("value", True)
-                if not enabled_value:
-                    return False
-                else:
-                    return True
+            if enable_condition:
+                # Evaluate the condition in python
+                try:
+                    # Use eval to evaluate the condition
+                    enabled = eval(enable_condition, {"__builtins__": None}, {enable: enabled_value})
+                except Exception as e:
+                    self.log("Warn: Enable to evaluate enable condition for item {} - '{}': {}".format(item, enable_condition, e))
+                    enabled = False
+                return enabled
             else:
-                return False
-        return True
+                enabled = True if enabled_value else False
+            
+        return enabled
 
     async def async_update_save_restore_list(self):
         return await self.run_in_executor(self.update_save_restore_list)
