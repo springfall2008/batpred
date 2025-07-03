@@ -44,15 +44,13 @@ def wrapped_run_prediction_export(this_export_limit, start, window_n, charge_lim
     return pred.thread_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
 
 
-def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, debug=False):
+def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss):
     """
     Get AC output difference
     """
     battery_balance = battery_draw + pv_dc
     battery_balance = battery_balance * inverter_loss if battery_balance > 0 else battery_balance / inverter_loss
     diff = load_yesterday - battery_balance - pv_ac
-    if debug:
-        print("battery_draw {} pv_dc {} pv_ac {} load_yesterday {} battery_balance {} diff {}".format(battery_draw * 60 / 5, pv_dc * 60 / 5, pv_ac * 60 / 5, load_yesterday * 60 / 5, battery_balance * 60 / 5, diff * 60 / 5))
     return diff
 
 
@@ -454,6 +452,7 @@ class Prediction:
             export_window_n = export_window_optimised.get(minute_absolute, -1)
             charge_window_active = charge_window_n >= 0
             export_window_active = export_window_n >= 0
+            export_limit_now = export_limits[export_window_n] if export_window_active else 100.0
 
             # Find charge limit
             charge_limit_n = 0
@@ -601,7 +600,7 @@ class Prediction:
             # discharge freeze, reset charge rate by default
             if self.set_export_freeze:
                 # Freeze mode
-                if (export_window_active) and export_limits[export_window_n] < 100.0 and (self.set_export_freeze and (export_limits[export_window_n] == 99.0 or self.set_export_freeze_only)):
+                if (export_window_active) and export_limit_now < 100.0 and (self.set_export_freeze and (export_limit_now == 99.0 or self.set_export_freeze_only)):
                     charge_rate_now = self.battery_rate_min  # 0
 
             # Set discharge during charge?
@@ -624,13 +623,13 @@ class Prediction:
 
             discharge_min = self.reserve
             if export_window_active:
-                discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, self.best_soc_min)
+                discharge_min = max(self.soc_max * export_limit_now / 100.0, self.reserve, self.best_soc_min)
 
-            if not self.set_export_freeze_only and (export_window_active) and export_limits[export_window_n] < 99.0 and (soc > discharge_min):
+            if not self.set_export_freeze_only and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
                 if self.set_export_low_power:
-                    export_rate_adjust = 1 - (export_limits[export_window_n] - int(export_limits[export_window_n]))
+                    export_rate_adjust = 1 - (eexport_limit_now - int(export_limit_now))
                 else:
                     export_rate_adjust = 1.0
                 discharge_rate_now = self.battery_rate_max_discharge * export_rate_adjust
