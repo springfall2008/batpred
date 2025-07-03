@@ -79,6 +79,8 @@ class Prediction:
     def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None):
         global PRED_GLOBAL
         if base:
+            self.checkpoints = {}
+            self.checkpoint_next = {}
             self.minutes_now = base.minutes_now
             self.log = base.log
             self.time_abs_str = base.time_abs_str
@@ -255,13 +257,17 @@ class Prediction:
         Returns a dictionary defining for each minute that is in the charge window will contain the window number
         """
         charge_window_optimised = {}
+        charge_window_optimised30 = {}
         for window_n in range(len(charge_windows)):
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
+                minute30 = int(minute / 30) * 30
                 if is_export and charge_limit[window_n] < 100.0:
                     charge_window_optimised[minute] = window_n
+                    charge_window_optimised30[minute30] = window_n
                 elif not is_export and charge_limit[window_n] > 0.0:
                     charge_window_optimised[minute] = window_n
-        return charge_window_optimised
+                    charge_window_optimised30[minute30] = window_n
+        return charge_window_optimised, charge_window_optimised30
 
     def in_iboost_slot(self, minute):
         """
@@ -321,7 +327,6 @@ class Prediction:
         rate_export = self.rate_export
 
         # Data structures creating during the prediction
-        self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_metric_best = {}
         self.predict_iboost_best = {}
@@ -331,6 +336,7 @@ class Prediction:
         self.iboost_running_solar = False
         self.iboost_running_full = False
 
+        predict_soc = {}
         predict_export = {}
         predict_battery_power = {}
         predict_battery_cycle = {}
@@ -391,11 +397,13 @@ class Prediction:
         first_charge = end_record
         export_to_first_charge = 0
         clipped_today = 0
-
+        checkpoint_count = 0
+        checkpoint_used_count = 0
+    
         # Remove intersecting windows and optimise the data format of the charge/discharge window
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
-        charge_window_optimised = self.find_charge_window_optimised(charge_window, charge_limit)
-        export_window_optimised = self.find_charge_window_optimised(export_window, export_limits, is_export=True)
+        charge_window_optimised, charge_window_optimised30 = self.find_charge_window_optimised(charge_window, charge_limit)
+        export_window_optimised, export_window_optimised30 = self.find_charge_window_optimised(export_window, export_limits, is_export=True)
 
         # For the SOC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
@@ -416,12 +424,119 @@ class Prediction:
         export_limit = self.export_limit * step
         set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
         carbon_enable = self.carbon_enable
+        checkpoint_mode = not save
+        previous_state_hash = None
+        previous_direction_hash = None
 
         # Simulate each forward minute
         minute = 0
         while minute < self.forecast_minutes:
             # Minute yesterday can wrap if days_previous is only 1
             minute_absolute = minute + self.minutes_now
+            predict_soc[minute] = round(soc, 3)
+
+            if checkpoint_mode and ((minute_absolute % 30) == 0):
+                charge_window_n30 = charge_window_optimised30.get(minute_absolute, -1)
+                export_window_n30 = export_window_optimised30.get(minute_absolute, -1)
+                next_charge_window_target = charge_limit[charge_window_n30] if charge_window_n30 >= 0 else 0
+                next_export_window_target = export_limits[export_window_n30] if export_window_n30 >= 0 else 100
+                next_export_window_start = export_window[export_window_n30]["start"] if export_window_n30 >= 0 else -1
+
+                current_state = [
+                    minute,
+                    record,
+                    round(metric, 4),
+                    round(import_kwh, 4),
+                    round(import_kwh_battery, 4),
+                    round(import_kwh_house, 4),
+                    round(export_kwh, 2),
+                    round(soc, 4),
+                    round(carbon_g, 4),
+                    round(battery_cycle, 4),
+                    round(metric_keep, 4),
+                    round(iboost_today_kwh, 4),
+                    round(soc_min, 4),
+                    soc_min_minute,
+                    next_charge_window_target, 
+                    next_export_window_target, 
+                    next_export_window_start, 
+                    pv10, 
+                    step
+                ]
+                current_state_hash = hash(tuple(current_state))
+
+                if current_state_hash not in self.checkpoints:
+                    save_only_state = [
+                        final_car_soc.copy(),
+                        predict_soc.copy(),
+                        car_soc.copy(),
+                        final_metric,
+                        final_import_kwh,
+                        final_import_kwh_battery,
+                        final_import_kwh_house,
+                        final_export_kwh,
+                        final_iboost_kwh,
+                        final_battery_cycle,
+                        final_metric_keep,
+                        final_carbon_g,
+                        final_soc,
+                    ]
+                    self.checkpoints[current_state_hash] = (current_state + save_only_state).copy()
+                    checkpoint_count += 1
+
+                if previous_state_hash is not None:
+                    self.checkpoint_next[previous_state_hash] = current_state_hash
+
+                previous_state_hash = current_state_hash
+
+                if current_state_hash in self.checkpoint_next:
+                    next_state_hash = self.checkpoint_next[current_state_hash]
+                    #print("Fast forward from minute {} from {} to {}".format(minute_absolute, current_state_hash, next_state_hash))
+                    next_state = self.checkpoints[next_state_hash]
+                    (
+                        minute,
+                        record,
+                        metric,
+                        import_kwh,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc,
+                        carbon_g,
+                        battery_cycle,
+                        metric_keep,
+                        iboost_today_kwh,
+                        soc_min,
+                        soc_min_minute,
+                        _next_charge_window_target, 
+                        _next_export_window_target, 
+                        _next_export_window_start, 
+                        _pv10, 
+                        _step,                     
+                        final_car_soc,
+                        predict_soc,
+                        car_soc,
+                        final_metric,
+                        final_import_kwh,
+                        final_import_kwh_battery,
+                        final_import_kwh_house,
+                        final_export_kwh,
+                        final_iboost_kwh,
+                        final_battery_cycle,
+                        final_metric_keep,
+                        final_carbon_g,
+                        final_soc,
+                    ) = next_state
+                    prev_minute_absolute = minute_absolute
+                    minute_absolute = minute + self.minutes_now
+
+                    #print("Fast forward {} to minute {} with state hash {} -> {} - metric to {}".format(prev_minute_absolute, minute_absolute, current_state_hash, next_state_hash, metric))
+
+                    car_soc = car_soc.copy()
+                    predict_soc = predict_soc.copy()
+                    final_car_soc = final_car_soc.copy()
+                    continue
+
             prev_soc = soc
             reserve_expected = self.reserve
             import_rate = rate_import.get(minute_absolute, 0)
@@ -470,9 +585,6 @@ class Prediction:
             # Outside the recording window?
             if record and minute >= end_record:
                 record = False
-
-            # Save Soc prediction data as minutes for later use
-            self.predict_soc[minute] = round(soc, 3)
 
             # Store data before the next simulation step to align timestamps
             if self.debug_enable or save:
@@ -989,6 +1101,7 @@ class Prediction:
         self.pv_kwh_time = pv_kwh_time
         self.import_kwh_time = import_kwh_time
         self.export_kwh_time = export_kwh_time
+        self.predict_soc = predict_soc.copy()
 
         return (
             round(final_metric, 4),
