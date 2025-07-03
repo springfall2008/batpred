@@ -5798,7 +5798,7 @@ def run_perf_test(my_predbat):
     failed = False
 
     start_time = time.time()
-    for count in range(0, 50):
+    for count in range(0, 200):
         failed |= simple_scenario(
             "load_bat_dc_pv2",
             my_predbat,
@@ -5818,7 +5818,7 @@ def run_perf_test(my_predbat):
         print("Performance test failed")
 
     run_time = end_time - start_time
-    print("Performance test took {} seconds for 50 iterations = {} iterations per second".format(run_time, round(1 / (run_time / 50.0), 2)))
+    print("Performance test took {} seconds for 200 iterations = {} iterations per second".format(run_time, round(1 / (run_time / 200.0), 2)))
     return failed
 
 
@@ -8629,6 +8629,7 @@ def main():
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     parser.add_argument("--quick", action="store_true", help="Run quick tests")
+    parser.add_argument("--perf_only", action="store_true", help="Run only perf tests")
     parser.add_argument("--compare", action="store_true", help="Run compare")
     parser.add_argument("--gecloud", action="store_true", help="Run tests for GivEnergy Cloud")
     parser.add_argument("--octopus_api", action="store", help="Run Octopus API tests with given token")
@@ -8662,6 +8663,11 @@ def main():
     if not failed and args.octopus_api:
         failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
+
+    if not failed and not args.quick:
+        failed |= run_perf_test(my_predbat)
+        if args.perf_only:
+            return failed
 
     if not failed:
         failed |= run_test_units(my_predbat)
@@ -8710,8 +8716,6 @@ def main():
         failed |= run_optimise_all_windows_tests(my_predbat)
     if not failed:
         failed |= run_compute_metric_tests(my_predbat)
-    if not failed and not args.quick:
-        failed |= run_perf_test(my_predbat)
 
     if not failed and not args.quick:
         # Scan .yaml files in cases directory
