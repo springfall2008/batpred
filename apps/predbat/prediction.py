@@ -44,12 +44,12 @@ def wrapped_run_prediction_export(this_export_limit, start, window_n, charge_lim
     return pred.thread_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
 
 
-def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss):
+def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp):
     """
     Get AC output difference
     """
     battery_balance = battery_draw + pv_dc
-    battery_balance = battery_balance * inverter_loss if battery_balance > 0 else battery_balance / inverter_loss
+    battery_balance = battery_balance * inverter_loss if battery_balance > 0 else battery_balance * inverter_loss_recp
     diff = load_yesterday - battery_balance - pv_ac
     return diff
 
@@ -321,7 +321,7 @@ class Prediction:
         rate_export = self.rate_export
 
         # Data structures creating during the prediction
-        self.predict_soc = {}
+        predict_soc = {}
         self.predict_soc_best = {}
         self.predict_metric_best = {}
         self.predict_iboost_best = {}
@@ -408,6 +408,7 @@ class Prediction:
             inverter_loss_ac = 1.0
         inverter_loss = self.inverter_loss
         inverter_hybrid = self.inverter_hybrid
+        inverter_loss_recp = 1 / inverter_loss
 
         enable_standing_charge = save and (save in ["best", "base", "base10", "best10", "test"])
         enable_save_stats = save and (save in ["best", "test", "compare"])
@@ -416,6 +417,43 @@ class Prediction:
         export_limit = self.export_limit * step
         set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
         carbon_enable = self.carbon_enable
+        reserve = self.reserve
+        soc_max = self.soc_max
+        battery_loss = self.battery_loss
+        battery_loss_discharge = self.battery_loss_discharge
+        battery_temperature_prediction = self.battery_temperature_prediction
+        alert_active_keep = self.alert_active_keep
+        best_soc_keep_weight = self.best_soc_keep_weight
+        best_soc_keep_orig = self.best_soc_keep
+        debug_enable = self.debug_enable
+        set_reserve_enable = self.set_reserve_enable
+        set_export_freeze = self.set_export_freeze
+        set_export_freeze_only = self.set_export_freeze_only
+        set_charge_window = self.set_charge_window
+        set_export_window = self.set_export_window
+        battery_rate_max_charge = self.battery_rate_max_charge
+        battery_rate_max_discharge = self.battery_rate_max_discharge
+        battery_temperature_charge_curve = self.battery_temperature_charge_curve
+        battery_rate_min = self.battery_rate_min
+        carbon_intensity = self.carbon_intensity
+        set_discharge_during_charge = self.set_discharge_during_charge
+
+        # Get PV step for the current step itself
+        pv_forecast_minute_step_flat = {}
+        load_minutes_step_flat = {}
+
+        if step != PREDICT_STEP:
+            for minute in range(0, self.forecast_minutes, step):
+                pv_now = 0
+                load_yesterday = 0
+                for offset in range(0, step, PREDICT_STEP):
+                    pv_now += pv_forecast_minute_step[minute + offset]
+                    load_yesterday += load_minutes_step[minute + offset]
+                pv_forecast_minute_step_flat[minute] = pv_now
+                load_minutes_step_flat[minute] = load_yesterday
+        else:
+            pv_forecast_minute_step_flat = pv_forecast_minute_step
+            load_minutes_step_flat = load_minutes_step
 
         # Simulate each forward minute
         minute = 0
@@ -423,29 +461,29 @@ class Prediction:
             # Minute yesterday can wrap if days_previous is only 1
             minute_absolute = minute + self.minutes_now
             prev_soc = soc
-            reserve_expected = self.reserve
+            reserve_expected = reserve
             import_rate = rate_import.get(minute_absolute, 0)
             export_rate = rate_export.get(minute_absolute, 0)
 
             # Alert?
-            alert_keep = self.alert_active_keep.get(minute_absolute, 0)
+            alert_keep = alert_active_keep.get(minute_absolute, 0)
 
             # Project battery temperature
-            battery_temperature = self.battery_temperature_prediction.get(minute, self.battery_temperature)
+            battery_temperature = battery_temperature_prediction.get(minute, self.battery_temperature)
 
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
-                keep_minute_scaling = min((minute / (4 * 60)), 1.0) * self.best_soc_keep_weight
+                keep_minute_scaling = min((minute / 256), 1.0) * best_soc_keep_weight
             else:
-                keep_minute_scaling = self.best_soc_keep_weight
+                keep_minute_scaling = best_soc_keep_weight
 
             # Get soc keep value
-            best_soc_keep = self.best_soc_keep
+            best_soc_keep = best_soc_keep_orig
 
             # Alert keep - force scaling to 1 and set new keep value
             if alert_keep > 0:
                 keep_minute_scaling = max(keep_minute_scaling, 2.0)
-                best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * self.soc_max, self.soc_max))
+                best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * soc_max, soc_max))
 
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
@@ -458,24 +496,24 @@ class Prediction:
             charge_limit_n = 0
             if charge_window_active:
                 charge_limit_n = charge_limit[charge_window_n]
-                if self.set_charge_freeze and (charge_limit_n == self.reserve):
+                if self.set_charge_freeze and (charge_limit_n == reserve):
                     # Charge freeze via reserve
-                    charge_limit_n = max(soc, self.reserve)
+                    charge_limit_n = max(soc, reserve)
 
                 # When set reserve enable is on pretend the reserve is the charge limit minus the
                 # minimum battery rate modelled as it can leak a little
-                if self.set_reserve_enable and (soc >= charge_limit_n):
-                    reserve_expected = max(charge_limit_n, self.reserve)
+                if set_reserve_enable and (soc >= charge_limit_n):
+                    reserve_expected = max(charge_limit_n, reserve)
 
             # Outside the recording window?
             if record and minute >= end_record:
                 record = False
 
             # Save Soc prediction data as minutes for later use
-            self.predict_soc[minute] = round(soc, 3)
+            predict_soc[minute] = round(soc, 3)
 
             # Store data before the next simulation step to align timestamps
-            if self.debug_enable or save:
+            if debug_enable or save:
                 minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute_absolute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 predict_soc_time[stamp] = round(soc, 3)
@@ -487,7 +525,7 @@ class Prediction:
                 for car_n in range(self.num_cars):
                     predict_car_soc_time[car_n][stamp] = round(car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0, 2)
                 predict_iboost[stamp] = iboost_today_kwh
-                record_time[stamp] = 0 if record else self.soc_max
+                record_time[stamp] = 0 if record else soc_max
                 if enable_save_stats:
                     self.predict_soc_best[minute] = round(soc, 3)
                     self.predict_metric_best[minute] = round(metric, 3)
@@ -502,19 +540,19 @@ class Prediction:
                 metric += self.metric_standing_charge
 
             # Get load and pv forecast, total up for all values in the step
-            pv_now = 0
-            load_yesterday = 0
-            for offset in range(0, step, PREDICT_STEP):
-                pv_now += pv_forecast_minute_step[minute + offset]
-                load_yesterday += load_minutes_step[minute + offset]
+            pv_now = pv_forecast_minute_step_flat[minute]
+            load_yesterday = load_minutes_step_flat[minute]
+            #for offset in range(0, step, PREDICT_STEP):
+            #    pv_now += pv_forecast_minute_step[minute + offset]
+            #    load_yesterday += load_minutes_step[minute + offset]
 
             # Count PV kWh
             pv_kwh += pv_now
 
             # Modelling reset of charge/discharge rate
-            if self.set_charge_window or self.set_export_window:
-                charge_rate_now = self.battery_rate_max_charge
-                discharge_rate_now = self.battery_rate_max_discharge
+            if set_charge_window or set_export_window:
+                charge_rate_now = battery_rate_max_charge
+                discharge_rate_now = battery_rate_max_discharge
 
             # Simulate car charging
             car_freeze = False
@@ -531,8 +569,8 @@ class Prediction:
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
                         load_yesterday += car_load_scale / self.car_charging_loss
                         # Model not allowing the car to charge from the battery
-                        if (car_load_scale > 0) and (not self.car_charging_from_battery) and self.set_charge_window:
-                            discharge_rate_now = self.battery_rate_min  # 0
+                        if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
+                            discharge_rate_now = battery_rate_min  # 0
                             car_freeze = True
             else:
                 car_load = 0
@@ -574,9 +612,9 @@ class Prediction:
                         iboost_amount = min(self.iboost_max_power * step, max(self.iboost_max_energy - iboost_today_kwh, 0))
 
                 # Freeze discharge on iboost
-                if iboost_amount > 0 and self.iboost_prevent_discharge and self.set_charge_window:
+                if iboost_amount > 0 and self.iboost_prevent_discharge and set_charge_window:
                     iboost_freeze = True
-                    discharge_rate_now = self.battery_rate_min  # 0
+                    discharge_rate_now = battery_rate_min  # 0
 
                 # Iboost running
                 if iboost_amount > 0 and minute == 0:
@@ -587,7 +625,7 @@ class Prediction:
 
                 # iBoost Solar diversion model
                 if self.iboost_solar and not self.iboost_solar_excess:
-                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (pv_now > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
+                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (pv_now > (self.iboost_min_power * step) and ((soc * 100.0 / soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
                         iboost_pv_amount = min(pv_now, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         pv_now -= iboost_pv_amount
                         iboost_amount += iboost_pv_amount
@@ -598,53 +636,57 @@ class Prediction:
             load_kwh += load_yesterday
 
             # discharge freeze, reset charge rate by default
-            if self.set_export_freeze:
+            if set_export_freeze:
                 # Freeze mode
-                if (export_window_active) and export_limit_now < 100.0 and (self.set_export_freeze and (export_limit_now == 99.0 or self.set_export_freeze_only)):
-                    charge_rate_now = self.battery_rate_min  # 0
+                if (export_window_active) and export_limit_now < 100.0 and (set_export_freeze and (export_limit_now == 99.0 or set_export_freeze_only)):
+                    charge_rate_now = battery_rate_min  # 0
 
             # Set discharge during charge?
             if charge_window_active:
-                if not self.set_discharge_during_charge:
-                    discharge_rate_now = self.battery_rate_min
-                elif self.set_charge_window and soc >= charge_limit_n and (abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0):
-                    discharge_rate_now = self.battery_rate_min
+                if not set_discharge_during_charge:
+                    discharge_rate_now = battery_rate_min
+                elif set_charge_window and soc >= charge_limit_n and (abs(calc_percent_limit(soc, soc_max) - calc_percent_limit(charge_limit_n, soc_max)) <= 1.0):
+                    discharge_rate_now = battery_rate_min
 
             # Current real charge rate
             charge_rate_now_curve = (
-                get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_charge_curve) * self.battery_rate_max_scaling
+                get_charge_rate_curve(soc, charge_rate_now, soc_max, battery_rate_max_charge, self.battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_charge_curve) * self.battery_rate_max_scaling
             )
+            charge_rate_now_curve_step = charge_rate_now_curve * step
             discharge_rate_now_curve = (
-                get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
+                get_discharge_rate_curve(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, self.battery_discharge_power_curve, battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
                 * self.battery_rate_max_scaling_discharge
             )
-            battery_to_min = max(soc - reserve_expected, 0) * self.battery_loss_discharge
-            battery_to_max = max(self.soc_max - soc, 0) * self.battery_loss
+            discharge_rate_now_curve_step = discharge_rate_now_curve * step
+            
+            battery_to_min = max(soc - reserve_expected, 0) * battery_loss_discharge
+            battery_to_max = max(soc_max - soc, 0) * battery_loss
 
-            discharge_min = self.reserve
+            discharge_min = reserve
             if export_window_active:
-                discharge_min = max(self.soc_max * export_limit_now / 100.0, self.reserve, self.best_soc_min)
+                discharge_min = max(soc_max * export_limit_now / 100.0, reserve, self.best_soc_min)
 
-            if not self.set_export_freeze_only and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
+            if not set_export_freeze_only and export_window_active and export_limit_now < 99.0 and (soc > discharge_min):
                 # Discharge enable
-                discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
+                discharge_rate_now = battery_rate_max_discharge  # Assume discharge becomes enabled here
                 if self.set_export_low_power:
                     export_rate_adjust = 1 - (export_limit_now - int(export_limit_now))
                 else:
                     export_rate_adjust = 1.0
-                discharge_rate_now = self.battery_rate_max_discharge * export_rate_adjust
+                discharge_rate_now = battery_rate_max_discharge * export_rate_adjust
                 discharge_rate_now_curve = (
-                    get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
+                    get_discharge_rate_curve(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, self.battery_discharge_power_curve, battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
                     * self.battery_rate_max_scaling_discharge
                 )
+                discharge_rate_now_curve_step = discharge_rate_now_curve * step
 
-                battery_draw = min(discharge_rate_now_curve * step, battery_to_min)
+                battery_draw = min(discharge_rate_now_curve_step, battery_to_min)
 
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
 
                 # Exceed export limit?
-                diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
+                diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
                 if diff < 0 and abs(diff) > export_limit:
                     over_limit = abs(diff) - export_limit
                     reduce_by = over_limit
@@ -652,7 +694,7 @@ class Prediction:
                     if reduce_by > battery_draw:
                         if self.inverter_can_charge_during_export:
                             reduce_by = reduce_by - battery_draw
-                            battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve * step)
+                            battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve_step)
                         else:
                             battery_draw = 0
                     else:
@@ -672,7 +714,7 @@ class Prediction:
                             reduce_by = reduce_by - battery_draw
                             battery_draw = 0
                             if self.inverter_can_charge_during_export:
-                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve * step)
+                                battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve_step)
                         else:
                             battery_draw = battery_draw - reduce_by
 
@@ -699,20 +741,21 @@ class Prediction:
                     soc,
                     charge_window[charge_window_n],
                     charge_limit_n,
-                    self.battery_rate_max_charge,
-                    self.soc_max,
+                    battery_rate_max_charge,
+                    soc_max,
                     self.battery_charge_power_curve,
                     set_charge_low_power,
                     self.charge_low_power_margin,
-                    self.battery_rate_min,
+                    battery_rate_min,
                     self.battery_rate_max_scaling,
-                    self.battery_loss,
+                    battery_loss,
                     None,
                     battery_temperature,
-                    self.battery_temperature_charge_curve,
+                    battery_temperature_charge_curve,
                 )
+                charge_rate_now_curve_step = charge_rate_now_curve * step
 
-                battery_draw = -max(min(charge_rate_now_curve * step, max(charge_limit_n - soc, pv_now)), 0, -battery_to_max)
+                battery_draw = -max(min(charge_rate_now_curve_step, max(charge_limit_n - soc, pv_now)), 0, -battery_to_max)
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
 
@@ -722,12 +765,12 @@ class Prediction:
                     pv_dc = 0
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
-                if (charge_limit_n - soc) < (charge_rate_now_curve * step):
+                if (charge_limit_n - soc) < (charge_rate_now_curve_step):
                     # The battery will hit the charge limit in this period, so if the charge was spread over the period
                     # it could be done from solar, but in reality it will be full rate and then stop meaning the solar
                     # won't cover it and it will likely create an import.
                     pv_compare = pv_dc + pv_ac
-                    if pv_dc >= (charge_limit_n - soc) and (pv_compare < (charge_rate_now_curve * step)):
+                    if pv_dc >= (charge_limit_n - soc) and (pv_compare < (charge_rate_now_curve_step)):
                         charge_time_remains = (charge_limit_n - soc) / charge_rate_now_curve  # Time in minute periods left
                         pv_in_period = pv_compare / step * charge_time_remains
                         potential_import = min((charge_rate_now_curve * charge_time_remains) - pv_in_period, (charge_limit_n - soc))
@@ -736,9 +779,9 @@ class Prediction:
                 # ECO Mode
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
-                diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss)
+                diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
 
-                required_for_load = load_yesterday / inverter_loss
+                required_for_load = load_yesterday * inverter_loss_recp
                 if inverter_hybrid:
                     potential_to_charge = pv_now
                 else:
@@ -747,10 +790,10 @@ class Prediction:
                 diff = required_for_load - potential_to_charge
 
                 if diff > 0:
-                    battery_draw = min(diff, discharge_rate_now_curve * step, inverter_limit, battery_to_min)
+                    battery_draw = min(diff, discharge_rate_now_curve_step, inverter_limit, battery_to_min)
                     battery_state = "e-"
                 else:
-                    battery_draw = max(diff, -charge_rate_now_curve * step, -inverter_limit, -battery_to_max)
+                    battery_draw = max(diff, -charge_rate_now_curve_step, -inverter_limit, -battery_to_max)
                     if battery_draw < 0:
                         battery_state = "e+"
                     else:
@@ -789,7 +832,7 @@ class Prediction:
                         total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                         if total_inverted > inverter_limit:
                             over_limit = total_inverted - inverter_limit
-                        battery_draw = max(-over_limit * inverter_loss, -charge_rate_now_curve * step, -battery_to_max, -pv_ac)
+                        battery_draw = max(-over_limit * inverter_loss, -charge_rate_now_curve_step, -battery_to_max, -pv_ac)
 
                     if battery_draw < 0:
                         pv_dc = min(abs(battery_draw), pv_now)
@@ -811,7 +854,7 @@ class Prediction:
                         battery_draw = min(battery_draw + over_limit * inverter_loss, 0)
 
             # Export limit, clip PV output
-            diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
+            diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
             if diff < 0 and abs(diff) > export_limit:
                 over_limit = abs(diff) - export_limit
                 clipped_today += over_limit
@@ -819,9 +862,9 @@ class Prediction:
 
             # Adjust battery soc
             if battery_draw > 0:
-                soc = max(soc - battery_draw / self.battery_loss_discharge, reserve_expected)
+                soc = max(soc - battery_draw / battery_loss_discharge, reserve_expected)
             else:
-                soc = min(soc - battery_draw * self.battery_loss, self.soc_max)
+                soc = min(soc - battery_draw * battery_loss, soc_max)
             soc = round(soc, 6)
 
             # Iboost finally count
@@ -831,7 +874,7 @@ class Prediction:
                     excess = 0
                     if diff < 0:
                         excess = -diff
-                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (excess > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
+                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (excess > (self.iboost_min_power * step) and ((soc * 100.0 / soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
                         iboost_pv_amount = min(excess, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         load_yesterday += iboost_pv_amount
                         iboost_amount += iboost_pv_amount
@@ -856,7 +899,7 @@ class Prediction:
             battery_cycle = battery_cycle + abs(battery_draw)
 
             # Work out left over energy after battery adjustment
-            diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
+            diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
@@ -868,7 +911,7 @@ class Prediction:
                 import_kwh += diff
 
                 if carbon_enable:
-                    carbon_g += diff * self.carbon_intensity.get(minute, 0)
+                    carbon_g += diff * carbon_intensity.get(minute, 0)
 
                 if charge_window_active:
                     # If the battery is on charge anyhow then imports are at battery charging rate
@@ -884,7 +927,7 @@ class Prediction:
                 energy = -diff
                 export_kwh += energy
                 if carbon_enable:
-                    carbon_g -= energy * self.carbon_intensity.get(minute, 0)
+                    carbon_g -= energy * carbon_intensity.get(minute, 0)
 
                 metric -= export_rate * energy
                 if diff != 0:
@@ -895,7 +938,7 @@ class Prediction:
             # Record final soc & metric
             if record:
                 # Store the number of minutes until the battery runs out
-                if soc <= self.reserve:
+                if soc <= reserve:
                     minute_left = min(minute, minute_left)
                 final_soc = soc
 
@@ -936,7 +979,7 @@ class Prediction:
                 soc_min = min(soc_min, soc)
 
             # Record state
-            if self.debug_enable or save:
+            if debug_enable or save:
                 predict_state[stamp] = "g" + grid_state + "b" + battery_state
                 predict_battery_power[stamp] = round(battery_draw * (60 / step), 3)
                 predict_battery_cycle[stamp] = round(battery_cycle, 3)
@@ -968,6 +1011,7 @@ class Prediction:
         self.final_soc_min_minute = soc_min_minute
         self.export_to_first_charge = export_to_first_charge
         self.predict_soc_time = predict_soc_time
+        self.predict_soc = predict_soc
         self.first_charge = first_charge
         self.first_charge_soc = round(first_charge_soc, 4)
         self.predict_state = predict_state
