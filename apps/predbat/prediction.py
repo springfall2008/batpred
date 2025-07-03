@@ -629,7 +629,7 @@ class Prediction:
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
                 if self.set_export_low_power:
-                    export_rate_adjust = 1 - (eexport_limit_now - int(export_limit_now))
+                    export_rate_adjust = 1 - (export_limit_now - int(export_limit_now))
                 else:
                     export_rate_adjust = 1.0
                 discharge_rate_now = self.battery_rate_max_discharge * export_rate_adjust
