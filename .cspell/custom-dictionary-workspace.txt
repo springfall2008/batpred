@@ -195,6 +195,7 @@ pylint
 pyproject
 pytz
 rarr
+recp
 Redownload
 remotecontrol
 resetmidnight
