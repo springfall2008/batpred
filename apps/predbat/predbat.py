@@ -1451,7 +1451,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.load_user_config()
                 self.validate_config()
                 config_changed = True
-                
+
             try:
                 self.update_pred(scheduled=True)
             except Exception as e:
