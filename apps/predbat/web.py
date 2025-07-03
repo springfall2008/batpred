@@ -768,7 +768,7 @@ class WebInterface:
             background-color: #cc3333 !important;
             color: #e0e0e0 !important;
         }
-        
+
         body.dark-mode button:hover {
             background-color: #aa2222 !important;
         }
@@ -1685,8 +1685,6 @@ body.dark-mode .log-menu a.active {
         rates_export = self.get_entity_results(self.base.prefix + ".rates_export")
         rates_gas = self.get_entity_results(self.base.prefix + ".rates_gas")
         record = self.get_entity_results(self.base.prefix + ".record")
-
-
 
         text = ""
 
