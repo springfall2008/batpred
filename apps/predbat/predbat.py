@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.22.0"
+THIS_VERSION = "v8.22.1"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py"]
@@ -1392,7 +1392,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         if self.update_pending and not self.prediction_started:
             self.update_pending = False
             self.prediction_started = True
-            self.ha_interface.update_states()
             self.load_user_config()
             self.validate_config()
             try:
@@ -1440,15 +1439,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.fatal_error = True
             raise Exception("HA interface not active")
 
+        self.check_entity_refresh()
         if not self.prediction_started:
+            was_update_pending = self.update_pending
             config_changed = False
             self.prediction_started = True
             self.update_pending = False
 
-            self.ha_interface.update_states()
-            self.check_entity_refresh()
-
-            if self.update_pending:
+            if was_update_pending:
+                self.ha_interface.update_states()
                 self.load_user_config()
                 self.validate_config()
                 config_changed = True

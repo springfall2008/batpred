@@ -784,14 +784,12 @@ class Plan:
             if self.plan_valid:
                 charge_limit_best_prev = copy.deepcopy(self.charge_limit_best)
                 charge_window_best_prev = copy.deepcopy(self.charge_window_best)
-                charge_limit_percent_best_prev = copy.deepcopy(self.charge_limit_percent_best)
                 export_window_best_prev = copy.deepcopy(self.export_window_best)
                 export_limits_best_prev = copy.deepcopy(self.export_limits_best)
                 self.log("Recompute is saving previous plan...")
             else:
                 charge_limit_best_prev = None
                 charge_window_best_prev = None
-                charge_limit_percent_best_prev = None
                 export_window_best_prev = None
                 export_limits_best_prev = None
                 self.log("Recompute, previous plan is invalid...")
@@ -1005,7 +1003,11 @@ class Plan:
 
             # Plan is now valid
             self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))
-            self.plan_valid = True
+            if not self.update_pending:
+                self.plan_valid = True
+            else:
+                self.log("Plan is not valid as update is pending, will re-compute on next run...")
+                self.plan_valid = False
             self.plan_last_updated = self.now_utc
             self.plan_last_updated_minutes = self.minutes_now
 
