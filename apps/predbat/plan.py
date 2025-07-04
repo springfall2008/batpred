@@ -1954,7 +1954,7 @@ class Plan:
                 # Combine two windows of the same charge target provided the rates are the same or low power mode is off (low power mode can skew the charge into the more expensive slot)
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
-                new_window_best[-1]["average"] = (new_window_best[-1]["average"] + window["average"]) / 2
+                new_window_best[-1]["average"] = dp2((new_window_best[-1]["average"] + window["average"]) / 2)
                 if self.debug_enable:
                     self.log("Combine charge slot {} with previous (same target) - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
             elif (
@@ -2960,7 +2960,7 @@ class Plan:
                 while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     step_size = int(max(region_size / 2, min_region_size))
-                    fast_mode = not (region_size == min_region_size)
+                    # fast_mode = not (region_size == min_region_size)
                     for region in range(0, self.end_record + self.minutes_now, step_size):
                         region_start = max(self.end_record + self.minutes_now - region - region_size, 0)
                         region_end = min(region_start + region_size, self.end_record + self.minutes_now)
@@ -3012,7 +3012,7 @@ class Plan:
                             break
 
                     self.plan_write_debug(debug_mode, "plan_levels_{}.html".format(region_size))
-                    region_size = int(region_size / 2)
+                    region_size = int(region_size / 4)
 
         best_price_charge, best_price_export, best_price_charge_level, best_price_export_level = self.find_price_levels(price_set, price_links, window_index, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best)
         self.rate_best_cost_threshold_charge = best_price_charge
