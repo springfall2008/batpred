@@ -1745,7 +1745,7 @@ class Fetch:
             window = {}
             window["start"] = rate_low_start
             window["end"] = rate_low_end
-            window["average"] = rate_low_average
+            window["average"] = dp2(rate_low_average)
 
             if rate_low_start >= 0:
                 if (return_raw or (rate_low_end > self.minutes_now)) and (rate_low_end - rate_low_start) >= rate_low_min_window:
