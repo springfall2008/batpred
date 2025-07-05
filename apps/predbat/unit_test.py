@@ -2563,7 +2563,17 @@ def simple_scenario(
             metric_keep,
             final_iboost,
             final_carbon_g,
+            predict_soc,
+            car_charging_soc_next,
+            iboost_next,
+            iboost_running,
+            iboost_running_solar,
+            iboost_running_full,
         ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
+        prediction.iboost_next = iboost_next
+        prediction.iboost_running = iboost_running
+        prediction.iboost_running_solar = iboost_running_solar
+        prediction.iboost_running_full = iboost_running_full
     metric = round(metric / 100.0, 2)
     final_soc = round(final_soc, 2)
     final_iboost = round(final_iboost, 2)

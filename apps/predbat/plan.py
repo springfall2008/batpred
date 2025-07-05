@@ -2960,7 +2960,7 @@ class Plan:
                 while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     step_size = int(max(region_size / 2, min_region_size))
-                    fast_mode = not (region_size == min_region_size)
+                    # fast_mode = not (region_size == min_region_size)
                     for region in range(0, self.end_record + self.minutes_now, step_size):
                         region_start = max(self.end_record + self.minutes_now - region - region_size, 0)
                         region_end = min(region_start + region_size, self.end_record + self.minutes_now)
@@ -3012,7 +3012,7 @@ class Plan:
                             break
 
                     self.plan_write_debug(debug_mode, "plan_levels_{}.html".format(region_size))
-                    region_size = int(region_size / 2)
+                    region_size = int(region_size / 4)
 
         best_price_charge, best_price_export, best_price_charge_level, best_price_export_level = self.find_price_levels(price_set, price_links, window_index, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best)
         self.rate_best_cost_threshold_charge = best_price_charge
@@ -3160,14 +3160,20 @@ class Plan:
             final_metric_keep,
             final_iboost_kwh,
             final_carbon_g,
+            predict_soc,
+            car_charging_soc_next,
+            iboost_next,
+            iboost_running,
+            iboost_running_solar,
+            iboost_running_full,
         ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record, save, step)
-        self.predict_soc = pred.predict_soc
-        self.car_charging_soc_next = pred.car_charging_soc_next
-        self.iboost_next = pred.iboost_next
-        self.iboost_running = pred.iboost_running
-        self.iboost_running_solar = pred.iboost_running_solar
-        self.iboost_running_full = pred.iboost_running_full
-        if save or self.debug_enable:
+        self.predict_soc = predict_soc
+        self.car_charging_soc_next = car_charging_soc_next
+        self.iboost_next = iboost_next
+        self.iboost_running = iboost_running
+        self.iboost_running_solar = iboost_running_solar
+        self.iboost_running_full = iboost_running_full
+        if save or pred.debug_enable:
             predict_soc_time = pred.predict_soc_time
             first_charge = pred.first_charge
             first_charge_soc = pred.first_charge_soc
