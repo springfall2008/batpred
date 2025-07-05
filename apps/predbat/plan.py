@@ -292,7 +292,7 @@ class Plan:
                                     try_export[window_n] = export_option[window_n]
 
                             # Skip this one as it's the same as selected already
-                            try_hash = str(try_charge_limit) + "_d_" + str(try_export)
+                            try_hash = hash(tuple(try_charge_limit)) ^ hash(tuple(try_export))
                             if try_hash in tried_list:
                                 try_value = tried_list[try_hash]
                                 if try_value is not True:
@@ -2316,6 +2316,7 @@ class Plan:
         Swap optimisation tries to move export windows later
         """
         swapped_target = {}
+        tried_pair = {}
 
         if self.calculate_best_export and record_export_windows >= 2:
             swapped = True
@@ -2341,6 +2342,10 @@ class Plan:
                     if swapped_target.get(window_n_target, False):
                         # Skip if we already swapped this window
                         continue
+
+                    # New entry for this pair
+                    if window_n_target not in tried_pair:
+                        tried_pair[window_n_target] = {}
 
                     # Can not swap into car charging slot
                     if not self.car_charging_from_battery and self.hit_car_window(window_start_target, self.export_window_best[window_n_target]["end"]):
@@ -2393,6 +2398,11 @@ class Plan:
                         )
                     # Try to swap into the target slot
                     for window_n in range(max(window_n_target - 32, 0), max(window_n_target, 0), 1):
+
+                        if window_n in tried_pair[window_n_target]:
+                            # Skip if we already tried this pair
+                            continue
+                        tried_pair[window_n_target][window_n] = True
                         previous_end = 0
                         if window_n > 0:
                             previous_end = self.export_window_best[window_n - 1]["end"]
@@ -2509,6 +2519,9 @@ class Plan:
                                 selected_import = best_import
                                 swapped = True
                                 swapped_target[window_n_target] = True
+                                for targets in tried_part:
+                                    # Allow re-try of this source window again due to the swap
+                                    tried_pair[targets][window_n] = False
                                 break
                             else:
                                 # Revert the change
@@ -2615,8 +2628,6 @@ class Plan:
                 window_n = window_index[key]["id"]
                 if typ == "c" and (self.charge_limit_best[window_n] > self.reserve):
                     lowest_price_charge = min(self.charge_window_best[window_n]["average"], lowest_price_charge)
-        if debug_mode:
-            print("Best price charge level {} Best price export level {} Lowest price charge {} Best price charge {} best price export {}".format(best_price_charge_level, best_price_export_level, lowest_price_charge, best_price_charge, best_price_export))
 
         # Optimise individual windows in the price band for charge/export
         # First optimise those at or below threshold highest to lowest (to turn down values)
@@ -2639,9 +2650,6 @@ class Plan:
 
             for price_key in price_set:
                 links = price_links[price_key].copy()
-
-                if debug_mode:
-                    print("Optimise pass {} price_key {} best_metric {} best_cost {}".format(pass_type, price_key, best_metric, best_cost))
 
                 # Freeze/Trim pass should be done in time order (newest first)
                 if pass_type in ["freeze", "trim"]:
