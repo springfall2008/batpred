@@ -1942,7 +1942,7 @@ document.addEventListener("DOMContentLoaded", function() {
         args = self.base.args
         for arg in args:
             value = args[arg]
-            if "api_key" in arg or "cloud_key" in arg:
+            if "_key" in arg:
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
             if arg_errors:

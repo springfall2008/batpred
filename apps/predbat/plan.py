@@ -292,7 +292,7 @@ class Plan:
                                     try_export[window_n] = export_option[window_n]
 
                             # Skip this one as it's the same as selected already
-                            try_hash = str(try_charge_limit) + "_d_" + str(try_export)
+                            try_hash = hash(tuple(try_charge_limit)) ^ hash(tuple(try_export))
                             if try_hash in tried_list:
                                 try_value = tried_list[try_hash]
                                 if try_value is not True:
@@ -2617,8 +2617,6 @@ class Plan:
                 window_n = window_index[key]["id"]
                 if typ == "c" and (self.charge_limit_best[window_n] > self.reserve):
                     lowest_price_charge = min(self.charge_window_best[window_n]["average"], lowest_price_charge)
-        if debug_mode:
-            print("Best price charge level {} Best price export level {} Lowest price charge {} Best price charge {} best price export {}".format(best_price_charge_level, best_price_export_level, lowest_price_charge, best_price_charge, best_price_export))
 
         # Optimise individual windows in the price band for charge/export
         # First optimise those at or below threshold highest to lowest (to turn down values)
@@ -2641,9 +2639,6 @@ class Plan:
 
             for price_key in price_set:
                 links = price_links[price_key].copy()
-
-                if debug_mode:
-                    print("Optimise pass {} price_key {} best_metric {} best_cost {}".format(pass_type, price_key, best_metric, best_cost))
 
                 # Freeze/Trim pass should be done in time order (newest first)
                 if pass_type in ["freeze", "trim"]:
@@ -3162,14 +3157,20 @@ class Plan:
             final_metric_keep,
             final_iboost_kwh,
             final_carbon_g,
+            predict_soc,
+            car_charging_soc_next,
+            iboost_next,
+            iboost_running,
+            iboost_running_solar,
+            iboost_running_full,
         ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record, save, step)
-        self.predict_soc = pred.predict_soc
-        self.car_charging_soc_next = pred.car_charging_soc_next
-        self.iboost_next = pred.iboost_next
-        self.iboost_running = pred.iboost_running
-        self.iboost_running_solar = pred.iboost_running_solar
-        self.iboost_running_full = pred.iboost_running_full
-        if save or self.debug_enable:
+        self.predict_soc = predict_soc
+        self.car_charging_soc_next = car_charging_soc_next
+        self.iboost_next = iboost_next
+        self.iboost_running = iboost_running
+        self.iboost_running_solar = iboost_running_solar
+        self.iboost_running_full = iboost_running_full
+        if save or pred.debug_enable:
             predict_soc_time = pred.predict_soc_time
             first_charge = pred.first_charge
             first_charge_soc = pred.first_charge_soc
