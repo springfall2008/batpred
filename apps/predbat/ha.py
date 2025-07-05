@@ -369,7 +369,11 @@ class HAInterface:
             if not nodb and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
                 if last_changed:
-                    last_changed = datetime.strptime(last_changed, TIME_FORMAT_HA_TZ)
+                    try:
+                        last_changed = datetime.strptime(last_changed, TIME_FORMAT_HA_TZ)
+                    except ValueError, TypeError:
+                        self.log("Warn: Failed to parse last_changed time {} for entity {}".format(last_changed, entity_id))
+                        last_changed = datetime.now()
 
                 self.db_manager.set_state_db(entity_id, state, attributes, timestamp=last_changed)
 

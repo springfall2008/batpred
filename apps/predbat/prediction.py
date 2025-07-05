@@ -208,9 +208,9 @@ class Prediction:
             predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
             predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
             for minute in range(predict_minute_start, predict_minute_end + 5, 5):
-                if minute in self.predict_soc:
-                    min_soc = min(self.predict_soc[minute], min_soc)
-                    max_soc = max(self.predict_soc[minute], max_soc)
+                if minute in predict_soc:
+                    min_soc = min(predict_soc[minute], min_soc)
+                    max_soc = max(predict_soc[minute], max_soc)
             max_soc = max(max_soc, min_soc)
             min_soc = min(min_soc, max_soc)
 
