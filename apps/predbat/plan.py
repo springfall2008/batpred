@@ -2316,7 +2316,6 @@ class Plan:
         Swap optimisation tries to move export windows later
         """
         swapped_target = {}
-        tried_pair = {}
 
         if self.calculate_best_export and record_export_windows >= 2:
             swapped = True
@@ -2342,10 +2341,6 @@ class Plan:
                     if swapped_target.get(window_n_target, False):
                         # Skip if we already swapped this window
                         continue
-
-                    # New entry for this pair
-                    if window_n_target not in tried_pair:
-                        tried_pair[window_n_target] = {}
 
                     # Can not swap into car charging slot
                     if not self.car_charging_from_battery and self.hit_car_window(window_start_target, self.export_window_best[window_n_target]["end"]):
@@ -2398,11 +2393,6 @@ class Plan:
                         )
                     # Try to swap into the target slot
                     for window_n in range(max(window_n_target - 32, 0), max(window_n_target, 0), 1):
-
-                        if window_n in tried_pair[window_n_target]:
-                            # Skip if we already tried this pair
-                            continue
-                        tried_pair[window_n_target][window_n] = True
                         previous_end = 0
                         if window_n > 0:
                             previous_end = self.export_window_best[window_n - 1]["end"]
@@ -2519,9 +2509,6 @@ class Plan:
                                 selected_import = best_import
                                 swapped = True
                                 swapped_target[window_n_target] = True
-                                for targets in tried_part:
-                                    # Allow re-try of this source window again due to the swap
-                                    tried_pair[targets][window_n] = False
                                 break
                             else:
                                 # Revert the change
