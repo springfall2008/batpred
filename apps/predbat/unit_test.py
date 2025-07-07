@@ -223,8 +223,7 @@ def reset_inverter(my_predbat):
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots[0] = []
     my_predbat.car_charging_from_battery = True
-    my_predbat.car_charging_soc[0] = 0
-    my_predbat.car_charging_limit[0] = 100.0
+    my_predbat.car_charging_limit = [100.0, 100.0, 100.0, 100.0]
     my_predbat.car_charging_soc = [0, 0, 0, 0]
     my_predbat.iboost_enable = False
     my_predbat.iboost_solar = False
@@ -2399,6 +2398,9 @@ def simple_scenario(
     battery_temperature=20,
     set_export_freeze_only=False,
     inverter_can_charge_during_export=True,
+    prediction_handle=None,
+    return_prediction_handle=False,
+    ignore_failed = False,
 ):
     """
     No PV, No Load
@@ -2524,7 +2526,10 @@ def simple_scenario(
         my_predbat.num_cars = 0
         my_predbat.car_charging_slots[0] = []
 
-    prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+    if prediction_handle:
+        prediction = prediction_handle
+    else:
+        prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
 
     charge_limit_best = []
     if charge > 0:
@@ -2570,6 +2575,8 @@ def simple_scenario(
             iboost_running_solar,
             iboost_running_full,
         ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
+        prediction.predict_soc = predict_soc
+        prediction.car_charging_soc_next = car_charging_soc_next
         prediction.iboost_next = iboost_next
         prediction.iboost_running = iboost_running
         prediction.iboost_running_solar = iboost_running_solar
@@ -2580,34 +2587,70 @@ def simple_scenario(
 
     failed = False
     if abs(metric - assert_final_metric) >= 0.1:
-        print("ERROR: Metric {} should be {}".format(metric, assert_final_metric))
+        if not ignore_failed:
+            print("ERROR: Metric {} should be {}".format(metric, assert_final_metric))
         failed = True
     if abs(final_soc - assert_final_soc) >= 0.1:
-        print("ERROR: Final SOC {} should be {}".format(final_soc, assert_final_soc))
+        if not ignore_failed:
+            print("ERROR: Final SOC {} should be {}".format(final_soc, assert_final_soc))
         failed = True
     if abs(final_iboost - assert_final_iboost) >= 0.1:
-        print("ERROR: Final iBoost {} should be {}".format(final_iboost, assert_final_iboost))
+        if not ignore_failed:
+            print("ERROR: Final iBoost {} should be {}".format(final_iboost, assert_final_iboost))
         failed = True
     if abs(final_carbon_g - assert_final_carbon) >= 0.1:
-        print("ERROR: Final Carbon {} should be {}".format(final_carbon_g, assert_final_carbon))
+        if not ignore_failed:
+            print("ERROR: Final Carbon {} should be {}".format(final_carbon_g, assert_final_carbon))
         failed = True
     if abs(metric_keep - assert_keep) >= 0.5:
-        print("ERROR: Metric keep {} should be {}".format(metric_keep, assert_keep))
+        if not ignore_failed:
+            print("ERROR: Metric keep {} should be {}".format(metric_keep, assert_keep))
         failed = True
     if assert_iboost_running != prediction.iboost_running:
-        print("ERROR: iBoost running should be {}".format(assert_iboost_running))
+        if not ignore_failed:
+            print("ERROR: iBoost running should be {}".format(assert_iboost_running))
         failed = True
     if assert_iboost_running_solar != prediction.iboost_running_solar:
-        print("ERROR: iBoost running solar should be {}".format(assert_iboost_running_solar))
+        if not ignore_failed:
+            print("ERROR: iBoost running solar should be {}".format(assert_iboost_running_solar))
         failed = True
     if assert_iboost_running_full != prediction.iboost_running_full:
-        print("ERROR: iBoost running full should be {}".format(assert_iboost_running_full))
+        if not ignore_failed:
+            print("ERROR: iBoost running full should be {}".format(assert_iboost_running_full))
         failed = True
 
-    if failed:
-        prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save="test")
+    if failed and not ignore_failed:
+        (
+            metric,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            final_soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+            predict_soc,
+            car_charging_soc_next,
+            iboost_next,
+            iboost_running,
+            iboost_running_solar,
+            iboost_running_full,
+        ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
+        prediction.predict_soc = predict_soc
+        prediction.car_charging_soc_next = car_charging_soc_next
+        prediction.iboost_next = iboost_next
+        prediction.iboost_running = iboost_running
+        prediction.iboost_running_solar = iboost_running_solar
+        prediction.iboost_running_full = iboost_running_full
         plot(name, prediction)
-    return failed
+
+    if return_prediction_handle:
+        return failed, prediction
+    else:
+        return failed
 
 
 class DummyInverter:
@@ -3037,7 +3080,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
-        my_predbat.plan_debug = True
+        #my_predbat.plan_debug = True
         my_predbat.debug_enable = True
         # my_predbat.set_discharge_during_charge = True
         # my_predbat.calculate_export_oncharge = True
@@ -3052,7 +3095,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.calculate_second_pass = False
         # my_predbat.best_soc_keep = 1
         # my_predbat.set_charge_freeze = True
-        my_predbat.combine_export_slots = True
+        # my_predbat.combine_export_slots = True
         # my_predbat.set_export_freeze = False
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_tweak_plan = False
@@ -3076,6 +3119,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.iboost_solar_excess = True
         # my_predbat.iboost_min_power = 500 / MINUTE_WATT
         pass
+
+    print("Read2 yaml num_cars {}".format(my_predbat.num_cars))
 
     if re_do_rates:
         # Set rate thresholds
@@ -3158,6 +3203,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     failed = False
     my_predbat.log("> ORIGINAL PLAN")
+    print("Read3 yaml num_cars {}".format(my_predbat.num_cars))
 
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
@@ -3181,6 +3227,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             if enabled and value != default:
                 print("- {} = {} (default {}) - enable {}".format(name, value, default, enable))
 
+    print("Read4 yaml num_cars {}".format(my_predbat.num_cars))
     # Save plan
     # Pre-optimise all plan
     my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
@@ -5807,6 +5854,25 @@ def run_perf_test(my_predbat):
     reset_rates(my_predbat, import_rate, export_rate)
     failed = False
 
+    my_predbat.prediction_cache_enable = False
+
+    failed, prediction_handle = simple_scenario(
+            "load_bat_dc_pv2",
+            my_predbat,
+            4,
+            4,
+            assert_final_metric=import_rate * 24 * 3.2,
+            assert_final_soc=50 + 24,
+            with_battery=True,
+            battery_soc=50.0,
+            inverter_loss=0.8,
+            hybrid=True,
+            quiet=True,
+            save="none",
+            return_prediction_handle=True,
+            ignore_failed=True,
+        )
+
     start_time = time.time()
     for count in range(0, 200):
         failed |= simple_scenario(
@@ -5822,6 +5888,8 @@ def run_perf_test(my_predbat):
             hybrid=True,
             quiet=True,
             save="none",
+            prediction_handle=prediction_handle,
+            ignore_failed=True,
         )
     end_time = time.time()
     if failed:

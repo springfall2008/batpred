@@ -540,7 +540,7 @@ class Prediction:
 
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
-                keep_minute_scaling = min((minute / 256), 1.0) * best_soc_keep_weight
+                keep_minute_scaling = min((minute / 240), 1.0) * best_soc_keep_weight
             else:
                 keep_minute_scaling = best_soc_keep_weight
 
@@ -895,6 +895,7 @@ class Prediction:
 
                     if battery_draw == 0:
                         total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
+                        over_limit = 0
                         if total_inverted > inverter_limit:
                             over_limit = total_inverted - inverter_limit
                         battery_draw = max(-over_limit * inverter_loss, -charge_rate_now_curve_step, -battery_to_max, -pv_ac)
@@ -1089,6 +1090,7 @@ class Prediction:
             self.metric_time = metric_time
             self.record_time = record_time
             self.predict_battery_cycle = predict_battery_cycle
+            self.predict_soc = predict_soc
             self.pv_kwh_h0 = round(pv_kwh_h0, 4)
             self.import_kwh_h0 = round(import_kwh_h0, 4)
             self.export_kwh_h0 = round(export_kwh_h0, 4)

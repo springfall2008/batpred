@@ -183,6 +183,31 @@ class Plan:
             if region_start:
                 self.log("Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end)))
 
+        price_set_charge = []
+        for price in price_set[::-1]:
+            links = price_links[price]
+            for key in links:
+                window_n = window_index[key]["id"]
+                typ = window_index[key]["type"]
+                if typ in ["c", "cf"]:
+                    if region_start and (charge_window[window_n]["start"] >= region_end or charge_window[window_n]["end"] < region_start):
+                        pass
+                    else:                            
+                        price_set_charge.append([price, window_n, typ])
+        price_set_export = []
+        if export_enable:
+            for price in price_set:
+                links = price_links[price]
+                # For prices above threshold try export
+                for key in links:
+                    typ = window_index[key]["type"]
+                    window_n = window_index[key]["id"]
+                    if typ in ["d", "df"]:
+                        if region_start and (export_window[window_n]["start"] >= region_end or export_window[window_n]["end"] < region_start):
+                            pass
+                        else:
+                            price_set_export.append([price, window_n, typ])
+
         # Start loop of trials
         for loop_price in all_prices:
             if best_level_score is not None:
@@ -207,43 +232,30 @@ class Plan:
                             all_d = []
                             count_c = 0
                             count_d = 0
-                            for price in price_set[::-1]:
-                                links = price_links[price]
+                            for price, window_n, typ in price_set_charge:
                                 if loop_price >= price:
-                                    for key in links:
-                                        window_n = window_index[key]["id"]
-                                        typ = window_index[key]["type"]
-                                        if typ in ["c", "cf"]:
-                                            if typ == "cf" and (not self.set_charge_freeze or not try_charge_freeze):
-                                                pass
-                                            elif region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
-                                                pass
-                                            elif count_c < max_charge_slots and (window_n not in all_n):
-                                                all_n.append(window_n)
-                                                if typ == "c":
-                                                    charge_option[window_n] = self.soc_max
-                                                else:
-                                                    charge_option[window_n] = self.reserve
-                                                count_c += 1
-                            for price in price_set:
-                                links = price_links[price]
-                                if export_enable and loop_price < price:
+                                    if typ == "cf" and (not self.set_charge_freeze or not try_charge_freeze):
+                                        pass
+                                    elif count_c < max_charge_slots and (window_n not in all_n):
+                                        all_n.append(window_n)
+                                        if typ == "c":
+                                            charge_option[window_n] = self.soc_max
+                                        else:
+                                            charge_option[window_n] = self.reserve
+                                        count_c += 1
+
+                            for price, window_n, typ in price_set_export:
+                                if loop_price < price:
                                     # For prices above threshold try export
-                                    for key in links:
-                                        typ = window_index[key]["type"]
-                                        window_n = window_index[key]["id"]
-                                        if typ in ["d", "df"]:
-                                            if typ == "df" and (not self.set_export_freeze or not try_export_freeze):
-                                                pass
-                                            elif region_start and (export_window[window_n]["start"] > region_end or export_window[window_n]["end"] < region_start):
-                                                pass
-                                            elif count_d < max_export_slots and (window_n not in all_d):
-                                                all_d.append(window_n)
-                                                if typ == "d":
-                                                    export_option[window_n] = calc_percent_limit(self.best_soc_min, self.soc_max)
-                                                else:
-                                                    export_option[window_n] = 99.0
-                                                count_d += 1
+                                    if typ == "df" and (not self.set_export_freeze or not try_export_freeze):
+                                        pass
+                                    elif count_d < max_export_slots and (window_n not in all_d):
+                                        all_d.append(window_n)
+                                        if typ == "d":
+                                            export_option[window_n] = calc_percent_limit(self.best_soc_min, self.soc_max)
+                                        else:
+                                            export_option[window_n] = 99.0
+                                        count_d += 1
 
                             # Sort for print out
                             all_n.sort()
