@@ -170,6 +170,7 @@ class Prediction:
             self.iboost_running_solar = False
             self.iboost_running_full = False
             self.inverter_can_charge_during_export = base.inverter_can_charge_during_export
+            self.prediction_cache_enable = base.prediction_cache_enable
             self.prediction_cache = {}
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
@@ -540,7 +541,7 @@ class Prediction:
 
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
-                keep_minute_scaling = min((minute / 256), 1.0) * best_soc_keep_weight
+                keep_minute_scaling = min((minute / 240), 1.0) * best_soc_keep_weight
             else:
                 keep_minute_scaling = best_soc_keep_weight
 
@@ -895,6 +896,7 @@ class Prediction:
 
                     if battery_draw == 0:
                         total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
+                        over_limit = 0
                         if total_inverted > inverter_limit:
                             over_limit = total_inverted - inverter_limit
                         battery_draw = max(-over_limit * inverter_loss, -charge_rate_now_curve_step, -battery_to_max, -pv_ac)
@@ -1089,6 +1091,7 @@ class Prediction:
             self.metric_time = metric_time
             self.record_time = record_time
             self.predict_battery_cycle = predict_battery_cycle
+            self.predict_soc = predict_soc
             self.pv_kwh_h0 = round(pv_kwh_h0, 4)
             self.import_kwh_h0 = round(import_kwh_h0, 4)
             self.export_kwh_h0 = round(export_kwh_h0, 4)
@@ -1098,7 +1101,7 @@ class Prediction:
             self.import_kwh_time = import_kwh_time
             self.export_kwh_time = export_kwh_time
 
-        if not save:
+        if not save and self.prediction_cache_enable:
             self.prediction_cache[sim_hash] = (
                 round(final_metric, 4),
                 round(import_kwh_battery, 4),
