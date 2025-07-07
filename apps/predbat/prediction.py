@@ -170,6 +170,7 @@ class Prediction:
             self.iboost_running_solar = False
             self.iboost_running_full = False
             self.inverter_can_charge_during_export = base.inverter_can_charge_during_export
+            self.prediction_cache_enable = base.prediction_cache_enable
             self.prediction_cache = {}
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
@@ -1100,7 +1101,7 @@ class Prediction:
             self.import_kwh_time = import_kwh_time
             self.export_kwh_time = export_kwh_time
 
-        if not save:
+        if not save and self.prediction_cache_enable:
             self.prediction_cache[sim_hash] = (
                 round(final_metric, 4),
                 round(import_kwh_battery, 4),
