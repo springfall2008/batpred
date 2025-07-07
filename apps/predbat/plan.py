@@ -192,7 +192,7 @@ class Plan:
                 if typ in ["c", "cf"]:
                     if region_start and (charge_window[window_n]["start"] >= region_end or charge_window[window_n]["end"] < region_start):
                         pass
-                    else:                            
+                    else:
                         price_set_charge.append([price, window_n, typ])
         price_set_export = []
         if export_enable:

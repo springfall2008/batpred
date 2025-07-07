@@ -2400,7 +2400,7 @@ def simple_scenario(
     inverter_can_charge_during_export=True,
     prediction_handle=None,
     return_prediction_handle=False,
-    ignore_failed = False,
+    ignore_failed=False,
 ):
     """
     No PV, No Load
@@ -3080,7 +3080,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
-        #my_predbat.plan_debug = True
+        # my_predbat.plan_debug = True
         my_predbat.debug_enable = True
         # my_predbat.set_discharge_during_charge = True
         # my_predbat.calculate_export_oncharge = True
@@ -5857,21 +5857,21 @@ def run_perf_test(my_predbat):
     my_predbat.prediction_cache_enable = False
 
     failed, prediction_handle = simple_scenario(
-            "load_bat_dc_pv2",
-            my_predbat,
-            4,
-            4,
-            assert_final_metric=import_rate * 24 * 3.2,
-            assert_final_soc=50 + 24,
-            with_battery=True,
-            battery_soc=50.0,
-            inverter_loss=0.8,
-            hybrid=True,
-            quiet=True,
-            save="none",
-            return_prediction_handle=True,
-            ignore_failed=True,
-        )
+        "load_bat_dc_pv2",
+        my_predbat,
+        4,
+        4,
+        assert_final_metric=import_rate * 24 * 3.2,
+        assert_final_soc=50 + 24,
+        with_battery=True,
+        battery_soc=50.0,
+        inverter_loss=0.8,
+        hybrid=True,
+        quiet=True,
+        save="none",
+        return_prediction_handle=True,
+        ignore_failed=True,
+    )
 
     start_time = time.time()
     for count in range(0, 200):
