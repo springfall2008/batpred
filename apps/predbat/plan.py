@@ -183,6 +183,35 @@ class Plan:
             if region_start:
                 self.log("Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end)))
 
+        start_time = datetime.now()
+
+        price_set_charge = []
+        for price in price_set[::-1]:
+            links = price_links[price]
+            for key in links:
+                window_n = window_index[key]["id"]
+                typ = window_index[key]["type"]
+                if typ in ["c", "cf"]:
+                    if region_start and (charge_window[window_n]["start"] >= region_end or charge_window[window_n]["end"] < region_start):
+                        pass
+                    else:                            
+                        price_set_charge.append([price, window_n, typ])
+        price_set_export = []
+        if export_enable:
+            for price in price_set:
+                links = price_links[price]
+                # For prices above threshold try export
+                for key in links:
+                    typ = window_index[key]["type"]
+                    window_n = window_index[key]["id"]
+                    if typ in ["d", "df"]:
+                        if region_start and (export_window[window_n]["start"] >= region_end or export_window[window_n]["end"] < region_start):
+                            pass
+                        else:
+                            price_set_export.append([price, window_n, typ])
+
+
+
         # Start loop of trials
         for loop_price in all_prices:
             if best_level_score is not None:
@@ -207,43 +236,30 @@ class Plan:
                             all_d = []
                             count_c = 0
                             count_d = 0
-                            for price in price_set[::-1]:
-                                links = price_links[price]
+                            for price, window_n, typ in price_set_charge:
                                 if loop_price >= price:
-                                    for key in links:
-                                        window_n = window_index[key]["id"]
-                                        typ = window_index[key]["type"]
-                                        if typ in ["c", "cf"]:
-                                            if typ == "cf" and (not self.set_charge_freeze or not try_charge_freeze):
-                                                pass
-                                            elif region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
-                                                pass
-                                            elif count_c < max_charge_slots and (window_n not in all_n):
-                                                all_n.append(window_n)
-                                                if typ == "c":
-                                                    charge_option[window_n] = self.soc_max
-                                                else:
-                                                    charge_option[window_n] = self.reserve
-                                                count_c += 1
-                            for price in price_set:
-                                links = price_links[price]
-                                if export_enable and loop_price < price:
+                                    if typ == "cf" and (not self.set_charge_freeze or not try_charge_freeze):
+                                        pass
+                                    elif count_c < max_charge_slots and (window_n not in all_n):
+                                        all_n.append(window_n)
+                                        if typ == "c":
+                                            charge_option[window_n] = self.soc_max
+                                        else:
+                                            charge_option[window_n] = self.reserve
+                                        count_c += 1
+
+                            for price, window_n, typ in price_set_export:
+                                if loop_price < price:
                                     # For prices above threshold try export
-                                    for key in links:
-                                        typ = window_index[key]["type"]
-                                        window_n = window_index[key]["id"]
-                                        if typ in ["d", "df"]:
-                                            if typ == "df" and (not self.set_export_freeze or not try_export_freeze):
-                                                pass
-                                            elif region_start and (export_window[window_n]["start"] > region_end or export_window[window_n]["end"] < region_start):
-                                                pass
-                                            elif count_d < max_export_slots and (window_n not in all_d):
-                                                all_d.append(window_n)
-                                                if typ == "d":
-                                                    export_option[window_n] = calc_percent_limit(self.best_soc_min, self.soc_max)
-                                                else:
-                                                    export_option[window_n] = 99.0
-                                                count_d += 1
+                                    if typ == "df" and (not self.set_export_freeze or not try_export_freeze):
+                                        pass
+                                    elif count_d < max_export_slots and (window_n not in all_d):
+                                        all_d.append(window_n)
+                                        if typ == "d":
+                                            export_option[window_n] = calc_percent_limit(self.best_soc_min, self.soc_max)
+                                        else:
+                                            export_option[window_n] = 99.0
+                                        count_d += 1
 
                             # Sort for print out
                             all_n.sort()
@@ -453,6 +469,9 @@ class Plan:
 
             metric, battery_value, cost, keep, cycle, carbon, import_this, export_this = self.run_prediction_metric(best_limits, charge_window, export_window, best_export_limits, end_record=self.end_record)
 
+        end_time = datetime.now()
+        print("Optimise all charge took {} seconds and ran {} simulations".format((end_time - start_time).total_seconds(), len(tried_list)))
+
         return (
             best_limits,
             best_export_limits,
@@ -467,11 +486,11 @@ class Plan:
             tried_list,
             levels_score,
         )
-
     def launch_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step=PREDICT_STEP):
         """
         Launch a thread to run a prediction
         """
+        #return DummyThread([100, 10, 10, 10, 5, 24, 50, 5, 1, 0, 0])
         charge_limit = copy.deepcopy(charge_limit)
         export_limits = copy.deepcopy(export_limits)
         if self.pool and self.pool._state == "RUN":
@@ -784,12 +803,14 @@ class Plan:
             if self.plan_valid:
                 charge_limit_best_prev = copy.deepcopy(self.charge_limit_best)
                 charge_window_best_prev = copy.deepcopy(self.charge_window_best)
+                charge_limit_percent_best_prev = copy.deepcopy(self.charge_limit_percent_best)
                 export_window_best_prev = copy.deepcopy(self.export_window_best)
                 export_limits_best_prev = copy.deepcopy(self.export_limits_best)
                 self.log("Recompute is saving previous plan...")
             else:
                 charge_limit_best_prev = None
                 charge_window_best_prev = None
+                charge_limit_percent_best_prev = None
                 export_window_best_prev = None
                 export_limits_best_prev = None
                 self.log("Recompute, previous plan is invalid...")
@@ -1003,11 +1024,7 @@ class Plan:
 
             # Plan is now valid
             self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))
-            if not self.update_pending:
-                self.plan_valid = True
-            else:
-                self.log("Plan is not valid as update is pending, will re-compute on next run...")
-                self.plan_valid = False
+            self.plan_valid = True
             self.plan_last_updated = self.now_utc
             self.plan_last_updated_minutes = self.minutes_now
 
@@ -1956,7 +1973,7 @@ class Plan:
                 # Combine two windows of the same charge target provided the rates are the same or low power mode is off (low power mode can skew the charge into the more expensive slot)
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
-                new_window_best[-1]["average"] = dp2((new_window_best[-1]["average"] + window["average"]) / 2)
+                new_window_best[-1]["average"] = (new_window_best[-1]["average"] + window["average"]) / 2
                 if self.debug_enable:
                     self.log("Combine charge slot {} with previous (same target) - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
             elif (
@@ -3170,7 +3187,7 @@ class Plan:
         self.iboost_running = iboost_running
         self.iboost_running_solar = iboost_running_solar
         self.iboost_running_full = iboost_running_full
-        if save or pred.debug_enable:
+        if save:
             predict_soc_time = pred.predict_soc_time
             first_charge = pred.first_charge
             first_charge_soc = pred.first_charge_soc

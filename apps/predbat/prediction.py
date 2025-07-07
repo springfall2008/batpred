@@ -11,7 +11,16 @@
 from datetime import timedelta
 from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
 from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
+from datetime import datetime
+import subprocess
+import os
+import sys
+import time
 
+PREDICTION_SERVER = True
+FIXED_POINT_SCALE = 1000000
+LOCKSTEP = False
+C_MODE = False
 
 # Only assign globals once to avoid re-creating them with processes are forked
 if not "PRED_GLOBAL" in globals():
@@ -28,7 +37,6 @@ def wrapped_run_prediction_single(charge_limit, charge_window, export_window, ex
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
     return pred.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step)
-
 
 def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
@@ -70,18 +78,177 @@ def get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybri
 
     return total_inverted
 
+def float2fixed(value):
+    """
+    Convert a float to a fixed point representation with the given precision
+    """
+    return int(value * FIXED_POINT_SCALE)
+
+def write_float(value, han):
+    """
+    Write a float to a binary file
+    """
+    han.write(float2fixed(value).to_bytes(8, "little", signed=True))
+
+def write_int(value, han):
+    """
+    Write an integer to a binary file
+    """
+    han.write(value.to_bytes(8, "little", signed=True))
+
+def write_bool(value, han):
+    """
+    Write a boolean to a binary file
+    """
+    han.write(int(value).to_bytes(8, "little"))
+
+def write_minute_array(forecast_minutes, array, han, default=0):
+    """
+    Write a minute array to a binary file
+    """
+    for minute in range(0, forecast_minutes, 5):
+        value = array.get(minute, default)
+        han.write(float2fixed(value).to_bytes(8, "little", signed=True))
+
+def write_fixed_array(size, array, han, offset=0, default=0):
+    """
+    Write a percent array to a binary file
+    """
+    for idx in range(size):
+        if isinstance(array, dict):
+            value = array.get(idx - offset, default)
+        else:
+            index = idx - offset
+            if index < len(array):
+                value = array[index]
+                if value is None:
+                    value = default
+            else:
+                value = default
+        han.write(float2fixed(value).to_bytes(8, "little"))
 
 class Prediction:
     """
     Class to hold prediction input and output data and the run function
     """
 
+    def init_prediction_server(self):
+        # Open a pipe to the 'prediction_server' executable and pipe the data to it via stdin
+        self.prediction_server = subprocess.Popen(
+            ["./prediction_server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            # stderr=subprocess.PIPE,
+        )
+        han = self.prediction_server.stdin
+        han.write("INIT".encode("utf-8"))
+        write_int(self.minutes_now, han)
+        write_int(self.forecast_minutes, han)
+        max_minutes = self.forecast_minutes + self.minutes_now;
+        write_int(int(self.midnight_utc.timestamp()), han)
+        write_float(self.soc_kw, han)
+        write_float(self.soc_max, han)
+        write_float(self.export_today_now, han)
+        write_float(self.import_today_now, han)
+        write_float(self.load_minutes_now, han)
+        write_float(self.pv_today_now, han)
+        write_float(self.iboost_today, han)
+        write_float(self.charge_rate_now, han)
+        write_float(self.discharge_rate_now, han)
+        write_float(self.cost_today_sofar, han)
+        write_float(self.carbon_today_sofar, han)
+        write_bool(self.debug_enable, han)
+        write_int(self.num_cars, han)
+        write_fixed_array(self.num_cars, self.car_charging_soc, han)
+        write_fixed_array(self.num_cars, self.car_charging_soc_next, han)
+        write_float(self.car_charging_loss, han)
+        write_float(self.reserve, han)
+        write_float(self.metric_standing_charge, han)
+        write_int(self.set_charge_freeze, han)
+        write_int(self.set_reserve_enable, han)
+        write_int(self.set_export_freeze, han)
+        write_int(self.set_export_freeze_only, han)
+        write_int(self.set_discharge_during_charge, han)
+        write_int(self.set_read_only, han)
+        write_int(self.set_charge_low_power, han)
+        write_int(self.set_export_low_power, han)
+        write_bool(self.set_charge_window, han)
+        write_bool(self.set_export_window, han)
+        write_float(self.charge_low_power_margin, han)
+        for car_n in range(self.num_cars):
+            write_minute_array(max_minutes, self.car_charging_slot_fold[car_n], han)
+        write_fixed_array(self.num_cars, self.car_charging_limit, han)
+        write_int(self.car_charging_from_battery, han)
+        write_bool(self.iboost_enable, han)
+        write_bool(self.iboost_on_export, han)
+        write_bool(self.iboost_prevent_discharge, han)
+        write_bool(self.carbon_enable, han)
+        write_float(self.iboost_next, han)
+        write_float(self.iboost_max_energy, han)
+        write_float(self.iboost_max_power, han)
+        write_float(self.iboost_min_power, han)
+        write_float(self.iboost_min_soc, han)
+        write_bool(self.iboost_solar, han)
+        write_bool(self.iboost_solar_excess, han)
+        write_bool(self.iboost_charging, han)
+        write_minute_array(max_minutes, self.iboost_plan_fold, han)
+        #write_bool(self.iboost_gas, han)
+        write_bool(True, han)
+        write_bool(self.iboost_gas_export, han)
+        write_float(self.iboost_gas_scale, han)
+        write_float(self.iboost_rate_threshold, han)
+        write_float(self.iboost_rate_threshold_export, han)
+        write_minute_array(max_minutes, self.rate_gas, han)
+        write_float(self.inverter_loss, han)
+        write_bool(self.inverter_hybrid, han)
+        write_float(self.inverter_limit, han)
+        write_float(self.export_limit, han)
+        write_float(self.battery_rate_min, han)
+        write_float(self.battery_rate_max_charge, han)
+        write_float(self.battery_rate_max_discharge, han)
+        write_float(self.battery_rate_max_charge_scaled, han)
+        write_float(self.battery_rate_max_discharge_scaled, han)
+        write_fixed_array(100, self.battery_charge_power_curve, han, default=1.0)
+        write_fixed_array(100, self.battery_discharge_power_curve, han, default=1.0)
+        write_float(self.battery_temperature, han)
+        write_fixed_array(40, self.battery_temperature_charge_curve, han, offset=-20, default=1.0)
+        write_fixed_array(40, self.battery_temperature_discharge_curve, han, offset=-20, default=1.0)
+        write_minute_array(max_minutes, self.battery_temperature_prediction, han, default=self.battery_temperature)
+        write_float(self.battery_rate_max_scaling, han)
+        write_float(self.battery_rate_max_scaling_discharge, han)
+        write_float(self.battery_loss, han)
+        write_float(self.battery_loss_discharge, han)
+        write_float(self.best_soc_keep, han)
+        write_float(self.best_soc_keep_weight, han)
+        write_float(self.best_soc_min, han)
+        write_fixed_array(self.num_cars, self.car_charging_battery_size, han)
+        write_minute_array(max_minutes, self.rate_import, han)
+        write_minute_array(max_minutes, self.rate_export, han)
+        write_minute_array(max_minutes, self.pv_forecast_minute_step, han)
+        write_minute_array(max_minutes, self.pv_forecast_minute10_step, han)
+        write_minute_array(max_minutes, self.load_minutes_step, han)
+        write_minute_array(max_minutes, self.load_minutes_step10, han)
+        write_minute_array(max_minutes, self.carbon_intensity, han)
+        write_minute_array(max_minutes, self.alert_active_keep, han)
+        write_bool(self.iboost_running, han)
+        write_bool(self.iboost_running_solar, han)
+        write_bool(self.iboost_running_full, han)
+        write_bool(self.inverter_can_charge_during_export, han)
+        han.write("DONE".encode("utf-8"))
+
+        # Read from stdout to ensure the server is ready
+        self.prediction_server.stdin.flush()
+        cmd = self.prediction_server.stdout.read(4).decode("utf-8")
+        if cmd != "OKAY":
+            self.log("Error: Prediction server did not start correctly, received: {}".format(cmd))
+
+            
+
     def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None):
         global PRED_GLOBAL
         if base:
             self.minutes_now = base.minutes_now
             self.log = base.log
-            self.time_abs_str = base.time_abs_str
             self.forecast_minutes = base.forecast_minutes
             self.midnight_utc = base.midnight_utc
             self.soc_kw = base.soc_kw
@@ -170,7 +337,20 @@ class Prediction:
             self.iboost_running_solar = False
             self.iboost_running_full = False
             self.inverter_can_charge_during_export = base.inverter_can_charge_during_export
+            self.car_charging_slot_fold = {}
+            for car_n in range(self.num_cars):
+                # Create a car charging slot fold for each car
+                self.car_charging_slot_fold[car_n] = {}
+                for minute in range(self.forecast_minutes):
+                    self.car_charging_slot_fold[car_n][minute] = self.in_car_slot(minute)[car_n]
+            self.iboost_plan_fold = {}
+            for minute in range(self.forecast_minutes):
+                self.iboost_plan_fold[minute] = self.in_iboost_slot(minute)
             self.prediction_cache = {}
+            self.prediction_server = None
+            self.prediction_cache_enable = base.prediction_cache_enable
+            if PREDICTION_SERVER:
+                self.init_prediction_server()
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -179,7 +359,6 @@ class Prediction:
         """
         Run single prediction in a thread
         """
-
         (
             cost,
             import_kwh_battery,
@@ -232,6 +411,7 @@ class Prediction:
             iboost_running_solar,
             iboost_running_full,
         ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record)
+
         min_soc = self.soc_max
         max_soc = 0
         if not all_n:
@@ -354,9 +534,89 @@ class Prediction:
                         break
         return load_amount
 
+    def run_prediction_server(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step=PREDICT_STEP):
+        """
+        Run a prediction scenario using the prediction server
+        """
+        # First pass the parameters to the prediction server
+        han = self.prediction_server.stdin
+        han_read = self.prediction_server.stdout
+
+        han.write("PRED".encode("utf-8"))
+        han.write(len(charge_limit).to_bytes(8, "little"))
+        for limit in charge_limit:
+            han.write(float2fixed(limit).to_bytes(8, "little"))
+        han.write(len(charge_window).to_bytes(8, "little"))
+        for window in charge_window:
+            han.write(window["start"].to_bytes(8, "little"))
+            han.write(window["end"].to_bytes(8, "little"))
+        han.write(len(export_window).to_bytes(8, "little"))
+        for window in export_window:
+            han.write(window["start"].to_bytes(8, "little"))
+            han.write(window["end"].to_bytes(8, "little"))
+        han.write(len(export_limits).to_bytes(8, "little"))
+        for limit in export_limits:
+            han.write(float2fixed(limit).to_bytes(8, "little"))
+        han.write(int(pv10).to_bytes(8, "little"))
+        han.write(int(end_record).to_bytes(8, "little"))
+        han.write(int(step).to_bytes(8, "little"))
+        han.flush()
+
+        # Now read the results from the prediction server
+        cmd = han_read.read(4).decode("utf-8")
+        if cmd != "PRED":
+            self.log("Error: Prediction server did not return PRED command, received: {}".format(cmd))
+            return None
+                
+        final_metric = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        import_kwh_battery = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        import_kwh_house = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        export_kwh = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        soc_min = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        final_soc = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        soc_min_minute = int.from_bytes(han_read.read(8), "little")
+        final_battery_cycle = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        final_metric_keep = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        final_iboost_kwh = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        final_carbon_g = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        predict_soc = {}
+        for minute in range(0, self.forecast_minutes, 5):
+            predict_soc[minute] = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        car_charging_soc_next = []
+        for car_n in range(self.num_cars):
+            car_charging_soc_next.append(float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE)
+        iboost_next = float(int.from_bytes(han_read.read(8), "little")) / FIXED_POINT_SCALE
+        iboost_running = bool(int.from_bytes(han_read.read(8), "little"))
+        iboost_running_solar = bool(int.from_bytes(han_read.read(8), "little"))
+        iboost_running_full = bool(int.from_bytes(han_read.read(8), "little"))
+        cmd = han_read.read(4).decode("utf-8")
+        if cmd != "DONE":
+            self.log("Error: Prediction server did not return DONE command, received: {}".format(cmd))
+            return None
+        
+        return (
+            round(final_metric, 4),
+            round(import_kwh_battery, 4),
+            round(import_kwh_house, 4),
+            round(export_kwh, 4),
+            round(soc_min, 4),
+            round(final_soc, 4),
+            soc_min_minute,
+            round(final_battery_cycle, 4),
+            round(final_metric_keep, 4),
+            round(final_iboost_kwh, 4),
+            round(final_carbon_g, 4),
+            predict_soc,
+            car_charging_soc_next,
+            iboost_next,
+            iboost_running,
+            iboost_running_solar,
+            iboost_running_full,
+        )
+
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """
-        Run a prediction scenario given a charge limit, return the results
+        Prediction wrapper
         """
         window_hash = 0
         for window in charge_window:
@@ -366,10 +626,25 @@ class Prediction:
 
         sim_hash = hash(tuple(charge_limit)) ^ window_hash ^ hash(tuple(export_limits)) ^ hash(pv10) ^ hash(end_record) ^ hash(step)
 
-        if not save and sim_hash in self.prediction_cache:
+        if self.prediction_cache_enable and not save and sim_hash in self.prediction_cache:
             # Return cached result
             return self.prediction_cache[sim_hash]
+        
+        if not save and C_MODE:
+            # In C mode we run the prediction server
+            return self.run_prediction_server(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step)
+        else:
+            # In Python mode we run the prediction in Python
+            return self.run_prediction_python(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, save=save, step=step, sim_hash=sim_hash)
+                        
 
+    def run_prediction_python(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP, sim_hash=None):
+        """
+        Python version of the prediction
+        This is the main prediction function that runs the prediction logic
+        It calculates the SOC, cost, import/export values and other metrics based on the provided parameters
+        and returns the results.
+        """
         # Fetch data from globals, optimised away from class to avoid passing it between threads
         if pv10:
             pv_forecast_minute_step = self.pv_forecast_minute10_step
@@ -895,6 +1170,7 @@ class Prediction:
 
                     if battery_draw == 0:
                         total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
+                        over_limit = 0;
                         if total_inverted > inverter_limit:
                             over_limit = total_inverted - inverter_limit
                         battery_draw = max(-over_limit * inverter_loss, -charge_rate_now_curve_step, -battery_to_max, -pv_ac)
@@ -1098,7 +1374,7 @@ class Prediction:
             self.import_kwh_time = import_kwh_time
             self.export_kwh_time = export_kwh_time
 
-        if not save:
+        if self.prediction_cache_enable and not save and sim_hash:
             self.prediction_cache[sim_hash] = (
                 round(final_metric, 4),
                 round(import_kwh_battery, 4),

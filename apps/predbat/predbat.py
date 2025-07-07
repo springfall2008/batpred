@@ -480,11 +480,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.charge_limit_best_percent = []
         self.charge_window = []
         self.charge_window_best = []
-        self.car_charging_battery_size = [100]
-        self.car_charging_limit = [100]
-        self.car_charging_soc = [0]
-        self.car_charging_soc_next = [None]
-        self.car_charging_rate = [7.4]
+        self.car_charging_battery_size = [100, 100, 100, 100]
+        self.car_charging_limit = [100, 100, 100, 100]
+        self.car_charging_soc = [0, 0, 0, 0]
+        self.car_charging_soc_next = [None, None, None, None]
+        self.car_charging_rate = [7.4, 7.4, 7.4, 7.4]
         self.car_charging_loss = 1.0
         self.export_window = []
         self.export_limits = []
@@ -615,6 +615,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.set_export_low_power = False
         self.config_root = "./"
         self.inverter_can_charge_during_export = True
+        self.prediction_cache_enable = True
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):

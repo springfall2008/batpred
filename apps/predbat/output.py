@@ -2582,6 +2582,7 @@ class Output:
         rate_export = self.rate_export
         iboost_enable = self.iboost_enable
         num_cars = self.num_cars
+        car_charging_soc_next = self.car_charging_soc_next
 
         # Fake to yesterday state
         self.minutes_now = 0
@@ -2706,6 +2707,7 @@ class Output:
         self.rate_export = rate_export
         self.iboost_enable = iboost_enable
         self.num_cars = num_cars
+        self.car_charging_soc_next = car_charging_soc_next
 
     def publish_rate_and_threshold(self):
         """
