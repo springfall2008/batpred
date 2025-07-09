@@ -3054,7 +3054,7 @@ def run_execute_test(
     return failed
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False):
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False):
     print("**** Running debug test {} ****\n".format(debug_file))
     if not expected_file:
         re_do_rates = True
@@ -3080,8 +3080,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
-        # my_predbat.plan_debug = True
-        my_predbat.debug_enable = True
+        my_predbat.plan_debug = True
+        my_predbat.debug_enable = debug
         # my_predbat.set_discharge_during_charge = True
         # my_predbat.calculate_export_oncharge = True
         # my_predbat.combine_charge_slots = False
@@ -3133,7 +3133,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         if my_predbat.rate_export:
             my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
             print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
-            print("Export windows {}".format(my_predbat.high_export_rates))
             # Update threshold automatically
             if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
                 my_predbat.rate_export_cost_threshold = export_lowest
@@ -3146,12 +3145,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             # Update threshold automatically
             if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
                 my_predbat.rate_import_cost_threshold = highest
-
-            print("Lowest rate {} highest rate {} rates {}".format(lowest, highest, my_predbat.low_rates))
     else:
         print("don't re-do rates")
-
-    print("minutes_now {} end_record {}".format(my_predbat.minutes_now, my_predbat.end_record))
 
     if compare:
         print("Run compare")
@@ -3203,7 +3198,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     failed = False
     my_predbat.log("> ORIGINAL PLAN")
-    print("Read3 yaml num_cars {}".format(my_predbat.num_cars))
 
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
@@ -3227,7 +3221,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             if enabled and value != default:
                 print("- {} = {} (default {}) - enable {}".format(name, value, default, enable))
 
-    print("Read4 yaml num_cars {}".format(my_predbat.num_cars))
     # Save plan
     # Pre-optimise all plan
     my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
@@ -3237,8 +3230,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     open(filename, "w").write(my_predbat.html_plan)
     print("Wrote plan to {} metric {}".format(filename, metric))
 
-    print("Export windows {}".format(my_predbat.export_window_best))
-    my_predbat.calculate_plan(recompute=True, debug_mode=True)
+    ## Calculate the plan
+    my_predbat.plan_valid = False
+    my_predbat.calculate_plan(recompute=True, debug_mode=debug)
 
     # Predict
     my_predbat.log("> FINAL PLAN")
@@ -8706,6 +8700,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
+    parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--quick", action="store_true", help="Run quick tests")
     parser.add_argument("--perf_only", action="store_true", help="Run only perf tests")
     parser.add_argument("--compare", action="store_true", help="Run compare")
@@ -8731,7 +8726,7 @@ def main():
     failed = False
 
     if args.debug_file:
-        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug)
         sys.exit(0)
 
     if not failed and args.gecloud:
