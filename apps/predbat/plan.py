@@ -196,7 +196,7 @@ class Plan:
                     elif charge_window[window_n]["start"] in self.manual_all_times:
                         pass
                     else:
-                        price_set_charge.append([price, window_n, typ=="cf"])
+                        price_set_charge.append([price, window_n, typ == "cf"])
                         valid_charge_windows[window_n] = True
         price_set_export = []
         valid_export_windows = {}
@@ -213,7 +213,7 @@ class Plan:
                         elif export_window[window_n]["start"] in self.manual_all_times:
                             pass
                         else:
-                            price_set_export.append([price, window_n, typ=="df"])
+                            price_set_export.append([price, window_n, typ == "df"])
                             valid_export_windows[window_n] = True
 
         # Start loop of trials
