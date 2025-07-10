@@ -238,7 +238,8 @@ metric_octopus_import: 'sensor.current_buy_electricity_price_raw'
 metric_octopus_export: 'sensor.current_sell_electricity_price_raw'
 
 Czech Republic example:
-https://github.com/rnovacek/homeassistant_cz_energy_spot_prices
+<https://github.com/rnovacek/homeassistant_cz_energy_spot_prices>
+
 ```yaml
 {% set attributes = states.sensor.current_buy_electricity_price.attributes %}
 {% set datetime_dict = zip(attributes.keys() | map('as_datetime', default={}), attributes.values()) | selectattr(0, 'datetime') %}
@@ -250,8 +251,9 @@ https://github.com/rnovacek/homeassistant_cz_energy_spot_prices
 {% endfor %}
 {{ns.output | sort(attribute='start') }}
 ```
+
 full code for cz energy spot template:
-https://gist.github.com/ziat007/ae29e26ae257f069520b65f0168c3a6b
+<https://gist.github.com/ziat007/ae29e26ae257f069520b65f0168c3a6b>
 
 ## Rate Bands to manually configure Energy Rates
 
