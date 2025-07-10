@@ -232,7 +232,7 @@ metric_energidataservice_export - Export rates from the Energidataservice integr
 
 ## Other spot sensor integrations
 
-Different spot integrations that include forecast prices may be used. 
+Different spot integrations that include forecast prices may be used.
 Because integrations format their attribute data differently, a template sensor is required to convert the attribute data into a new sensor with the correctly formatted attributes: raw_today and raw_tomorrow.
 
 metric_octopus_import: 'sensor.current_buy_electricity_price_raw'
