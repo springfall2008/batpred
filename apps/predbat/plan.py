@@ -196,7 +196,7 @@ class Plan:
                     elif charge_window[window_n]["start"] in self.manual_all_times:
                         pass
                     else:
-                        price_set_charge.append([price, window_n, typ=="cf"])
+                        price_set_charge.append([price, window_n, typ == "cf"])
                         valid_charge_windows[window_n] = True
                         best_limits_reset[window_n] = 0
 
@@ -216,7 +216,7 @@ class Plan:
                         elif export_window[window_n]["start"] in self.manual_all_times:
                             pass
                         else:
-                            price_set_export.append([price, window_n, typ=="df"])
+                            price_set_export.append([price, window_n, typ == "df"])
                             valid_export_windows[window_n] = True
                             best_export_limits_reset[window_n] = 100.0
 
@@ -259,7 +259,6 @@ class Plan:
                                     if freeze and not try_export_freeze:
                                         pass
                                     elif count_d < max_export_slots and (window_n not in all_d):
-
                                         if not self.car_charging_from_battery and self.hit_car_window(export_window[window_n]["start"], export_window[window_n]["end"]):
                                             pass
                                         elif not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, export_window[window_n]["start"], export_window[window_n]["end"]) >= 0):
