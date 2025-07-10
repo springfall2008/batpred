@@ -1,4 +1,7 @@
 # Custom Dictionary Words
+selectattr
+timedelta
+isoformat
 activepower
 adata
 adbase
