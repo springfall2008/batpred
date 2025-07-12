@@ -259,7 +259,6 @@ class Plan:
                                     if freeze and not try_export_freeze:
                                         pass
                                     elif count_d < max_export_slots and (window_n not in all_d):
-
                                         if not self.car_charging_from_battery and self.hit_car_window(export_window[window_n]["start"], export_window[window_n]["end"]):
                                             pass
                                         elif not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, export_window[window_n]["start"], export_window[window_n]["end"]) >= 0):

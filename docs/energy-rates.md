@@ -230,6 +230,32 @@ metric_energidataservice_import - Import rates from the Energidataservice integr
 
 metric_energidataservice_export - Export rates from the Energidataservice integration. This should point to the sensor that provides hourly export rates (e.g., solar feed-in rates), such as sensor.energi_data_service_export.
 
+## Other spot sensor integrations
+
+Different spot integrations that include forecast prices may be used.
+Because integrations format their attribute data differently, a template sensor is required to convert the attribute data into a new sensor with the correctly formatted attributes: raw_today and raw_tomorrow.
+
+metric_octopus_import: 'sensor.current_buy_electricity_price_raw'
+metric_octopus_export: 'sensor.current_sell_electricity_price_raw'
+
+Czech Republic example:
+<https://github.com/rnovacek/homeassistant_cz_energy_spot_prices>
+
+```yaml
+{% set attributes = states.sensor.current_buy_electricity_price.attributes %}
+{% set datetime_dict = zip(attributes.keys() | map('as_datetime', default={}), attributes.values()) | selectattr(0, 'datetime') %}
+{% set ns = namespace(output=[]) %}
+{% for start_time, price in datetime_dict %}
+ {% if start_time < today_at() + timedelta(days=1) %}
+   {% set ns.output = ns.output + [{'start': start_time.isoformat(), 'end': (start_time + timedelta(hours=1)).isoformat(), 'value': price | round(5)}] %}
+ {% endif %}
+{% endfor %}
+{{ns.output | sort(attribute='start') }}
+```
+
+full code for cz energy spot template:
+<https://gist.github.com/ziat007/ae29e26ae257f069520b65f0168c3a6b>
+
 ## Rate Bands to manually configure Energy Rates
 
 If you are not an Octopus Energy customer, or you are but your energy rates repeat simply, you can configure your rate bands in apps.yaml using rates_import/rates_export/rates_gas.
