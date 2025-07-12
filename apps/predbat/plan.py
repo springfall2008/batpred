@@ -2955,7 +2955,7 @@ class Plan:
                             break
 
                     self.plan_write_debug(debug_mode, "plan_levels_{}.html".format(region_size))
-                    region_size = int(region_size / 4)
+                    region_size = int(region_size / 2)
 
         best_price_charge, best_price_export, best_price_charge_level, best_price_export_level = self.find_price_levels(price_set, price_links, window_index, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best)
         self.rate_best_cost_threshold_charge = best_price_charge
