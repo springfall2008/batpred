@@ -906,20 +906,30 @@ class Inverter:
                 else:
                     self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id, required_unit="V")
         else:
+            # Battery power
             self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id, required_unit="W")
             if self.base.get_arg("battery_power_invert", default=False, index=self.id):
                 # If battery power is inverted then invert it
                 self.battery_power = -self.battery_power
+
+            # PV Power
             self.pv_power = self.base.get_arg("pv_power", default=0.0, index=self.id, required_unit="W")
-            self.load_power = self.base.get_arg("load_power", default=0.0, index=self.id, required_unit="W")
+
+            # Grid Power
             self.grid_power = self.base.get_arg("grid_power", default=0.0, index=self.id, required_unit="W")
             if self.base.get_arg("grid_power_invert", default=False, index=self.id):
                 # If grid power is inverted then invert it
                 self.grid_power = -self.grid_power
 
+            # Load Power
+            self.load_power = self.base.get_arg("load_power", default=0.0, index=self.id, required_unit="W")
             for i in range(1, self.inv_num_load_entities):
                 self.load_power += self.base.get_arg(f"load_power_{i}", default=0.0, index=self.id, required_unit="W")
+            if self.base.get_arg("load_power_invert", default=False, index=self.id):
+                # If load power is inverted then invert it
+                self.load_power = -self.load_power
 
+            # Battery Voltage
             self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id, required_unit="V")
 
         if not quiet:
