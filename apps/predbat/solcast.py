@@ -589,12 +589,13 @@ class Solcast:
 
         for minute in pv_power_hist:
             minute_absolute = self.minutes_now - minute
-            days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
-            slot_abs = minute_absolute % (24 * 60)
-            slot = int(slot_abs / 30) * 30
-            pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
-            pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
-            past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
+            if minute_absolute < 0:
+                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+                slot_abs = minute_absolute % (24 * 60)
+                slot = int(slot_abs / 30) * 30
+                pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
+                pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
+                past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
 
         for slot in pv_power_hist_by_slot:
             if pv_power_hist_by_slot_count[slot] > 0:
@@ -648,7 +649,8 @@ class Solcast:
             pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0 else 0)
             forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
 
-            slot_adjustment[slot] = dp4(pv_distribution[slot] / forecast_distribution[slot] if (forecast_distribution[slot] > 0.01) else 1.0)
+            slot_adjustment[slot] = pv_power_hist_by_slot.get(slot, 0) / pv_forecast_by_slot.get(slot, 0) if pv_forecast_by_slot.get(slot, 0) > 0.01 else 1.0
+            slot_adjustment[slot] = max(min(slot_adjustment[slot], 2.0), 0.5)  # Clamp adjustment factor to sensible values
 
             # Override if we don't have enough data
             if not enabled_calibration:
@@ -671,7 +673,7 @@ class Solcast:
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
             pv_value = pv_forecast_minute.get(minute, 0)
             slot = (int(minute / 30) * 30) % (24 * 60)
-            pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(slot, 1.0) * total_adjustment
+            pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(slot, 1.0)
 
         pv_estimateCL = {}
         pv_estimate10 = {}
