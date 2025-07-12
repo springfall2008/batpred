@@ -388,7 +388,13 @@ class WebInterface:
         text += '<div style="flex: 1;">\n'
         text += "<h2>Status</h2>\n"
         text += "<table>\n"
-        is_running = self.base.is_running()
+
+        try:
+            is_running = self.base.is_running()
+        except Exception as e:
+            self.log("Error checking if Predbat is running: {}".format(e))
+            is_running = False
+
         last_updated = self.base.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
         if not is_running:
             text += "<tr><td colspan='2' bgcolor='#ff7777'>Predbat is not running</td></tr>\n"
@@ -1161,11 +1167,16 @@ var options = {
         Check if Predbat is running
         return error 500 if not running
         """
-        if self.base.is_running():
+        try:
+            is_running = self.base.is_running()
+        except Exception as e:
+            self.log("Error checking if Predbat is running: {}".format(e))
+            is_running = False
+
+        if is_running:
             return web.Response(content_type="application/json", text='{"result": "ok"}')
         else:
             return web.Response(status=500, content_type="application/json", text='{"result": "error"}')
-
 
     async def html_api_get_state(self, request):
         """
