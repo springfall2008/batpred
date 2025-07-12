@@ -1251,6 +1251,33 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
         return errors
 
+    def is_running(self):
+        """
+        Check if the app is running
+        """
+        if self.stop_thread:
+            return False
+        if not self.dashboard_index:
+            return False
+        
+        # Read predbat.status
+        predbat_error = self.get_state_wrapper("predbat.status", attribute="error", default=True)
+        if predbat_error is None or predbat_error:
+            return False
+        predbat_last_updated = self.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+        if predbat_last_updated is None:
+            return False
+        
+        try:
+            predbat_last_updated = datetime.fromisoformat(predbat_last_updated)
+        except ValueError:
+            return False
+        
+        # Check if the last updated time is within the last 6 minutes
+        if (datetime.now() - predbat_last_updated).total_seconds() > 360:
+            return False
+        return True        
+
     def initialize(self):
         """
         Setup the app, called once each time the app starts
