@@ -2259,7 +2259,7 @@ class Plan:
             self.charge_window_best = orig_charge_window_best
             self.charge_limit_best = orig_charge_limit_best
 
-    def optimise_swap_export(self, record_charge_windows, record_export_windows, debug_mode=False):
+    def optimise_swap_export(self, record_charge_windows, record_export_windows, drop=False, debug_mode=False):
         """
         Swap optimisation tries to move export windows later
         """
@@ -2283,6 +2283,7 @@ class Plan:
                     window_length_target = self.export_window_best[window_n_target]["end"] - window_start_target
                     orig_length_target = self.export_window_best[window_n_target]["end"] - orig_start_target
                     export_limit_target = self.export_limits_best[window_n_target]
+                    target_day = self.export_window_best[window_n_target]["start"] // 1440
 
                     if window_start_target in self.manual_all_times:
                         continue
@@ -2295,7 +2296,7 @@ class Plan:
                         continue
 
                     # Try to drop the target
-                    if export_limit_target < 100:
+                    if drop and export_limit_target < 100:
                         self.export_limits_best[window_n_target] = 100.0
                         best_metric_drop, best_battery_value_drop, best_cost_drop, best_keep_drop, best_cycle_drop, best_carbon_drop, best_import_drop, best_export_drop = self.run_prediction_metric(
                             self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
@@ -2350,8 +2351,13 @@ class Plan:
                         window_length = self.export_window_best[window_n]["end"] - window_start_from_now
                         window_length_orig = self.export_window_best[window_n]["end"] - window_start_orig
                         export_limit = self.export_limits_best[window_n]
+                        window_day = self.export_window_best[window_n]["start"] // 1440
 
                         if window_start in self.manual_all_times:
+                            continue
+
+                        if target_day != window_day:
+                            # Don't swap windows on different days
                             continue
 
                         if export_limit == export_limit_target and window_length == window_length_target:
@@ -2577,7 +2583,7 @@ class Plan:
             )
         )
 
-        for pass_type in ["freeze", "trim", "normal", "trim", "low"]:
+        for pass_type in ["trim", "freeze", "normal", "trim", "low"]:
             start_at_low = False
             if pass_type in ["low"]:
                 price_set.reverse()
@@ -2721,6 +2727,10 @@ class Plan:
                         if pass_type == "low" and (self.export_limits_best[window_n] == 100):
                             continue
 
+                        # Don't trim freeze, that can be done in the freeze pass
+                        if (pass_type == "trim" and self.export_limits_best[window_n] == 99):
+                            continue 
+
                         # Ignore prices below the threshold if not already selected during levelling
                         if (price_key < best_price_export_level) and (self.export_limits_best[window_n] == 100):
                             if self.debug_enable:
@@ -2772,7 +2782,7 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                                freeze_only=(typ == "df") or pass_type == "freeze" or (pass_type == "trim" and self.export_limits_best[window_n] == 99),
+                                freeze_only=(typ == "df") or pass_type == "freeze",
                                 allow_freeze=True,
                             )
                             self.export_window_best[window_n]["start"] = keep_start
@@ -2902,7 +2912,8 @@ class Plan:
                 min_region_size = int(120)
                 while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
-                    step_size = int(max(region_size / 2, min_region_size))
+                    #step_size = int(max(region_size / 2, min_region_size))
+                    step_size = region_size
                     # fast_mode = not (region_size == min_region_size)
                     for region in range(0, self.end_record + self.minutes_now, step_size):
                         region_start = max(self.end_record + self.minutes_now - region - region_size, 0)
@@ -2989,8 +3000,8 @@ class Plan:
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
         # Swaps
-        self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
-        self.plan_write_debug(debug_mode, "plan_swap_levels.html")
+        #self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode, drop=False)
+        #self.plan_write_debug(debug_mode, "plan_swap_levels.html")
 
         # Perform detailed optimisation
         best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_detailed_pass(
