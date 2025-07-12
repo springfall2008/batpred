@@ -59,7 +59,7 @@ class HAInterface:
                 return False
         if self.db_manager_task:
             if not self.db_manager_task.is_alive():
-                return False            
+                return False
         return True
 
     def __init__(self, base):
