@@ -196,7 +196,7 @@ class Plan:
                     elif charge_window[window_n]["start"] in self.manual_all_times:
                         pass
                     else:
-                        price_set_charge.append([price, window_n, typ=="cf"])
+                        price_set_charge.append([price, window_n, typ == "cf"])
                         valid_charge_windows[window_n] = True
                         best_limits_reset[window_n] = 0
 
@@ -216,7 +216,7 @@ class Plan:
                         elif export_window[window_n]["start"] in self.manual_all_times:
                             pass
                         else:
-                            price_set_export.append([price, window_n, typ=="df"])
+                            price_set_export.append([price, window_n, typ == "df"])
                             valid_export_windows[window_n] = True
                             best_export_limits_reset[window_n] = 100.0
 
@@ -2727,8 +2727,8 @@ class Plan:
                             continue
 
                         # Don't trim freeze, that can be done in the freeze pass
-                        if (pass_type == "trim" and self.export_limits_best[window_n] == 99):
-                            continue 
+                        if pass_type == "trim" and self.export_limits_best[window_n] == 99:
+                            continue
 
                         # Ignore prices below the threshold if not already selected during levelling
                         if (price_key < best_price_export_level) and (self.export_limits_best[window_n] == 100):
@@ -2911,7 +2911,7 @@ class Plan:
                 min_region_size = int(120)
                 while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
-                    #step_size = int(max(region_size / 2, min_region_size))
+                    # step_size = int(max(region_size / 2, min_region_size))
                     step_size = region_size
                     # fast_mode = not (region_size == min_region_size)
                     for region in range(0, self.end_record + self.minutes_now, step_size):
@@ -2999,8 +2999,8 @@ class Plan:
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
         # Swaps
-        #self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode, drop=False)
-        #self.plan_write_debug(debug_mode, "plan_swap_levels.html")
+        # self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode, drop=False)
+        # self.plan_write_debug(debug_mode, "plan_swap_levels.html")
 
         # Perform detailed optimisation
         best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_detailed_pass(
