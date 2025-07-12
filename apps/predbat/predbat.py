@@ -1261,28 +1261,27 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             return False
         if self.fatal_error:
             return False
-        
+
         if not self.ha_interface:
-            return False        
+            return False
         if not self.ha_interface.is_running():
             return False
-        
-        
+
         if self.octopus_api_direct_task:
             # Check if the task is still running
             if not self.octopus_api_direct_task.is_alive():
                 return False
-            
+
         if self.ge_cloud_direct_task:
             # Check if the task is still running
             if not self.ge_cloud_direct_task.is_alive():
                 return False
-            
+
         if self.web_interface_task:
             # Check if the task is still running
             if not self.web_interface_task.is_alive():
                 return False
-        
+
         # Read predbat.status
         predbat_error = self.get_state_wrapper("predbat.status", attribute="error", default=True)
         if predbat_error is None or predbat_error:
@@ -1290,7 +1289,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         predbat_last_updated = self.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
         if predbat_last_updated is None:
             return False
-        
+
         try:
             predbat_last_updated = datetime.fromisoformat(predbat_last_updated)
         except ValueError:
@@ -1299,7 +1298,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         # Check if the last updated time is within the last 6 minutes
         if (datetime.now() - predbat_last_updated).total_seconds() > 360:
             return False
-        return True        
+        return True
 
     def initialize(self):
         """
