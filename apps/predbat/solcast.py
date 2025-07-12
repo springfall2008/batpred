@@ -570,7 +570,7 @@ class Solcast:
         """
         self.log("PV Calibration: Fetching PV data for calibration")
 
-        days = 14
+        days = 10
         pv_power_hist, pv_power_hist_days = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False, intermediate=True))
         pv_forecast, pv_forecast_hist_days = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False, intermediate=True))
 
