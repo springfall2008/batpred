@@ -51,6 +51,17 @@ class HAInterface:
     Direct interface to Home Assistant
     """
 
+    def is_running(self):
+        if self.websocket_task:
+            if not self.websocket_task.is_alive():
+                return False
+            if not self.websocket_active:
+                return False
+        if self.db_manager_task:
+            if not self.db_manager_task.is_alive():
+                return False
+        return True
+
     def __init__(self, base):
         """
         Initialize the interface to Home Assistant.
@@ -61,10 +72,13 @@ class HAInterface:
         self.db_days = base.args.get("db_days", 30)
         self.db_mirror_ha = base.args.get("db_mirror_ha", False)
         self.db_primary = base.args.get("db_primary", False)
+        self.db_manager = None
+        self.db_manager_task = None
         self.db_mirror_list = {}
         self.db = None
         self.db_cursor = None
         self.websocket_active = False
+        self.websocket_task = None
         self.api_errors = 0
         self.stop_thread = False
 
@@ -101,7 +115,7 @@ class HAInterface:
 
                 self.log("Creating websocket")
 
-                self.base.create_task(self.socketLoop())
+                self.websocket_task = self.base.create_task(self.socketLoop())
                 self.websocket_active = True
                 self.log("Info: Web Socket task started")
 

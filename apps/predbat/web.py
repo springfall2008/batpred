@@ -101,6 +101,7 @@ class WebInterface:
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/restart", self.html_restart)
         app.router.add_get("/api/state", self.html_api_get_state)
+        app.router.add_get("/api/ping", self.html_api_ping)
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
         app.router.add_post("/api/login", self.html_api_login)
@@ -387,10 +388,21 @@ class WebInterface:
         text += '<div style="flex: 1;">\n'
         text += "<h2>Status</h2>\n"
         text += "<table>\n"
+
+        try:
+            is_running = self.base.is_running()
+        except Exception as e:
+            self.log("Error checking if Predbat is running: {}".format(e))
+            is_running = False
+
+        last_updated = self.base.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
         if status and (("Warn:" in status) or ("Error:" in status)):
             text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
+        elif not is_running:
+            text += "<tr><td colspan='2' bgcolor='#ff7777'>Predbat has errors</td></tr>\n"
         else:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+        text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
         text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
         text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
@@ -1149,6 +1161,22 @@ var options = {
             return web.Response(content_type="application/json", text='{"result": "ok"}')
         else:
             return web.Response(content_type="application/json", text='{"result": "error"}')
+
+    async def html_api_ping(self, request):
+        """
+        Check if Predbat is running
+        return error 500 if not running
+        """
+        try:
+            is_running = self.base.is_running()
+        except Exception as e:
+            self.log("Error checking if Predbat is running: {}".format(e))
+            is_running = False
+
+        if is_running:
+            return web.Response(content_type="application/json", text='{"result": "ok"}')
+        else:
+            return web.Response(status=500, content_type="application/json", text='{"result": "error"}')
 
     async def html_api_get_state(self, request):
         """
