@@ -630,7 +630,8 @@ class Prediction:
                 record = False
 
             # Save Soc prediction data as minutes for later use
-            predict_soc[minute] = round(soc, 3)
+            if not cache or debug_enable or save:
+                predict_soc[minute] = round(soc, 3)
 
             # Store data before the next simulation step to align timestamps
             if debug_enable or save:
