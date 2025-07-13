@@ -1320,32 +1320,8 @@ class Plan:
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            (
-                cost,
-                import_kwh_battery,
-                import_kwh_house,
-                export_kwh,
-                soc_min,
-                soc,
-                soc_min_minute,
-                battery_cycle,
-                metric_keep,
-                final_iboost,
-                final_carbon_g
-            ) = resultmid[try_soc]
-            (
-                cost10,
-                import_kwh_battery10,
-                import_kwh_house10,
-                export_kwh10,
-                soc_min10,
-                soc10,
-                soc_min_minute10,
-                battery_cycle10,
-                metric_keep10,
-                final_iboost10,
-                final_carbon_g10
-            ) = result10[try_soc]
+            (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g) = resultmid[try_soc]
+            (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10) = result10[try_soc]
 
             # Compute the metric from simulation results
             metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
