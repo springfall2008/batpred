@@ -239,7 +239,6 @@ class Prediction:
             iboost_running_solar,
             iboost_running_full,
         ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
-
         return (
             cost,
             import_kwh_battery,
