@@ -37,6 +37,13 @@ def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window
     return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
 
 
+def wrapped_run_prediction_charge_min_max(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+    global PRED_GLOBAL
+    pred = Prediction()
+    pred.__dict__ = PRED_GLOBAL["dict"].copy()
+    return pred.thread_run_prediction_charge_min_max(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
+
+
 def wrapped_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
     pred = Prediction()
@@ -233,6 +240,51 @@ class Prediction:
             iboost_running_solar,
             iboost_running_full,
         ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
+        return (
+            cost,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+        )
+
+    def thread_run_prediction_charge_min_max(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+        """
+        Run prediction in a thread
+        """
+
+        try_charge_limit = charge_limit.copy()
+        if all_n:
+            for set_n in all_n:
+                try_charge_limit[set_n] = try_soc
+        else:
+            try_charge_limit[window_n] = try_soc
+
+        (
+            cost,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+            predict_soc,
+            car_charging_soc_next,
+            iboost_next,
+            iboost_running,
+            iboost_running_solar,
+            iboost_running_full,
+        ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=False)
         min_soc = self.soc_max
         max_soc = 0
         if not all_n:
@@ -578,7 +630,8 @@ class Prediction:
                 record = False
 
             # Save Soc prediction data as minutes for later use
-            predict_soc[minute] = round(soc, 3)
+            if not cache or debug_enable or save:
+                predict_soc[minute] = round(soc, 3)
 
             # Store data before the next simulation step to align timestamps
             if debug_enable or save:

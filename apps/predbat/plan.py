@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from config import PREDICT_STEP, TIME_FORMAT
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit
-from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_export
+from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 
 """
 Used to mimic threads when they are disabled
@@ -433,6 +433,16 @@ class Plan:
             han = self.pool.apply_async(wrapped_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record))
         else:
             han = DummyThread(self.prediction.thread_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record))
+        return han
+
+    def launch_run_prediction_charge_min_max(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+        """
+        Launch a thread to run a prediction
+        """
+        if self.pool and self.pool._state == "RUN":
+            han = self.pool.apply_async(wrapped_run_prediction_charge_min_max, (loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record))
+        else:
+            han = DummyThread(self.prediction.thread_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record))
         return han
 
     def launch_run_prediction_export(self, this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv10, all_n, end_record):
@@ -1157,10 +1167,10 @@ class Plan:
             hans = []
             all_max_soc = 0
             all_min_soc = self.soc_max
-            hans.append(self.launch_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, False, all_n, end_record))
-            hans.append(self.launch_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, True, all_n, end_record))
-            hans.append(self.launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, False, all_n, end_record))
-            hans.append(self.launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, True, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, False, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, True, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, False, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, True, all_n, end_record))
             id = 0
             for han in hans:
                 (
@@ -1193,8 +1203,6 @@ class Plan:
                         metric_keep,
                         final_iboost,
                         final_carbon_g,
-                        min_soc,
-                        max_soc,
                     ]
                 elif id == 1:
                     result10[loop_soc] = [
@@ -1209,8 +1217,6 @@ class Plan:
                         metric_keep,
                         final_iboost,
                         final_carbon_g,
-                        min_soc,
-                        max_soc,
                     ]
                 elif id == 2:
                     resultmid[best_soc_min] = [
@@ -1225,8 +1231,6 @@ class Plan:
                         metric_keep,
                         final_iboost,
                         final_carbon_g,
-                        min_soc,
-                        max_soc,
                     ]
                 elif id == 3:
                     result10[best_soc_min] = [
@@ -1241,8 +1245,6 @@ class Plan:
                         metric_keep,
                         final_iboost,
                         final_carbon_g,
-                        min_soc,
-                        max_soc,
                     ]
                 id += 1
 
@@ -1318,36 +1320,8 @@ class Plan:
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            (
-                cost,
-                import_kwh_battery,
-                import_kwh_house,
-                export_kwh,
-                soc_min,
-                soc,
-                soc_min_minute,
-                battery_cycle,
-                metric_keep,
-                final_iboost,
-                final_carbon_g,
-                min_soc,
-                max_soc,
-            ) = resultmid[try_soc]
-            (
-                cost10,
-                import_kwh_battery10,
-                import_kwh_house10,
-                export_kwh10,
-                soc_min10,
-                soc10,
-                soc_min_minute10,
-                battery_cycle10,
-                metric_keep10,
-                final_iboost10,
-                final_carbon_g10,
-                min_soc10,
-                max_soc10,
-            ) = result10[try_soc]
+            (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g) = resultmid[try_soc]
+            (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10) = result10[try_soc]
 
             # Compute the metric from simulation results
             metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
