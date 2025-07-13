@@ -36,6 +36,7 @@ def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
     return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
 
+
 def wrapped_run_prediction_charge_min_max(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
     pred = Prediction()
