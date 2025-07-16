@@ -60,11 +60,11 @@ If you do not set an import or export rate for a particular tariff then your exi
         - rate: 16.5
     - id: 'igo_fixed'
       name: 'Intelligent GO import/Fixed export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-BB-VAR-23-03-01/electricity-tariffs/E-1R-INTELLI-BB-VAR-23-03-01-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
       rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{dno_region}/standard-unit-rates/'
     - id: 'igo_agile'
       name: 'Intelligent GO import/Agile export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-BB-VAR-23-03-01/electricity-tariffs/E-1R-INTELLI-BB-VAR-23-03-01-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
       rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-{dno_region}/standard-unit-rates/'
     - id: 'go_fixed'
       name: 'GO import/Fixed export'
