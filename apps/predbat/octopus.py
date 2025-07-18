@@ -1347,7 +1347,7 @@ class Octopus:
             kwh = slot.get("chargeKwh", None)
 
         if kwh is None:
-            kwh = org_minutes * self.car_charging_rate[0] / 60.0 
+            kwh = org_minutes * self.car_charging_rate[0] / 60.0
 
         try:
             kwh = abs(float(kwh))
