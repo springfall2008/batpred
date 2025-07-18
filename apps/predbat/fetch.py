@@ -341,6 +341,9 @@ class Fetch:
 
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
+        if entity_ids is None:
+            self.log("Error: No entity IDs provided for {}".format(key))
+            entity_ids = []
 
         import_today = {}
         for entity_id in entity_ids:
