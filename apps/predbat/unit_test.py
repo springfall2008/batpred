@@ -1596,12 +1596,14 @@ def run_load_octopus_slots_tests(my_predbat):
     slots2 = []
     slots3 = []
     slots4 = []
+    slots5 = []
     expected_slots = []
     expected_slots2 = []
     expected_slots3 = []
     expected_slots4 = []
     expected_slots5 = []
     expected_slots6 = []
+    expected_slots7 = []
     now_utc = my_predbat.now_utc
     now_utc = now_utc.replace(minute=5, second=0, microsecond=0)
     my_predbat.minutes_now = int((now_utc - my_predbat.midnight_utc).total_seconds() / 60)
@@ -1623,11 +1625,13 @@ def run_load_octopus_slots_tests(my_predbat):
         soc += 5
         soc2 += 2.5
         slots.append({"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": -5, "source": "null", "location": "AT_HOME"})
+        slots5.append({"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "source": "null", "location": "AT_HOME"})
         slots2.append({"start": start.strftime(TIME_FORMAT) if i >= 1 else start_plus_15.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": -5, "source": "null", "location": "AT_HOME"})
         slots3.append({"start": start.strftime(TIME_FORMAT) if i >= 1 else start_minus_30.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": -5 if i >= 1 else -5 * 1.5, "source": "null", "location": "AT_HOME"})
         minutes_start = int((start - midnight_utc).total_seconds() / 60)
         minutes_end = int((end - midnight_utc).total_seconds() / 60)
         expected_slots.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": 4, "cost": 20.0, "soc": 0.0})
+        expected_slots7.append({"start": minutes_start, "end": minutes_end, "kwh": my_predbat.car_charging_rate[0], "average": 4, "cost": my_predbat.car_charging_rate[0]*4, "soc": 0.0})
         expected_slots2.append({"start": minutes_start, "end": minutes_end, "kwh": 0.0, "average": 4, "cost": 0.0, "soc": 0.0})
         expected_slots3.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 12.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 12.0 else 0.0, "soc": min(soc, 12.0)})
         if prev_soc2 < 10.0 and soc2 >= 10.0:
@@ -1661,6 +1665,7 @@ def run_load_octopus_slots_tests(my_predbat):
     failed |= run_load_octopus_slot_test("test4", my_predbat, slots, expected_slots4, True, 2.0, 10.0, 0.5)
     failed |= run_load_octopus_slot_test("test5", my_predbat, slots3, expected_slots5, False, 0, 10, 1.0)
     failed |= run_load_octopus_slot_test("test6", my_predbat, slots4, expected_slots6, False, 0, 100, 1.0)
+    failed |= run_load_octopus_slot_test("test7", my_predbat, slots5, expected_slots7, False, 2.0, 0.0, 1.0)
     if failed:
         return failed
 
