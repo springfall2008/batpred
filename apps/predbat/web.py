@@ -2361,7 +2361,7 @@ document.addEventListener("DOMContentLoaded", function() {
                     apps_yaml_content = f.read()
                 self.log(f"Successfully loaded apps.yaml from {apps_yaml_path}")
             else:
-                file_error = f"Could not find apps.yaml file. Searched: {', '.join(possible_paths)}"
+                file_error = f"Could not find apps.yaml file."
 
         except Exception as e:
             file_error = f"Error reading apps.yaml: {str(e)}"
