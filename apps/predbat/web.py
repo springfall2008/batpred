@@ -3121,12 +3121,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (saveButton) {
                     // Force enable the save button for debugging purposes by treating content as changed and valid
                     const content = editor ? editor.getValue() : '';
-                    window.originalContent = content === window.originalContent ? '' : window.originalContent; // Force a difference
                     updateButtonStates(saveButton, revertButton, content, false);
-                    console.log('Save button manually enabled via debug function');
-                    return 'Save button enabled';
                 }
-                return 'Save button not found';
             };
         }
     }, 2000); // Wait longer for everything to initialize
