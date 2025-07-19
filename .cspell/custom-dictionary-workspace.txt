@@ -9,6 +9,8 @@ Alertfeed
 Anson
 apexcharts
 appdaemon
+jsyaml
+monokai
 appkey
 argname
 autodocstring
