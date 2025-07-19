@@ -9,8 +9,6 @@ Alertfeed
 Anson
 apexcharts
 appdaemon
-jsyaml
-monokai
 appkey
 argname
 autodocstring
@@ -123,6 +121,7 @@ isoformat
 isort
 itemtype
 ivtime
+jsyaml
 killall
 kopt
 Krakenflex
@@ -152,6 +151,7 @@ Mixergy
 mkdocs
 Modbus
 mogons
+monokai
 Mosquitto
 mpan
 mprn
