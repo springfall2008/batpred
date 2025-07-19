@@ -17,6 +17,7 @@ import re
 from datetime import datetime, timedelta
 import json
 import shutil
+import html as html_module
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
@@ -2681,7 +2682,6 @@ body.dark-mode .revert-button:disabled {
         <textarea class="editor-textarea" name="apps_content" id="appsContent" placeholder="Loading apps.yaml content...">"""
 
         # Escape the content for HTML
-        import html as html_module
 
         text += html_module.escape(apps_yaml_content)
 
