@@ -2322,46 +2322,49 @@ document.addEventListener("DOMContentLoaded", function() {
         """
         self.default_page = "./apps_editor"
         text = self.get_header("Predbat Apps.yaml Editor", refresh=0)
-        
+
         # Add CodeMirror scripts and styles to the header
-        text = text.replace('</head>', '''
+        text = text.replace(
+            "</head>",
+            """
     <!-- CodeMirror Library -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/mode/yaml/yaml.min.js"></script>
-    
+
     <!-- CodeMirror Theme -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/theme/monokai.min.css">
-    
+
     <!-- YAML Validation and Linting -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/lint.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/yaml-lint.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/lint.min.css">
-    </head>''')
-        
+    </head>""",
+        )
+
         # Get success/error messages from URL parameters
         args = request.query
-        success_message = urllib.parse.unquote(args.get('success', ''))
-        error_message = urllib.parse.unquote(args.get('error', ''))
-        
+        success_message = urllib.parse.unquote(args.get("success", ""))
+        error_message = urllib.parse.unquote(args.get("error", ""))
+
         # Try to read the current apps.yaml file
         apps_yaml_content = ""
         file_error = ""
-        
+
         try:
             # apps.yaml will always live in the current directory of the script
             apps_yaml_path = "apps.yaml"
             if apps_yaml_path:
-                with open(apps_yaml_path, 'r') as f:
+                with open(apps_yaml_path, "r") as f:
                     apps_yaml_content = f.read()
                 self.log(f"Successfully loaded apps.yaml from {apps_yaml_path}")
             else:
                 file_error = f"Could not find apps.yaml file. Searched: {', '.join(possible_paths)}"
-                
+
         except Exception as e:
             file_error = f"Error reading apps.yaml: {str(e)}"
-        
+
         text += """
 <style>
 .editor-container {
@@ -2669,38 +2672,39 @@ body.dark-mode .revert-button:disabled {
         <h2>Apps.yaml Editor</h2>
         <div id="lintStatus" style="margin-top: 8px;"></div>
 """
-        
+
         text += """
     </div>
-    
+
     <form id="editorForm" class="editor-form" method="post" action="./apps_editor">
         <!-- We use a regular textarea that CodeMirror will replace -->
         <textarea class="editor-textarea" name="apps_content" id="appsContent" placeholder="Loading apps.yaml content...">"""
-        
+
         # Escape the content for HTML
         import html as html_module
+
         text += html_module.escape(apps_yaml_content)
-        
+
         text += """</textarea>
-        
+
         <div class="editor-controls">
             <button type="submit" class="save-button" id="saveButton" title="Click to save changes">Save</button>
             <button type="button" class="revert-button" id="revertButton" title="Discard changes and reload from disk">Revert</button>
             <span id="saveStatus"></span>
         </div>
     </form>
-    
+
     <div id="messageContainer">"""
-        
+
         # Show success message if present
         if success_message:
             text += f'<div class="message success" style="display: block;">{html_module.escape(success_message)}</div>'
-        
+
         # Show error message if present (from URL or file reading)
         display_error = error_message or file_error
         if display_error:
             text += f'<div class="message error" style="display: block;">{html_module.escape(display_error)}</div>'
-        
+
         text += """    </div>
 </div>
 
@@ -2710,15 +2714,15 @@ let editor; // CodeMirror instance
 
 document.getElementById('editorForm').addEventListener('submit', function(e) {
     e.preventDefault(); // Always prevent default initially
-    
+
     if (isSubmitting) {
         return;
     }
-    
+
     // Get the current content and validate it
     const content = editor ? editor.getValue() : document.getElementById('appsContent').value;
     let hasYamlError = false;
-    
+
     try {
         // Only validate if content exists and isn't empty
         if (content && content.trim()) {
@@ -2728,36 +2732,36 @@ document.getElementById('editorForm').addEventListener('submit', function(e) {
         console.log('YAML validation error during form submit:', e.message);
         hasYamlError = true;
     }
-    
+
     // Safety check - don't allow submission if there are YAML errors
     if (hasYamlError) {
         showMessage("Cannot save while there are YAML syntax errors. Please fix the errors first.", "error");
         return;
     }
-    
+
     // Show confirmation popup
     const confirmed = confirm("Warning: Saving changes will restart Predbat. Are you sure you want to continue?");
-    
+
     if (!confirmed) {
         return; // User cancelled the save
     }
-    
+
     // Update the hidden textarea with CodeMirror content before submission
     if (editor) {
         document.getElementById('appsContent').value = editor.getValue();
     }
-    
+
     isSubmitting = true;
     const saveButton = document.getElementById('saveButton');
     const saveStatus = document.getElementById('saveStatus');
-    
+
     saveButton.disabled = true;
     saveButton.textContent = 'Saving...';
     saveStatus.textContent = 'Please wait...';
-    
+
     // Clear stored content as we're saving now
     localStorage.removeItem('appsYamlContent');
-    
+
     // Submit the form programmatically
     this.submit();
 });
@@ -2769,10 +2773,10 @@ function showMessage(message, type = 'success') {
     messageDiv.className = `message ${type}`;
     messageDiv.style.display = 'block';
     messageDiv.textContent = message;
-    
+
     messageContainer.innerHTML = '';
     messageContainer.appendChild(messageDiv);
-    
+
     // Auto-hide success messages after 5 seconds
     if (type === 'success') {
         setTimeout(() => {
@@ -2784,23 +2788,23 @@ function showMessage(message, type = 'success') {
 // Function to update button states based on content changes and validation
 function updateButtonStates(saveButton, revertButton, content, hasError = false) {
     if (!saveButton && !revertButton) return;
-    
+
     const isDarkMode = document.body.classList.contains('dark-mode');
     const hasChanged = content !== window.originalContent;
-    
+
     // Update Save button
     if (saveButton) {
         // First set the disabled property, which is crucial for behavior
         const shouldDisableSave = hasError || !hasChanged;
         saveButton.disabled = shouldDisableSave;
-        
+
         // Update tooltip
         if (hasError) {
             saveButton.title = 'Fix YAML errors before saving';
         } else {
             saveButton.title = hasChanged ? 'Save changes' : 'No changes to save';
         }
-        
+
         // Apply styling - ensure disabled style gets applied correctly
         if (shouldDisableSave) {
             // Disabled styling
@@ -2814,14 +2818,14 @@ function updateButtonStates(saveButton, revertButton, content, hasError = false)
             saveButton.style.border = 'none';
         }
     }
-    
+
     // Update Revert button - always enable if content changed, regardless of errors
     if (revertButton) {
         // First set the disabled property
         const shouldDisableRevert = !hasChanged;
         revertButton.disabled = shouldDisableRevert;
         revertButton.title = hasChanged ? 'Discard changes and reload from disk' : 'No changes to revert';
-        
+
         // Apply styling - ensure disabled style gets applied correctly
         if (shouldDisableRevert) {
             // Disabled styling
@@ -2843,7 +2847,7 @@ CodeMirror.registerHelper("lint", "yaml", function(text) {
     if (!text.trim()) {
         return found; // Return empty array for empty text to avoid false errors
     }
-    
+
     try {
         jsyaml.load(text);
     } catch (e) {
@@ -2857,7 +2861,7 @@ CodeMirror.registerHelper("lint", "yaml", function(text) {
             severity: "error"
         });
     }
-    
+
     // Return the array of found issues
     return found;
 });
@@ -2865,24 +2869,24 @@ CodeMirror.registerHelper("lint", "yaml", function(text) {
 // Initialize CodeMirror and handle dark mode
 function initializeCodeMirror() {
     const textarea = document.getElementById('appsContent');
-    
+
     if (!textarea) return;
-    
+
     const isDarkMode = document.body.classList.contains('dark-mode');
-    
+
     // Check if we have unsaved content in localStorage
     const savedContent = localStorage.getItem('appsYamlContent');
-    
+
     // Store the original content for change comparison
     window.originalContent = textarea.value;
-    
+
     // If we have saved content and the textarea is empty or the saved content differs from current
     if (savedContent && (!textarea.value.trim() || savedContent !== textarea.value)) {
         // Always load the saved content automatically
         textarea.value = savedContent;
         console.log('Automatically restored content from localStorage');
     }
-    
+
     // Create CodeMirror instance
     editor = CodeMirror.fromTextArea(textarea, {
         mode: 'yaml',
@@ -2911,7 +2915,7 @@ function initializeCodeMirror() {
             'Ctrl-Space': 'autocomplete'
         }
     });
-    
+
     // Manually validate YAML when editor is ready
     editor.on('change', function() {
         // Get the content and buttons
@@ -2919,7 +2923,7 @@ function initializeCodeMirror() {
         const saveButton = document.getElementById('saveButton');
         const revertButton = document.getElementById('revertButton');
         let isValid = true;
-        
+
         try {
             // Parse YAML to check for errors
             if (content.trim()) {
@@ -2929,25 +2933,25 @@ function initializeCodeMirror() {
             isValid = false;
             console.log('YAML validation error in change handler:', e.message);
         }
-        
+
         // Update button states based on YAML validation result
         updateButtonStates(saveButton, revertButton, content, !isValid);
         console.log('Button states updated by change handler, YAML valid:', isValid);
-        
+
         // Save content to localStorage whenever it changes
         localStorage.setItem('appsYamlContent', content);
         console.log('Content saved to localStorage');
     });
-    
+
     // Make CodeMirror fill the available space
     editor.setSize('100%', '100%');
-    
+
     // Add custom CSS to make CodeMirror fill its container properly
     const cmElement = editor.getWrapperElement();
     cmElement.style.flex = '1';
     cmElement.style.minHeight = '0';
     cmElement.style.height = 'auto';
-    
+
     // Set up the lint status display
     const lintStatusEl = document.getElementById('lintStatus');
     if (lintStatusEl) {
@@ -2955,7 +2959,7 @@ function initializeCodeMirror() {
         editor.on('lint', (errors) => {
             console.log('Lint event fired:', errors ? errors.length : 0, 'errors found');
             const saveButton = document.getElementById('saveButton');
-            
+
             // Make a direct validation attempt as backup
             let isValid = true;
             try {
@@ -2967,35 +2971,35 @@ function initializeCodeMirror() {
                 console.log('Manual YAML validation error during lint event:', e.message);
                 isValid = false;
             }
-            
+
             const content = editor.getValue();
             const revertButton = document.getElementById('revertButton');
             const hasErrors = (errors && errors.length > 0) || !isValid;
-            
+
             if (hasErrors) {
                 lintStatusEl.innerHTML = `<div style="color: #d32f2f; padding: 5px; border-radius: 4px; background-color: ${isDarkMode ? '#3f1e1e' : '#fff0f0'}; border: 1px solid #d32f2f;">
                     <strong>⚠️ Found ${errors ? errors.length : 'syntax'} YAML ${errors && errors.length === 1 ? 'error' : 'errors'}</strong>
                     <p style="margin: 5px 0 0 0; font-size: 14px;">Hover over the red markers in the editor gutter to see details.</p>
                 </div>`;
-                
+
                 // Update button states with error flag
                 updateButtonStates(saveButton, revertButton, content, true);
                 console.log('Button states updated by lint event (with errors)');
             } else {
                 // Clear the lint status when syntax is valid
                 lintStatusEl.innerHTML = '';
-                
+
                 // Update button states with no error flag
                 updateButtonStates(saveButton, revertButton, content, false);
                 console.log('Button states updated by lint event (no errors)');
             }
         });
-        
+
         // Initial lint after a short delay to ensure editor is fully loaded
         setTimeout(() => {
             // Perform the lint
             editor.performLint();
-            
+
             // Manually check and enable the button if there are no errors
             // This is a fallback in case the lint event doesn't fire correctly
             setTimeout(() => {
@@ -3004,7 +3008,7 @@ function initializeCodeMirror() {
                 try {
                     const content = editor.getValue();
                     let isValidYaml = true;
-                    
+
                     // Only validate if we have content
                     if (content && content.trim()) {
                         try {
@@ -3013,11 +3017,11 @@ function initializeCodeMirror() {
                             isValidYaml = false;
                             console.log('YAML validation error in initialization:', e.message);
                         }
-                        
+
                         // Update button states based on content validity
                         updateButtonStates(saveButton, revertButton, content, !isValidYaml);
                         console.log('Button states updated by initial validation');
-                        
+
                         // Also clear the lint status if it exists and YAML is valid
                         if (lintStatusEl && isValidYaml) {
                             lintStatusEl.innerHTML = '';
@@ -3030,27 +3034,27 @@ function initializeCodeMirror() {
                 } catch (e) {
                     // Something went wrong, keep the save button disabled but enable revert if changed
                     console.log('Error during initialization button state update:', e.message);
-                    
+
                     const content = editor.getValue();
                     updateButtonStates(saveButton, revertButton, content, true);
                 }
             }, 300);
         }, 800);
     }
-    
+
     // Apply dark mode if needed
     if (isDarkMode) {
         // Make sure the CodeMirror editor has proper dark mode styling
         const cmElement = editor.getWrapperElement();
         cmElement.style.backgroundColor = '#2d2d2d';
-        
+
         // Style the gutters
         const gutters = document.querySelectorAll('.CodeMirror-gutters');
         gutters.forEach(gutter => {
             gutter.style.backgroundColor = '#2d2d2d';
             gutter.style.borderRight = '1px solid #444';
         });
-        
+
         // Force a refresh to ensure all styles are applied properly
         editor.refresh();
     }
@@ -3062,33 +3066,33 @@ document.addEventListener('DOMContentLoaded', function() {
     if (textarea && textarea.value.trim() === '') {
         textarea.placeholder = 'apps.yaml content could not be loaded';
     }
-    
+
     // Initialize CodeMirror
     initializeCodeMirror();
-    
+
     // Handle Revert button click
     document.getElementById('revertButton').addEventListener('click', function() {
         if (confirm('This will discard all your unsaved changes and reload the file from disk. Are you sure?')) {
             // Remove saved content from localStorage
             localStorage.removeItem('appsYamlContent');
-            
+
             // Reload the page to get fresh content from disk
             window.location.reload();
         }
     });
-    
+
     // Add a direct listener to ensure the button gets enabled
     // This is a final fallback in case other methods fail
     setTimeout(() => {
         const saveButton = document.getElementById('saveButton');
         const revertButton = document.getElementById('revertButton');
-        
+
         if (editor) {
             // Force a final validation check
             try {
                 const content = editor.getValue();
                 const hasChanged = content !== window.originalContent;
-                
+
                 // Check YAML validity
                 let isValid = true;
                 if (content && content.trim()) {
@@ -3099,17 +3103,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         console.log('YAML validation error in DOMContentLoaded final check:', e.message);
                     }
                 }
-                
+
                 // Update buttons states consistently
                 updateButtonStates(saveButton, revertButton, content, !isValid);
                 console.log('Button states updated by DOMContentLoaded final check, YAML valid:', isValid);
-                
+
             } catch (e) {
                 console.log('YAML validation error in DOMContentLoaded:', e.message);
                 // We already know there's an error, but we won't disable the button here
                 // as that should be handled by the lint event
             }
-            
+
             // Manual override for debugging: add a global function to force-enable the button
             window.enableSaveButton = function() {
                 const saveButton = document.getElementById('saveButton');
@@ -3126,27 +3130,27 @@ document.addEventListener('DOMContentLoaded', function() {
             };
         }
     }, 2000); // Wait longer for everything to initialize
-    
+
     // Add a listener for dark mode toggle
     window.addEventListener('storage', function(e) {
         if (e.key === 'darkMode') {
             if (editor) {
                 const isDarkMode = localStorage.getItem('darkMode') === 'true';
                 editor.setOption('theme', isDarkMode ? 'monokai' : 'default');
-                
+
                 // Update the editor's wrapper element styling
                 const cmElement = editor.getWrapperElement();
-                
+
                 if (isDarkMode) {
                     cmElement.style.backgroundColor = '#2d2d2d';
-                    
+
                     // Style the gutters
                     const gutters = document.querySelectorAll('.CodeMirror-gutters');
                     gutters.forEach(gutter => {
                         gutter.style.backgroundColor = '#2d2d2d';
                         gutter.style.borderRight = '1px solid #444';
                     });
-                    
+
                     // Re-style any lint tooltips that might be open
                     const tooltips = document.querySelectorAll('.CodeMirror-lint-tooltip');
                     tooltips.forEach(tooltip => {
@@ -3156,14 +3160,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 } else {
                     cmElement.style.backgroundColor = '#ffffff';
-                    
+
                     // Style the gutters
                     const gutters = document.querySelectorAll('.CodeMirror-gutters');
                     gutters.forEach(gutter => {
                         gutter.style.backgroundColor = '#f8f8f8';
                         gutter.style.borderRight = '1px solid #ddd';
                     });
-                    
+
                     // Re-style any lint tooltips that might be open
                     const tooltips = document.querySelectorAll('.CodeMirror-lint-tooltip');
                     tooltips.forEach(tooltip => {
@@ -3172,10 +3176,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         tooltip.style.borderColor = '#ccc';
                     });
                 }
-                
+
                 // Re-run the linter
                 editor.performLint();
-                
+
                 // Force a refresh to ensure all styles are applied properly
                 editor.refresh();
             }
@@ -3185,7 +3189,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 
 </div>"""
-        
+
         return web.Response(content_type="text/html", text=text)
 
     async def html_apps_editor_post(self, request):
@@ -3194,34 +3198,36 @@ document.addEventListener('DOMContentLoaded', function() {
         """
         try:
             postdata = await request.post()
-            apps_content = postdata.get('apps_content', '')
-            
+            apps_content = postdata.get("apps_content", "")
+
             # Find the apps.yaml file path
-            apps_yaml_path = "apps.yaml"                 
+            apps_yaml_path = "apps.yaml"
             # Create backup
             backup_path = "apps.yaml.backup"
             shutil.copy2(apps_yaml_path, backup_path)
-            
+
             # Save the new content
-            with open(apps_yaml_path, 'w') as f:
+            with open(apps_yaml_path, "w") as f:
                 f.write(apps_content)
-            
+
             self.log(f"Apps.yaml successfully saved to {apps_yaml_path}")
             if backup_path:
                 self.log(f"Backup created at {backup_path}")
-            
+
             # Redirect back to editor with success message
             import urllib.parse
+
             success_message = f"Apps.yaml saved successfully. Backup created at {backup_path}."
             encoded_message = urllib.parse.quote(success_message)
             raise web.HTTPFound(f"./apps_editor?success={encoded_message}")
-            
+
         except web.HTTPFound:
             raise  # Re-raise HTTP redirects
         except Exception as e:
             error_msg = f"Failed to save apps.yaml: {str(e)}"
             self.log(f"ERROR: {error_msg}")
             import urllib.parse
+
             encoded_error = urllib.parse.quote(error_msg)
             raise web.HTTPFound(f"./apps_editor?error={encoded_error}")
 
