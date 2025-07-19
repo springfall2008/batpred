@@ -1323,7 +1323,8 @@ Please look at their web site for more details. The apps.yaml must be configured
 The event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax.
 Any unset values are ignored.
 
-Your location (from Home Assistant) is used to filter alerts that apply only to your area.
+Your location (from Home Assistant) is used to filter alerts that apply only to your area. If this does not work if you want to change the location
+you can also set **latitude** and **longitude** in the alerts section of the apps.yaml.
 
 Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
 This works by using a much stronger version of best_soc_keep but only for that time period.
