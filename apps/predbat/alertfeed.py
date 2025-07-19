@@ -33,6 +33,14 @@ class Alertfeed:
 
         latitude = self.get_state_wrapper("zone.home", attribute="latitude")
         longitude = self.get_state_wrapper("zone.home", attribute="longitude")
+
+        # Try apps.yaml if not found in zone.home
+        if not latitude:
+            latitude = alerts.get("latitude", None)
+        if not longitude:
+            longitude = alerts.get("longitude", None)
+
+        # If latitude and longitude are not found, we cannot process alerts
         if latitude and longitude:
             self.log("Processing alerts for approx position latitude {} longitude {}".format(dp1(latitude), dp1(longitude)))
         else:
