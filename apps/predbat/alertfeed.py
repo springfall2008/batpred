@@ -42,7 +42,7 @@ class Alertfeed:
             longitude = self.get_state_wrapper("zone.home", attribute="longitude")
 
         # If latitude and longitude are not found, we cannot process alerts
-        if latitude is not None and longitude is not None:
+        if latitude and longitude:
             self.log("Processing alerts for approx position latitude {} longitude {}".format(dp1(latitude), dp1(longitude)))
         else:
             if not testing:
