@@ -16,10 +16,12 @@ import os
 import re
 from datetime import datetime, timedelta
 import json
+import shutil
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
+import urllib.parse
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -98,6 +100,8 @@ class WebInterface:
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
+        app.router.add_get("/apps_editor", self.html_apps_editor)
+        app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/restart", self.html_restart)
         app.router.add_get("/api/state", self.html_api_get_state)
@@ -1437,7 +1441,6 @@ var options = {
             return button_html
 
         # Process the HTML plan to add buttons to time cells
-        import re
 
         processed_html = re.sub(time_pattern, add_button_to_time, html_plan)
 
@@ -2313,6 +2316,915 @@ document.addEventListener("DOMContentLoaded", function() {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    async def html_apps_editor(self, request):
+        """
+        Return the apps.yaml editor as an HTML page
+        """
+        self.default_page = "./apps_editor"
+        text = self.get_header("Predbat Apps.yaml Editor", refresh=0)
+        
+        # Add CodeMirror scripts and styles to the header
+        text = text.replace('</head>', '''
+    <!-- CodeMirror Library -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/mode/yaml/yaml.min.js"></script>
+    
+    <!-- CodeMirror Theme -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/theme/monokai.min.css">
+    
+    <!-- YAML Validation and Linting -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/lint.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/yaml-lint.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/lint.min.css">
+    </head>''')
+        
+        # Get success/error messages from URL parameters
+        args = request.query
+        success_message = urllib.parse.unquote(args.get('success', ''))
+        error_message = urllib.parse.unquote(args.get('error', ''))
+        
+        # Try to read the current apps.yaml file
+        apps_yaml_content = ""
+        file_error = ""
+        
+        try:
+            # apps.yaml will always live in the current directory of the script
+            apps_yaml_path = "apps.yaml"
+            if apps_yaml_path:
+                with open(apps_yaml_path, 'r') as f:
+                    apps_yaml_content = f.read()
+                self.log(f"Successfully loaded apps.yaml from {apps_yaml_path}")
+            else:
+                file_error = f"Could not find apps.yaml file. Searched: {', '.join(possible_paths)}"
+                
+        except Exception as e:
+            file_error = f"Error reading apps.yaml: {str(e)}"
+        
+        text += """
+<style>
+.editor-container {
+    position: fixed;
+    top: 70px; /* Account for fixed header */
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    background-color: inherit;
+    z-index: 10;
+}
+
+.editor-header {
+    flex-shrink: 0;
+    padding: 10px 15px;
+    margin: 0;
+    background-color: inherit;
+}
+
+.editor-form {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 0 15px 15px 15px;
+    min-height: 0; /* Important for flex children */
+    overflow: hidden; /* Prevent form from overflowing */
+}
+
+.editor-textarea {
+    flex: 1;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.4;
+    padding: 10px;
+    border: 2px solid #4CAF50;
+    border-radius: 4px;
+    resize: none;
+    background-color: #ffffff;
+    color: #333;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow: auto;
+    min-height: 0; /* Important for flex children */
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.editor-controls {
+    flex-shrink: 0;
+    margin-top: 10px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 10px 0;
+}
+
+.save-button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    font-size: 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.save-button:hover {
+    background-color: #45a049;
+}
+
+.save-button:disabled {
+    background-color: #cccccc !important;
+    color: #888888 !important;
+    cursor: not-allowed !important;
+    position: relative !important;
+    border: 2px solid #bbbbbb !important;
+}
+
+.revert-button {
+    background-color: #f44336;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    font-size: 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.revert-button:hover {
+    background-color: #d32f2f;
+}
+
+.revert-button:disabled {
+    background-color: #cccccc !important;
+    color: #888888 !important;
+    cursor: not-allowed !important;
+    position: relative !important;
+    border: 2px solid #bbbbbb !important;
+}
+
+.message {
+    padding: 10px;
+    border-radius: 4px;
+    margin: 10px 0;
+    display: none;
+}
+
+.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* CodeMirror specific styles */
+.CodeMirror {
+    height: auto;
+    flex: 1;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    border: 2px solid #4CAF50;
+    border-radius: 4px;
+    background-color: #ffffff !important; /* Force white background */
+}
+
+/* Selection style */
+.CodeMirror-selected {
+    background-color: #b5d5ff !important;
+}
+
+/* Dark mode selection style */
+body.dark-mode .CodeMirror-selected {
+    background-color: #3a3d41 !important;
+}
+
+.CodeMirror-gutters {
+    background-color: #f8f8f8;
+    border-right: 1px solid #ddd;
+}
+
+.CodeMirror-linenumber {
+    color: #999;
+}
+
+/* Dark mode styles */
+body.dark-mode .editor-textarea {
+    background-color: #2d2d2d;
+    color: #f0f0f0;
+    border-color: #4CAF50;
+}
+
+body.dark-mode .CodeMirror {
+    border-color: #4CAF50;
+    background-color: #2d2d2d !important; /* Force dark background */
+    color: #f0f0f0 !important; /* Force light text */
+}
+
+body.dark-mode .CodeMirror-gutters {
+    background-color: #2d2d2d;
+    border-right: 1px solid #444;
+}
+
+body.dark-mode .CodeMirror-linenumber {
+    color: #777;
+}
+
+/* Dark mode syntax highlighting adjustments */
+body.dark-mode .cm-s-default .cm-string {
+    color: #ce9178 !important;
+}
+
+body.dark-mode .cm-s-default .cm-number {
+    color: #b5cea8 !important;
+}
+
+body.dark-mode .cm-s-default .cm-keyword {
+    color: #569cd6 !important;
+}
+
+body.dark-mode .cm-s-default .cm-property {
+    color: #9cdcfe !important;
+}
+
+body.dark-mode .cm-s-default .cm-atom {
+    color: #d19a66 !important;
+}
+
+body.dark-mode .cm-s-default .cm-comment {
+    color: #6a9955 !important;
+}
+
+body.dark-mode .cm-s-default .cm-meta {
+    color: #dcdcaa !important;
+}
+
+body.dark-mode .cm-s-default .cm-tag {
+    color: #569cd6 !important;
+}
+
+body.dark-mode .cm-s-default .cm-attribute {
+    color: #9cdcfe !important;
+}
+
+body.dark-mode .cm-s-default .cm-variable {
+    color: #9cdcfe !important;
+}
+
+body.dark-mode .cm-s-default .cm-variable-2 {
+    color: #4ec9b0 !important;
+}
+
+body.dark-mode .cm-s-default .cm-def {
+    color: #dcdcaa !important;
+}
+
+body.dark-mode .CodeMirror-cursor {
+    border-left: 1px solid #f0f0f0 !important;
+}
+
+/* Lint markers for both light and dark mode */
+.CodeMirror-lint-marker-error, .CodeMirror-lint-message-error {
+    background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiBmaWxsPSJyZWQiPjxwYXRoIGQ9Ik0xMS45OTMgMi4wMDFhMTAgMTAgMCAwMC03LjA3MyAyLjkyOEExMCAxMCAwIDAwMS45OTIgMTIuMDAxYTEwIDEwIDAgMDAyLjkyOCA3LjA3MiAxMCAxMCAwIDAwNy4wNzMgMi45MjkgMTAgMTAgMCAwMDcuMDczLTIuOTMgMTAgMTAgMCAwMDIuOTI4LTcuMDcxIDEwIDEwIDAgMDAtMi45MjgtNy4wNzIgMTAgMTAgMCAwMC03LjA3My0yLjkyOHptMCA0bC4yMzIuMDAzYy41MjUuMDEzLjk5NC4zMzQgMS4yLjgyNWwuMDQuMTAzTDE2LjM0NSAxNWExLjUgMS41IDAgMDEtMi44NS45NDVsLS4wMzItLjFMMTIgMTIuNzYzIDguNTM3IDE1LjgybC0uMDk2LjA4YTEuNSAxLjUgMCAwMS0xLjgxLjEwNmwtLjEwMi0uMDgxYTEuNSAxLjUgMCAwMS0uMTA4LTEuODA2bC4wOC0uMTA0TDkuNCA3Ljk0NWwuMDgxLS4xMjVjLjIzMS0uMzE2LjYxNi0uNTE2IDEuMDM3LS4wMTZsLjA5Mi4wODMuMDc4LjA5My4wOTcuMTM2LjA0OC4wODUuMTYuMDMyeloiLz48L3N2Zz4=');
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+.CodeMirror-lint-tooltip {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: white;
+    z-index: 10000;
+    max-width: 600px;
+    overflow: hidden;
+    white-space: pre-wrap;
+    padding: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    color: #333;
+}
+
+body.dark-mode .CodeMirror-lint-tooltip {
+    background-color: #2d2d2d;
+    color: #f0f0f0;
+    border-color: #444;
+}
+
+.CodeMirror-lint-marker-error:hover {
+    cursor: pointer;
+}
+
+.CodeMirror-lint-line-error {
+    background-color: rgba(255, 0, 0, 0.1);
+}
+
+body.dark-mode .CodeMirror-lint-line-error {
+    background-color: rgba(255, 0, 0, 0.2);
+}
+
+body.dark-mode .message.success {
+    background-color: #1e3f20;
+    color: #7bc97d;
+    border-color: #2d5a2f;
+}
+
+body.dark-mode .message.error {
+    background-color: #3f1e1e;
+    color: #f5c6cb;
+    border-color: #5a2d2d;
+}
+
+body.dark-mode .save-button:disabled {
+    background-color: #444444 !important;
+    color: #777777 !important;
+    border: 2px solid #555555 !important;
+}
+
+body.dark-mode .revert-button {
+    background-color: #c62828;
+    color: white;
+    border: none;
+}
+
+body.dark-mode .revert-button:hover {
+    background-color: #b71c1c;
+}
+
+body.dark-mode .revert-button:disabled {
+    background-color: #444444 !important;
+    color: #777777 !important;
+    border: 2px solid #555555 !important;
+}
+</style>
+
+<div class="editor-container">
+    <div class="editor-header">
+        <h2>Apps.yaml Editor</h2>
+        <div id="lintStatus" style="margin-top: 8px;"></div>
+"""
+        
+        text += """
+    </div>
+    
+    <form id="editorForm" class="editor-form" method="post" action="./apps_editor">
+        <!-- We use a regular textarea that CodeMirror will replace -->
+        <textarea class="editor-textarea" name="apps_content" id="appsContent" placeholder="Loading apps.yaml content...">"""
+        
+        # Escape the content for HTML
+        import html as html_module
+        text += html_module.escape(apps_yaml_content)
+        
+        text += """</textarea>
+        
+        <div class="editor-controls">
+            <button type="submit" class="save-button" id="saveButton" title="Click to save changes">Save</button>
+            <button type="button" class="revert-button" id="revertButton" title="Discard changes and reload from disk">Revert</button>
+            <span id="saveStatus"></span>
+        </div>
+    </form>
+    
+    <div id="messageContainer">"""
+        
+        # Show success message if present
+        if success_message:
+            text += f'<div class="message success" style="display: block;">{html_module.escape(success_message)}</div>'
+        
+        # Show error message if present (from URL or file reading)
+        display_error = error_message or file_error
+        if display_error:
+            text += f'<div class="message error" style="display: block;">{html_module.escape(display_error)}</div>'
+        
+        text += """    </div>
+</div>
+
+<script>
+let isSubmitting = false;
+let editor; // CodeMirror instance
+
+document.getElementById('editorForm').addEventListener('submit', function(e) {
+    e.preventDefault(); // Always prevent default initially
+    
+    if (isSubmitting) {
+        return;
+    }
+    
+    // Get the current content and validate it
+    const content = editor ? editor.getValue() : document.getElementById('appsContent').value;
+    let hasYamlError = false;
+    
+    try {
+        // Only validate if content exists and isn't empty
+        if (content && content.trim()) {
+            jsyaml.load(content);
+        }
+    } catch (e) {
+        console.log('YAML validation error during form submit:', e.message);
+        hasYamlError = true;
+    }
+    
+    // Safety check - don't allow submission if there are YAML errors
+    if (hasYamlError) {
+        showMessage("Cannot save while there are YAML syntax errors. Please fix the errors first.", "error");
+        return;
+    }
+    
+    // Show confirmation popup
+    const confirmed = confirm("Warning: Saving changes will restart Predbat. Are you sure you want to continue?");
+    
+    if (!confirmed) {
+        return; // User cancelled the save
+    }
+    
+    // Update the hidden textarea with CodeMirror content before submission
+    if (editor) {
+        document.getElementById('appsContent').value = editor.getValue();
+    }
+    
+    isSubmitting = true;
+    const saveButton = document.getElementById('saveButton');
+    const saveStatus = document.getElementById('saveStatus');
+    
+    saveButton.disabled = true;
+    saveButton.textContent = 'Saving...';
+    saveStatus.textContent = 'Please wait...';
+    
+    // Clear stored content as we're saving now
+    localStorage.removeItem('appsYamlContent');
+    
+    // Submit the form programmatically
+    this.submit();
+});
+
+// Show messages
+function showMessage(message, type = 'success') {
+    const messageContainer = document.getElementById('messageContainer');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${type}`;
+    messageDiv.style.display = 'block';
+    messageDiv.textContent = message;
+    
+    messageContainer.innerHTML = '';
+    messageContainer.appendChild(messageDiv);
+    
+    // Auto-hide success messages after 5 seconds
+    if (type === 'success') {
+        setTimeout(() => {
+            messageDiv.style.display = 'none';
+        }, 5000);
+    }
+}
+
+// Function to update button states based on content changes and validation
+function updateButtonStates(saveButton, revertButton, content, hasError = false) {
+    if (!saveButton && !revertButton) return;
+    
+    const isDarkMode = document.body.classList.contains('dark-mode');
+    const hasChanged = content !== window.originalContent;
+    
+    // Update Save button
+    if (saveButton) {
+        // First set the disabled property, which is crucial for behavior
+        const shouldDisableSave = hasError || !hasChanged;
+        saveButton.disabled = shouldDisableSave;
+        
+        // Update tooltip
+        if (hasError) {
+            saveButton.title = 'Fix YAML errors before saving';
+        } else {
+            saveButton.title = hasChanged ? 'Save changes' : 'No changes to save';
+        }
+        
+        // Apply styling - ensure disabled style gets applied correctly
+        if (shouldDisableSave) {
+            // Disabled styling
+            saveButton.style.backgroundColor = isDarkMode ? '#444444' : '#cccccc';
+            saveButton.style.color = isDarkMode ? '#777777' : '#888888';
+            saveButton.style.border = `2px solid ${isDarkMode ? '#555555' : '#bbbbbb'}`;
+        } else {
+            // Enabled styling
+            saveButton.style.backgroundColor = '#4CAF50';
+            saveButton.style.color = 'white';
+            saveButton.style.border = 'none';
+        }
+    }
+    
+    // Update Revert button - always enable if content changed, regardless of errors
+    if (revertButton) {
+        // First set the disabled property
+        const shouldDisableRevert = !hasChanged;
+        revertButton.disabled = shouldDisableRevert;
+        revertButton.title = hasChanged ? 'Discard changes and reload from disk' : 'No changes to revert';
+        
+        // Apply styling - ensure disabled style gets applied correctly
+        if (shouldDisableRevert) {
+            // Disabled styling
+            revertButton.style.backgroundColor = isDarkMode ? '#444444' : '#cccccc';
+            revertButton.style.color = isDarkMode ? '#777777' : '#888888';
+            revertButton.style.border = `2px solid ${isDarkMode ? '#555555' : '#bbbbbb'}`;
+        } else {
+            // Enabled styling
+            revertButton.style.backgroundColor = '#4CAF50';
+            revertButton.style.color = 'white';
+            revertButton.style.border = 'none';
+        }
+    }
+}
+
+// Custom YAML linter using js-yaml
+CodeMirror.registerHelper("lint", "yaml", function(text) {
+    const found = [];
+    if (!text.trim()) {
+        return found; // Return empty array for empty text to avoid false errors
+    }
+    
+    try {
+        jsyaml.load(text);
+    } catch (e) {
+        // Convert js-yaml error to CodeMirror lint format
+        const line = e.mark && e.mark.line ? e.mark.line : 0;
+        const ch = e.mark && e.mark.column ? e.mark.column : 0;
+        found.push({
+            from: CodeMirror.Pos(line, ch),
+            to: CodeMirror.Pos(line, ch + 1),
+            message: e.message,
+            severity: "error"
+        });
+    }
+    
+    // Return the array of found issues
+    return found;
+});
+
+// Initialize CodeMirror and handle dark mode
+function initializeCodeMirror() {
+    const textarea = document.getElementById('appsContent');
+    
+    if (!textarea) return;
+    
+    const isDarkMode = document.body.classList.contains('dark-mode');
+    
+    // Check if we have unsaved content in localStorage
+    const savedContent = localStorage.getItem('appsYamlContent');
+    
+    // Store the original content for change comparison
+    window.originalContent = textarea.value;
+    
+    // If we have saved content and the textarea is empty or the saved content differs from current
+    if (savedContent && (!textarea.value.trim() || savedContent !== textarea.value)) {
+        // Always load the saved content automatically
+        textarea.value = savedContent;
+        console.log('Automatically restored content from localStorage');
+    }
+    
+    // Create CodeMirror instance
+    editor = CodeMirror.fromTextArea(textarea, {
+        mode: 'yaml',
+        theme: isDarkMode ? 'monokai' : 'default', // Use default theme for light mode (pure white background)
+        lineNumbers: true,
+        indentUnit: 2,
+        smartIndent: true,
+        tabSize: 2,
+        indentWithTabs: false,
+        lineWrapping: false,
+        gutters: ['CodeMirror-linenumbers', 'CodeMirror-lint-markers'],
+        lint: {
+            getAnnotations: CodeMirror.helpers.lint.yaml,
+            lintOnChange: true,
+            delay: 300 // Reduced delay for faster feedback
+        },
+        autofocus: true,
+        extraKeys: {
+            'Tab': function(cm) {
+                if (cm.somethingSelected()) {
+                    cm.indentSelection('add');
+                } else {
+                    cm.replaceSelection('  ', 'end', '+input');
+                }
+            },
+            'Ctrl-Space': 'autocomplete'
+        }
+    });
+    
+    // Manually validate YAML when editor is ready
+    editor.on('change', function() {
+        // Get the content and buttons
+        const content = editor.getValue();
+        const saveButton = document.getElementById('saveButton');
+        const revertButton = document.getElementById('revertButton');
+        let isValid = true;
+        
+        try {
+            // Parse YAML to check for errors
+            if (content.trim()) {
+                jsyaml.load(content);
+            }
+        } catch (e) {
+            isValid = false;
+            console.log('YAML validation error in change handler:', e.message);
+        }
+        
+        // Update button states based on YAML validation result
+        updateButtonStates(saveButton, revertButton, content, !isValid);
+        console.log('Button states updated by change handler, YAML valid:', isValid);
+        
+        // Save content to localStorage whenever it changes
+        localStorage.setItem('appsYamlContent', content);
+        console.log('Content saved to localStorage');
+    });
+    
+    // Make CodeMirror fill the available space
+    editor.setSize('100%', '100%');
+    
+    // Add custom CSS to make CodeMirror fill its container properly
+    const cmElement = editor.getWrapperElement();
+    cmElement.style.flex = '1';
+    cmElement.style.minHeight = '0';
+    cmElement.style.height = 'auto';
+    
+    // Set up the lint status display
+    const lintStatusEl = document.getElementById('lintStatus');
+    if (lintStatusEl) {
+        // Update lint status when linting is done
+        editor.on('lint', (errors) => {
+            console.log('Lint event fired:', errors ? errors.length : 0, 'errors found');
+            const saveButton = document.getElementById('saveButton');
+            
+            // Make a direct validation attempt as backup
+            let isValid = true;
+            try {
+                const content = editor.getValue();
+                if (content && content.trim()) {
+                    jsyaml.load(content);
+                }
+            } catch (e) {
+                console.log('Manual YAML validation error during lint event:', e.message);
+                isValid = false;
+            }
+            
+            const content = editor.getValue();
+            const revertButton = document.getElementById('revertButton');
+            const hasErrors = (errors && errors.length > 0) || !isValid;
+            
+            if (hasErrors) {
+                lintStatusEl.innerHTML = `<div style="color: #d32f2f; padding: 5px; border-radius: 4px; background-color: ${isDarkMode ? '#3f1e1e' : '#fff0f0'}; border: 1px solid #d32f2f;">
+                    <strong>⚠️ Found ${errors ? errors.length : 'syntax'} YAML ${errors && errors.length === 1 ? 'error' : 'errors'}</strong>
+                    <p style="margin: 5px 0 0 0; font-size: 14px;">Hover over the red markers in the editor gutter to see details.</p>
+                </div>`;
+                
+                // Update button states with error flag
+                updateButtonStates(saveButton, revertButton, content, true);
+                console.log('Button states updated by lint event (with errors)');
+            } else {
+                // Clear the lint status when syntax is valid
+                lintStatusEl.innerHTML = '';
+                
+                // Update button states with no error flag
+                updateButtonStates(saveButton, revertButton, content, false);
+                console.log('Button states updated by lint event (no errors)');
+            }
+        });
+        
+        // Initial lint after a short delay to ensure editor is fully loaded
+        setTimeout(() => {
+            // Perform the lint
+            editor.performLint();
+            
+            // Manually check and enable the button if there are no errors
+            // This is a fallback in case the lint event doesn't fire correctly
+            setTimeout(() => {
+                const saveButton = document.getElementById('saveButton');
+                const revertButton = document.getElementById('revertButton');
+                try {
+                    const content = editor.getValue();
+                    let isValidYaml = true;
+                    
+                    // Only validate if we have content
+                    if (content && content.trim()) {
+                        try {
+                            jsyaml.load(content);
+                        } catch (e) {
+                            isValidYaml = false;
+                            console.log('YAML validation error in initialization:', e.message);
+                        }
+                        
+                        // Update button states based on content validity
+                        updateButtonStates(saveButton, revertButton, content, !isValidYaml);
+                        console.log('Button states updated by initial validation');
+                        
+                        // Also clear the lint status if it exists and YAML is valid
+                        if (lintStatusEl && isValidYaml) {
+                            lintStatusEl.innerHTML = '';
+                        }
+                    } else {
+                        // Empty content is considered valid
+                        updateButtonStates(saveButton, revertButton, content, false);
+                        console.log('Button states updated for empty content');
+                    }
+                } catch (e) {
+                    // Something went wrong, keep the save button disabled but enable revert if changed
+                    console.log('Error during initialization button state update:', e.message);
+                    
+                    const content = editor.getValue();
+                    updateButtonStates(saveButton, revertButton, content, true);
+                }
+            }, 300);
+        }, 800);
+    }
+    
+    // Apply dark mode if needed
+    if (isDarkMode) {
+        // Make sure the CodeMirror editor has proper dark mode styling
+        const cmElement = editor.getWrapperElement();
+        cmElement.style.backgroundColor = '#2d2d2d';
+        
+        // Style the gutters
+        const gutters = document.querySelectorAll('.CodeMirror-gutters');
+        gutters.forEach(gutter => {
+            gutter.style.backgroundColor = '#2d2d2d';
+            gutter.style.borderRight = '1px solid #444';
+        });
+        
+        // Force a refresh to ensure all styles are applied properly
+        editor.refresh();
+    }
+}
+
+// Handle page load
+document.addEventListener('DOMContentLoaded', function() {
+    const textarea = document.getElementById('appsContent');
+    if (textarea && textarea.value.trim() === '') {
+        textarea.placeholder = 'apps.yaml content could not be loaded';
+    }
+    
+    // Initialize CodeMirror
+    initializeCodeMirror();
+    
+    // Handle Revert button click
+    document.getElementById('revertButton').addEventListener('click', function() {
+        if (confirm('This will discard all your unsaved changes and reload the file from disk. Are you sure?')) {
+            // Remove saved content from localStorage
+            localStorage.removeItem('appsYamlContent');
+            
+            // Reload the page to get fresh content from disk
+            window.location.reload();
+        }
+    });
+    
+    // Add a direct listener to ensure the button gets enabled
+    // This is a final fallback in case other methods fail
+    setTimeout(() => {
+        const saveButton = document.getElementById('saveButton');
+        const revertButton = document.getElementById('revertButton');
+        
+        if (editor) {
+            // Force a final validation check
+            try {
+                const content = editor.getValue();
+                const hasChanged = content !== window.originalContent;
+                
+                // Check YAML validity
+                let isValid = true;
+                if (content && content.trim()) {
+                    try {
+                        jsyaml.load(content);
+                    } catch (e) {
+                        isValid = false;
+                        console.log('YAML validation error in DOMContentLoaded final check:', e.message);
+                    }
+                }
+                
+                // Update buttons states consistently
+                updateButtonStates(saveButton, revertButton, content, !isValid);
+                console.log('Button states updated by DOMContentLoaded final check, YAML valid:', isValid);
+                
+            } catch (e) {
+                console.log('YAML validation error in DOMContentLoaded:', e.message);
+                // We already know there's an error, but we won't disable the button here
+                // as that should be handled by the lint event
+            }
+            
+            // Manual override for debugging: add a global function to force-enable the button
+            window.enableSaveButton = function() {
+                const saveButton = document.getElementById('saveButton');
+                const revertButton = document.getElementById('revertButton');
+                if (saveButton) {
+                    // Force enable the save button for debugging purposes by treating content as changed and valid
+                    const content = editor ? editor.getValue() : '';
+                    window.originalContent = content === window.originalContent ? '' : window.originalContent; // Force a difference
+                    updateButtonStates(saveButton, revertButton, content, false);
+                    console.log('Save button manually enabled via debug function');
+                    return 'Save button enabled';
+                }
+                return 'Save button not found';
+            };
+        }
+    }, 2000); // Wait longer for everything to initialize
+    
+    // Add a listener for dark mode toggle
+    window.addEventListener('storage', function(e) {
+        if (e.key === 'darkMode') {
+            if (editor) {
+                const isDarkMode = localStorage.getItem('darkMode') === 'true';
+                editor.setOption('theme', isDarkMode ? 'monokai' : 'default');
+                
+                // Update the editor's wrapper element styling
+                const cmElement = editor.getWrapperElement();
+                
+                if (isDarkMode) {
+                    cmElement.style.backgroundColor = '#2d2d2d';
+                    
+                    // Style the gutters
+                    const gutters = document.querySelectorAll('.CodeMirror-gutters');
+                    gutters.forEach(gutter => {
+                        gutter.style.backgroundColor = '#2d2d2d';
+                        gutter.style.borderRight = '1px solid #444';
+                    });
+                    
+                    // Re-style any lint tooltips that might be open
+                    const tooltips = document.querySelectorAll('.CodeMirror-lint-tooltip');
+                    tooltips.forEach(tooltip => {
+                        tooltip.style.backgroundColor = '#2d2d2d';
+                        tooltip.style.color = '#f0f0f0';
+                        tooltip.style.borderColor = '#444';
+                    });
+                } else {
+                    cmElement.style.backgroundColor = '#ffffff';
+                    
+                    // Style the gutters
+                    const gutters = document.querySelectorAll('.CodeMirror-gutters');
+                    gutters.forEach(gutter => {
+                        gutter.style.backgroundColor = '#f8f8f8';
+                        gutter.style.borderRight = '1px solid #ddd';
+                    });
+                    
+                    // Re-style any lint tooltips that might be open
+                    const tooltips = document.querySelectorAll('.CodeMirror-lint-tooltip');
+                    tooltips.forEach(tooltip => {
+                        tooltip.style.backgroundColor = '#ffffff';
+                        tooltip.style.color = '#333';
+                        tooltip.style.borderColor = '#ccc';
+                    });
+                }
+                
+                // Re-run the linter
+                editor.performLint();
+                
+                // Force a refresh to ensure all styles are applied properly
+                editor.refresh();
+            }
+        }
+    });
+});
+</script>
+
+</div>"""
+        
+        return web.Response(content_type="text/html", text=text)
+
+    async def html_apps_editor_post(self, request):
+        """
+        Handle POST request for apps.yaml editor - save the file
+        """
+        try:
+            postdata = await request.post()
+            apps_content = postdata.get('apps_content', '')
+            
+            # Find the apps.yaml file path
+            apps_yaml_path = "apps.yaml"                 
+            # Create backup
+            backup_path = "apps.yaml.backup"
+            shutil.copy2(apps_yaml_path, backup_path)
+            
+            # Save the new content
+            with open(apps_yaml_path, 'w') as f:
+                f.write(apps_content)
+            
+            self.log(f"Apps.yaml successfully saved to {apps_yaml_path}")
+            if backup_path:
+                self.log(f"Backup created at {backup_path}")
+            
+            # Redirect back to editor with success message
+            import urllib.parse
+            success_message = f"Apps.yaml saved successfully. Backup created at {backup_path}."
+            encoded_message = urllib.parse.quote(success_message)
+            raise web.HTTPFound(f"./apps_editor?success={encoded_message}")
+            
+        except web.HTTPFound:
+            raise  # Re-raise HTTP redirects
+        except Exception as e:
+            error_msg = f"Failed to save apps.yaml: {str(e)}"
+            self.log(f"ERROR: {error_msg}")
+            import urllib.parse
+            encoded_error = urllib.parse.quote(error_msg)
+            raise web.HTTPFound(f"./apps_editor?error={encoded_error}")
+
     async def html_default(self, request):
         """
         Redirect to the default page
@@ -2641,6 +3553,7 @@ window.addEventListener('resize', function() {
             + config_warning
             + """</a>
     <a href='./apps'>Apps</a>
+    <a href='./apps_editor'>Editor</a>
     <a href='./log'>Log</a>
     <a href='./compare'>Compare</a>
     <a href='https://springfall2008.github.io/batpred/'>Docs</a>
