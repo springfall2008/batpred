@@ -31,14 +31,15 @@ class Alertfeed:
             self.log("Warn: Alerts must be a dictionary, ignoring")
             return
 
-        latitude = self.get_state_wrapper("zone.home", attribute="latitude")
-        longitude = self.get_state_wrapper("zone.home", attribute="longitude")
+        # Try apps.yaml
+        latitude = alerts.get("latitude", None)
+        longitude = alerts.get("longitude", None)
 
-        # Try apps.yaml if not found in zone.home
-        if not latitude:
-            latitude = alerts.get("latitude", None)
-        if not longitude:
-            longitude = alerts.get("longitude", None)
+        # If latitude and longitude are not provided, use zone.home
+        if latitude is None:
+            latitude = self.get_state_wrapper("zone.home", attribute="latitude")
+        if longitude is None:
+            longitude = self.get_state_wrapper("zone.home", attribute="longitude")
 
         # If latitude and longitude are not found, we cannot process alerts
         if latitude and longitude:
