@@ -16,7 +16,7 @@ import xml.etree.ElementTree as etree
 
 
 class Alertfeed:
-    def process_alerts(self):
+    def process_alerts(self, testing=False):
         """
         Process the alerts from the alert feed
         """
@@ -35,6 +35,10 @@ class Alertfeed:
         longitude = self.get_state_wrapper("zone.home", attribute="longitude")
         if latitude and longitude:
             self.log("Processing alerts for approx position latitude {} longitude {}".format(dp1(latitude), dp1(longitude)))
+        else:
+            if not testing:
+                self.log("Warn: No latitude or longitude found, cannot process alerts")
+                return
 
         alert_url = alerts.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom")
         area = alerts.get("area", "")
@@ -44,7 +48,6 @@ class Alertfeed:
         urgency = alerts.get("urgency", "")
         keep = alerts.get("keep", 100)
 
-        self.log("Processing alerts from {}".format(alert_url))
         alert_xml = self.download_alert_data(alert_url)
         if alert_xml:
             self.alerts = self.parse_alert_data(alert_xml)

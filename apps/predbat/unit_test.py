@@ -8096,7 +8096,7 @@ def test_alert_feed(my_predbat):
     original_download_alert_data = my_predbat.download_alert_data
     my_predbat.download_alert_data = MagicMock(return_value=alert_data)
     my_predbat.args["alerts"] = alert_config
-    my_predbat.process_alerts()
+    my_predbat.process_alerts(testing=True)
     my_predbat.download_alert_data = original_download_alert_data
     alert_active_keep = my_predbat.alert_active_keep
     my_predbat.alert_active_keep = {}
