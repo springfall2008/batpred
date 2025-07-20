@@ -2496,9 +2496,9 @@ body.dark-mode .entity-value {
 let pendingChanges = {{}};
 
 // All Home Assistant states for entity dropdown
-const allStates = """ +
-            all_states_json + 
-        """;
+const allStates = """
+            + all_states_json
+            + """;
 function showMessage(message, type) {
     const container = document.getElementById('messageContainer');
     container.className = 'message-container message-' + type;
@@ -3253,8 +3253,8 @@ function editNestedValue(rowId) {
     const valueCell = document.getElementById('nested_value_' + rowId);
     const nestedPath = row.dataset.nestedPath;
     const originalValue = row.dataset.nestedOriginal;
-    
-    // Check if this is an entity string (contains dots) 
+
+    // Check if this is an entity string (contains dots)
     if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown for nested values
         showNestedEntityDropdown(rowId, originalValue);
