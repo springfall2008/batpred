@@ -2496,10 +2496,9 @@ body.dark-mode .entity-value {
 let pendingChanges = {{}};
 
 // All Home Assistant states for entity dropdown
-const allStates = """
-            + all_states_json
-            + """;
-
+const allStates = """ +
+            all_states_json + 
+        """;
 function showMessage(message, type) {
     const container = document.getElementById('messageContainer');
     container.className = 'message-container message-' + type;
@@ -2580,7 +2579,7 @@ function editValue(rowId) {
     const originalValue = row.dataset.originalValue;
 
     // Check if this is an entity string (contains dots)
-    if (originalValue && originalValue.match(/^[a-zA-Z]+\.\S+/)) {
+    if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown
         showEntityDropdown(rowId, originalValue);
     } else {
@@ -2608,7 +2607,7 @@ function cancelEdit(rowId) {
         let displayValue = pendingValue;
 
         // If it's an entity string, show the state value instead of entity ID
-        if (pendingValue && pendingValue.match(/^[a-zA-Z]+\.\S+/) && pendingChanges[argName].type === 'entity') {
+        if (pendingValue && pendingValue.match(/^[a-zA-Z]+\\.\\S+/) && pendingChanges[argName].type === 'entity') {
             const entityState = allStates[pendingValue];
             displayValue = entityState && entityState.state ? pendingValue + ' = ' + entityState.state : pendingValue;
         }
@@ -2620,7 +2619,7 @@ function cancelEdit(rowId) {
         let displayValue = originalValue;
 
         // If it's an entity string, show the state value instead of entity ID
-        if (originalValue && originalValue.match(/^[a-zA-Z]+\.\S+/)) {
+        if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
             const entityState = allStates[originalValue];
             displayValue = entityState && entityState.state ? originalValue + ' = ' + entityState.state : originalValue;
         }
@@ -2644,7 +2643,7 @@ function saveValue(rowId) {
 
     // Determine if this is an entity or numerical value
     let valueType = 'numerical';
-    if (newValue.match(/^[a-zA-Z]+\.\S+/) && isNaN(parseFloat(newValue))) {
+    if (newValue.match(/^[a-zA-Z]+\\.\\S+/) && isNaN(parseFloat(newValue))) {
         // This looks like an entity ID (contains dots but is not a number)
         valueType = 'entity';
     }
@@ -2708,7 +2707,7 @@ function showEntityDropdown(rowId, currentValue) {
     setupEntitySearch(rowId, currentValue);
 
     // If current value is an entity, populate with it as initial filter
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\.\S+/)) {
+    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         populateEntityDropdown(rowId, currentValue, currentValue);
     } else {
         populateEntityDropdown(rowId, currentValue);
@@ -3256,7 +3255,7 @@ function editNestedValue(rowId) {
     const originalValue = row.dataset.nestedOriginal;
     
     // Check if this is an entity string (contains dots) 
-    if (originalValue && originalValue.match(/^[a-zA-Z]+\.\S+/)) {
+    if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown for nested values
         showNestedEntityDropdown(rowId, originalValue);
     } else {
