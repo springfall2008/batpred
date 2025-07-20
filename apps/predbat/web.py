@@ -25,6 +25,7 @@ from predbat import THIS_VERSION
 import urllib.parse
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+ROOT_YAML_KEY = "pred_bat"
 
 
 class WebInterface:
@@ -90,6 +91,7 @@ class WebInterface:
         app.router.add_get("/plan", self.html_plan)
         app.router.add_get("/log", self.html_log)
         app.router.add_get("/apps", self.html_apps)
+        app.router.add_post("/apps", self.html_apps_post)
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_get("/entity", self.html_entity)
@@ -1606,20 +1608,84 @@ body.dark-mode .log-menu a.active {
 
         raise web.HTTPFound("./config")
 
-    def render_type(self, arg, value):
+    def render_type(self, arg, value, parent_path="", row_counter=None):
         """
-        Render a value based on its type
+        Render a value based on its type with support for nested editing.
+
+        Parameters:
+        - arg (str): The name of the argument or key being rendered.
+        - value (any): The value to render, which can be a list, dictionary, or other data type.
+        - parent_path (str): The hierarchical path to the current value, used for nested structures.
+          For example, "config[0]" for the first item in a list under the "config" key.
+        - row_counter (int, optional): A counter to track the number of rows rendered, useful for
+          indexing or applying alternating styles in tables.
+
+        Returns:
+        - str: The rendered HTML representation of the value.
         """
         text = ""
         if isinstance(value, list):
             text += "<table>"
-            for item in value:
-                text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item))
+            for idx, item in enumerate(value):
+                nested_path = f"{parent_path}[{idx}]" if parent_path else f"{arg}[{idx}]"
+
+                # Check if this list item is editable
+                can_edit = self.is_editable_value(item)
+                actions_cell = ""
+
+                if can_edit and row_counter is not None:
+                    row_counter[0] += 1
+                    nested_row_id = row_counter[0]
+
+                    if isinstance(item, bool):
+                        toggle_class = "toggle-button active" if item else "toggle-button"
+                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
+                    else:
+                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+
+                    # Store the nested value info for later processing
+                    if not hasattr(self, "_nested_values"):
+                        self._nested_values = {}
+                    self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+
+                raw_value = self.resolve_value_raw(arg, item)
+
+                if actions_cell:
+                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                else:
+                    text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
             text += "</table>"
         elif isinstance(value, dict):
             text += "<table>"
             for key in value:
-                text += "<tr><td>{}</td><td>: {}</td></tr>\n".format(key, self.render_type(key, value[key]))
+                nested_path = f"{parent_path}.{key}" if parent_path else f"{arg}.{key}"
+                nested_value = value[key]
+
+                # Check if this nested value is editable
+                can_edit = self.is_editable_value(nested_value)
+                actions_cell = ""
+
+                if can_edit and row_counter is not None:
+                    row_counter[0] += 1
+                    nested_row_id = row_counter[0]
+
+                    if isinstance(nested_value, bool):
+                        toggle_class = "toggle-button active" if nested_value else "toggle-button"
+                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
+                    else:
+                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+
+                    # Store the nested value info for later processing
+                    if not hasattr(self, "_nested_values"):
+                        self._nested_values = {}
+                    self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+
+                raw_value = self.resolve_value_raw(key, nested_value)
+
+                if actions_cell:
+                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                else:
+                    text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z]+\.\S+", value)
@@ -1628,7 +1694,7 @@ body.dark-mode .log-menu a.active {
                 if text is None:
                     text = '<span style="background-color:#FFAAAA"> {} </p>'.format(value)
                 else:
-                    text = self.render_type(arg, text)
+                    text = self.render_type(arg, text, parent_path, row_counter)
             elif pat and (arg != "service"):
                 entity_id = value
                 if "$" in entity_id:
@@ -1960,38 +2026,1639 @@ document.addEventListener("DOMContentLoaded", function() {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    def is_editable_value(self, value):
+        """
+        Check if a value is editable (numerical, boolean, entity strings, or list with editable items)
+        """
+        if isinstance(value, bool):
+            return True
+        if isinstance(value, (int, float)):
+            return True
+        if isinstance(value, str):
+            return True
+        if isinstance(value, list):
+            # A list is editable if it contains any editable items
+            return len(value) > 0 and any(self.is_editable_value(item) for item in value)
+        return False
+
+    def resolve_value_raw(self, arg, value):
+        if isinstance(value, str) and "{" in value:
+            text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
+            if text is not None:
+                value = text
+            return value
+        elif isinstance(value, list):
+            return [self.resolve_value_raw(arg, item) for item in value]
+        elif isinstance(value, dict):
+            return {key: self.resolve_value_raw(arg, val) for key, val in value.items()}
+        else:
+            return value
+
     async def html_apps(self, request):
         """
-        Render apps.yaml as an HTML page
+        Render apps.yaml as an HTML page with edit functionality
         """
         self.default_page = "./apps"
         text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
+
+        # all_states has all the HA entities and their states
+        all_states_data = self.base.get_state_wrapper()
+        all_states = {}
+        for entity in all_states_data:
+            all_states[entity] = {"state": all_states_data[entity].get("state", "")}
+
+        # Ensure all_states is valid and serializable
+        try:
+            all_states_json = json.dumps(all_states)
+        except (TypeError, ValueError) as e:
+            self.base.log(f"Error serializing all_states for web interface: {e}")
+            all_states_json = "{}"
+
+        # Add CSS styles for edit functionality
+        text += """
+<style>
+.edit-button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 12px;
+    margin: 2px 2px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+
+.edit-button:hover {
+    background-color: #45a049;
+}
+
+.edit-input {
+    width: 300px;
+    padding: 4px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+.save-button, .cancel-button {
+    background-color: #2196F3;
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 12px;
+    margin: 2px 2px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+
+.cancel-button {
+    background-color: #f44336;
+}
+
+.save-button:hover {
+    background-color: #0b7dda;
+}
+
+.cancel-button:hover {
+    background-color: #da190b;
+}
+
+.message-container {
+    padding: 10px;
+    margin: 10px 0;
+    border-radius: 4px;
+    display: none;
+}
+
+.message-success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.message-error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* Dark mode styles */
+body.dark-mode .edit-button {
+    background-color: #4CAF50;
+    color: white;
+}
+
+body.dark-mode .edit-button:hover {
+    background-color: #45a049;
+}
+
+body.dark-mode .edit-input {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #555;
+}
+
+body.dark-mode .save-button {
+    background-color: #2196F3;
+    color: white;
+}
+
+body.dark-mode .cancel-button {
+    background-color: #f44336;
+    color: white;
+}
+
+body.dark-mode .message-success {
+    background-color: #1e3f20;
+    color: #7bc97d;
+    border: 1px solid #2d5a2f;
+}
+
+body.dark-mode .message-error {
+    background-color: #3f1e1e;
+    color: #f5c6cb;
+    border: 1px solid #5a2d2d;
+}
+
+/* Toggle button styles */
+.toggle-button {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 24px;
+    background-color: #ccc;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    border: none;
+    outline: none;
+}
+
+.toggle-button.active {
+    background-color: #4CAF50;
+}
+
+.toggle-button::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background-color: white;
+    border-radius: 50%;
+    transition: transform 0.3s;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.toggle-button.active::before {
+    transform: translateX(36px);
+}
+
+.toggle-button:hover {
+    opacity: 0.8;
+}
+
+/* Dark mode toggle styles */
+body.dark-mode .toggle-button {
+    background-color: #555;
+}
+
+body.dark-mode .toggle-button.active {
+    background-color: #4CAF50;
+}
+
+body.dark-mode .toggle-button::before {
+    background-color: #e0e0e0;
+}
+
+/* Save controls styles */
+.save-controls {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 10px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.save-status {
+    display: flex;
+    align-items: center;
+    font-weight: bold;
+    color: #495057;
+}
+
+.save-all-button {
+    background-color: #28a745;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.3s;
+}
+
+.save-all-button:hover:not(:disabled) {
+    background-color: #218838;
+}
+
+.save-all-button:disabled {
+    background-color: #6c757d;
+    cursor: not-allowed;
+}
+
+.discard-all-button {
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.3s;
+}
+
+.discard-all-button:hover:not(:disabled) {
+    background-color: #c82333;
+}
+
+.discard-all-button:disabled {
+    background-color: #6c757d;
+    cursor: not-allowed;
+}
+
+/* Highlight changed rows */
+.row-changed {
+    background-color: #fff3cd !important;
+    border-left: 4px solid #ffc107 !important;
+}
+
+/* Dark mode save controls styles */
+body.dark-mode .save-controls {
+    background-color: #2d2d2d;
+    border: 1px solid #404040;
+}
+
+body.dark-mode .save-status {
+    color: #e0e0e0;
+}
+
+body.dark-mode .row-changed {
+    background-color: #3d3d1d !important;
+    border-left: 4px solid #ffc107 !important;
+}
+
+/* Confirmation dialog styles */
+.confirmation-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+}
+
+.confirmation-dialog {
+    background-color: white;
+    border-radius: 8px;
+    padding: 25px;
+    max-width: 600px;
+    width: 95%;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    word-wrap: break-word;
+}
+
+.confirmation-dialog h3 {
+    margin-top: 0;
+    color: #dc3545;
+    font-size: 18px;
+    word-wrap: break-word;
+}
+
+.confirmation-dialog p {
+    margin: 15px 0;
+    line-height: 1.6;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.confirmation-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+.confirm-button, .cancel-button-dialog {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.confirm-button {
+    background-color: #dc3545;
+    color: white;
+}
+
+.confirm-button:hover {
+    background-color: #c82333;
+}
+
+.cancel-button-dialog {
+    background-color: #6c757d;
+    color: white;
+}
+
+.cancel-button-dialog:hover {
+    background-color: #545b62;
+}
+
+/* Dark mode confirmation dialog */
+body.dark-mode .confirmation-dialog {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+}
+
+body.dark-mode .confirmation-dialog h3 {
+    color: #ff6b6b;
+}
+
+/* Entity dropdown styles */
+.entity-dropdown-container {
+    position: relative;
+    width: 100%;
+    min-width: 400px;
+}
+
+.entity-search-input {
+    width: 100%;
+    min-width: 400px;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.entity-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    min-width: 400px;
+    background: white;
+    border: 1px solid #ddd;
+    border-top: none;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.entity-option {
+    padding: 8px;
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.entity-option:hover,
+.entity-option.selected {
+    background-color: #f0f0f0;
+}
+
+.entity-name {
+    font-weight: bold;
+    flex: 1;
+    margin-right: 10px;
+    word-break: break-all;
+}
+
+.entity-value {
+    color: #666;
+    font-size: 12px;
+    flex-shrink: 0;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Dark mode entity dropdown styles */
+body.dark-mode .entity-search-input {
+    background-color: #444;
+    color: #fff;
+    border: 1px solid #666;
+}
+
+body.dark-mode .entity-dropdown {
+    background: #333;
+    border: 1px solid #666;
+    color: #fff;
+}
+
+body.dark-mode .entity-option {
+    border-bottom: 1px solid #555;
+}
+
+body.dark-mode .entity-option:hover,
+body.dark-mode .entity-option.selected {
+    background-color: #555;
+}
+
+body.dark-mode .entity-value {
+    color: #ccc;
+}
+</style>
+"""
+
         text += "<body>\n"
+        text += (
+            f"""
+<script>
+// Global object to track pending changes
+let pendingChanges = {{}};
+
+// All Home Assistant states for entity dropdown
+const allStates = """
+            + all_states_json
+            + """;
+function showMessage(message, type) {
+    const container = document.getElementById('messageContainer');
+    container.className = 'message-container message-' + type;
+    container.textContent = message;
+    container.style.display = 'block';
+
+    // Auto-hide success messages after 5 seconds
+    if (type === 'success') {
+        setTimeout(() => {
+            container.style.display = 'none';
+        }, 5000);
+    }
+}
+
+function updateChangeCounter() {
+    const changeCount = Object.keys(pendingChanges).length;
+    const changeCountElement = document.getElementById('changeCount');
+    const saveButton = document.getElementById('saveAllButton');
+    const discardButton = document.getElementById('discardAllButton');
+
+    if (changeCount === 0) {
+        changeCountElement.textContent = 'No unsaved changes';
+        saveButton.disabled = true;
+        discardButton.disabled = true;
+    } else {
+        changeCountElement.textContent = `${changeCount} unsaved change${changeCount > 1 ? 's' : ''}`;
+        saveButton.disabled = false;
+        discardButton.disabled = false;
+    }
+}
+
+function markRowAsChanged(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    row.classList.add('row-changed');
+}
+
+function unmarkRowAsChanged(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    row.classList.remove('row-changed');
+}
+
+function toggleValue(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const argName = row.dataset.argName;
+    const toggleButton = row.querySelector('.toggle-button');
+    const currentValue = toggleButton.dataset.value === 'true';
+    const newValue = !currentValue;
+
+    // Track the change locally
+    pendingChanges[argName] = {
+        rowId: rowId,
+        originalValue: row.dataset.originalValue,
+        newValue: newValue.toString(),
+        type: 'boolean'
+    };
+
+    // Update the toggle button state visually
+    toggleButton.dataset.value = newValue.toString();
+    if (newValue) {
+        toggleButton.classList.add('active');
+    } else {
+        toggleButton.classList.remove('active');
+    }
+
+    // Update the value display
+    const valueCell = document.getElementById('value_' + rowId);
+    valueCell.innerHTML = newValue.toString();
+
+    // Mark row as changed and update counter
+    markRowAsChanged(rowId);
+    updateChangeCounter();
+}
+
+function editValue(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const valueCell = document.getElementById('value_' + rowId);
+    const argName = row.dataset.argName;
+    const originalValue = row.dataset.originalValue;
+
+    // Check if this is an entity string (contains dots)
+    if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+        // Show entity dropdown
+        showEntityDropdown(rowId, originalValue);
+    } else {
+        // Show regular text input for non-entity values
+        valueCell.innerHTML = `
+            <input type="text" class="edit-input" id="input_${rowId}" value="${originalValue}">
+            <button class="save-button" onclick="saveValue(${rowId})">Apply</button>
+            <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
+        `;
+
+        // Focus the input field
+        document.getElementById('input_' + rowId).focus();
+    }
+}
+
+function cancelEdit(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const valueCell = document.getElementById('value_' + rowId);
+    const argName = row.dataset.argName;
+
+    // Check if there's a pending change for this row
+    if (pendingChanges[argName]) {
+        // Show the pending value - need to check if it's an entity
+        const pendingValue = pendingChanges[argName].newValue;
+        let displayValue = pendingValue;
+
+        // If it's an entity string, show the state value instead of entity ID
+        if (pendingValue && pendingValue.match(/^[a-zA-Z]+\\.\\S+/) && pendingChanges[argName].type === 'entity') {
+            const entityState = allStates[pendingValue];
+            displayValue = entityState && entityState.state ? pendingValue + ' = ' + entityState.state : pendingValue;
+        }
+
+        valueCell.innerHTML = displayValue;
+    } else {
+        // Show the original value - need to check if it's an entity
+        const originalValue = row.dataset.originalValue;
+        let displayValue = originalValue;
+
+        // If it's an entity string, show the state value instead of entity ID
+        if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+            const entityState = allStates[originalValue];
+            displayValue = entityState && entityState.state ? originalValue + ' = ' + entityState.state : originalValue;
+        }
+
+        valueCell.innerHTML = displayValue;
+    }
+}
+
+function saveValue(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const input = document.getElementById('input_' + rowId);
+    const argName = row.dataset.argName;
+    const newValue = input.value.trim();
+    const originalValue = row.dataset.originalValue;
+
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Value cannot be empty', 'error');
+        return;
+    }
+
+    // Determine if this is an entity or numerical value
+    let valueType = 'numerical';
+    if (newValue.match(/^[a-zA-Z]+\\.\\S+/) && isNaN(parseFloat(newValue))) {
+        // This looks like an entity ID (contains dots but is not a number)
+        valueType = 'entity';
+    }
+
+    // Try to parse as number to validate (only for numerical values)
+    if (valueType === 'numerical' && newValue !== originalValue) {
+        try {
+            if (newValue.includes('.')) {
+                parseFloat(newValue);
+            } else {
+                parseInt(newValue);
+            }
+        } catch (e) {
+            showMessage('Invalid number format', 'error');
+            return;
+        }
+    }
+
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[argName] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: valueType
+        };
+        markRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[argName]) {
+            delete pendingChanges[argName];
+            unmarkRowAsChanged(rowId);
+        }
+    }
+
+    // Update the display value
+    const valueCell = document.getElementById('value_' + rowId);
+    valueCell.innerHTML = newValue;
+
+    updateChangeCounter();
+}
+
+// Entity dropdown functions for editing entity strings
+function showEntityDropdown(rowId, currentValue) {
+    const valueCell = document.getElementById('value_' + rowId);
+
+    // Create the dropdown container
+    valueCell.innerHTML = `
+        <div class="entity-dropdown-container">
+            <input type="text" class="entity-search-input" id="entity_search_${rowId}"
+                   placeholder="Type to filter entities..." autocomplete="off">
+            <div class="entity-dropdown" id="entity_dropdown_${rowId}"></div>
+            <div style="margin-top: 5px;">
+                <button class="save-button" onclick="saveEntityValue(${rowId})">Apply</button>
+                <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
+            </div>
+        </div>
+    `;
+
+    // Set up search functionality first
+    setupEntitySearch(rowId, currentValue);
+
+    // If current value is an entity, populate with it as initial filter
+    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+        populateEntityDropdown(rowId, currentValue, currentValue);
+    } else {
+        populateEntityDropdown(rowId, currentValue);
+    }
+
+    // Focus the search input and select all text for easy replacement
+    const searchInput = document.getElementById('entity_search_' + rowId);
+    searchInput.focus();
+    searchInput.select();
+}
+
+function populateEntityDropdown(rowId, currentValue, filterText = '') {
+    const dropdown = document.getElementById('entity_dropdown_' + rowId);
+    const searchInput = document.getElementById('entity_search_' + rowId);
+
+    if (!dropdown) return;
+
+    dropdown.innerHTML = '';
+
+    // Get all entity IDs and filter them
+    const entities = Object.keys(allStates);
+    const filteredEntities = entities.filter(entityId =>
+        entityId.toLowerCase().includes(filterText.toLowerCase())
+    ).sort();
+
+    // Limit results to prevent performance issues
+    const maxResults = 100;
+    const limitedEntities = filteredEntities.slice(0, maxResults);
+
+    if (limitedEntities.length === 0) {
+        dropdown.innerHTML = '<div class="entity-option">No entities found</div>';
+        return;
+    }
+
+    limitedEntities.forEach(entityId => {
+        const entityState = allStates[entityId];
+        const entityValue = entityState && entityState.state ? entityState.state : 'unknown';
+
+        const option = document.createElement('div');
+        option.className = 'entity-option';
+        option.dataset.entityId = entityId;
+
+        // Highlight current selection (only if search input is empty or matches exactly)
+        if (entityId === currentValue && (!filterText || filterText === entityId)) {
+            option.classList.add('selected');
+        }
+
+        option.innerHTML = `
+            <div class="entity-name">${entityId}</div>
+            <div class="entity-value">${entityValue}</div>
+        `;
+
+        option.addEventListener('click', () => {
+            // Clear previous selections
+            dropdown.querySelectorAll('.entity-option').forEach(opt => opt.classList.remove('selected'));
+            // Select this option
+            option.classList.add('selected');
+            searchInput.value = entityId;
+        });
+
+        dropdown.appendChild(option);
+    });
+
+    if (filteredEntities.length > maxResults) {
+        const moreOption = document.createElement('div');
+        moreOption.className = 'entity-option';
+        moreOption.style.fontStyle = 'italic';
+        moreOption.innerHTML = `<div class="entity-name">... and ${filteredEntities.length - maxResults} more (refine search)</div>`;
+        dropdown.appendChild(moreOption);
+    }
+}
+
+function setupEntitySearch(rowId, currentValue) {
+    const searchInput = document.getElementById('entity_search_' + rowId);
+
+    if (!searchInput) return;
+
+    // Set initial value if it's an entity
+    if (currentValue && currentValue.includes('.')) {
+        searchInput.value = currentValue;
+    }
+
+    // Handle search input
+    searchInput.addEventListener('input', (e) => {
+        const filterText = e.target.value;
+        populateEntityDropdown(rowId, currentValue, filterText);
+    });
+
+    // Handle keyboard navigation
+    searchInput.addEventListener('keydown', (e) => {
+        const dropdown = document.getElementById('entity_dropdown_' + rowId);
+        const options = dropdown.querySelectorAll('.entity-option[data-entity-id]');
+        const selected = dropdown.querySelector('.entity-option.selected');
+
+        let newSelection = null;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.nextElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[0];
+                }
+            } else {
+                newSelection = options[0];
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.previousElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[options.length - 1];
+                }
+            } else {
+                newSelection = options[options.length - 1];
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selected && selected.dataset.entityId) {
+                searchInput.value = selected.dataset.entityId;
+            }
+            saveEntityValue(rowId);
+            return;
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelEdit(rowId);
+            return;
+        }
+
+        if (newSelection) {
+            // Clear previous selections
+            options.forEach(opt => opt.classList.remove('selected'));
+            // Select new option
+            newSelection.classList.add('selected');
+            // Only update input value on Enter, not on arrow key navigation
+            // searchInput.value = newSelection.dataset.entityId;
+            // Scroll into view if needed
+            newSelection.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+function saveEntityValue(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const searchInput = document.getElementById('entity_search_' + rowId);
+    const argName = row.dataset.argName;
+    const newValue = searchInput.value.trim();
+    const originalValue = row.dataset.originalValue;
+
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Entity value cannot be empty', 'error');
+        return;
+    }
+
+    // Validate that it's a valid entity ID (contains at least one dot)
+    if (!newValue.includes('.')) {
+        showMessage('Please select a valid entity ID', 'error');
+        return;
+    }
+
+    // New value without text after dollar (if existing)
+    const newValueBase = newValue.split('$')[0].trim();
+
+    // Check if entity exists in allStates
+    if (!allStates[newValueBase]) {
+        if (!confirm(`Entity "${newValueBase}" was not found in Home Assistant. Do you want to use it anyway?`)) {
+            return;
+        }
+    }
+
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[argName] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: 'entity'
+        }
+        markRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[argName]) {
+            delete pendingChanges[argName];
+            unmarkRowAsChanged(rowId);
+        }
+    }
+
+    // Update the display value - show entity's current state value, not just the entity ID
+    const valueCell = document.getElementById('value_' + rowId);
+
+    // Get the entity's current state value for display
+    const entityState = allStates[newValue];
+    displayValue = entityState && entityState.state ? newValue + ' = ' + entityState.state : newValue;
+
+    valueCell.innerHTML = displayValue;
+
+    updateChangeCounter();
+}
+
+// Nested entity dropdown functions for editing entity strings within lists/dictionaries
+function showNestedEntityDropdown(rowId, currentValue) {
+    const valueCell = document.getElementById('nested_value_' + rowId);
+
+    // Create the dropdown container
+    valueCell.innerHTML = `
+        : <div class="entity-dropdown-container" style="min-width: 450px;">
+            <input type="text" class="entity-search-input" id="nested_entity_search_${rowId}"
+                   placeholder="Type to filter entities..." autocomplete="off" style="min-width: 400px;">
+            <div class="entity-dropdown" id="nested_entity_dropdown_${rowId}" style="min-width: 400px;"></div>
+            <div style="margin-top: 5px;">
+                <button class="save-button" onclick="saveNestedEntityValue(${rowId})">Apply</button>
+                <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
+            </div>
+        </div>
+    `;
+
+    // Set up search functionality first
+    setupNestedEntitySearch(rowId, currentValue);
+
+    // If current value is an entity, populate with it as initial filter
+    if (currentValue && currentValue.includes('.')) {
+        populateNestedEntityDropdown(rowId, currentValue, currentValue);
+    } else {
+        populateNestedEntityDropdown(rowId, currentValue);
+    }
+
+    // Focus the search input and select all text for easy replacement
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+    searchInput.focus();
+    searchInput.select();
+}
+
+function populateNestedEntityDropdown(rowId, currentValue, filterText = '') {
+    const dropdown = document.getElementById('nested_entity_dropdown_' + rowId);
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+
+    if (!dropdown) return;
+
+    dropdown.innerHTML = '';
+
+    // Get all entity IDs and filter them
+    const entities = Object.keys(allStates);
+    const filteredEntities = entities.filter(entityId =>
+        entityId.toLowerCase().includes(filterText.toLowerCase())
+    ).sort();
+
+    // Limit results to prevent performance issues
+    const maxResults = 100;
+    const limitedEntities = filteredEntities.slice(0, maxResults);
+
+    if (limitedEntities.length === 0) {
+        dropdown.innerHTML = '<div class="entity-option">No entities found</div>';
+        return;
+    }
+
+    limitedEntities.forEach(entityId => {
+        const entityState = allStates[entityId];
+        const entityValue = entityState && entityState.state ? entityState.state : 'unknown';
+
+        const option = document.createElement('div');
+        option.className = 'entity-option';
+        option.dataset.entityId = entityId;
+
+        // Highlight current selection (only if search input is empty or matches exactly)
+        if (entityId === currentValue && (!filterText || filterText === entityId)) {
+            option.classList.add('selected');
+        }
+
+        option.innerHTML = `
+            <div class="entity-name">${entityId}</div>
+            <div class="entity-value">${entityValue}</div>
+        `;
+
+        option.addEventListener('click', () => {
+            // Clear previous selections
+            dropdown.querySelectorAll('.entity-option').forEach(opt => opt.classList.remove('selected'));
+            // Select this option
+            option.classList.add('selected');
+            searchInput.value = entityId;
+        });
+
+        dropdown.appendChild(option);
+    });
+
+    if (filteredEntities.length > maxResults) {
+        const moreOption = document.createElement('div');
+        moreOption.className = 'entity-option';
+        moreOption.style.fontStyle = 'italic';
+        moreOption.innerHTML = `<div class="entity-name">... and ${filteredEntities.length - maxResults} more (refine search)</div>`;
+        dropdown.appendChild(moreOption);
+    }
+}
+
+function setupNestedEntitySearch(rowId, currentValue) {
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+
+    if (!searchInput) return;
+
+    // Set initial value if it's an entity
+    if (currentValue && currentValue.includes('.')) {
+        searchInput.value = currentValue;
+    }
+
+    // Handle search input
+    searchInput.addEventListener('input', (e) => {
+        const filterText = e.target.value;
+        populateNestedEntityDropdown(rowId, currentValue, filterText);
+    });
+
+    // Handle keyboard navigation
+    searchInput.addEventListener('keydown', (e) => {
+        const dropdown = document.getElementById('nested_entity_dropdown_' + rowId);
+        const options = dropdown.querySelectorAll('.entity-option[data-entity-id]');
+        const selected = dropdown.querySelector('.entity-option.selected');
+
+        let newSelection = null;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.nextElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[0];
+                }
+            } else {
+                newSelection = options[0];
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.previousElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[options.length - 1];
+                }
+            } else {
+                newSelection = options[options.length - 1];
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selected && selected.dataset.entityId) {
+                searchInput.value = selected.dataset.entityId;
+            }
+            saveNestedEntityValue(rowId);
+            return;
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelNestedEdit(rowId);
+            return;
+        }
+
+        if (newSelection) {
+            // Clear previous selections
+            options.forEach(opt => opt.classList.remove('selected'));
+            // Select new option
+            newSelection.classList.add('selected');
+            // Scroll into view if needed
+            newSelection.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+function saveNestedEntityValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+    const newValue = searchInput.value.trim();
+    const originalValue = row.dataset.nestedOriginal;
+
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Entity value cannot be empty', 'error');
+        return;
+    }
+
+    // Validate that it's a valid entity ID (contains at least one dot)
+    if (!newValue.includes('.')) {
+        showMessage('Please select a valid entity ID', 'error');
+        return;
+    }
+
+    // New value without text after dollar (if existing)
+    const newValueBase = newValue.split('$')[0].trim();
+
+    // Check if entity exists in allStates
+    if (!allStates[newValueBase]) {
+        if (!confirm(`Entity "${newValueBase}" was not found in Home Assistant. Do you want to use it anyway?`)) {
+            return;
+        }
+    }
+
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[nestedPath] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: 'entity',
+            isNested: true,
+            path: nestedPath
+        };
+        markNestedRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[nestedPath]) {
+            delete pendingChanges[nestedPath];
+            unmarkNestedRowAsChanged(rowId);
+        }
+    }
+
+    // Update the display value - show entity's current state value, not just the entity ID
+    const valueCell = document.getElementById('nested_value_' + rowId);
+
+    // Get the entity's current state value for display
+    const entityState = allStates[newValue];
+    const displayValue = entityState && entityState.state ? newValue + ' = ' + entityState.state : newValue;
+
+    valueCell.innerHTML = displayValue;
+
+    updateChangeCounter();
+}
+
+function showConfirmationDialog() {
+    const changeCount = Object.keys(pendingChanges).length;
+
+    // Create the overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'confirmation-overlay';
+    overlay.innerHTML = `
+        <div class="confirmation-dialog">
+            <h3>⚠️ Confirm Save Changes</h3>
+            <p>You are about to save <strong>${changeCount}</strong> change${changeCount > 1 ? 's' : ''} to apps.yaml.</p>
+            <p><strong>Warning:</strong> This will restart Predbat to apply the changes.</p>
+            <div class="confirmation-buttons">
+                <button class="cancel-button-dialog" onclick="hideConfirmationDialog()">Cancel</button>
+                <button class="confirm-button" onclick="confirmSaveChanges()">Save & Restart</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+}
+
+function hideConfirmationDialog() {
+    const overlay = document.querySelector('.confirmation-overlay');
+    if (overlay) {
+        overlay.remove();
+    }
+}
+
+async function confirmSaveChanges() {
+    hideConfirmationDialog();
+
+    // Disable save buttons
+    document.getElementById('saveAllButton').disabled = true;
+    document.getElementById('discardAllButton').disabled = true;
+
+    showMessage('Saving changes...', 'success');
+
+    // Send all changes to the server
+    try {
+        const formData = new FormData();
+        formData.append('changes', JSON.stringify(pendingChanges));
+
+        const response = await fetch('./apps', {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showMessage(result.message + ' - Page will reload...', 'success');
+
+            // Clear pending changes
+            pendingChanges = {};
+            updateChangeCounter();
+
+            // Reload the page after a short delay
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            showMessage(result.message, 'error');
+            // Re-enable buttons
+            document.getElementById('saveAllButton').disabled = false;
+            document.getElementById('discardAllButton').disabled = false;
+        }
+    } catch (error) {
+        showMessage('Error saving changes: ' + error.message, 'error');
+        // Re-enable buttons
+        document.getElementById('saveAllButton').disabled = false;
+        document.getElementById('discardAllButton').disabled = false;
+    }
+}
+
+function saveAllChanges() {
+    if (Object.keys(pendingChanges).length === 0) {
+        showMessage('No changes to save', 'error');
+        return;
+    }
+
+    showConfirmationDialog();
+}
+
+// Functions for handling nested dictionary values
+function toggleNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+    const toggleButton = row.querySelector('.toggle-button');
+    const currentValue = toggleButton.dataset.value === 'true';
+    const newValue = !currentValue;
+
+    // Track the change locally
+    pendingChanges[nestedPath] = {
+        rowId: rowId,
+        originalValue: row.dataset.nestedOriginal,
+        newValue: newValue.toString(),
+        type: 'boolean',
+        isNested: true,
+        path: nestedPath
+    };
+
+    // Update the toggle button state visually
+    toggleButton.dataset.value = newValue.toString();
+    if (newValue) {
+        toggleButton.classList.add('active');
+    } else {
+        toggleButton.classList.remove('active');
+    }
+
+    // Update the value display
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    valueCell.innerHTML = newValue.toString();
+
+    // Mark row as changed and update counter
+    markNestedRowAsChanged(rowId);
+    updateChangeCounter();
+}
+
+function editNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+    const originalValue = row.dataset.nestedOriginal;
+
+    // Check if this is an entity string (contains dots)
+    if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+        // Show entity dropdown for nested values
+        showNestedEntityDropdown(rowId, originalValue);
+    } else {
+        // Replace the value cell content with an input field for non-entity values
+        valueCell.innerHTML = `
+            : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${originalValue}">
+            <button class="save-button" onclick="saveNestedValue(${rowId})">Apply</button>
+            <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
+        `;
+
+        // Focus the input field
+        document.getElementById('nested_input_' + rowId).focus();
+    }
+}
+
+function cancelNestedEdit(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+
+    // Check if there's a pending change for this nested value
+    if (pendingChanges[nestedPath]) {
+        // Show the pending value
+        valueCell.innerHTML = pendingChanges[nestedPath].newValue;
+    } else {
+        // Show the original value
+        const originalValue = row.dataset.nestedOriginal;
+        valueCell.innerHTML = originalValue;
+    }
+}
+
+function saveNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const input = document.getElementById('nested_input_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+    const newValue = input.value.trim();
+    const originalValue = row.dataset.nestedOriginal;
+
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Value cannot be empty', 'error');
+        return;
+    }
+
+    // Determine the value type and validate accordingly
+    let valueType = 'string';
+    if (newValue !== originalValue) {
+        // Try to parse as number first
+        if (newValue.match(/^-?\\d*\\.?\\d+$/)) {
+            try {
+                if (newValue.includes('.')) {
+                    parseFloat(newValue);
+                } else {
+                    parseInt(newValue);
+                }
+                valueType = 'numerical';
+            } catch (e) {
+                // If parsing fails, treat as string
+            }
+        }
+        // Otherwise it's a string (currency symbol, short text, etc.)
+    } else {
+        // If value hasn't changed, try to detect original type
+        if (originalValue.match(/^-?\\d*\\.?\\d+$/)) {
+            valueType = 'numerical';
+        }
+    }
+
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[nestedPath] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: valueType,
+            isNested: true,
+            path: nestedPath
+        };
+        markNestedRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[nestedPath]) {
+            delete pendingChanges[nestedPath];
+            unmarkNestedRowAsChanged(rowId);
+        }
+    }
+
+    // Update the display value
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    valueCell.innerHTML = newValue;
+
+    updateChangeCounter();
+}
+
+function markNestedRowAsChanged(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    row.classList.add('row-changed');
+}
+
+function unmarkNestedRowAsChanged(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    row.classList.remove('row-changed');
+}
+
+// Update the discardAllChanges function to handle nested values
+function discardAllChanges() {
+    // Reset all changed rows to their original values
+    for (const pathOrArgName in pendingChanges) {
+        const change = pendingChanges[pathOrArgName];
+
+        if (change.isNested) {
+            // Handle nested values
+            const row = document.getElementById('nested_row_' + change.rowId);
+            const valueCell = document.getElementById('nested_value_' + change.rowId);
+
+            if (change.type === 'boolean') {
+                // Reset toggle button
+                const toggleButton = row.querySelector('.toggle-button');
+                const originalValue = change.originalValue === 'True';
+                toggleButton.dataset.value = change.originalValue.toLowerCase();
+                if (originalValue) {
+                    toggleButton.classList.add('active');
+                } else {
+                    toggleButton.classList.remove('active');
+                }
+                valueCell.innerHTML = change.originalValue;
+            } else {
+                // Reset numerical value
+                valueCell.innerHTML = change.originalValue;
+            }
+
+            unmarkNestedRowAsChanged(change.rowId);
+        } else {
+            // Handle top-level values (existing logic)
+            const row = document.getElementById('row_' + change.rowId);
+            const valueCell = document.getElementById('value_' + change.rowId);
+
+            if (change.type === 'boolean') {
+                // Reset toggle button
+                const toggleButton = row.querySelector('.toggle-button');
+                const originalValue = change.originalValue === 'True';
+                toggleButton.dataset.value = change.originalValue.toLowerCase();
+                if (originalValue) {
+                    toggleButton.classList.add('active');
+                } else {
+                    toggleButton.classList.remove('active');
+                }
+                valueCell.innerHTML = change.originalValue;
+            } else {
+                // Reset numerical or entity value
+                let displayValue = change.originalValue;
+
+                // If it's an entity string, show the state value instead of entity ID
+                if (change.type === 'entity' && change.originalValue && change.originalValue.includes('.')) {
+                    const entityState = allStates[change.originalValue];
+                    displayValue = entityState && entityState.state ? pendingValue + ' = ' + entityState.state : pendingValue;
+                }
+
+                valueCell.innerHTML = displayValue;
+            }
+
+            unmarkRowAsChanged(change.rowId);
+        }
+    }
+
+    // Clear all pending changes
+    pendingChanges = {};
+    updateChangeCounter();
+    showMessage('All changes discarded', 'success');
+}
+</script>
+"""
+        )
+
+        # Add message container
+        text += '<div id="messageContainer" class="message-container"></div>\n'
+
+        # Add save controls at the top
+        text += """
+<div id="saveControls" class="save-controls">
+    <div class="save-status">
+        <span id="changeCount">No unsaved changes</span>
+    </div>
+    <button id="saveAllButton" class="save-all-button" onclick="saveAllChanges()" disabled>Save All Changes</button>
+    <button id="discardAllButton" class="discard-all-button" onclick="discardAllChanges()" disabled>Discard Changes</button>
+</div>
+"""
+
         warning = ""
         if self.base.arg_errors:
             warning = "&#9888;"
         text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
         text += "<table>\n"
-        text += "<tr><th>Name</th><th>Value</th><td>\n"
+        text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
         args = self.base.args
+        row_id = 0
+        # Initialize nested values tracking and row counter
+        self._nested_values = {}
+        row_counter = [1000]  # Start nested rows at 1000 to avoid conflicts
+
         for arg in args:
             value = args[arg]
+            raw_value = self.resolve_value_raw(arg, value)
             if "_key" in arg:
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
+
+            # Determine if this value can be edited
+            # Lists should not be editable at the top level - only their individual items
+            can_edit = self.is_editable_value(value) and not arg_errors and not isinstance(value, list)
+
             if arg_errors:
-                text += '<tr><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td></tr>\n'.format(arg_errors, arg, self.render_type(arg, value))
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td><td></td></tr>\n'.format(
+                    row_id, arg, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
+                )
             else:
-                text += "<tr><td>{}</td><td>{}</td></tr>\n".format(arg, self.render_type(arg, value))
+                actions_cell = ""
+                if can_edit:
+                    if isinstance(value, bool):
+                        # For boolean values, show a toggle button
+                        toggle_class = "toggle-button active" if value else "toggle-button"
+                        actions_cell = f'<button class="{toggle_class}" onclick="toggleValue({row_id})" data-value="{str(value).lower()}"></button>'
+                    else:
+                        # For numerical values, show edit button
+                        actions_cell = f'<button class="edit-button" onclick="editValue({row_id})">Edit</button>'
+
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
+                    row_id, arg, html_module.escape(str(raw_value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
+                )
+            row_id += 1
+
         args = self.base.unmatched_args
         for arg in args:
             value = args[arg]
-            text += '<tr><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td></tr>\n'.format(arg, self.render_type(arg, value))
+            raw_value = self.resolve_value_raw(arg, value)
+            text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td><td></td></tr>\n'.format(
+                row_id, arg, html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
+            )
+            row_id += 1
 
         text += "</table>"
+
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    def _update_nested_yaml_value(self, data, path, value):
+        """
+        Update a nested value in YAML data using a dot-notation path
+        """
+        pre_keys = path.split(".")
+        keys = []
+        # Split out set of square brackets into a different key
+        for key in pre_keys:
+            if "[" in key and "]" in key:
+                # Handle keys with square brackets, e.g., "battery_charge_low[0]"
+                base_key, index = key.split("[")
+                index = index.rstrip("]")
+                keys.append(base_key)
+                keys.append(f"[{index}]")
+            else:
+                keys.append(key)
+
+        current = data
+
+        # Navigate to the parent of the target value
+        for key in keys[:-1]:
+            if key.startswith("[") and key.endswith("]"):
+                # Handle numerical index in square brackets
+                index = int(key[1:-1])
+                if not isinstance(current, list) or index >= len(current):
+                    raise KeyError(f"Index '{index}' out of range in path '{path}'")
+                current = current[index]
+            elif key in current:
+                current = current[key]
+            else:
+                raise KeyError(f"Key '{key}' not found in path '{path}'")
+
+        # Set the final value
+        key = keys[-1]
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            current[index] = value
+        elif key in current:
+            current[key] = value
+        else:
+            # If final key is numerical try it as an integer
+            if key.isdigit():
+                key = int(key)
+                if key not in current:
+                    raise KeyError(f"Final key '{key}' not found in path '{path}'")
+                else:
+                    current[key] = value
+            else:
+                raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    async def html_apps_post(self, request):
+        """
+        Handle POST request for apps page - batch edit values
+        """
+        try:
+            from ruamel.yaml import YAML
+
+            postdata = await request.post()
+            changes_json = postdata.get("changes", "")
+
+            if not changes_json:
+                return web.json_response({"success": False, "message": "No changes provided"})
+
+            # Parse the changes JSON
+            try:
+                changes = json.loads(changes_json)
+            except json.JSONDecodeError:
+                return web.json_response({"success": False, "message": "Invalid changes format"})
+
+            if not changes:
+                return web.json_response({"success": False, "message": "No changes to save"})
+
+            # Read and parse the apps.yaml file using ruamel.yaml
+            apps_yaml_path = "apps.yaml"
+            yaml = YAML()
+            yaml.preserve_quotes = True
+
+            try:
+                with open(apps_yaml_path, "r") as f:
+                    data = yaml.load(f)
+            except Exception as e:
+                return web.json_response({"success": False, "message": f"Error reading apps.yaml: {str(e)}"})
+
+            # Navigate to the predbat section
+            if ROOT_YAML_KEY not in data:
+                return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
+
+            # Process each change
+            updated_args = []
+            for path_or_arg, change_info in changes.items():
+                new_value = change_info["newValue"]
+                change_type = change_info.get("type", "numerical")
+                is_nested = change_info.get("isNested", False)
+
+                # Convert the new value to appropriate type
+                try:
+                    if change_type == "boolean":
+                        converted_value = new_value.lower() == "true"
+                    elif change_type == "string" or change_type == "entity":
+                        # Keep as string (includes entity IDs)
+                        converted_value = new_value
+                    else:
+                        # Try to convert to int first, then float (numerical values)
+                        if "." in new_value:
+                            converted_value = float(new_value)
+                        else:
+                            converted_value = int(new_value)
+                except ValueError:
+                    return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {new_value}"})
+
+                # Update the value in the YAML data
+                if is_nested:
+                    # Handle nested paths like "battery_charge_low.normal"
+                    try:
+                        self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
+                        self._update_nested_yaml_value(self.base.args, path_or_arg, converted_value)
+                        updated_args.append(f"{path_or_arg}={converted_value}")
+                    except (KeyError, TypeError) as e:
+                        return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})
+                else:
+                    # Handle top-level arguments
+                    if path_or_arg in data[ROOT_YAML_KEY]:
+                        data[ROOT_YAML_KEY][path_or_arg] = converted_value
+                        self.base.args[path_or_arg] = converted_value  # Update the base args as well
+                        updated_args.append(f"{path_or_arg}={converted_value}")
+                    else:
+                        return web.json_response({"success": False, "message": f"Argument {path_or_arg} not found in apps.yaml"})
+
+            # Write back to the file, preserving comments and formatting
+            try:
+                with open(apps_yaml_path, "w") as f:
+                    yaml.dump(data, f)
+
+                change_count = len(updated_args)
+                self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
+
+                return web.json_response({"success": True, "message": f"Successfully saved {change_count} changes to apps.yaml. Predbat will restart to apply changes."})
+
+            except Exception as e:
+                return web.json_response({"success": False, "message": f"Error writing to apps.yaml: {str(e)}"})
+
+        except ImportError:
+            return web.json_response({"success": False, "message": "ruamel.yaml library not available, update Predbat add-on first."})
+        except Exception as e:
+            return web.json_response({"success": False, "message": f"Unexpected error: {str(e)}"})
 
     def html_config_item_text(self, entity):
         text = ""
