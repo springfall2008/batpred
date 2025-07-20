@@ -18,8 +18,6 @@ from datetime import datetime, timedelta
 import json
 import shutil
 import html as html_module
-from ruamel.yaml import YAML
-import json
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
@@ -3561,7 +3559,6 @@ function discardAllChanges() {
         """
         try:
             from ruamel.yaml import YAML
-            import json
 
             postdata = await request.post()
             changes_json = postdata.get("changes", "")
@@ -3648,7 +3645,7 @@ function discardAllChanges() {
                 return web.json_response({"success": False, "message": f"Error writing to apps.yaml: {str(e)}"})
 
         except ImportError:
-            return web.json_response({"success": False, "message": "ruamel.yaml library not available. Please install it first."})
+            return web.json_response({"success": False, "message": "ruamel.yaml library not available, update Predbat add-on first."})
         except Exception as e:
             return web.json_response({"success": False, "message": f"Unexpected error: {str(e)}"})
 
