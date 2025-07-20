@@ -2871,7 +2871,7 @@ function saveEntityValue(rowId) {
 
     // New value without text after dollar (if existing)
     const newValueBase = newValue.split('$')[0].trim();
-    
+
     // Check if entity exists in allStates
     if (!allStates[newValueBase]) {
         if (!confirm(`Entity "${newValueBase}" was not found in Home Assistant. Do you want to use it anyway?`)) {
@@ -3088,7 +3088,7 @@ function saveNestedEntityValue(rowId) {
         showMessage('Please select a valid entity ID', 'error');
         return;
     }
-    
+
     // New value without text after dollar (if existing)
     const newValueBase = newValue.split('$')[0].trim();
 
