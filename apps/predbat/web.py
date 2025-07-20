@@ -2872,7 +2872,7 @@ function saveEntityValue(rowId) {
 
     // New value without text after dollar (if existing)
     const newValueBase = newValue.split('$')[0].trim();
-    
+
     // Check if entity exists in allStates
     if (!allStates[newValueBase]) {
         if (!confirm(`Entity "${newValueBase}" was not found in Home Assistant. Do you want to use it anyway?`)) {
@@ -3089,7 +3089,7 @@ function saveNestedEntityValue(rowId) {
         showMessage('Please select a valid entity ID', 'error');
         return;
     }
-    
+
     // New value without text after dollar (if existing)
     const newValueBase = newValue.split('$')[0].trim();
 
@@ -3254,8 +3254,8 @@ function editNestedValue(rowId) {
     const valueCell = document.getElementById('nested_value_' + rowId);
     const nestedPath = row.dataset.nestedPath;
     const originalValue = row.dataset.nestedOriginal;
-    
-    // Check if this is an entity string (contains dots) 
+
+    // Check if this is an entity string (contains dots)
     if (originalValue && originalValue.match(/^[a-zA-Z]+\.\S+/)) {
         // Show entity dropdown for nested values
         showNestedEntityDropdown(rowId, originalValue);
