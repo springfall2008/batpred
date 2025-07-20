@@ -1611,7 +1611,7 @@ body.dark-mode .log-menu a.active {
     def render_type(self, arg, value, parent_path="", row_counter=None):
         """
         Render a value based on its type with support for nested editing.
-        
+
         Parameters:
         - arg (str): The name of the argument or key being rendered.
         - value (any): The value to render, which can be a list, dictionary, or other data type.
@@ -1619,7 +1619,7 @@ body.dark-mode .log-menu a.active {
           For example, "config[0]" for the first item in a list under the "config" key.
         - row_counter (int, optional): A counter to track the number of rows rendered, useful for
           indexing or applying alternating styles in tables.
-        
+
         Returns:
         - str: The rendered HTML representation of the value.
         """
