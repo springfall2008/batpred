@@ -19,6 +19,7 @@ import json
 import shutil
 import html as html_module
 from ruamel.yaml import YAML
+import json
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
@@ -1613,11 +1614,6 @@ body.dark-mode .log-menu a.active {
         Render a value based on its type with support for nested editing
         """
         text = ""
-    def render_type(self, arg, value, parent_path="", row_counter=None):
-        """
-        Render a value based on its type with support for nested editing
-        """
-        text = ""
         if isinstance(value, list):
             text += "<table>"
             for idx, item in enumerate(value):
@@ -1644,9 +1640,11 @@ body.dark-mode .log-menu a.active {
                         'path': nested_path,
                         'value': item
                     }
+
+                raw_value = self.resolve_value_raw(arg, item)
                 
                 if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(item))}'><td>- </td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
                     text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
             text += "</table>"
@@ -1677,11 +1675,13 @@ body.dark-mode .log-menu a.active {
                         'path': nested_path,
                         'value': nested_value
                     }
+
+                raw_value = self.resolve_value_raw(key, nested_value)
                 
                 if actions_cell:
-                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(nested_value))}'><td><b>{key}</b></td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>: {self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
                 else:
-                    text += "<tr><td><b>{}</b></td><td colspan='2'>: {}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
+                    text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z]+\.\S+", value)
@@ -2024,24 +2024,31 @@ document.addEventListener("DOMContentLoaded", function() {
 
     def is_editable_value(self, value):
         """
-        Check if a value is editable (numerical, boolean, or list with editable items)
+        Check if a value is editable (numerical, boolean, entity strings, or list with editable items)
         """
         if isinstance(value, bool):
             return True
         if isinstance(value, (int, float)):
             return True
         if isinstance(value, str):
-            try:
-                float(value)
-                return True
-            except ValueError:
-                # For strings, allow editing of short values (likely symbols/currencies)
-                # or values that don't look like entity IDs
-                return not ('.' in value and value.count('.') >= 1 and not value.startswith('.'))
+            return True
         if isinstance(value, list):
             # A list is editable if it contains any editable items
             return len(value) > 0 and any(self.is_editable_value(item) for item in value)
         return False
+
+    def resolve_value_raw(self, arg, value):
+        if isinstance(value, str) and '{' in value:
+            text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
+            if text is not None:
+                value = text
+            return value
+        elif isinstance(value, list):
+            return [self.resolve_value_raw(arg, item) for item in value]
+        elif isinstance(value, dict):
+            return {key: self.resolve_value_raw(arg, val) for key, val in value.items()}
+        else:
+            return value
 
     async def html_apps(self, request):
         """
@@ -2050,6 +2057,19 @@ document.addEventListener("DOMContentLoaded", function() {
         self.default_page = "./apps"
         text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
         
+        # all_states has all the HA entities and their states
+        all_states_data = self.base.get_state_wrapper()
+        all_states = {}
+        for entity in all_states_data:
+            all_states[entity] = {'state' : all_states_data[entity].get("state", "")}
+
+        # Ensure all_states is valid and serializable
+        try:
+            all_states_json = json.dumps(all_states)
+        except (TypeError, ValueError) as e:
+            self.base.log(f"Error serializing all_states for web interface: {e}")
+            all_states_json = "{}"        
+
         # Add CSS styles for edit functionality
         text += """
 <style>
@@ -2072,7 +2092,7 @@ document.addEventListener("DOMContentLoaded", function() {
 }
 
 .edit-input {
-    width: 100px;
+    width: 300px;
     padding: 4px;
     border: 1px solid #ddd;
     border-radius: 3px;
@@ -2381,80 +2401,106 @@ body.dark-mode .confirmation-dialog {
 body.dark-mode .confirmation-dialog h3 {
     color: #ff6b6b;
 }
+
+/* Entity dropdown styles */
+.entity-dropdown-container {
+    position: relative;
+    width: 100%;
+    min-width: 400px;
+}
+
+.entity-search-input {
+    width: 100%;
+    min-width: 400px;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.entity-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    min-width: 400px;
+    background: white;
+    border: 1px solid #ddd;
+    border-top: none;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.entity-option {
+    padding: 8px;
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.entity-option:hover,
+.entity-option.selected {
+    background-color: #f0f0f0;
+}
+
+.entity-name {
+    font-weight: bold;
+    flex: 1;
+    margin-right: 10px;
+    word-break: break-all;
+}
+
+.entity-value {
+    color: #666;
+    font-size: 12px;
+    flex-shrink: 0;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Dark mode entity dropdown styles */
+body.dark-mode .entity-search-input {
+    background-color: #444;
+    color: #fff;
+    border: 1px solid #666;
+}
+
+body.dark-mode .entity-dropdown {
+    background: #333;
+    border: 1px solid #666;
+    color: #fff;
+}
+
+body.dark-mode .entity-option {
+    border-bottom: 1px solid #555;
+}
+
+body.dark-mode .entity-option:hover,
+body.dark-mode .entity-option.selected {
+    background-color: #555;
+}
+
+body.dark-mode .entity-value {
+    color: #ccc;
+}
 </style>
 """
 
         text += "<body>\n"
-        
-        # Add message container
-        text += '<div id="messageContainer" class="message-container"></div>\n'
-        
-        # Add save controls at the top
-        text += '''
-<div id="saveControls" class="save-controls">
-    <div class="save-status">
-        <span id="changeCount">No unsaved changes</span>
-    </div>
-    <button id="saveAllButton" class="save-all-button" onclick="saveAllChanges()" disabled>Save All Changes</button>
-    <button id="discardAllButton" class="discard-all-button" onclick="discardAllChanges()" disabled>Discard Changes</button>
-</div>
-'''
-        
-        warning = ""
-        if self.base.arg_errors:
-            warning = "&#9888;"
-        text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
-        text += "<table>\n"
-        text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
-
-        args = self.base.args
-        row_id = 0
-        # Initialize nested values tracking and row counter
-        self._nested_values = {}
-        row_counter = [1000]  # Start nested rows at 1000 to avoid conflicts
-        
-        for arg in args:
-            value = args[arg]
-            if "_key" in arg:
-                value = '<span title = "{}"> (hidden)</span>'.format(value)
-            arg_errors = self.base.arg_errors.get(arg, "")
-            
-            # Determine if this value can be edited
-            # Lists should not be editable at the top level - only their individual items
-            can_edit = self.is_editable_value(value) and not arg_errors and not isinstance(value, list)
-            
-            if arg_errors:
-                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td><td></td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(value)), arg_errors, arg, self.render_type(arg, value, "", row_counter))
-            else:
-                actions_cell = ""
-                if can_edit:
-                    if isinstance(value, bool):
-                        # For boolean values, show a toggle button
-                        toggle_class = "toggle-button active" if value else "toggle-button"
-                        actions_cell = f'<button class="{toggle_class}" onclick="toggleValue({row_id})" data-value="{str(value).lower()}"></button>'
-                    else:
-                        # For numerical values, show edit button
-                        actions_cell = f'<button class="edit-button" onclick="editValue({row_id})">Edit</button>'
-                
-                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
-                    row_id, arg, html_module.escape(str(value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell)
-            row_id += 1
-            
-        args = self.base.unmatched_args
-        for arg in args:
-            value = args[arg]
-            text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td><td></td></tr>\n'.format(
-                row_id, arg, html_module.escape(str(value)), arg, self.render_type(arg, value, "", row_counter))
-            row_id += 1
-
-        text += "</table>"
-        
-        # Add JavaScript for edit functionality
-        text += """
+        text += f"""
 <script>
 // Global object to track pending changes
-let pendingChanges = {};
+let pendingChanges = {{}};
+
+// All Home Assistant states for entity dropdown
+const allStates = """ + all_states_json + """;
 
 function showMessage(message, type) {
     const container = document.getElementById('messageContainer');
@@ -2535,15 +2581,21 @@ function editValue(rowId) {
     const argName = row.dataset.argName;
     const originalValue = row.dataset.originalValue;
     
-    // Replace the value cell content with an input field
-    valueCell.innerHTML = `
-        <input type="text" class="edit-input" id="input_${rowId}" value="${originalValue}">
-        <button class="save-button" onclick="saveValue(${rowId})">Apply</button>
-        <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
-    `;
-    
-    // Focus the input field
-    document.getElementById('input_' + rowId).focus();
+    // Check if this is an entity string (contains dots)
+    if (originalValue && originalValue.includes('.')) {
+        // Show entity dropdown
+        showEntityDropdown(rowId, originalValue);
+    } else {
+        // Show regular text input for non-entity values
+        valueCell.innerHTML = `
+            <input type="text" class="edit-input" id="input_${rowId}" value="${originalValue}">
+            <button class="save-button" onclick="saveValue(${rowId})">Apply</button>
+            <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
+        `;
+        
+        // Focus the input field
+        document.getElementById('input_' + rowId).focus();
+    }
 }
 
 function cancelEdit(rowId) {
@@ -2553,12 +2605,29 @@ function cancelEdit(rowId) {
     
     // Check if there's a pending change for this row
     if (pendingChanges[argName]) {
-        // Show the pending value
-        valueCell.innerHTML = pendingChanges[argName].newValue;
+        // Show the pending value - need to check if it's an entity
+        const pendingValue = pendingChanges[argName].newValue;
+        let displayValue = pendingValue;
+        
+        // If it's an entity string, show the state value instead of entity ID
+        if (pendingValue && pendingValue.includes('.') && pendingChanges[argName].type === 'entity') {
+            const entityState = allStates[pendingValue];
+            displayValue = entityState && entityState.state ? pendingValue + ' = ' + entityState.state : pendingValue;
+        }
+        
+        valueCell.innerHTML = displayValue;
     } else {
-        // Show the original value
+        // Show the original value - need to check if it's an entity
         const originalValue = row.dataset.originalValue;
-        valueCell.innerHTML = originalValue;
+        let displayValue = originalValue;
+        
+        // If it's an entity string, show the state value instead of entity ID
+        if (originalValue && originalValue.includes('.')) {
+            const entityState = allStates[originalValue];
+            displayValue = entityState && entityState.state ? originalValue + ' = ' + entityState.state : originalValue;
+        }
+        
+        valueCell.innerHTML = displayValue;
     }
 }
 
@@ -2575,8 +2644,15 @@ function saveValue(rowId) {
         return;
     }
     
-    // Try to parse as number to validate
-    if (newValue !== originalValue) {
+    // Determine if this is an entity or numerical value
+    let valueType = 'numerical';
+    if (newValue.includes('.') && isNaN(parseFloat(newValue))) {
+        // This looks like an entity ID (contains dots but is not a number)
+        valueType = 'entity';
+    }
+    
+    // Try to parse as number to validate (only for numerical values)
+    if (valueType === 'numerical' && newValue !== originalValue) {
         try {
             if (newValue.includes('.')) {
                 parseFloat(newValue);
@@ -2595,7 +2671,7 @@ function saveValue(rowId) {
             rowId: rowId,
             originalValue: originalValue,
             newValue: newValue,
-            type: 'numerical'
+            type: valueType
         };
         markRowAsChanged(rowId);
     } else {
@@ -2609,6 +2685,444 @@ function saveValue(rowId) {
     // Update the display value
     const valueCell = document.getElementById('value_' + rowId);
     valueCell.innerHTML = newValue;
+    
+    updateChangeCounter();
+}
+
+// Entity dropdown functions for editing entity strings
+function showEntityDropdown(rowId, currentValue) {
+    const valueCell = document.getElementById('value_' + rowId);
+    
+    // Create the dropdown container
+    valueCell.innerHTML = `
+        <div class="entity-dropdown-container">
+            <input type="text" class="entity-search-input" id="entity_search_${rowId}" 
+                   placeholder="Type to filter entities..." autocomplete="off">
+            <div class="entity-dropdown" id="entity_dropdown_${rowId}"></div>
+            <div style="margin-top: 5px;">
+                <button class="save-button" onclick="saveEntityValue(${rowId})">Apply</button>
+                <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
+            </div>
+        </div>
+    `;
+    
+    // Set up search functionality first
+    setupEntitySearch(rowId, currentValue);
+    
+    // If current value is an entity, populate with it as initial filter
+    if (currentValue && currentValue.includes('.')) {
+        populateEntityDropdown(rowId, currentValue, currentValue);
+    } else {
+        populateEntityDropdown(rowId, currentValue);
+    }
+    
+    // Focus the search input and select all text for easy replacement
+    const searchInput = document.getElementById('entity_search_' + rowId);
+    searchInput.focus();
+    searchInput.select();
+}
+
+function populateEntityDropdown(rowId, currentValue, filterText = '') {
+    const dropdown = document.getElementById('entity_dropdown_' + rowId);
+    const searchInput = document.getElementById('entity_search_' + rowId);
+    
+    if (!dropdown) return;
+    
+    dropdown.innerHTML = '';
+    
+    // Get all entity IDs and filter them
+    const entities = Object.keys(allStates);
+    const filteredEntities = entities.filter(entityId => 
+        entityId.toLowerCase().includes(filterText.toLowerCase())
+    ).sort();
+    
+    // Limit results to prevent performance issues
+    const maxResults = 100;
+    const limitedEntities = filteredEntities.slice(0, maxResults);
+    
+    if (limitedEntities.length === 0) {
+        dropdown.innerHTML = '<div class="entity-option">No entities found</div>';
+        return;
+    }
+    
+    limitedEntities.forEach(entityId => {
+        const entityState = allStates[entityId];
+        const entityValue = entityState && entityState.state ? entityState.state : 'unknown';
+        
+        const option = document.createElement('div');
+        option.className = 'entity-option';
+        option.dataset.entityId = entityId;
+        
+        // Highlight current selection (only if search input is empty or matches exactly)
+        if (entityId === currentValue && (!filterText || filterText === entityId)) {
+            option.classList.add('selected');
+        }
+        
+        option.innerHTML = `
+            <div class="entity-name">${entityId}</div>
+            <div class="entity-value">${entityValue}</div>
+        `;
+        
+        option.addEventListener('click', () => {
+            // Clear previous selections
+            dropdown.querySelectorAll('.entity-option').forEach(opt => opt.classList.remove('selected'));
+            // Select this option
+            option.classList.add('selected');
+            searchInput.value = entityId;
+        });
+        
+        dropdown.appendChild(option);
+    });
+    
+    if (filteredEntities.length > maxResults) {
+        const moreOption = document.createElement('div');
+        moreOption.className = 'entity-option';
+        moreOption.style.fontStyle = 'italic';
+        moreOption.innerHTML = `<div class="entity-name">... and ${filteredEntities.length - maxResults} more (refine search)</div>`;
+        dropdown.appendChild(moreOption);
+    }
+}
+
+function setupEntitySearch(rowId, currentValue) {
+    const searchInput = document.getElementById('entity_search_' + rowId);
+    
+    if (!searchInput) return;
+    
+    // Set initial value if it's an entity
+    if (currentValue && currentValue.includes('.')) {
+        searchInput.value = currentValue;
+    }
+    
+    // Handle search input
+    searchInput.addEventListener('input', (e) => {
+        const filterText = e.target.value;
+        populateEntityDropdown(rowId, currentValue, filterText);
+    });
+    
+    // Handle keyboard navigation
+    searchInput.addEventListener('keydown', (e) => {
+        const dropdown = document.getElementById('entity_dropdown_' + rowId);
+        const options = dropdown.querySelectorAll('.entity-option[data-entity-id]');
+        const selected = dropdown.querySelector('.entity-option.selected');
+        
+        let newSelection = null;
+        
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.nextElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[0];
+                }
+            } else {
+                newSelection = options[0];
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.previousElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[options.length - 1];
+                }
+            } else {
+                newSelection = options[options.length - 1];
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selected && selected.dataset.entityId) {
+                searchInput.value = selected.dataset.entityId;
+            }
+            saveEntityValue(rowId);
+            return;
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelEdit(rowId);
+            return;
+        }
+        
+        if (newSelection) {
+            // Clear previous selections
+            options.forEach(opt => opt.classList.remove('selected'));
+            // Select new option
+            newSelection.classList.add('selected');
+            // Only update input value on Enter, not on arrow key navigation
+            // searchInput.value = newSelection.dataset.entityId;
+            // Scroll into view if needed
+            newSelection.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+function saveEntityValue(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const searchInput = document.getElementById('entity_search_' + rowId);
+    const argName = row.dataset.argName;
+    const newValue = searchInput.value.trim();
+    const originalValue = row.dataset.originalValue;
+    
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Entity value cannot be empty', 'error');
+        return;
+    }
+    
+    // Validate that it's a valid entity ID (contains at least one dot)
+    if (!newValue.includes('.')) {
+        showMessage('Please select a valid entity ID', 'error');
+        return;
+    }
+    
+    // Check if entity exists in allStates
+    if (!allStates[newValue]) {
+        if (!confirm(`Entity "${newValue}" was not found in Home Assistant. Do you want to use it anyway?`)) {
+            return;
+        }
+    }
+    
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[argName] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: 'entity'
+        }
+        markRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[argName]) {
+            delete pendingChanges[argName];
+            unmarkRowAsChanged(rowId);
+        }
+    }
+    
+    // Update the display value - show entity's current state value, not just the entity ID
+    const valueCell = document.getElementById('value_' + rowId);
+    
+    // Get the entity's current state value for display
+    const entityState = allStates[newValue];
+    displayValue = entityState && entityState.state ? newValue + ' = ' + entityState.state : newValue;
+    
+    valueCell.innerHTML = displayValue;
+    
+    updateChangeCounter();
+}
+
+// Nested entity dropdown functions for editing entity strings within lists/dictionaries
+function showNestedEntityDropdown(rowId, currentValue) {
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    
+    // Create the dropdown container
+    valueCell.innerHTML = `
+        : <div class="entity-dropdown-container" style="min-width: 450px;">
+            <input type="text" class="entity-search-input" id="nested_entity_search_${rowId}" 
+                   placeholder="Type to filter entities..." autocomplete="off" style="min-width: 400px;">
+            <div class="entity-dropdown" id="nested_entity_dropdown_${rowId}" style="min-width: 400px;"></div>
+            <div style="margin-top: 5px;">
+                <button class="save-button" onclick="saveNestedEntityValue(${rowId})">Apply</button>
+                <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
+            </div>
+        </div>
+    `;
+    
+    // Set up search functionality first
+    setupNestedEntitySearch(rowId, currentValue);
+    
+    // If current value is an entity, populate with it as initial filter
+    if (currentValue && currentValue.includes('.')) {
+        populateNestedEntityDropdown(rowId, currentValue, currentValue);
+    } else {
+        populateNestedEntityDropdown(rowId, currentValue);
+    }
+    
+    // Focus the search input and select all text for easy replacement
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+    searchInput.focus();
+    searchInput.select();
+}
+
+function populateNestedEntityDropdown(rowId, currentValue, filterText = '') {
+    const dropdown = document.getElementById('nested_entity_dropdown_' + rowId);
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+    
+    if (!dropdown) return;
+    
+    dropdown.innerHTML = '';
+    
+    // Get all entity IDs and filter them
+    const entities = Object.keys(allStates);
+    const filteredEntities = entities.filter(entityId => 
+        entityId.toLowerCase().includes(filterText.toLowerCase())
+    ).sort();
+    
+    // Limit results to prevent performance issues
+    const maxResults = 100;
+    const limitedEntities = filteredEntities.slice(0, maxResults);
+    
+    if (limitedEntities.length === 0) {
+        dropdown.innerHTML = '<div class="entity-option">No entities found</div>';
+        return;
+    }
+    
+    limitedEntities.forEach(entityId => {
+        const entityState = allStates[entityId];
+        const entityValue = entityState && entityState.state ? entityState.state : 'unknown';
+        
+        const option = document.createElement('div');
+        option.className = 'entity-option';
+        option.dataset.entityId = entityId;
+        
+        // Highlight current selection (only if search input is empty or matches exactly)
+        if (entityId === currentValue && (!filterText || filterText === entityId)) {
+            option.classList.add('selected');
+        }
+        
+        option.innerHTML = `
+            <div class="entity-name">${entityId}</div>
+            <div class="entity-value">${entityValue}</div>
+        `;
+        
+        option.addEventListener('click', () => {
+            // Clear previous selections
+            dropdown.querySelectorAll('.entity-option').forEach(opt => opt.classList.remove('selected'));
+            // Select this option
+            option.classList.add('selected');
+            searchInput.value = entityId;
+        });
+        
+        dropdown.appendChild(option);
+    });
+    
+    if (filteredEntities.length > maxResults) {
+        const moreOption = document.createElement('div');
+        moreOption.className = 'entity-option';
+        moreOption.style.fontStyle = 'italic';
+        moreOption.innerHTML = `<div class="entity-name">... and ${filteredEntities.length - maxResults} more (refine search)</div>`;
+        dropdown.appendChild(moreOption);
+    }
+}
+
+function setupNestedEntitySearch(rowId, currentValue) {
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+    
+    if (!searchInput) return;
+    
+    // Set initial value if it's an entity
+    if (currentValue && currentValue.includes('.')) {
+        searchInput.value = currentValue;
+    }
+    
+    // Handle search input
+    searchInput.addEventListener('input', (e) => {
+        const filterText = e.target.value;
+        populateNestedEntityDropdown(rowId, currentValue, filterText);
+    });
+    
+    // Handle keyboard navigation
+    searchInput.addEventListener('keydown', (e) => {
+        const dropdown = document.getElementById('nested_entity_dropdown_' + rowId);
+        const options = dropdown.querySelectorAll('.entity-option[data-entity-id]');
+        const selected = dropdown.querySelector('.entity-option.selected');
+        
+        let newSelection = null;
+        
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.nextElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[0];
+                }
+            } else {
+                newSelection = options[0];
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.previousElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[options.length - 1];
+                }
+            } else {
+                newSelection = options[options.length - 1];
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selected && selected.dataset.entityId) {
+                searchInput.value = selected.dataset.entityId;
+            }
+            saveNestedEntityValue(rowId);
+            return;
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelNestedEdit(rowId);
+            return;
+        }
+        
+        if (newSelection) {
+            // Clear previous selections
+            options.forEach(opt => opt.classList.remove('selected'));
+            // Select new option
+            newSelection.classList.add('selected');
+            // Scroll into view if needed
+            newSelection.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+function saveNestedEntityValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+    const newValue = searchInput.value.trim();
+    const originalValue = row.dataset.nestedOriginal;
+    
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Entity value cannot be empty', 'error');
+        return;
+    }
+    
+    // Validate that it's a valid entity ID (contains at least one dot)
+    if (!newValue.includes('.')) {
+        showMessage('Please select a valid entity ID', 'error');
+        return;
+    }
+    
+    // Check if entity exists in allStates
+    if (!allStates[newValue]) {
+        if (!confirm(`Entity "${newValue}" was not found in Home Assistant. Do you want to use it anyway?`)) {
+            return;
+        }
+    }
+    
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[nestedPath] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: 'entity',
+            isNested: true,
+            path: nestedPath
+        };
+        markNestedRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[nestedPath]) {
+            delete pendingChanges[nestedPath];
+            unmarkNestedRowAsChanged(rowId);
+        }
+    }
+    
+    // Update the display value - show entity's current state value, not just the entity ID
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    
+    // Get the entity's current state value for display
+    const entityState = allStates[newValue];
+    const displayValue = entityState && entityState.state ? newValue + ' = ' + entityState.state : newValue;
+    
+    valueCell.innerHTML = displayValue;
     
     updateChangeCounter();
 }
@@ -2724,7 +3238,7 @@ function toggleNestedValue(rowId) {
     
     // Update the value display
     const valueCell = document.getElementById('nested_value_' + rowId);
-    valueCell.innerHTML = ': ' + newValue.toString();
+    valueCell.innerHTML = newValue.toString();
     
     // Mark row as changed and update counter
     markNestedRowAsChanged(rowId);
@@ -2737,15 +3251,21 @@ function editNestedValue(rowId) {
     const nestedPath = row.dataset.nestedPath;
     const originalValue = row.dataset.nestedOriginal;
     
-    // Replace the value cell content with an input field
-    valueCell.innerHTML = `
-        : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${originalValue}">
-        <button class="save-button" onclick="saveNestedValue(${rowId})">Apply</button>
-        <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
-    `;
-    
-    // Focus the input field
-    document.getElementById('nested_input_' + rowId).focus();
+    // Check if this is an entity string (contains dots) 
+    if (originalValue && originalValue.includes('.')) {
+        // Show entity dropdown for nested values
+        showNestedEntityDropdown(rowId, originalValue);
+    } else {
+        // Replace the value cell content with an input field for non-entity values
+        valueCell.innerHTML = `
+            : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${originalValue}">
+            <button class="save-button" onclick="saveNestedValue(${rowId})">Apply</button>
+            <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
+        `;
+        
+        // Focus the input field
+        document.getElementById('nested_input_' + rowId).focus();
+    }
 }
 
 function cancelNestedEdit(rowId) {
@@ -2756,11 +3276,11 @@ function cancelNestedEdit(rowId) {
     // Check if there's a pending change for this nested value
     if (pendingChanges[nestedPath]) {
         // Show the pending value
-        valueCell.innerHTML = ': ' + pendingChanges[nestedPath].newValue;
+        valueCell.innerHTML = pendingChanges[nestedPath].newValue;
     } else {
         // Show the original value
         const originalValue = row.dataset.nestedOriginal;
-        valueCell.innerHTML = ': ' + originalValue;
+        valueCell.innerHTML = originalValue;
     }
 }
 
@@ -2822,7 +3342,7 @@ function saveNestedValue(rowId) {
     
     // Update the display value
     const valueCell = document.getElementById('nested_value_' + rowId);
-    valueCell.innerHTML = ': ' + newValue;
+    valueCell.innerHTML = newValue;
     
     updateChangeCounter();
 }
@@ -2858,10 +3378,10 @@ function discardAllChanges() {
                 } else {
                     toggleButton.classList.remove('active');
                 }
-                valueCell.innerHTML = ': ' + change.originalValue;
+                valueCell.innerHTML = change.originalValue;
             } else {
                 // Reset numerical value
-                valueCell.innerHTML = ': ' + change.originalValue;
+                valueCell.innerHTML = change.originalValue;
             }
             
             unmarkNestedRowAsChanged(change.rowId);
@@ -2882,8 +3402,16 @@ function discardAllChanges() {
                 }
                 valueCell.innerHTML = change.originalValue;
             } else {
-                // Reset numerical value
-                valueCell.innerHTML = change.originalValue;
+                // Reset numerical or entity value
+                let displayValue = change.originalValue;
+                
+                // If it's an entity string, show the state value instead of entity ID
+                if (change.type === 'entity' && change.originalValue && change.originalValue.includes('.')) {
+                    const entityState = allStates[change.originalValue];
+                    displayValue = entityState && entityState.state ? pendingValue + ' = ' + entityState.state : pendingValue;
+                }
+                
+                valueCell.innerHTML = displayValue;
             }
             
             unmarkRowAsChanged(change.rowId);
@@ -2897,6 +3425,74 @@ function discardAllChanges() {
 }
 </script>
 """
+
+        
+        # Add message container
+        text += '<div id="messageContainer" class="message-container"></div>\n'
+        
+        # Add save controls at the top
+        text += '''
+<div id="saveControls" class="save-controls">
+    <div class="save-status">
+        <span id="changeCount">No unsaved changes</span>
+    </div>
+    <button id="saveAllButton" class="save-all-button" onclick="saveAllChanges()" disabled>Save All Changes</button>
+    <button id="discardAllButton" class="discard-all-button" onclick="discardAllChanges()" disabled>Discard Changes</button>
+</div>
+'''
+        
+        warning = ""
+        if self.base.arg_errors:
+            warning = "&#9888;"
+        text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
+        text += "<table>\n"
+        text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
+
+        args = self.base.args
+        row_id = 0
+        # Initialize nested values tracking and row counter
+        self._nested_values = {}
+        row_counter = [1000]  # Start nested rows at 1000 to avoid conflicts
+
+        for arg in args:
+            value = args[arg]
+            raw_value = self.resolve_value_raw(arg, value)
+            if "_key" in arg:
+                value = '<span title = "{}"> (hidden)</span>'.format(value)
+            arg_errors = self.base.arg_errors.get(arg, "")
+            
+            # Determine if this value can be edited
+            # Lists should not be editable at the top level - only their individual items
+            can_edit = self.is_editable_value(value) and not arg_errors and not isinstance(value, list)
+            
+            if arg_errors:
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td><td></td></tr>\n'.format(
+                    row_id, arg, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter))
+            else:
+                actions_cell = ""
+                if can_edit:
+                    if isinstance(value, bool):
+                        # For boolean values, show a toggle button
+                        toggle_class = "toggle-button active" if value else "toggle-button"
+                        actions_cell = f'<button class="{toggle_class}" onclick="toggleValue({row_id})" data-value="{str(value).lower()}"></button>'
+                    else:
+                        # For numerical values, show edit button
+                        actions_cell = f'<button class="edit-button" onclick="editValue({row_id})">Edit</button>'
+                
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
+                    row_id, arg, html_module.escape(str(raw_value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell)
+            row_id += 1
+            
+        args = self.base.unmatched_args
+        for arg in args:
+            value = args[arg]
+            raw_value = self.resolve_value_raw(arg, value)
+            text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td><td></td></tr>\n'.format(
+                row_id, arg, html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter))
+            row_id += 1
+
+        text += "</table>"
+                
         
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -3019,11 +3615,11 @@ function discardAllChanges() {
                 try:
                     if change_type == 'boolean':
                         converted_value = new_value.lower() == 'true'
-                    elif change_type == 'string':
-                        # Keep as string
+                    elif change_type == 'string' or change_type == 'entity':
+                        # Keep as string (includes entity IDs)
                         converted_value = new_value
                     else:
-                        # Try to convert to int first, then float
+                        # Try to convert to int first, then float (numerical values)
                         if '.' in new_value:
                             converted_value = float(new_value)
                         else:
