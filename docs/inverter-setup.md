@@ -837,7 +837,7 @@ When current the inverter has  **timed_charge_current** and **timed_discharge_cu
 
 ### charge_control_immediate
 
-When True the inverter **timed_charge_current** or **timed_discharge_current** is used to control charging or discharging as/when it starts and stops rather than using a timed method.
+When True the inverter uses **timed_charge_current** and **timed_discharge_current** to control charging and discharging by setting current levels directly, instead of following a time-based plan.
 
 ### current_dp
 
