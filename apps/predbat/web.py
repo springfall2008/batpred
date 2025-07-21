@@ -2994,6 +2994,7 @@ function populateNestedEntityDropdown(rowId, currentValue, filterText = '') {
     limitedEntities.forEach(entityId => {
         const entityState = allStates[entityId];
         const entityValue = entityState && entityState.state ? entityState.state : 'unknown';
+        const unit_of_measurement = entityState && entityState.unit_of_measurement ? entityState.unit_of_measurement : '';
 
         const option = document.createElement('div');
         option.className = 'entity-option';
@@ -3006,7 +3007,7 @@ function populateNestedEntityDropdown(rowId, currentValue, filterText = '') {
 
         option.innerHTML = `
             <div class="entity-name">${entityId}</div>
-            <div class="entity-value">${entityValue}</div>
+            <div class="entity-value">${entityValue}${unit_of_measurement}</div>
         `;
 
         option.addEventListener('click', () => {
