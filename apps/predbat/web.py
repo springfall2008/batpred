@@ -2067,7 +2067,7 @@ document.addEventListener("DOMContentLoaded", function() {
         all_states_data = self.base.get_state_wrapper()
         all_states = {}
         for entity in all_states_data:
-            all_states[entity] = {"state": all_states_data[entity].get("state", ""), "unit_of_measurement": all_states_data[entity].get("attributes", {}). get("unit_of_measurement", "")}
+            all_states[entity] = {"state": all_states_data[entity].get("state", ""), "unit_of_measurement": all_states_data[entity].get("attributes", {}).get("unit_of_measurement", "")}
 
         # Ensure all_states is valid and serializable
         try:
@@ -2676,7 +2676,7 @@ function saveValue(rowId) {
     if (typeIsEntity(newValue)) {
         // This looks like an entity ID (contains dots but is not a number)
         valueType = 'entity';
-    } else { 
+    } else {
        if (typeIsNumerical(newValue)) {
             valueType = 'numerical';
        }
