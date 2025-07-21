@@ -2737,7 +2737,7 @@ function showEntityDropdown(rowId, currentValue) {
     setupEntitySearch(rowId, currentValue);
 
     // If current value is an entity, populate with it as initial filter
-    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (currentValue && typeIsEntity(currentValue)) {
         populateEntityDropdown(rowId, currentValue, currentValue);
     } else {
         populateEntityDropdown(rowId, currentValue);
@@ -2775,6 +2775,7 @@ function populateEntityDropdown(rowId, currentValue, filterText = '') {
     limitedEntities.forEach(entityId => {
         const entityState = allStates[entityId];
         const entityValue = entityState && entityState.state ? entityState.state : 'unknown';
+        const unit_of_measurement = entityState && entityState.unit_of_measurement ? entityState.unit_of_measurement : '';
 
         const option = document.createElement('div');
         option.className = 'entity-option';
@@ -2787,7 +2788,7 @@ function populateEntityDropdown(rowId, currentValue, filterText = '') {
 
         option.innerHTML = `
             <div class="entity-name">${entityId}</div>
-            <div class="entity-value">${entityValue}</div>
+            <div class="entity-value">${entityValue}${unit_of_measurement}</div>
         `;
 
         option.addEventListener('click', () => {
