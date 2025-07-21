@@ -1697,16 +1697,18 @@ body.dark-mode .log-menu a.active {
                     text = self.render_type(arg, text, parent_path, row_counter)
             elif pat and (arg != "service"):
                 entity_id = value
+                unit_of_measurement = ""
                 if "$" in entity_id:
                     entity_id, attribute = entity_id.split("$")
                     state = self.base.get_state_wrapper(entity_id=entity_id, attribute=attribute, default=None)
                 else:
                     state = self.base.get_state_wrapper(entity_id=entity_id, default=None)
+                    unit_of_measurement = self.base.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
 
                 if state is not None:
-                    text = '<a href="./entity?entity_id={}">{}</a> = {}'.format(entity_id, value, state)
+                    text = '<a href="./entity?entity_id={}">{}</a> = {}{}'.format(entity_id, value, state, unit_of_measurement)
                 else:
-                    text = '<span style="background-color:#FFAAAA"> {} ? </span>'.format(value)
+                    text = '<span style="background-color:#FFAAAA"> {} = ?{} </span>'.format(value, unit_of_measurement)
             else:
                 text = str(value)
         else:
@@ -2065,7 +2067,7 @@ document.addEventListener("DOMContentLoaded", function() {
         all_states_data = self.base.get_state_wrapper()
         all_states = {}
         for entity in all_states_data:
-            all_states[entity] = {"state": all_states_data[entity].get("state", "")}
+            all_states[entity] = {"state": all_states_data[entity].get("state", ""), "unit_of_measurement": all_states_data[entity].get("attributes", {}). get("unit_of_measurement", "")}
 
         # Ensure all_states is valid and serializable
         try:
@@ -2604,6 +2606,18 @@ function editValue(rowId) {
     }
 }
 
+function getDisplayValueEntity(entityId) {
+    // Get the state of the entity from allStates
+    if (typeIsEntity(entityId) && allStates[entityId])
+    {
+        const entityState = allStates[entityId];
+        const state = entityState.state || '';
+        const unit = entityState.unit_of_measurement || '';
+        return `${entityId} = ${state} ${unit}`;
+    }
+    return entityId; // Fallback to just the entity ID if no state found
+}
+
 function cancelEdit(rowId) {
     const row = document.getElementById('row_' + rowId);
     const valueCell = document.getElementById('value_' + rowId);
@@ -2613,29 +2627,36 @@ function cancelEdit(rowId) {
     if (pendingChanges[argName]) {
         // Show the pending value - need to check if it's an entity
         const pendingValue = pendingChanges[argName].newValue;
-        let displayValue = pendingValue;
-
-        // If it's an entity string, show the state value instead of entity ID
-        if (pendingValue && pendingValue.match(/^[a-zA-Z]+\\.\\S+/) && pendingChanges[argName].type === 'entity') {
-            const entityState = allStates[pendingValue];
-            displayValue = entityState && entityState.state ? pendingValue + ' = ' + entityState.state : pendingValue;
-        }
-
-        valueCell.innerHTML = displayValue;
+        valueCell.innerHTML = getDisplayValueEntity(pendingValue);
     } else {
         // Show the original value - need to check if it's an entity
         const originalValue = row.dataset.originalValue;
-        let displayValue = originalValue;
-
-        // If it's an entity string, show the state value instead of entity ID
-        if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
-            const entityState = allStates[originalValue];
-            displayValue = entityState && entityState.state ? originalValue + ' = ' + entityState.state : originalValue;
-        }
-
-        valueCell.innerHTML = displayValue;
+        valueCell.innerHTML = getDisplayValueEntity(originalValue);
     }
 }
+
+function typeIsEntity(value) {
+    if (value.match(/^[a-zA-Z]+\\.\\S+/) && isNaN(parseFloat(value)))
+    {
+        return true; // This looks like an entity ID (contains dots but is not a number)
+    }
+    return false; // Not an entity ID
+}
+
+function typeIsNumerical(value) {
+    // Check if the value is a number (integer or float)
+    try {
+        if (newValue.includes('.')) {
+            parseFloat(newValue);
+        } else {
+            parseInt(newValue);
+        }
+    } catch (e) {
+        return false; // Not a numerical value
+    }
+    return true; // This is a numerical value
+}
+
 
 function saveValue(rowId) {
     const row = document.getElementById('row_' + rowId);
@@ -2651,21 +2672,21 @@ function saveValue(rowId) {
     }
 
     // Determine if this is an entity or numerical value
-    let valueType = 'numerical';
-    if (newValue.match(/^[a-zA-Z]+\\.\\S+/) && isNaN(parseFloat(newValue))) {
+    let valueType = 'string';
+    if (typeIsEntity(newValue)) {
         // This looks like an entity ID (contains dots but is not a number)
         valueType = 'entity';
+    } else { 
+       if (typeIsNumerical(newValue)) {
+            valueType = 'numerical';
+       }
     }
 
     // Try to parse as number to validate (only for numerical values)
     if (valueType === 'numerical' && newValue !== originalValue) {
-        try {
-            if (newValue.includes('.')) {
-                parseFloat(newValue);
-            } else {
-                parseInt(newValue);
-            }
-        } catch (e) {
+        if (typeIsNumerical(newValue)) {
+        }
+        else {
             showMessage('Invalid number format', 'error');
             return;
         }
@@ -2690,7 +2711,7 @@ function saveValue(rowId) {
 
     // Update the display value
     const valueCell = document.getElementById('value_' + rowId);
-    valueCell.innerHTML = newValue;
+    valueCell.innerHTML = getDisplayValueEntity(newValue);
 
     updateChangeCounter();
 }
@@ -2873,7 +2894,7 @@ function saveEntityValue(rowId) {
     }
 
     // Validate that it's a valid entity ID (contains at least one dot)
-    if (!newValue.includes('.')) {
+    if (!typeIsEntity(newValue)) {
         showMessage('Please select a valid entity ID', 'error');
         return;
     }
@@ -2909,11 +2930,7 @@ function saveEntityValue(rowId) {
     const valueCell = document.getElementById('value_' + rowId);
 
     // Get the entity's current state value for display
-    const entityState = allStates[newValue];
-    displayValue = entityState && entityState.state ? newValue + ' = ' + entityState.state : newValue;
-
-    valueCell.innerHTML = displayValue;
-
+    valueCell.innerHTML = getDisplayValueEntity(newValue);
     updateChangeCounter();
 }
 
@@ -3131,10 +3148,7 @@ function saveNestedEntityValue(rowId) {
     const valueCell = document.getElementById('nested_value_' + rowId);
 
     // Get the entity's current state value for display
-    const entityState = allStates[newValue];
-    const displayValue = entityState && entityState.state ? newValue + ' = ' + entityState.state : newValue;
-
-    valueCell.innerHTML = displayValue;
+    valueCell.innerHTML = getDisplayValueEntity(newValue);
 
     updateChangeCounter();
 }
@@ -3288,11 +3302,11 @@ function cancelNestedEdit(rowId) {
     // Check if there's a pending change for this nested value
     if (pendingChanges[nestedPath]) {
         // Show the pending value
-        valueCell.innerHTML = pendingChanges[nestedPath].newValue;
+        valueCell.innerHTML = getDisplayValueEntity(pendingChanges[nestedPath].newValue);
     } else {
         // Show the original value
         const originalValue = row.dataset.nestedOriginal;
-        valueCell.innerHTML = originalValue;
+        valueCell.innerHTML = getDisplayValueEntity(originalValue);
     }
 }
 
@@ -3313,22 +3327,13 @@ function saveNestedValue(rowId) {
     let valueType = 'string';
     if (newValue !== originalValue) {
         // Try to parse as number first
-        if (newValue.match(/^-?\\d*\\.?\\d+$/)) {
-            try {
-                if (newValue.includes('.')) {
-                    parseFloat(newValue);
-                } else {
-                    parseInt(newValue);
-                }
-                valueType = 'numerical';
-            } catch (e) {
-                // If parsing fails, treat as string
-            }
+        if (typeIsNumerical(newValue)) {
+            valueType = 'numerical';
         }
         // Otherwise it's a string (currency symbol, short text, etc.)
     } else {
         // If value hasn't changed, try to detect original type
-        if (originalValue.match(/^-?\\d*\\.?\\d+$/)) {
+        if (typeIsEntity(originalValue)) {
             valueType = 'numerical';
         }
     }
@@ -3354,7 +3359,7 @@ function saveNestedValue(rowId) {
 
     // Update the display value
     const valueCell = document.getElementById('nested_value_' + rowId);
-    valueCell.innerHTML = newValue;
+    valueCell.innerHTML = getDisplayValueEntity(newValue);
 
     updateChangeCounter();
 }
@@ -3390,10 +3395,10 @@ function discardAllChanges() {
                 } else {
                     toggleButton.classList.remove('active');
                 }
-                valueCell.innerHTML = change.originalValue;
+                valueCell.innerHTML = getDisplayValueEntity(change.originalValue);
             } else {
                 // Reset numerical value
-                valueCell.innerHTML = change.originalValue;
+                valueCell.innerHTML = getDisplayValueEntity(change.originalValue);
             }
 
             unmarkNestedRowAsChanged(change.rowId);
@@ -3412,18 +3417,10 @@ function discardAllChanges() {
                 } else {
                     toggleButton.classList.remove('active');
                 }
-                valueCell.innerHTML = change.originalValue;
+                valueCell.innerHTML = getDisplayValueEntity(change.originalValue);
             } else {
                 // Reset numerical or entity value
-                let displayValue = change.originalValue;
-
-                // If it's an entity string, show the state value instead of entity ID
-                if (change.type === 'entity' && change.originalValue && change.originalValue.includes('.')) {
-                    const entityState = allStates[change.originalValue];
-                    displayValue = entityState && entityState.state ? pendingValue + ' = ' + entityState.state : pendingValue;
-                }
-
-                valueCell.innerHTML = displayValue;
+                valueCell.innerHTML = getDisplayValueEntity(change.originalValue);
             }
 
             unmarkRowAsChanged(change.rowId);
