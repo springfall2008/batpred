@@ -4,12 +4,11 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
-import os
 import importlib
 import importlib.util
 import inspect
-import sys
-from typing import Dict, List, Callable, Any
+import os
+from typing import List, Callable
 
 
 class PluginSystem:
