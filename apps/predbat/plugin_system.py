@@ -111,7 +111,7 @@ class PluginSystem:
         plugin_instance = None
 
         # Plugin discovery fallthrough (try in order of preference):
-        
+
         # 1. MOST PREFERRED: Class name ends with "Plugin"
         for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
             if name.endswith("Plugin"):
