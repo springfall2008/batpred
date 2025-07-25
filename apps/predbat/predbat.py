@@ -871,10 +871,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             )
         self.expose_config("active", False)
         self.save_current_config()
-        
+
         # Call plugin update hooks
         if self.plugin_system:
-            self.plugin_system.call_hooks('on_update')
+            self.plugin_system.call_hooks("on_update")
 
         if self.comparison:
             if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
@@ -1334,13 +1334,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.log("Starting web interface")
             self.web_interface = WebInterface(self)
             self.web_interface_task = self.create_task(self.web_interface.start())
-            
+
             # Initialize plugin system and discover plugins
             self.init_plugin_system()
-            
+
             # Allow plugins to register with web interface now that it's started
             if self.plugin_system:
-                self.plugin_system.call_hooks('on_web_start')
+                self.plugin_system.call_hooks("on_web_start")
 
             if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
                 self.log("Starting Octopus API interface")
@@ -1551,13 +1551,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         try:
             self.log("Initializing plugin system")
             self.plugin_system = PluginSystem(self)
-            
+
             # Discover and load plugins
             self.plugin_system.discover_plugins()
-            
+
             # Call initialization hooks
-            self.plugin_system.call_hooks('on_init')
-            
+            self.plugin_system.call_hooks("on_init")
+
         except Exception as e:
             self.log("Warning: Failed to initialize plugin system: {}".format(e))
             self.plugin_system = None

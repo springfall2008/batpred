@@ -43,24 +43,20 @@ class WebInterface:
         self.cost_yesterday_no_car = {}
         self.web_port = self.base.get_arg("web_port", 5052)
         self.default_log = "warnings"
-        
+
         # Plugin registration system
         self.registered_endpoints = []
 
-    def register_endpoint(self, path, handler, method='GET'):
+    def register_endpoint(self, path, handler, method="GET"):
         """
         Register a new endpoint with the web interface
-        
+
         Args:
             path (str): URL path for the endpoint (e.g., '/metrics')
             handler (callable): Async handler function
             method (str): HTTP method ('GET', 'POST', etc.)
         """
-        self.registered_endpoints.append({
-            'path': path,
-            'handler': handler,
-            'method': method.upper()
-        })
+        self.registered_endpoints.append({"path": path, "handler": handler, "method": method.upper()})
         self.log(f"Registered endpoint: {method.upper()} {path}")
 
     def subtract_daily(self, hist1, hist2):
@@ -126,13 +122,13 @@ class WebInterface:
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/restart", self.html_restart)
-        
+
         # Register any dynamically registered endpoints
         for endpoint in self.registered_endpoints:
-            if endpoint['method'] == 'GET':
-                app.router.add_get(endpoint['path'], endpoint['handler'])
-            elif endpoint['method'] == 'POST':
-                app.router.add_post(endpoint['path'], endpoint['handler'])
+            if endpoint["method"] == "GET":
+                app.router.add_get(endpoint["path"], endpoint["handler"])
+            elif endpoint["method"] == "POST":
+                app.router.add_post(endpoint["path"], endpoint["handler"])
             # Add more methods as needed
             self.log(f"Added registered endpoint: {endpoint['method']} {endpoint['path']}")
         app.router.add_get("/api/state", self.html_api_get_state)
