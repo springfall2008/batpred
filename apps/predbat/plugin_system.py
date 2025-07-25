@@ -110,34 +110,36 @@ class PluginSystem:
         # Look for plugin classes or initialization functions
         plugin_instance = None
 
-        # Look for classes that might be plugins
+        # Plugin discovery fallthrough (try in order of preference):
+        
+        # 1. MOST PREFERRED: Class name ends with "Plugin"
         for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
-            if name.endswith("Plugin") or name.endswith("Metrics") or hasattr(obj, "PREDBAT_PLUGIN"):
+            if name.endswith("Plugin"):
                 try:
-                    self.log(f"Initializing plugin class: {name}")
+                    self.log(f"Initializing plugin class (name-based): {name}")
                     plugin_instance = obj(self.base)
                     break
                 except Exception as e:
                     self.log(f"Failed to initialize plugin class {name}: {e}")
 
-        # Look for plugin initialization function
+        # 2. FALLBACK: Class has PREDBAT_PLUGIN = True attribute
+        if plugin_instance is None:
+            for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
+                if hasattr(obj, "PREDBAT_PLUGIN") and getattr(obj, "PREDBAT_PLUGIN"):
+                    try:
+                        self.log(f"Initializing plugin class (attribute-based): {name}")
+                        plugin_instance = obj(self.base)
+                        break
+                    except Exception as e:
+                        self.log(f"Failed to initialize plugin class {name}: {e}")
+
+        # 3. FINAL FALLBACK: initialize_plugin function
         if plugin_instance is None and hasattr(plugin_module, "initialize_plugin"):
             try:
                 self.log(f"Calling initialize_plugin function in {plugin_name}")
                 plugin_instance = plugin_module.initialize_plugin(self.base)
             except Exception as e:
                 self.log(f"Failed to call initialize_plugin in {plugin_name}: {e}")
-
-        # Look for auto-initialization based on class names containing certain keywords
-        if plugin_instance is None:
-            for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
-                if any(keyword in name.lower() for keyword in ["predbat", "plugin", "metrics", "monitor"]):
-                    try:
-                        self.log(f"Auto-initializing plugin class: {name}")
-                        plugin_instance = obj(self.base)
-                        break
-                    except Exception as e:
-                        self.log(f"Failed to auto-initialize plugin class {name}: {e}")
 
         if plugin_instance:
             self.plugins[plugin_name] = plugin_instance
