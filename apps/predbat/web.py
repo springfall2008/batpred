@@ -16,12 +16,16 @@ import os
 import re
 from datetime import datetime, timedelta
 import json
+import shutil
+import html as html_module
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
+import urllib.parse
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+ROOT_YAML_KEY = "pred_bat"
 
 
 class WebInterface:
@@ -87,6 +91,7 @@ class WebInterface:
         app.router.add_get("/plan", self.html_plan)
         app.router.add_get("/log", self.html_log)
         app.router.add_get("/apps", self.html_apps)
+        app.router.add_post("/apps", self.html_apps_post)
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_get("/entity", self.html_entity)
@@ -98,6 +103,8 @@ class WebInterface:
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
+        app.router.add_get("/apps_editor", self.html_apps_editor)
+        app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/restart", self.html_restart)
         app.router.add_get("/api/state", self.html_api_get_state)
@@ -1437,7 +1444,6 @@ var options = {
             return button_html
 
         # Process the HTML plan to add buttons to time cells
-        import re
 
         processed_html = re.sub(time_pattern, add_button_to_time, html_plan)
 
@@ -1602,20 +1608,84 @@ body.dark-mode .log-menu a.active {
 
         raise web.HTTPFound("./config")
 
-    def render_type(self, arg, value):
+    def render_type(self, arg, value, parent_path="", row_counter=None):
         """
-        Render a value based on its type
+        Render a value based on its type with support for nested editing.
+
+        Parameters:
+        - arg (str): The name of the argument or key being rendered.
+        - value (any): The value to render, which can be a list, dictionary, or other data type.
+        - parent_path (str): The hierarchical path to the current value, used for nested structures.
+          For example, "config[0]" for the first item in a list under the "config" key.
+        - row_counter (int, optional): A counter to track the number of rows rendered, useful for
+          indexing or applying alternating styles in tables.
+
+        Returns:
+        - str: The rendered HTML representation of the value.
         """
         text = ""
         if isinstance(value, list):
             text += "<table>"
-            for item in value:
-                text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item))
+            for idx, item in enumerate(value):
+                nested_path = f"{parent_path}[{idx}]" if parent_path else f"{arg}[{idx}]"
+
+                # Check if this list item is editable
+                can_edit = self.is_editable_value(item)
+                actions_cell = ""
+
+                if can_edit and row_counter is not None:
+                    row_counter[0] += 1
+                    nested_row_id = row_counter[0]
+
+                    if isinstance(item, bool):
+                        toggle_class = "toggle-button active" if item else "toggle-button"
+                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(item).lower()}" data-path="{nested_path}"></button>'
+                    else:
+                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+
+                    # Store the nested value info for later processing
+                    if not hasattr(self, "_nested_values"):
+                        self._nested_values = {}
+                    self._nested_values[nested_row_id] = {"path": nested_path, "value": item}
+
+                raw_value = self.resolve_value_raw(arg, item)
+
+                if actions_cell:
+                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td>- </td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(arg, item, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                else:
+                    text += "<tr><td>- {}</td></tr>\n".format(self.render_type(arg, item, nested_path, row_counter))
             text += "</table>"
         elif isinstance(value, dict):
             text += "<table>"
             for key in value:
-                text += "<tr><td>{}</td><td>: {}</td></tr>\n".format(key, self.render_type(key, value[key]))
+                nested_path = f"{parent_path}.{key}" if parent_path else f"{arg}.{key}"
+                nested_value = value[key]
+
+                # Check if this nested value is editable
+                can_edit = self.is_editable_value(nested_value)
+                actions_cell = ""
+
+                if can_edit and row_counter is not None:
+                    row_counter[0] += 1
+                    nested_row_id = row_counter[0]
+
+                    if isinstance(nested_value, bool):
+                        toggle_class = "toggle-button active" if nested_value else "toggle-button"
+                        actions_cell = f'<button class="{toggle_class}" onclick="toggleNestedValue({nested_row_id})" data-value="{str(nested_value).lower()}" data-path="{nested_path}"></button>'
+                    else:
+                        actions_cell = f'<button class="edit-button" onclick="editNestedValue({nested_row_id})" data-path="{nested_path}">Edit</button>'
+
+                    # Store the nested value info for later processing
+                    if not hasattr(self, "_nested_values"):
+                        self._nested_values = {}
+                    self._nested_values[nested_row_id] = {"path": nested_path, "value": nested_value}
+
+                raw_value = self.resolve_value_raw(key, nested_value)
+
+                if actions_cell:
+                    text += f"<tr id='nested_row_{row_counter[0] if can_edit else 'static'}' data-nested-path='{nested_path}' data-nested-original='{html_module.escape(str(raw_value))}'><td><b>{key}: </b></td><td id='nested_value_{row_counter[0] if can_edit else 'static'}'>{self.render_type(key, nested_value, nested_path, row_counter)}</td><td>{actions_cell}</td></tr>\n"
+                else:
+                    text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z]+\.\S+", value)
@@ -1624,19 +1694,21 @@ body.dark-mode .log-menu a.active {
                 if text is None:
                     text = '<span style="background-color:#FFAAAA"> {} </p>'.format(value)
                 else:
-                    text = self.render_type(arg, text)
+                    text = self.render_type(arg, text, parent_path, row_counter)
             elif pat and (arg != "service"):
                 entity_id = value
+                unit_of_measurement = ""
                 if "$" in entity_id:
                     entity_id, attribute = entity_id.split("$")
                     state = self.base.get_state_wrapper(entity_id=entity_id, attribute=attribute, default=None)
                 else:
                     state = self.base.get_state_wrapper(entity_id=entity_id, default=None)
+                    unit_of_measurement = self.base.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
 
                 if state is not None:
-                    text = '<a href="./entity?entity_id={}">{}</a> = {}'.format(entity_id, value, state)
+                    text = '<a href="./entity?entity_id={}">{}</a> = {}{}'.format(entity_id, value, state, unit_of_measurement)
                 else:
-                    text = '<span style="background-color:#FFAAAA"> {} ? </span>'.format(value)
+                    text = '<span style="background-color:#FFAAAA"> {} = ?{} </span>'.format(value, unit_of_measurement)
             else:
                 text = str(value)
         else:
@@ -1956,38 +2028,1636 @@ document.addEventListener("DOMContentLoaded", function() {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    def is_editable_value(self, value):
+        """
+        Check if a value is editable (numerical, boolean, entity strings, or list with editable items)
+        """
+        if isinstance(value, bool):
+            return True
+        if isinstance(value, (int, float)):
+            return True
+        if isinstance(value, str):
+            return True
+        if isinstance(value, list):
+            # A list is editable if it contains any editable items
+            return len(value) > 0 and any(self.is_editable_value(item) for item in value)
+        return False
+
+    def resolve_value_raw(self, arg, value):
+        if isinstance(value, str) and "{" in value:
+            text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
+            if text is not None:
+                value = text
+            return value
+        elif isinstance(value, list):
+            return [self.resolve_value_raw(arg, item) for item in value]
+        elif isinstance(value, dict):
+            return {key: self.resolve_value_raw(arg, val) for key, val in value.items()}
+        else:
+            return value
+
     async def html_apps(self, request):
         """
-        Render apps.yaml as an HTML page
+        Render apps.yaml as an HTML page with edit functionality
         """
         self.default_page = "./apps"
         text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
+
+        # all_states has all the HA entities and their states
+        all_states_data = self.base.get_state_wrapper()
+        all_states = {}
+        for entity in all_states_data:
+            all_states[entity] = {"state": all_states_data[entity].get("state", ""), "unit_of_measurement": all_states_data[entity].get("attributes", {}).get("unit_of_measurement", "")}
+
+        # Ensure all_states is valid and serializable
+        try:
+            all_states_json = json.dumps(all_states)
+        except (TypeError, ValueError) as e:
+            self.base.log(f"Error serializing all_states for web interface: {e}")
+            all_states_json = "{}"
+
+        # Add CSS styles for edit functionality
+        text += """
+<style>
+.edit-button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 12px;
+    margin: 2px 2px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+
+.edit-button:hover {
+    background-color: #45a049;
+}
+
+.edit-input {
+    width: 300px;
+    padding: 4px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+.save-button, .cancel-button {
+    background-color: #2196F3;
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 12px;
+    margin: 2px 2px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+
+.cancel-button {
+    background-color: #f44336;
+}
+
+.save-button:hover {
+    background-color: #0b7dda;
+}
+
+.cancel-button:hover {
+    background-color: #da190b;
+}
+
+.message-container {
+    padding: 10px;
+    margin: 10px 0;
+    border-radius: 4px;
+    display: none;
+}
+
+.message-success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.message-error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* Dark mode styles */
+body.dark-mode .edit-button {
+    background-color: #4CAF50;
+    color: white;
+}
+
+body.dark-mode .edit-button:hover {
+    background-color: #45a049;
+}
+
+body.dark-mode .edit-input {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #555;
+}
+
+body.dark-mode .save-button {
+    background-color: #2196F3;
+    color: white;
+}
+
+body.dark-mode .cancel-button {
+    background-color: #f44336;
+    color: white;
+}
+
+body.dark-mode .message-success {
+    background-color: #1e3f20;
+    color: #7bc97d;
+    border: 1px solid #2d5a2f;
+}
+
+body.dark-mode .message-error {
+    background-color: #3f1e1e;
+    color: #f5c6cb;
+    border: 1px solid #5a2d2d;
+}
+
+/* Toggle button styles */
+.toggle-button {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 24px;
+    background-color: #ccc;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    border: none;
+    outline: none;
+}
+
+.toggle-button.active {
+    background-color: #4CAF50;
+}
+
+.toggle-button::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background-color: white;
+    border-radius: 50%;
+    transition: transform 0.3s;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.toggle-button.active::before {
+    transform: translateX(36px);
+}
+
+.toggle-button:hover {
+    opacity: 0.8;
+}
+
+/* Dark mode toggle styles */
+body.dark-mode .toggle-button {
+    background-color: #555;
+}
+
+body.dark-mode .toggle-button.active {
+    background-color: #4CAF50;
+}
+
+body.dark-mode .toggle-button::before {
+    background-color: #e0e0e0;
+}
+
+/* Save controls styles */
+.save-controls {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 15px;
+    margin: 10px 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.save-status {
+    display: flex;
+    align-items: center;
+    font-weight: bold;
+    color: #495057;
+}
+
+.save-all-button {
+    background-color: #28a745;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.3s;
+}
+
+.save-all-button:hover:not(:disabled) {
+    background-color: #218838;
+}
+
+.save-all-button:disabled {
+    background-color: #6c757d;
+    cursor: not-allowed;
+}
+
+.discard-all-button {
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.3s;
+}
+
+.discard-all-button:hover:not(:disabled) {
+    background-color: #c82333;
+}
+
+.discard-all-button:disabled {
+    background-color: #6c757d;
+    cursor: not-allowed;
+}
+
+/* Highlight changed rows */
+.row-changed {
+    background-color: #fff3cd !important;
+    border-left: 4px solid #ffc107 !important;
+}
+
+/* Dark mode save controls styles */
+body.dark-mode .save-controls {
+    background-color: #2d2d2d;
+    border: 1px solid #404040;
+}
+
+body.dark-mode .save-status {
+    color: #e0e0e0;
+}
+
+body.dark-mode .row-changed {
+    background-color: #3d3d1d !important;
+    border-left: 4px solid #ffc107 !important;
+}
+
+/* Confirmation dialog styles */
+.confirmation-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+}
+
+.confirmation-dialog {
+    background-color: white;
+    border-radius: 8px;
+    padding: 25px;
+    max-width: 600px;
+    width: 95%;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    word-wrap: break-word;
+}
+
+.confirmation-dialog h3 {
+    margin-top: 0;
+    color: #dc3545;
+    font-size: 18px;
+    word-wrap: break-word;
+}
+
+.confirmation-dialog p {
+    margin: 15px 0;
+    line-height: 1.6;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.confirmation-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+.confirm-button, .cancel-button-dialog {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.confirm-button {
+    background-color: #dc3545;
+    color: white;
+}
+
+.confirm-button:hover {
+    background-color: #c82333;
+}
+
+.cancel-button-dialog {
+    background-color: #6c757d;
+    color: white;
+}
+
+.cancel-button-dialog:hover {
+    background-color: #545b62;
+}
+
+/* Dark mode confirmation dialog */
+body.dark-mode .confirmation-dialog {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+}
+
+body.dark-mode .confirmation-dialog h3 {
+    color: #ff6b6b;
+}
+
+/* Entity dropdown styles */
+.entity-dropdown-container {
+    position: relative;
+    width: 100%;
+    min-width: 400px;
+}
+
+.entity-search-input {
+    width: 100%;
+    min-width: 400px;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.entity-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    min-width: 400px;
+    background: white;
+    border: 1px solid #ddd;
+    border-top: none;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.entity-option {
+    padding: 8px;
+    cursor: pointer;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.entity-option:hover,
+.entity-option.selected {
+    background-color: #f0f0f0;
+}
+
+.entity-name {
+    font-weight: bold;
+    flex: 1;
+    margin-right: 10px;
+    word-break: break-all;
+}
+
+.entity-value {
+    color: #666;
+    font-size: 12px;
+    flex-shrink: 0;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Dark mode entity dropdown styles */
+body.dark-mode .entity-search-input {
+    background-color: #444;
+    color: #fff;
+    border: 1px solid #666;
+}
+
+body.dark-mode .entity-dropdown {
+    background: #333;
+    border: 1px solid #666;
+    color: #fff;
+}
+
+body.dark-mode .entity-option {
+    border-bottom: 1px solid #555;
+}
+
+body.dark-mode .entity-option:hover,
+body.dark-mode .entity-option.selected {
+    background-color: #555;
+}
+
+body.dark-mode .entity-value {
+    color: #ccc;
+}
+</style>
+"""
+
         text += "<body>\n"
+        text += (
+            f"""
+<script>
+// Global object to track pending changes
+let pendingChanges = {{}};
+
+// All Home Assistant states for entity dropdown
+const allStates = """
+            + all_states_json
+            + """;
+function showMessage(message, type) {
+    const container = document.getElementById('messageContainer');
+    container.className = 'message-container message-' + type;
+    container.textContent = message;
+    container.style.display = 'block';
+
+    // Auto-hide success messages after 5 seconds
+    if (type === 'success') {
+        setTimeout(() => {
+            container.style.display = 'none';
+        }, 5000);
+    }
+}
+
+function updateChangeCounter() {
+    const changeCount = Object.keys(pendingChanges).length;
+    const changeCountElement = document.getElementById('changeCount');
+    const saveButton = document.getElementById('saveAllButton');
+    const discardButton = document.getElementById('discardAllButton');
+
+    if (changeCount === 0) {
+        changeCountElement.textContent = 'No unsaved changes';
+        saveButton.disabled = true;
+        discardButton.disabled = true;
+    } else {
+        changeCountElement.textContent = `${changeCount} unsaved change${changeCount > 1 ? 's' : ''}`;
+        saveButton.disabled = false;
+        discardButton.disabled = false;
+    }
+}
+
+function markRowAsChanged(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    row.classList.add('row-changed');
+}
+
+function unmarkRowAsChanged(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    row.classList.remove('row-changed');
+}
+
+function toggleValue(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const argName = row.dataset.argName;
+    const toggleButton = row.querySelector('.toggle-button');
+    const currentValue = toggleButton.dataset.value === 'true';
+    const newValue = !currentValue;
+
+    // Track the change locally
+    pendingChanges[argName] = {
+        rowId: rowId,
+        originalValue: row.dataset.originalValue,
+        newValue: newValue.toString(),
+        type: 'boolean'
+    };
+
+    // Update the toggle button state visually
+    toggleButton.dataset.value = newValue.toString();
+    if (newValue) {
+        toggleButton.classList.add('active');
+    } else {
+        toggleButton.classList.remove('active');
+    }
+
+    // Update the value display
+    const valueCell = document.getElementById('value_' + rowId);
+    valueCell.innerHTML = newValue.toString();
+
+    // Mark row as changed and update counter
+    markRowAsChanged(rowId);
+    updateChangeCounter();
+}
+
+function editValue(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const valueCell = document.getElementById('value_' + rowId);
+    const argName = row.dataset.argName;
+    const originalValue = row.dataset.originalValue;
+
+    // Check if this is an entity string (contains dots)
+    if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+        // Show entity dropdown
+        showEntityDropdown(rowId, originalValue);
+    } else {
+        // Show regular text input for non-entity values
+        valueCell.innerHTML = `
+            <input type="text" class="edit-input" id="input_${rowId}" value="${originalValue}">
+            <button class="save-button" onclick="saveValue(${rowId})">Apply</button>
+            <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
+        `;
+
+        // Focus the input field
+        document.getElementById('input_' + rowId).focus();
+    }
+}
+
+function getDisplayValueEntity(entityId) {
+    // Get the state of the entity from allStates
+    if (typeIsEntity(entityId) && allStates[entityId])
+    {
+        const entityState = allStates[entityId];
+        const state = entityState.state || '';
+        const unit = entityState.unit_of_measurement || '';
+        return `${entityId} = ${state} ${unit}`;
+    }
+    return entityId; // Fallback to just the entity ID if no state found
+}
+
+function cancelEdit(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const valueCell = document.getElementById('value_' + rowId);
+    const argName = row.dataset.argName;
+
+    // Check if there's a pending change for this row
+    if (pendingChanges[argName]) {
+        // Show the pending value - need to check if it's an entity
+        const pendingValue = pendingChanges[argName].newValue;
+        valueCell.innerHTML = getDisplayValueEntity(pendingValue);
+    } else {
+        // Show the original value - need to check if it's an entity
+        const originalValue = row.dataset.originalValue;
+        valueCell.innerHTML = getDisplayValueEntity(originalValue);
+    }
+}
+
+function typeIsEntity(value) {
+    if (value.match(/^[a-zA-Z]+\\.\\S+/) && isNaN(parseFloat(value)))
+    {
+        return true; // This looks like an entity ID (contains dots but is not a number)
+    }
+    return false; // Not an entity ID
+}
+
+function typeIsNumerical(value) {
+    // Check if the value is a number (integer or float)
+    try {
+        if (newValue.includes('.')) {
+            parseFloat(newValue);
+        } else {
+            parseInt(newValue);
+        }
+    } catch (e) {
+        return false; // Not a numerical value
+    }
+    return true; // This is a numerical value
+}
+
+
+function saveValue(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const input = document.getElementById('input_' + rowId);
+    const argName = row.dataset.argName;
+    const newValue = input.value.trim();
+    const originalValue = row.dataset.originalValue;
+
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Value cannot be empty', 'error');
+        return;
+    }
+
+    // Determine if this is an entity or numerical value
+    let valueType = 'string';
+    if (typeIsEntity(newValue)) {
+        // This looks like an entity ID (contains dots but is not a number)
+        valueType = 'entity';
+    } else {
+       if (typeIsNumerical(newValue)) {
+            valueType = 'numerical';
+       }
+    }
+
+    // Try to parse as number to validate (only for numerical values)
+    if (valueType === 'numerical' && newValue !== originalValue) {
+        if (typeIsNumerical(newValue)) {
+        }
+        else {
+            showMessage('Invalid number format', 'error');
+            return;
+        }
+    }
+
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[argName] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: valueType
+        };
+        markRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[argName]) {
+            delete pendingChanges[argName];
+            unmarkRowAsChanged(rowId);
+        }
+    }
+
+    // Update the display value
+    const valueCell = document.getElementById('value_' + rowId);
+    valueCell.innerHTML = getDisplayValueEntity(newValue);
+
+    updateChangeCounter();
+}
+
+// Entity dropdown functions for editing entity strings
+function showEntityDropdown(rowId, currentValue) {
+    const valueCell = document.getElementById('value_' + rowId);
+
+    // Create the dropdown container
+    valueCell.innerHTML = `
+        <div class="entity-dropdown-container">
+            <input type="text" class="entity-search-input" id="entity_search_${rowId}"
+                   placeholder="Type to filter entities..." autocomplete="off">
+            <div class="entity-dropdown" id="entity_dropdown_${rowId}"></div>
+            <div style="margin-top: 5px;">
+                <button class="save-button" onclick="saveEntityValue(${rowId})">Apply</button>
+                <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
+            </div>
+        </div>
+    `;
+
+    // Set up search functionality first
+    setupEntitySearch(rowId, currentValue);
+
+    // If current value is an entity, populate with it as initial filter
+    if (currentValue && typeIsEntity(currentValue)) {
+        populateEntityDropdown(rowId, currentValue, currentValue);
+    } else {
+        populateEntityDropdown(rowId, currentValue);
+    }
+
+    // Focus the search input and select all text for easy replacement
+    const searchInput = document.getElementById('entity_search_' + rowId);
+    searchInput.focus();
+    searchInput.select();
+}
+
+function populateEntityDropdown(rowId, currentValue, filterText = '') {
+    const dropdown = document.getElementById('entity_dropdown_' + rowId);
+    const searchInput = document.getElementById('entity_search_' + rowId);
+
+    if (!dropdown) return;
+
+    dropdown.innerHTML = '';
+
+    // Get all entity IDs and filter them
+    const entities = Object.keys(allStates);
+    const filteredEntities = entities.filter(entityId =>
+        entityId.toLowerCase().includes(filterText.toLowerCase())
+    ).sort();
+
+    // Limit results to prevent performance issues
+    const maxResults = 100;
+    const limitedEntities = filteredEntities.slice(0, maxResults);
+
+    if (limitedEntities.length === 0) {
+        dropdown.innerHTML = '<div class="entity-option">No entities found</div>';
+        return;
+    }
+
+    limitedEntities.forEach(entityId => {
+        const entityState = allStates[entityId];
+        const entityValue = entityState && entityState.state ? entityState.state : 'unknown';
+        const unit_of_measurement = entityState && entityState.unit_of_measurement ? entityState.unit_of_measurement : '';
+
+        const option = document.createElement('div');
+        option.className = 'entity-option';
+        option.dataset.entityId = entityId;
+
+        // Highlight current selection (only if search input is empty or matches exactly)
+        if (entityId === currentValue && (!filterText || filterText === entityId)) {
+            option.classList.add('selected');
+        }
+
+        option.innerHTML = `
+            <div class="entity-name">${entityId}</div>
+            <div class="entity-value">${entityValue}${unit_of_measurement}</div>
+        `;
+
+        option.addEventListener('click', () => {
+            // Clear previous selections
+            dropdown.querySelectorAll('.entity-option').forEach(opt => opt.classList.remove('selected'));
+            // Select this option
+            option.classList.add('selected');
+            searchInput.value = entityId;
+        });
+
+        dropdown.appendChild(option);
+    });
+
+    if (filteredEntities.length > maxResults) {
+        const moreOption = document.createElement('div');
+        moreOption.className = 'entity-option';
+        moreOption.style.fontStyle = 'italic';
+        moreOption.innerHTML = `<div class="entity-name">... and ${filteredEntities.length - maxResults} more (refine search)</div>`;
+        dropdown.appendChild(moreOption);
+    }
+}
+
+function setupEntitySearch(rowId, currentValue) {
+    const searchInput = document.getElementById('entity_search_' + rowId);
+
+    if (!searchInput) return;
+
+    // Set initial value if it's an entity
+    if (currentValue && currentValue.includes('.')) {
+        searchInput.value = currentValue;
+    }
+
+    // Handle search input
+    searchInput.addEventListener('input', (e) => {
+        const filterText = e.target.value;
+        populateEntityDropdown(rowId, currentValue, filterText);
+    });
+
+    // Handle keyboard navigation
+    searchInput.addEventListener('keydown', (e) => {
+        const dropdown = document.getElementById('entity_dropdown_' + rowId);
+        const options = dropdown.querySelectorAll('.entity-option[data-entity-id]');
+        const selected = dropdown.querySelector('.entity-option.selected');
+
+        let newSelection = null;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.nextElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[0];
+                }
+            } else {
+                newSelection = options[0];
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.previousElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[options.length - 1];
+                }
+            } else {
+                newSelection = options[options.length - 1];
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selected && selected.dataset.entityId) {
+                searchInput.value = selected.dataset.entityId;
+            }
+            saveEntityValue(rowId);
+            return;
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelEdit(rowId);
+            return;
+        }
+
+        if (newSelection) {
+            // Clear previous selections
+            options.forEach(opt => opt.classList.remove('selected'));
+            // Select new option
+            newSelection.classList.add('selected');
+            // Only update input value on Enter, not on arrow key navigation
+            // searchInput.value = newSelection.dataset.entityId;
+            // Scroll into view if needed
+            newSelection.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+function saveEntityValue(rowId) {
+    const row = document.getElementById('row_' + rowId);
+    const searchInput = document.getElementById('entity_search_' + rowId);
+    const argName = row.dataset.argName;
+    const newValue = searchInput.value.trim();
+    const originalValue = row.dataset.originalValue;
+
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Entity value cannot be empty', 'error');
+        return;
+    }
+
+    // Validate that it's a valid entity ID (contains at least one dot)
+    if (!typeIsEntity(newValue)) {
+        showMessage('Please select a valid entity ID', 'error');
+        return;
+    }
+
+    // New value without text after dollar (if existing)
+    const newValueBase = newValue.split('$')[0].trim();
+
+    // Check if entity exists in allStates
+    if (!allStates[newValueBase]) {
+        if (!confirm(`Entity "${newValueBase}" was not found in Home Assistant. Do you want to use it anyway?`)) {
+            return;
+        }
+    }
+
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[argName] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: 'entity'
+        }
+        markRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[argName]) {
+            delete pendingChanges[argName];
+            unmarkRowAsChanged(rowId);
+        }
+    }
+
+    // Update the display value - show entity's current state value, not just the entity ID
+    const valueCell = document.getElementById('value_' + rowId);
+
+    // Get the entity's current state value for display
+    valueCell.innerHTML = getDisplayValueEntity(newValue);
+    updateChangeCounter();
+}
+
+// Nested entity dropdown functions for editing entity strings within lists/dictionaries
+function showNestedEntityDropdown(rowId, currentValue) {
+    const valueCell = document.getElementById('nested_value_' + rowId);
+
+    // Create the dropdown container
+    valueCell.innerHTML = `
+        : <div class="entity-dropdown-container" style="min-width: 450px;">
+            <input type="text" class="entity-search-input" id="nested_entity_search_${rowId}"
+                   placeholder="Type to filter entities..." autocomplete="off" style="min-width: 400px;">
+            <div class="entity-dropdown" id="nested_entity_dropdown_${rowId}" style="min-width: 400px;"></div>
+            <div style="margin-top: 5px;">
+                <button class="save-button" onclick="saveNestedEntityValue(${rowId})">Apply</button>
+                <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
+            </div>
+        </div>
+    `;
+
+    // Set up search functionality first
+    setupNestedEntitySearch(rowId, currentValue);
+
+    // If current value is an entity, populate with it as initial filter
+    if (currentValue && currentValue.includes('.')) {
+        populateNestedEntityDropdown(rowId, currentValue, currentValue);
+    } else {
+        populateNestedEntityDropdown(rowId, currentValue);
+    }
+
+    // Focus the search input and select all text for easy replacement
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+    searchInput.focus();
+    searchInput.select();
+}
+
+function populateNestedEntityDropdown(rowId, currentValue, filterText = '') {
+    const dropdown = document.getElementById('nested_entity_dropdown_' + rowId);
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+
+    if (!dropdown) return;
+
+    dropdown.innerHTML = '';
+
+    // Get all entity IDs and filter them
+    const entities = Object.keys(allStates);
+    const filteredEntities = entities.filter(entityId =>
+        entityId.toLowerCase().includes(filterText.toLowerCase())
+    ).sort();
+
+    // Limit results to prevent performance issues
+    const maxResults = 100;
+    const limitedEntities = filteredEntities.slice(0, maxResults);
+
+    if (limitedEntities.length === 0) {
+        dropdown.innerHTML = '<div class="entity-option">No entities found</div>';
+        return;
+    }
+
+    limitedEntities.forEach(entityId => {
+        const entityState = allStates[entityId];
+        const entityValue = entityState && entityState.state ? entityState.state : 'unknown';
+        const unit_of_measurement = entityState && entityState.unit_of_measurement ? entityState.unit_of_measurement : '';
+
+        const option = document.createElement('div');
+        option.className = 'entity-option';
+        option.dataset.entityId = entityId;
+
+        // Highlight current selection (only if search input is empty or matches exactly)
+        if (entityId === currentValue && (!filterText || filterText === entityId)) {
+            option.classList.add('selected');
+        }
+
+        option.innerHTML = `
+            <div class="entity-name">${entityId}</div>
+            <div class="entity-value">${entityValue}${unit_of_measurement}</div>
+        `;
+
+        option.addEventListener('click', () => {
+            // Clear previous selections
+            dropdown.querySelectorAll('.entity-option').forEach(opt => opt.classList.remove('selected'));
+            // Select this option
+            option.classList.add('selected');
+            searchInput.value = entityId;
+        });
+
+        dropdown.appendChild(option);
+    });
+
+    if (filteredEntities.length > maxResults) {
+        const moreOption = document.createElement('div');
+        moreOption.className = 'entity-option';
+        moreOption.style.fontStyle = 'italic';
+        moreOption.innerHTML = `<div class="entity-name">... and ${filteredEntities.length - maxResults} more (refine search)</div>`;
+        dropdown.appendChild(moreOption);
+    }
+}
+
+function setupNestedEntitySearch(rowId, currentValue) {
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+
+    if (!searchInput) return;
+
+    // Set initial value if it's an entity
+    if (currentValue && currentValue.includes('.')) {
+        searchInput.value = currentValue;
+    }
+
+    // Handle search input
+    searchInput.addEventListener('input', (e) => {
+        const filterText = e.target.value;
+        populateNestedEntityDropdown(rowId, currentValue, filterText);
+    });
+
+    // Handle keyboard navigation
+    searchInput.addEventListener('keydown', (e) => {
+        const dropdown = document.getElementById('nested_entity_dropdown_' + rowId);
+        const options = dropdown.querySelectorAll('.entity-option[data-entity-id]');
+        const selected = dropdown.querySelector('.entity-option.selected');
+
+        let newSelection = null;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.nextElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[0];
+                }
+            } else {
+                newSelection = options[0];
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (selected) {
+                newSelection = selected.previousElementSibling;
+                if (!newSelection || !newSelection.dataset.entityId) {
+                    newSelection = options[options.length - 1];
+                }
+            } else {
+                newSelection = options[options.length - 1];
+            }
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selected && selected.dataset.entityId) {
+                searchInput.value = selected.dataset.entityId;
+            }
+            saveNestedEntityValue(rowId);
+            return;
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelNestedEdit(rowId);
+            return;
+        }
+
+        if (newSelection) {
+            // Clear previous selections
+            options.forEach(opt => opt.classList.remove('selected'));
+            // Select new option
+            newSelection.classList.add('selected');
+            // Scroll into view if needed
+            newSelection.scrollIntoView({ block: 'nearest' });
+        }
+    });
+}
+
+function saveNestedEntityValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const searchInput = document.getElementById('nested_entity_search_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+    const newValue = searchInput.value.trim();
+    const originalValue = row.dataset.nestedOriginal;
+
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Entity value cannot be empty', 'error');
+        return;
+    }
+
+    // Validate that it's a valid entity ID (contains at least one dot)
+    if (!newValue.includes('.')) {
+        showMessage('Please select a valid entity ID', 'error');
+        return;
+    }
+
+    // New value without text after dollar (if existing)
+    const newValueBase = newValue.split('$')[0].trim();
+
+    // Check if entity exists in allStates
+    if (!allStates[newValueBase]) {
+        if (!confirm(`Entity "${newValueBase}" was not found in Home Assistant. Do you want to use it anyway?`)) {
+            return;
+        }
+    }
+
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[nestedPath] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: 'entity',
+            isNested: true,
+            path: nestedPath
+        };
+        markNestedRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[nestedPath]) {
+            delete pendingChanges[nestedPath];
+            unmarkNestedRowAsChanged(rowId);
+        }
+    }
+
+    // Update the display value - show entity's current state value, not just the entity ID
+    const valueCell = document.getElementById('nested_value_' + rowId);
+
+    // Get the entity's current state value for display
+    valueCell.innerHTML = getDisplayValueEntity(newValue);
+
+    updateChangeCounter();
+}
+
+function showConfirmationDialog() {
+    const changeCount = Object.keys(pendingChanges).length;
+
+    // Create the overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'confirmation-overlay';
+    overlay.innerHTML = `
+        <div class="confirmation-dialog">
+            <h3>⚠️ Confirm Save Changes</h3>
+            <p>You are about to save <strong>${changeCount}</strong> change${changeCount > 1 ? 's' : ''} to apps.yaml.</p>
+            <p><strong>Warning:</strong> This will restart Predbat to apply the changes.</p>
+            <div class="confirmation-buttons">
+                <button class="cancel-button-dialog" onclick="hideConfirmationDialog()">Cancel</button>
+                <button class="confirm-button" onclick="confirmSaveChanges()">Save & Restart</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+}
+
+function hideConfirmationDialog() {
+    const overlay = document.querySelector('.confirmation-overlay');
+    if (overlay) {
+        overlay.remove();
+    }
+}
+
+async function confirmSaveChanges() {
+    hideConfirmationDialog();
+
+    // Disable save buttons
+    document.getElementById('saveAllButton').disabled = true;
+    document.getElementById('discardAllButton').disabled = true;
+
+    showMessage('Saving changes...', 'success');
+
+    // Send all changes to the server
+    try {
+        const formData = new FormData();
+        formData.append('changes', JSON.stringify(pendingChanges));
+
+        const response = await fetch('./apps', {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showMessage(result.message + ' - Page will reload...', 'success');
+
+            // Clear pending changes
+            pendingChanges = {};
+            updateChangeCounter();
+
+            // Reload the page after a short delay
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            showMessage(result.message, 'error');
+            // Re-enable buttons
+            document.getElementById('saveAllButton').disabled = false;
+            document.getElementById('discardAllButton').disabled = false;
+        }
+    } catch (error) {
+        showMessage('Error saving changes: ' + error.message, 'error');
+        // Re-enable buttons
+        document.getElementById('saveAllButton').disabled = false;
+        document.getElementById('discardAllButton').disabled = false;
+    }
+}
+
+function saveAllChanges() {
+    if (Object.keys(pendingChanges).length === 0) {
+        showMessage('No changes to save', 'error');
+        return;
+    }
+
+    showConfirmationDialog();
+}
+
+// Functions for handling nested dictionary values
+function toggleNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+    const toggleButton = row.querySelector('.toggle-button');
+    const currentValue = toggleButton.dataset.value === 'true';
+    const newValue = !currentValue;
+
+    // Track the change locally
+    pendingChanges[nestedPath] = {
+        rowId: rowId,
+        originalValue: row.dataset.nestedOriginal,
+        newValue: newValue.toString(),
+        type: 'boolean',
+        isNested: true,
+        path: nestedPath
+    };
+
+    // Update the toggle button state visually
+    toggleButton.dataset.value = newValue.toString();
+    if (newValue) {
+        toggleButton.classList.add('active');
+    } else {
+        toggleButton.classList.remove('active');
+    }
+
+    // Update the value display
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    valueCell.innerHTML = newValue.toString();
+
+    // Mark row as changed and update counter
+    markNestedRowAsChanged(rowId);
+    updateChangeCounter();
+}
+
+function editNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+    const originalValue = row.dataset.nestedOriginal;
+
+    // Check if this is an entity string (contains dots)
+    if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+        // Show entity dropdown for nested values
+        showNestedEntityDropdown(rowId, originalValue);
+    } else {
+        // Replace the value cell content with an input field for non-entity values
+        valueCell.innerHTML = `
+            : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${originalValue}">
+            <button class="save-button" onclick="saveNestedValue(${rowId})">Apply</button>
+            <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
+        `;
+
+        // Focus the input field
+        document.getElementById('nested_input_' + rowId).focus();
+    }
+}
+
+function cancelNestedEdit(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+
+    // Check if there's a pending change for this nested value
+    if (pendingChanges[nestedPath]) {
+        // Show the pending value
+        valueCell.innerHTML = getDisplayValueEntity(pendingChanges[nestedPath].newValue);
+    } else {
+        // Show the original value
+        const originalValue = row.dataset.nestedOriginal;
+        valueCell.innerHTML = getDisplayValueEntity(originalValue);
+    }
+}
+
+function saveNestedValue(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    const input = document.getElementById('nested_input_' + rowId);
+    const nestedPath = row.dataset.nestedPath;
+    const newValue = input.value.trim();
+    const originalValue = row.dataset.nestedOriginal;
+
+    // Validate the input
+    if (newValue === '') {
+        showMessage('Value cannot be empty', 'error');
+        return;
+    }
+
+    // Determine the value type and validate accordingly
+    let valueType = 'string';
+    if (newValue !== originalValue) {
+        // Try to parse as number first
+        if (typeIsNumerical(newValue)) {
+            valueType = 'numerical';
+        }
+        // Otherwise it's a string (currency symbol, short text, etc.)
+    } else {
+        // If value hasn't changed, try to detect original type
+        if (typeIsEntity(originalValue)) {
+            valueType = 'numerical';
+        }
+    }
+
+    // Track the change locally
+    if (newValue !== originalValue) {
+        pendingChanges[nestedPath] = {
+            rowId: rowId,
+            originalValue: originalValue,
+            newValue: newValue,
+            type: valueType,
+            isNested: true,
+            path: nestedPath
+        };
+        markNestedRowAsChanged(rowId);
+    } else {
+        // If value is same as original, remove from pending changes
+        if (pendingChanges[nestedPath]) {
+            delete pendingChanges[nestedPath];
+            unmarkNestedRowAsChanged(rowId);
+        }
+    }
+
+    // Update the display value
+    const valueCell = document.getElementById('nested_value_' + rowId);
+    valueCell.innerHTML = getDisplayValueEntity(newValue);
+
+    updateChangeCounter();
+}
+
+function markNestedRowAsChanged(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    row.classList.add('row-changed');
+}
+
+function unmarkNestedRowAsChanged(rowId) {
+    const row = document.getElementById('nested_row_' + rowId);
+    row.classList.remove('row-changed');
+}
+
+// Update the discardAllChanges function to handle nested values
+function discardAllChanges() {
+    // Reset all changed rows to their original values
+    for (const pathOrArgName in pendingChanges) {
+        const change = pendingChanges[pathOrArgName];
+
+        if (change.isNested) {
+            // Handle nested values
+            const row = document.getElementById('nested_row_' + change.rowId);
+            const valueCell = document.getElementById('nested_value_' + change.rowId);
+
+            if (change.type === 'boolean') {
+                // Reset toggle button
+                const toggleButton = row.querySelector('.toggle-button');
+                const originalValue = change.originalValue === 'True';
+                toggleButton.dataset.value = change.originalValue.toLowerCase();
+                if (originalValue) {
+                    toggleButton.classList.add('active');
+                } else {
+                    toggleButton.classList.remove('active');
+                }
+                valueCell.innerHTML = getDisplayValueEntity(change.originalValue);
+            } else {
+                // Reset numerical value
+                valueCell.innerHTML = getDisplayValueEntity(change.originalValue);
+            }
+
+            unmarkNestedRowAsChanged(change.rowId);
+        } else {
+            // Handle top-level values (existing logic)
+            const row = document.getElementById('row_' + change.rowId);
+            const valueCell = document.getElementById('value_' + change.rowId);
+
+            if (change.type === 'boolean') {
+                // Reset toggle button
+                const toggleButton = row.querySelector('.toggle-button');
+                const originalValue = change.originalValue === 'True';
+                toggleButton.dataset.value = change.originalValue.toLowerCase();
+                if (originalValue) {
+                    toggleButton.classList.add('active');
+                } else {
+                    toggleButton.classList.remove('active');
+                }
+                valueCell.innerHTML = getDisplayValueEntity(change.originalValue);
+            } else {
+                // Reset numerical or entity value
+                valueCell.innerHTML = getDisplayValueEntity(change.originalValue);
+            }
+
+            unmarkRowAsChanged(change.rowId);
+        }
+    }
+
+    // Clear all pending changes
+    pendingChanges = {};
+    updateChangeCounter();
+    showMessage('All changes discarded', 'success');
+}
+</script>
+"""
+        )
+
+        # Add message container
+        text += '<div id="messageContainer" class="message-container"></div>\n'
+
+        # Add save controls at the top
+        text += """
+<div id="saveControls" class="save-controls">
+    <div class="save-status">
+        <span id="changeCount">No unsaved changes</span>
+    </div>
+    <button id="saveAllButton" class="save-all-button" onclick="saveAllChanges()" disabled>Save All Changes</button>
+    <button id="discardAllButton" class="discard-all-button" onclick="discardAllChanges()" disabled>Discard Changes</button>
+</div>
+"""
+
         warning = ""
         if self.base.arg_errors:
             warning = "&#9888;"
         text += "{}<a href='./debug_apps'>apps.yaml</a> - has {} errors<br>\n".format(warning, len(self.base.arg_errors))
         text += "<table>\n"
-        text += "<tr><th>Name</th><th>Value</th><td>\n"
+        text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
         args = self.base.args
+        row_id = 0
+        # Initialize nested values tracking and row counter
+        self._nested_values = {}
+        row_counter = [1000]  # Start nested rows at 1000 to avoid conflicts
+
         for arg in args:
             value = args[arg]
+            raw_value = self.resolve_value_raw(arg, value)
             if "_key" in arg:
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             arg_errors = self.base.arg_errors.get(arg, "")
+
+            # Determine if this value can be edited
+            # Lists should not be editable at the top level - only their individual items
+            can_edit = self.is_editable_value(value) and not arg_errors and not isinstance(value, list)
+
             if arg_errors:
-                text += '<tr><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td></tr>\n'.format(arg_errors, arg, self.render_type(arg, value))
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td bgcolor=#FF7777><span title="{}">&#9888;{}</span></td><td>{}</td><td></td></tr>\n'.format(
+                    row_id, arg, html_module.escape(str(raw_value)), arg_errors, arg, self.render_type(arg, value, "", row_counter)
+                )
             else:
-                text += "<tr><td>{}</td><td>{}</td></tr>\n".format(arg, self.render_type(arg, value))
+                actions_cell = ""
+                if can_edit:
+                    if isinstance(value, bool):
+                        # For boolean values, show a toggle button
+                        toggle_class = "toggle-button active" if value else "toggle-button"
+                        actions_cell = f'<button class="{toggle_class}" onclick="toggleValue({row_id})" data-value="{str(value).lower()}"></button>'
+                    else:
+                        # For numerical values, show edit button
+                        actions_cell = f'<button class="edit-button" onclick="editValue({row_id})">Edit</button>'
+
+                text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td id="value_{}">{}</td><td>{}</td></tr>\n'.format(
+                    row_id, arg, html_module.escape(str(raw_value)), arg, row_id, self.render_type(arg, value, "", row_counter), actions_cell
+                )
+            row_id += 1
+
         args = self.base.unmatched_args
         for arg in args:
             value = args[arg]
-            text += '<tr><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td></tr>\n'.format(arg, self.render_type(arg, value))
+            raw_value = self.resolve_value_raw(arg, value)
+            text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td><td></td></tr>\n'.format(
+                row_id, arg, html_module.escape(str(raw_value)), arg, self.render_type(arg, value, "", row_counter)
+            )
+            row_id += 1
 
         text += "</table>"
+
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    def _update_nested_yaml_value(self, data, path, value):
+        """
+        Update a nested value in YAML data using a dot-notation path
+        """
+        pre_keys = path.split(".")
+        keys = []
+        # Split out set of square brackets into a different key
+        for key in pre_keys:
+            if "[" in key and "]" in key:
+                # Handle keys with square brackets, e.g., "battery_charge_low[0]"
+                base_key, index = key.split("[")
+                index = index.rstrip("]")
+                keys.append(base_key)
+                keys.append(f"[{index}]")
+            else:
+                keys.append(key)
+
+        current = data
+
+        # Navigate to the parent of the target value
+        for key in keys[:-1]:
+            if key.startswith("[") and key.endswith("]"):
+                # Handle numerical index in square brackets
+                index = int(key[1:-1])
+                if not isinstance(current, list) or index >= len(current):
+                    raise KeyError(f"Index '{index}' out of range in path '{path}'")
+                current = current[index]
+            elif key in current:
+                current = current[key]
+            else:
+                raise KeyError(f"Key '{key}' not found in path '{path}'")
+
+        # Set the final value
+        key = keys[-1]
+        if key.startswith("[") and key.endswith("]"):
+            # Handle numerical index in square brackets
+            index = int(key[1:-1])
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(f"Index '{index}' out of range in path '{path}'")
+            current[index] = value
+        elif key in current:
+            current[key] = value
+        else:
+            # If final key is numerical try it as an integer
+            if key.isdigit():
+                key = int(key)
+                if key not in current:
+                    raise KeyError(f"Final key '{key}' not found in path '{path}'")
+                else:
+                    current[key] = value
+            else:
+                raise KeyError(f"Final key '{key}' not found in path '{path}'")
+
+    async def html_apps_post(self, request):
+        """
+        Handle POST request for apps page - batch edit values
+        """
+        try:
+            from ruamel.yaml import YAML
+
+            postdata = await request.post()
+            changes_json = postdata.get("changes", "")
+
+            if not changes_json:
+                return web.json_response({"success": False, "message": "No changes provided"})
+
+            # Parse the changes JSON
+            try:
+                changes = json.loads(changes_json)
+            except json.JSONDecodeError:
+                return web.json_response({"success": False, "message": "Invalid changes format"})
+
+            if not changes:
+                return web.json_response({"success": False, "message": "No changes to save"})
+
+            # Read and parse the apps.yaml file using ruamel.yaml
+            apps_yaml_path = "apps.yaml"
+            yaml = YAML()
+            yaml.preserve_quotes = True
+
+            try:
+                with open(apps_yaml_path, "r") as f:
+                    data = yaml.load(f)
+            except Exception as e:
+                return web.json_response({"success": False, "message": f"Error reading apps.yaml: {str(e)}"})
+
+            # Navigate to the predbat section
+            if ROOT_YAML_KEY not in data:
+                return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
+
+            # Process each change
+            updated_args = []
+            for path_or_arg, change_info in changes.items():
+                new_value = change_info["newValue"]
+                change_type = change_info.get("type", "numerical")
+                is_nested = change_info.get("isNested", False)
+
+                # Convert the new value to appropriate type
+                try:
+                    if change_type == "boolean":
+                        converted_value = new_value.lower() == "true"
+                    elif change_type == "string" or change_type == "entity":
+                        # Keep as string (includes entity IDs)
+                        converted_value = new_value
+                    else:
+                        # Try to convert to int first, then float (numerical values)
+                        if "." in new_value:
+                            converted_value = float(new_value)
+                        else:
+                            converted_value = int(new_value)
+                except ValueError:
+                    return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {new_value}"})
+
+                # Update the value in the YAML data
+                if is_nested:
+                    # Handle nested paths like "battery_charge_low.normal"
+                    try:
+                        self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
+                        self._update_nested_yaml_value(self.base.args, path_or_arg, converted_value)
+                        updated_args.append(f"{path_or_arg}={converted_value}")
+                    except (KeyError, TypeError) as e:
+                        return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})
+                else:
+                    # Handle top-level arguments
+                    if path_or_arg in data[ROOT_YAML_KEY]:
+                        data[ROOT_YAML_KEY][path_or_arg] = converted_value
+                        self.base.args[path_or_arg] = converted_value  # Update the base args as well
+                        updated_args.append(f"{path_or_arg}={converted_value}")
+                    else:
+                        return web.json_response({"success": False, "message": f"Argument {path_or_arg} not found in apps.yaml"})
+
+            # Write back to the file, preserving comments and formatting
+            try:
+                with open(apps_yaml_path, "w") as f:
+                    yaml.dump(data, f)
+
+                change_count = len(updated_args)
+                self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
+
+                return web.json_response({"success": True, "message": f"Successfully saved {change_count} changes to apps.yaml. Predbat will restart to apply changes."})
+
+            except Exception as e:
+                return web.json_response({"success": False, "message": f"Error writing to apps.yaml: {str(e)}"})
+
+        except ImportError:
+            return web.json_response({"success": False, "message": "ruamel.yaml library not available, update Predbat add-on first."})
+        except Exception as e:
+            return web.json_response({"success": False, "message": f"Unexpected error: {str(e)}"})
 
     def html_config_item_text(self, entity):
         text = ""
@@ -2312,6 +3982,916 @@ document.addEventListener("DOMContentLoaded", function() {
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_apps_editor(self, request):
+        """
+        Return the apps.yaml editor as an HTML page
+        """
+        self.default_page = "./apps_editor"
+        text = self.get_header("Predbat Apps.yaml Editor", refresh=0)
+
+        # Add CodeMirror scripts and styles to the header
+        text = text.replace(
+            "</head>",
+            """
+    <!-- CodeMirror Library -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/mode/yaml/yaml.min.js"></script>
+
+    <!-- CodeMirror Theme -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/theme/monokai.min.css">
+
+    <!-- YAML Validation and Linting -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/lint.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/yaml-lint.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/addon/lint/lint.min.css">
+    </head>""",
+        )
+
+        # Get success/error messages from URL parameters
+        args = request.query
+        success_message = urllib.parse.unquote(args.get("success", ""))
+        error_message = urllib.parse.unquote(args.get("error", ""))
+
+        # Try to read the current apps.yaml file
+        apps_yaml_content = ""
+        file_error = ""
+
+        try:
+            # apps.yaml will always live in the current directory of the script
+            apps_yaml_path = "apps.yaml"
+            if apps_yaml_path:
+                with open(apps_yaml_path, "r") as f:
+                    apps_yaml_content = f.read()
+                self.log(f"Successfully loaded apps.yaml from {apps_yaml_path}")
+            else:
+                file_error = f"Could not find apps.yaml file."
+
+        except Exception as e:
+            file_error = f"Error reading apps.yaml: {str(e)}"
+
+        text += """
+<style>
+.editor-container {
+    position: fixed;
+    top: 70px; /* Account for fixed header */
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    background-color: inherit;
+    z-index: 10;
+}
+
+.editor-header {
+    flex-shrink: 0;
+    padding: 10px 15px;
+    margin: 0;
+    background-color: inherit;
+}
+
+.editor-form {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 0 15px 15px 15px;
+    min-height: 0; /* Important for flex children */
+    overflow: hidden; /* Prevent form from overflowing */
+}
+
+.editor-textarea {
+    flex: 1;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.4;
+    padding: 10px;
+    border: 2px solid #4CAF50;
+    border-radius: 4px;
+    resize: none;
+    background-color: #ffffff;
+    color: #333;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow: auto;
+    min-height: 0; /* Important for flex children */
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.editor-controls {
+    flex-shrink: 0;
+    margin-top: 10px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    padding: 10px 0;
+}
+
+.save-button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    font-size: 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.save-button:hover {
+    background-color: #45a049;
+}
+
+.save-button:disabled {
+    background-color: #cccccc !important;
+    color: #888888 !important;
+    cursor: not-allowed !important;
+    position: relative !important;
+    border: 2px solid #bbbbbb !important;
+}
+
+.revert-button {
+    background-color: #f44336;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    font-size: 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.revert-button:hover {
+    background-color: #d32f2f;
+}
+
+.revert-button:disabled {
+    background-color: #cccccc !important;
+    color: #888888 !important;
+    cursor: not-allowed !important;
+    position: relative !important;
+    border: 2px solid #bbbbbb !important;
+}
+
+.message {
+    padding: 10px;
+    border-radius: 4px;
+    margin: 10px 0;
+    display: none;
+}
+
+.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* CodeMirror specific styles */
+.CodeMirror {
+    height: auto;
+    flex: 1;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    border: 2px solid #4CAF50;
+    border-radius: 4px;
+    background-color: #ffffff !important; /* Force white background */
+}
+
+/* Selection style */
+.CodeMirror-selected {
+    background-color: #b5d5ff !important;
+}
+
+/* Dark mode selection style */
+body.dark-mode .CodeMirror-selected {
+    background-color: #3a3d41 !important;
+}
+
+.CodeMirror-gutters {
+    background-color: #f8f8f8;
+    border-right: 1px solid #ddd;
+}
+
+.CodeMirror-linenumber {
+    color: #999;
+}
+
+/* Dark mode styles */
+body.dark-mode .editor-textarea {
+    background-color: #2d2d2d;
+    color: #f0f0f0;
+    border-color: #4CAF50;
+}
+
+body.dark-mode .CodeMirror {
+    border-color: #4CAF50;
+    background-color: #2d2d2d !important; /* Force dark background */
+    color: #f0f0f0 !important; /* Force light text */
+}
+
+body.dark-mode .CodeMirror-gutters {
+    background-color: #2d2d2d;
+    border-right: 1px solid #444;
+}
+
+body.dark-mode .CodeMirror-linenumber {
+    color: #777;
+}
+
+/* Dark mode syntax highlighting adjustments */
+body.dark-mode .cm-s-default .cm-string {
+    color: #ce9178 !important;
+}
+
+body.dark-mode .cm-s-default .cm-number {
+    color: #b5cea8 !important;
+}
+
+body.dark-mode .cm-s-default .cm-keyword {
+    color: #569cd6 !important;
+}
+
+body.dark-mode .cm-s-default .cm-property {
+    color: #9cdcfe !important;
+}
+
+body.dark-mode .cm-s-default .cm-atom {
+    color: #d19a66 !important;
+}
+
+body.dark-mode .cm-s-default .cm-comment {
+    color: #6a9955 !important;
+}
+
+body.dark-mode .cm-s-default .cm-meta {
+    color: #dcdcaa !important;
+}
+
+body.dark-mode .cm-s-default .cm-tag {
+    color: #569cd6 !important;
+}
+
+body.dark-mode .cm-s-default .cm-attribute {
+    color: #9cdcfe !important;
+}
+
+body.dark-mode .cm-s-default .cm-variable {
+    color: #9cdcfe !important;
+}
+
+body.dark-mode .cm-s-default .cm-variable-2 {
+    color: #4ec9b0 !important;
+}
+
+body.dark-mode .cm-s-default .cm-def {
+    color: #dcdcaa !important;
+}
+
+body.dark-mode .CodeMirror-cursor {
+    border-left: 1px solid #f0f0f0 !important;
+}
+
+/* Lint markers for both light and dark mode */
+.CodeMirror-lint-marker-error, .CodeMirror-lint-message-error {
+    background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiBmaWxsPSJyZWQiPjxwYXRoIGQ9Ik0xMS45OTMgMi4wMDFhMTAgMTAgMCAwMC03LjA3MyAyLjkyOEExMCAxMCAwIDAwMS45OTIgMTIuMDAxYTEwIDEwIDAgMDAyLjkyOCA3LjA3MiAxMCAxMCAwIDAwNy4wNzMgMi45MjkgMTAgMTAgMCAwMDcuMDczLTIuOTMgMTAgMTAgMCAwMDIuOTI4LTcuMDcxIDEwIDEwIDAgMDAtMi45MjgtNy4wNzIgMTAgMTAgMCAwMC03LjA3My0yLjkyOHptMCA0bC4yMzIuMDAzYy41MjUuMDEzLjk5NC4zMzQgMS4yLjgyNWwuMDQuMTAzTDE2LjM0NSAxNWExLjUgMS41IDAgMDEtMi44NS45NDVsLS4wMzItLjFMMTIgMTIuNzYzIDguNTM3IDE1LjgybC0uMDk2LjA4YTEuNSAxLjUgMCAwMS0xLjgxLjEwNmwtLjEwMi0uMDgxYTEuNSAxLjUgMCAwMS0uMTA4LTEuODA2bC4wOC0uMTA0TDkuNCA3Ljk0NWwuMDgxLS4xMjVjLjIzMS0uMzE2LjYxNi0uNTE2IDEuMDM3LS4wMTZsLjA5Mi4wODMuMDc4LjA5My4wOTcuMTM2LjA0OC4wODUuMTYuMDMyeloiLz48L3N2Zz4=');
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+.CodeMirror-lint-tooltip {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: white;
+    z-index: 10000;
+    max-width: 600px;
+    overflow: hidden;
+    white-space: pre-wrap;
+    padding: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    color: #333;
+}
+
+body.dark-mode .CodeMirror-lint-tooltip {
+    background-color: #2d2d2d;
+    color: #f0f0f0;
+    border-color: #444;
+}
+
+.CodeMirror-lint-marker-error:hover {
+    cursor: pointer;
+}
+
+.CodeMirror-lint-line-error {
+    background-color: rgba(255, 0, 0, 0.1);
+}
+
+body.dark-mode .CodeMirror-lint-line-error {
+    background-color: rgba(255, 0, 0, 0.2);
+}
+
+body.dark-mode .message.success {
+    background-color: #1e3f20;
+    color: #7bc97d;
+    border-color: #2d5a2f;
+}
+
+body.dark-mode .message.error {
+    background-color: #3f1e1e;
+    color: #f5c6cb;
+    border-color: #5a2d2d;
+}
+
+body.dark-mode .save-button:disabled {
+    background-color: #444444 !important;
+    color: #777777 !important;
+    border: 2px solid #555555 !important;
+}
+
+body.dark-mode .revert-button {
+    background-color: #c62828;
+    color: white;
+    border: none;
+}
+
+body.dark-mode .revert-button:hover {
+    background-color: #b71c1c;
+}
+
+body.dark-mode .revert-button:disabled {
+    background-color: #444444 !important;
+    color: #777777 !important;
+    border: 2px solid #555555 !important;
+}
+</style>
+
+<div class="editor-container">
+    <div class="editor-header">
+        <h2>Apps.yaml Editor</h2>
+        <div id="lintStatus" style="margin-top: 8px;"></div>
+"""
+
+        text += """
+    </div>
+
+    <form id="editorForm" class="editor-form" method="post" action="./apps_editor">
+        <!-- We use a regular textarea that CodeMirror will replace -->
+        <textarea class="editor-textarea" name="apps_content" id="appsContent" placeholder="Loading apps.yaml content...">"""
+
+        # Escape the content for HTML
+
+        text += html_module.escape(apps_yaml_content)
+
+        text += """</textarea>
+
+        <div class="editor-controls">
+            <button type="submit" class="save-button" id="saveButton" title="Click to save changes">Save</button>
+            <button type="button" class="revert-button" id="revertButton" title="Discard changes and reload from disk">Revert</button>
+            <span id="saveStatus"></span>
+        </div>
+    </form>
+
+    <div id="messageContainer">"""
+
+        # Show success message if present
+        if success_message:
+            text += f'<div class="message success" style="display: block;">{html_module.escape(success_message)}</div>'
+
+        # Show error message if present (from URL or file reading)
+        display_error = error_message or file_error
+        if display_error:
+            text += f'<div class="message error" style="display: block;">{html_module.escape(display_error)}</div>'
+
+        text += """    </div>
+</div>
+
+<script>
+let isSubmitting = false;
+let editor; // CodeMirror instance
+
+document.getElementById('editorForm').addEventListener('submit', function(e) {
+    e.preventDefault(); // Always prevent default initially
+
+    if (isSubmitting) {
+        return;
+    }
+
+    // Get the current content and validate it
+    const content = editor ? editor.getValue() : document.getElementById('appsContent').value;
+    let hasYamlError = false;
+
+    try {
+        // Only validate if content exists and isn't empty
+        if (content && content.trim()) {
+            jsyaml.load(content);
+        }
+    } catch (e) {
+        console.log('YAML validation error during form submit:', e.message);
+        hasYamlError = true;
+    }
+
+    // Safety check - don't allow submission if there are YAML errors
+    if (hasYamlError) {
+        showMessage("Cannot save while there are YAML syntax errors. Please fix the errors first.", "error");
+        return;
+    }
+
+    // Show confirmation popup
+    const confirmed = confirm("Warning: Saving changes will restart Predbat. Are you sure you want to continue?");
+
+    if (!confirmed) {
+        return; // User cancelled the save
+    }
+
+    // Update the hidden textarea with CodeMirror content before submission
+    if (editor) {
+        document.getElementById('appsContent').value = editor.getValue();
+    }
+
+    isSubmitting = true;
+    const saveButton = document.getElementById('saveButton');
+    const saveStatus = document.getElementById('saveStatus');
+
+    saveButton.disabled = true;
+    saveButton.textContent = 'Saving...';
+    saveStatus.textContent = 'Please wait...';
+
+    // Clear stored content as we're saving now
+    localStorage.removeItem('appsYamlContent');
+
+    // Submit the form programmatically
+    this.submit();
+});
+
+// Show messages
+function showMessage(message, type = 'success') {
+    const messageContainer = document.getElementById('messageContainer');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${type}`;
+    messageDiv.style.display = 'block';
+    messageDiv.textContent = message;
+
+    messageContainer.innerHTML = '';
+    messageContainer.appendChild(messageDiv);
+
+    // Auto-hide success messages after 5 seconds
+    if (type === 'success') {
+        setTimeout(() => {
+            messageDiv.style.display = 'none';
+        }, 5000);
+    }
+}
+
+// Function to update button states based on content changes and validation
+function updateButtonStates(saveButton, revertButton, content, hasError = false) {
+    if (!saveButton && !revertButton) return;
+
+    const isDarkMode = document.body.classList.contains('dark-mode');
+    const hasChanged = content !== window.originalContent;
+
+    // Update Save button
+    if (saveButton) {
+        // First set the disabled property, which is crucial for behavior
+        const shouldDisableSave = hasError || !hasChanged;
+        saveButton.disabled = shouldDisableSave;
+
+        // Update tooltip
+        if (hasError) {
+            saveButton.title = 'Fix YAML errors before saving';
+        } else {
+            saveButton.title = hasChanged ? 'Save changes' : 'No changes to save';
+        }
+
+        // Apply styling - ensure disabled style gets applied correctly
+        if (shouldDisableSave) {
+            // Disabled styling
+            saveButton.style.backgroundColor = isDarkMode ? '#444444' : '#cccccc';
+            saveButton.style.color = isDarkMode ? '#777777' : '#888888';
+            saveButton.style.border = `2px solid ${isDarkMode ? '#555555' : '#bbbbbb'}`;
+        } else {
+            // Enabled styling
+            saveButton.style.backgroundColor = '#4CAF50';
+            saveButton.style.color = 'white';
+            saveButton.style.border = 'none';
+        }
+    }
+
+    // Update Revert button - always enable if content changed, regardless of errors
+    if (revertButton) {
+        // First set the disabled property
+        const shouldDisableRevert = !hasChanged;
+        revertButton.disabled = shouldDisableRevert;
+        revertButton.title = hasChanged ? 'Discard changes and reload from disk' : 'No changes to revert';
+
+        // Apply styling - ensure disabled style gets applied correctly
+        if (shouldDisableRevert) {
+            // Disabled styling
+            revertButton.style.backgroundColor = isDarkMode ? '#444444' : '#cccccc';
+            revertButton.style.color = isDarkMode ? '#777777' : '#888888';
+            revertButton.style.border = `2px solid ${isDarkMode ? '#555555' : '#bbbbbb'}`;
+        } else {
+            // Enabled styling
+            revertButton.style.backgroundColor = '#4CAF50';
+            revertButton.style.color = 'white';
+            revertButton.style.border = 'none';
+        }
+    }
+}
+
+// Custom YAML linter using js-yaml
+CodeMirror.registerHelper("lint", "yaml", function(text) {
+    const found = [];
+    if (!text.trim()) {
+        return found; // Return empty array for empty text to avoid false errors
+    }
+
+    try {
+        jsyaml.load(text);
+    } catch (e) {
+        // Convert js-yaml error to CodeMirror lint format
+        const line = e.mark && e.mark.line ? e.mark.line : 0;
+        const ch = e.mark && e.mark.column ? e.mark.column : 0;
+        found.push({
+            from: CodeMirror.Pos(line, ch),
+            to: CodeMirror.Pos(line, ch + 1),
+            message: e.message,
+            severity: "error"
+        });
+    }
+
+    // Return the array of found issues
+    return found;
+});
+
+// Initialize CodeMirror and handle dark mode
+function initializeCodeMirror() {
+    const textarea = document.getElementById('appsContent');
+
+    if (!textarea) return;
+
+    const isDarkMode = document.body.classList.contains('dark-mode');
+
+    // Check if we have unsaved content in localStorage
+    const savedContent = localStorage.getItem('appsYamlContent');
+
+    // Store the original content for change comparison
+    window.originalContent = textarea.value;
+
+    // If we have saved content and the textarea is empty or the saved content differs from current
+    if (savedContent && (!textarea.value.trim() || savedContent !== textarea.value)) {
+        // Always load the saved content automatically
+        textarea.value = savedContent;
+        console.log('Automatically restored content from localStorage');
+    }
+
+    // Create CodeMirror instance
+    editor = CodeMirror.fromTextArea(textarea, {
+        mode: 'yaml',
+        theme: isDarkMode ? 'monokai' : 'default', // Use default theme for light mode (pure white background)
+        lineNumbers: true,
+        indentUnit: 2,
+        smartIndent: true,
+        tabSize: 2,
+        indentWithTabs: false,
+        lineWrapping: false,
+        gutters: ['CodeMirror-linenumbers', 'CodeMirror-lint-markers'],
+        lint: {
+            getAnnotations: CodeMirror.helpers.lint.yaml,
+            lintOnChange: true,
+            delay: 300 // Reduced delay for faster feedback
+        },
+        autofocus: true,
+        extraKeys: {
+            'Tab': function(cm) {
+                if (cm.somethingSelected()) {
+                    cm.indentSelection('add');
+                } else {
+                    cm.replaceSelection('  ', 'end', '+input');
+                }
+            },
+            'Ctrl-Space': 'autocomplete'
+        }
+    });
+
+    // Manually validate YAML when editor is ready
+    editor.on('change', function() {
+        // Get the content and buttons
+        const content = editor.getValue();
+        const saveButton = document.getElementById('saveButton');
+        const revertButton = document.getElementById('revertButton');
+        let isValid = true;
+
+        try {
+            // Parse YAML to check for errors
+            if (content.trim()) {
+                jsyaml.load(content);
+            }
+        } catch (e) {
+            isValid = false;
+            console.log('YAML validation error in change handler:', e.message);
+        }
+
+        // Update button states based on YAML validation result
+        updateButtonStates(saveButton, revertButton, content, !isValid);
+        console.log('Button states updated by change handler, YAML valid:', isValid);
+
+        // Save content to localStorage whenever it changes
+        localStorage.setItem('appsYamlContent', content);
+        console.log('Content saved to localStorage');
+    });
+
+    // Make CodeMirror fill the available space
+    editor.setSize('100%', '100%');
+
+    // Add custom CSS to make CodeMirror fill its container properly
+    const cmElement = editor.getWrapperElement();
+    cmElement.style.flex = '1';
+    cmElement.style.minHeight = '0';
+    cmElement.style.height = 'auto';
+
+    // Set up the lint status display
+    const lintStatusEl = document.getElementById('lintStatus');
+    if (lintStatusEl) {
+        // Update lint status when linting is done
+        editor.on('lint', (errors) => {
+            console.log('Lint event fired:', errors ? errors.length : 0, 'errors found');
+            const saveButton = document.getElementById('saveButton');
+
+            // Make a direct validation attempt as backup
+            let isValid = true;
+            try {
+                const content = editor.getValue();
+                if (content && content.trim()) {
+                    jsyaml.load(content);
+                }
+            } catch (e) {
+                console.log('Manual YAML validation error during lint event:', e.message);
+                isValid = false;
+            }
+
+            const content = editor.getValue();
+            const revertButton = document.getElementById('revertButton');
+            const hasErrors = (errors && errors.length > 0) || !isValid;
+
+            if (hasErrors) {
+                lintStatusEl.innerHTML = `<div style="color: #d32f2f; padding: 5px; border-radius: 4px; background-color: ${isDarkMode ? '#3f1e1e' : '#fff0f0'}; border: 1px solid #d32f2f;">
+                    <strong>⚠️ Found ${errors ? errors.length : 'syntax'} YAML ${errors && errors.length === 1 ? 'error' : 'errors'}</strong>
+                    <p style="margin: 5px 0 0 0; font-size: 14px;">Hover over the red markers in the editor gutter to see details.</p>
+                </div>`;
+
+                // Update button states with error flag
+                updateButtonStates(saveButton, revertButton, content, true);
+                console.log('Button states updated by lint event (with errors)');
+            } else {
+                // Clear the lint status when syntax is valid
+                lintStatusEl.innerHTML = '';
+
+                // Update button states with no error flag
+                updateButtonStates(saveButton, revertButton, content, false);
+                console.log('Button states updated by lint event (no errors)');
+            }
+        });
+
+        // Initial lint after a short delay to ensure editor is fully loaded
+        setTimeout(() => {
+            // Perform the lint
+            editor.performLint();
+
+            // Manually check and enable the button if there are no errors
+            // This is a fallback in case the lint event doesn't fire correctly
+            setTimeout(() => {
+                const saveButton = document.getElementById('saveButton');
+                const revertButton = document.getElementById('revertButton');
+                try {
+                    const content = editor.getValue();
+                    let isValidYaml = true;
+
+                    // Only validate if we have content
+                    if (content && content.trim()) {
+                        try {
+                            jsyaml.load(content);
+                        } catch (e) {
+                            isValidYaml = false;
+                            console.log('YAML validation error in initialization:', e.message);
+                        }
+
+                        // Update button states based on content validity
+                        updateButtonStates(saveButton, revertButton, content, !isValidYaml);
+                        console.log('Button states updated by initial validation');
+
+                        // Also clear the lint status if it exists and YAML is valid
+                        if (lintStatusEl && isValidYaml) {
+                            lintStatusEl.innerHTML = '';
+                        }
+                    } else {
+                        // Empty content is considered valid
+                        updateButtonStates(saveButton, revertButton, content, false);
+                        console.log('Button states updated for empty content');
+                    }
+                } catch (e) {
+                    // Something went wrong, keep the save button disabled but enable revert if changed
+                    console.log('Error during initialization button state update:', e.message);
+
+                    const content = editor.getValue();
+                    updateButtonStates(saveButton, revertButton, content, true);
+                }
+            }, 300);
+        }, 800);
+    }
+
+    // Apply dark mode if needed
+    if (isDarkMode) {
+        // Make sure the CodeMirror editor has proper dark mode styling
+        const cmElement = editor.getWrapperElement();
+        cmElement.style.backgroundColor = '#2d2d2d';
+
+        // Style the gutters
+        const gutters = document.querySelectorAll('.CodeMirror-gutters');
+        gutters.forEach(gutter => {
+            gutter.style.backgroundColor = '#2d2d2d';
+            gutter.style.borderRight = '1px solid #444';
+        });
+
+        // Force a refresh to ensure all styles are applied properly
+        editor.refresh();
+    }
+}
+
+// Handle page load
+document.addEventListener('DOMContentLoaded', function() {
+    const textarea = document.getElementById('appsContent');
+    if (textarea && textarea.value.trim() === '') {
+        textarea.placeholder = 'apps.yaml content could not be loaded';
+    }
+
+    // Initialize CodeMirror
+    initializeCodeMirror();
+
+    // Handle Revert button click
+    document.getElementById('revertButton').addEventListener('click', function() {
+        if (confirm('This will discard all your unsaved changes and reload the file from disk. Are you sure?')) {
+            // Remove saved content from localStorage
+            localStorage.removeItem('appsYamlContent');
+
+            // Reload the page to get fresh content from disk
+            window.location.reload();
+        }
+    });
+
+    // Add a direct listener to ensure the button gets enabled
+    // This is a final fallback in case other methods fail
+    setTimeout(() => {
+        const saveButton = document.getElementById('saveButton');
+        const revertButton = document.getElementById('revertButton');
+
+        if (editor) {
+            // Force a final validation check
+            try {
+                const content = editor.getValue();
+                const hasChanged = content !== window.originalContent;
+
+                // Check YAML validity
+                let isValid = true;
+                if (content && content.trim()) {
+                    try {
+                        jsyaml.load(content);
+                    } catch (e) {
+                        isValid = false;
+                        console.log('YAML validation error in DOMContentLoaded final check:', e.message);
+                    }
+                }
+
+                // Update buttons states consistently
+                updateButtonStates(saveButton, revertButton, content, !isValid);
+                console.log('Button states updated by DOMContentLoaded final check, YAML valid:', isValid);
+
+            } catch (e) {
+                console.log('YAML validation error in DOMContentLoaded:', e.message);
+                // We already know there's an error, but we won't disable the button here
+                // as that should be handled by the lint event
+            }
+
+            // Manual override for debugging: add a global function to force-enable the button
+            window.enableSaveButton = function() {
+                const saveButton = document.getElementById('saveButton');
+                const revertButton = document.getElementById('revertButton');
+                if (saveButton) {
+                    // Force enable the save button for debugging purposes by treating content as changed and valid
+                    const content = editor ? editor.getValue() : '';
+                    updateButtonStates(saveButton, revertButton, content, false);
+                }
+            };
+        }
+    }, 2000); // Wait longer for everything to initialize
+
+    // Add a listener for dark mode toggle
+    window.addEventListener('storage', function(e) {
+        if (e.key === 'darkMode') {
+            if (editor) {
+                const isDarkMode = localStorage.getItem('darkMode') === 'true';
+                editor.setOption('theme', isDarkMode ? 'monokai' : 'default');
+
+                // Update the editor's wrapper element styling
+                const cmElement = editor.getWrapperElement();
+
+                if (isDarkMode) {
+                    cmElement.style.backgroundColor = '#2d2d2d';
+
+                    // Style the gutters
+                    const gutters = document.querySelectorAll('.CodeMirror-gutters');
+                    gutters.forEach(gutter => {
+                        gutter.style.backgroundColor = '#2d2d2d';
+                        gutter.style.borderRight = '1px solid #444';
+                    });
+
+                    // Re-style any lint tooltips that might be open
+                    const tooltips = document.querySelectorAll('.CodeMirror-lint-tooltip');
+                    tooltips.forEach(tooltip => {
+                        tooltip.style.backgroundColor = '#2d2d2d';
+                        tooltip.style.color = '#f0f0f0';
+                        tooltip.style.borderColor = '#444';
+                    });
+                } else {
+                    cmElement.style.backgroundColor = '#ffffff';
+
+                    // Style the gutters
+                    const gutters = document.querySelectorAll('.CodeMirror-gutters');
+                    gutters.forEach(gutter => {
+                        gutter.style.backgroundColor = '#f8f8f8';
+                        gutter.style.borderRight = '1px solid #ddd';
+                    });
+
+                    // Re-style any lint tooltips that might be open
+                    const tooltips = document.querySelectorAll('.CodeMirror-lint-tooltip');
+                    tooltips.forEach(tooltip => {
+                        tooltip.style.backgroundColor = '#ffffff';
+                        tooltip.style.color = '#333';
+                        tooltip.style.borderColor = '#ccc';
+                    });
+                }
+
+                // Re-run the linter
+                editor.performLint();
+
+                // Force a refresh to ensure all styles are applied properly
+                editor.refresh();
+            }
+        }
+    });
+});
+</script>
+
+</div>"""
+
+        return web.Response(content_type="text/html", text=text)
+
+    async def html_apps_editor_post(self, request):
+        """
+        Handle POST request for apps.yaml editor - save the file
+        """
+        try:
+            postdata = await request.post()
+            apps_content = postdata.get("apps_content", "")
+
+            # Find the apps.yaml file path
+            apps_yaml_path = "apps.yaml"
+            # Create backup
+            backup_path = "apps.yaml.backup"
+            shutil.copy2(apps_yaml_path, backup_path)
+
+            # Save the new content
+            with open(apps_yaml_path, "w") as f:
+                f.write(apps_content)
+
+            self.log(f"Apps.yaml successfully saved to {apps_yaml_path}")
+            if backup_path:
+                self.log(f"Backup created at {backup_path}")
+
+            # Redirect back to editor with success message
+            import urllib.parse
+
+            success_message = f"Apps.yaml saved successfully. Backup created at {backup_path}."
+            encoded_message = urllib.parse.quote(success_message)
+            raise web.HTTPFound(f"./apps_editor?success={encoded_message}")
+
+        except web.HTTPFound:
+            raise  # Re-raise HTTP redirects
+        except Exception as e:
+            error_msg = f"Failed to save apps.yaml: {str(e)}"
+            self.log(f"ERROR: {error_msg}")
+            import urllib.parse
+
+            encoded_error = urllib.parse.quote(error_msg)
+            raise web.HTTPFound(f"./apps_editor?error={encoded_error}")
 
     async def html_default(self, request):
         """
@@ -2641,6 +5221,7 @@ window.addEventListener('resize', function() {
             + config_warning
             + """</a>
     <a href='./apps'>Apps</a>
+    <a href='./apps_editor'>Editor</a>
     <a href='./log'>Log</a>
     <a href='./compare'>Compare</a>
     <a href='https://springfall2008.github.io/batpred/'>Docs</a>

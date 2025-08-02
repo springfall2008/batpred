@@ -1340,11 +1340,19 @@ class Octopus:
 
         # The load expected is stored in chargeKwh for the period in use
         if "charge_in_kwh" in slot:
-            kwh = abs(float(slot.get("charge_in_kwh", 0.0)))
+            kwh = slot.get("charge_in_kwh", None)
         elif "energy" in slot:
-            kwh = abs(float(slot.get("energy", 0.0)))
+            kwh = slot.get("energy", None)
         else:
-            kwh = abs(float(slot.get("chargeKwh", 0.0)))
+            kwh = slot.get("chargeKwh", None)
+
+        if kwh is None:
+            kwh = org_minutes * self.car_charging_rate[0] / 60.0
+
+        try:
+            kwh = abs(float(kwh))
+        except (ValueError, TypeError):
+            kwh = 0.0
 
         if org_minutes > 0:
             kwh = kwh * cap_minutes / org_minutes
