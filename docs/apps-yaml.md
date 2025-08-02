@@ -827,6 +827,8 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
 
+Note that gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)
+
 ## Energy Comparison
 
 You can configure in apps.yaml a **compare_list** section to define a list of Energy tariffs for Predbat to compare based on your predicted load and solar generation.

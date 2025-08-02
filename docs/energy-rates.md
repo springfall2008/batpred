@@ -93,7 +93,7 @@ To enable the above events:
 
 Repeat this for the other events.
 
-The gas rates are only required if you have a gas boiler, or an iBoost, and are using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas.
+The gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)
 
 Verify that the integration is working correctly in Home Assistant by going to Developer Tools / States, and entering 'octopus' in the 'Filter entities' box.
 Confirm that the Octopus entities are being populated correctly.
