@@ -4,6 +4,8 @@ This document describes the Predbat configuration items in Home Assistant that y
 
 All of these settings are entities that can be configured directly in Home Assistant (unlike the '[apps.yaml](apps-yaml.md)' configuration items that have to be edited with a file editor).
 
+Note the default values of the settings inside Home Assistant are set inside Predbat, but the default can be overridden by setting its value in apps.yaml prior to starting Predbat for the first time.
+
 See [Displaying output data](output-data.md)
 for information on how to view and edit these entities within
 Home Assistant.

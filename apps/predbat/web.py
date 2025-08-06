@@ -2670,10 +2670,10 @@ function typeIsEntity(value) {
 function typeIsNumerical(value) {
     // Check if the value is a number (integer or float)
     try {
-        if (newValue.includes('.')) {
-            parseFloat(newValue);
+        if (value.includes('.')) {
+            parseFloat(value);
         } else {
-            parseInt(newValue);
+            parseInt(value);
         }
     } catch (e) {
         return false; // Not a numerical value
@@ -3359,7 +3359,7 @@ function saveNestedValue(rowId) {
         // Otherwise it's a string (currency symbol, short text, etc.)
     } else {
         // If value hasn't changed, try to detect original type
-        if (typeIsEntity(originalValue)) {
+        if (typeIsNumerical(originalValue)) {
             valueType = 'numerical';
         }
     }

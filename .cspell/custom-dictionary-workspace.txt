@@ -208,6 +208,7 @@ rname
 rowspan
 rstart
 rtype
+ruamel
 saverestore
 searr
 selectattr
