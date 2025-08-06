@@ -163,8 +163,6 @@ For Predbat to automatically manage Octopus free sessions the following addition
 
 Note: **You must have signed up to Octoplus and eligible to benefit from these events**
 
-Warning: **Octopus Intelligent customers are not eligible for free energy, Intelligent customers should leave this line commented out**
-
 Like the electricity rates, this is set in the apps.yaml template to a regular expression that should auto-discover the Octopus Energy integration.
 
 **octopus_free_session** - Will point to the free event sensor that is exposed by the Octopus Energy Integration. This event sensor contains the dates/times of
