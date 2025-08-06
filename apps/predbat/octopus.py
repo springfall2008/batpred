@@ -1076,7 +1076,7 @@ class Octopus:
             self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
             return None
-        
+
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
@@ -1204,7 +1204,7 @@ class Octopus:
             except requests.exceptions.ConnectionError:
                 self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
-                return {}            
+                return {}
             if r.status_code not in [200, 201]:
                 self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
