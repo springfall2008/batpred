@@ -3647,8 +3647,6 @@ function discardAllChanges() {
                 except ValueError:
                     return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {new_value}"})
                 
-                print(f"Updating {path_or_arg} to {converted_value} (type: {change_type}, nested: {is_nested}) convert_value_type: {type(converted_value)})")
-
                 # Update the value in the YAML data
                 if is_nested:
                     # Handle nested paths like "battery_charge_low.normal"
