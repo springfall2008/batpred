@@ -871,6 +871,10 @@ class UserInterface:
             if name == "mode" and new_install:
                 item["default"] = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
 
+            if name in self.args:
+                # If the item is in args, use it as the default
+                item["default"] = self.args[name]
+
         # Load current config (if there is one)
         if register:
             self.log("Loading current config")
