@@ -24,7 +24,7 @@ is to connect Predbat directly to Octopus.
 
 - This method will not work correctly if you have multiple import or export meters.
 - A single Octopus Intelligent GO car charger or car is supported.
-- Saving sessions are also support, including auto-enroll.
+- Saving sessions are also supported, including auto-enroll.
 
 You should first log into your Octopus account and go to the [Accounts](https://octopus.energy/dashboard/new/accounts/) section and copy your account number e.g. A-1234567.
 
@@ -39,8 +39,9 @@ Put these both into your apps.yaml and you are done.
 
 Free energy sessions:
 
-Predbat can scrape directly from the Octopus Web Site, this may
-have its own issues due to a change of format. If you enable this then sessions will be considered even if you forget to sign-up so be careful!
+Predbat can obtain details of Free energy sessions directly from the Octopus Web Site.
+As Octopus do not publish an API for this information it has to be done by 'scraping' the website - there may be future issues with this if Octopus ever change the website format.
+If you enable free energy sessions in Predbat then sessions will be considered even if you forget to sign-up to them in your Octopus account so be careful!
 
 ```yaml
   octopus_free_url: 'http://octopus.energy/free-electricity'
@@ -50,8 +51,8 @@ have its own issues due to a change of format. If you enable this then sessions 
 
 ### Octopus Energy integration setup
 
-Instead of using Octopus Energy Direct Predbat can also work with the [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/),
-this bring greater configurability than the direct method.
+Instead of using Octopus Energy Direct method, Predbat can also work with the [Octopus Energy integration](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/),
+this brings greater configurability than the direct method.
 
 The Octopus Energy integration connects to your Octopus Energy account and retrieves the tariffs you are on, and the current tariff rates.
 If you change tariff within Octopus the integration will automatically retrieve the updated tariff information, and as tariff prices change, again they are automatically retrieved.
@@ -92,7 +93,7 @@ To enable the above events:
 
 Repeat this for the other events.
 
-The gas rates are only required if you have a gas boiler, or an iBoost, and are using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas.
+The gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)
 
 Verify that the integration is working correctly in Home Assistant by going to Developer Tools / States, and entering 'octopus' in the 'Filter entities' box.
 Confirm that the Octopus entities are being populated correctly.
@@ -173,7 +174,7 @@ all the free events.
   octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
 ```
 
-Note: **This event may need to be enabled in Home Assistant first [How to Enable Octopus events](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them)**
+Note: **This event may need to be enabled in Home Assistant first** - see [How to Enable Octopus events](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them)
 
 If you normally increase your house usage during a free session then you can change **input_number.predbat_load_scaling_free** to allow Predbat to assume an energy
 increase in this period. E.g. setting to a value of 1.2 would indicate you will use 20% more energy than normal during this period. (Default is 1.2)
@@ -181,7 +182,7 @@ increase in this period. E.g. setting to a value of 1.2 would indicate you will 
 If you do not want Predbat to see these sessions then comment out the **octopus_free_session** setting.
 
 Note: If the above is not working due to a lack of data (via a 3rd party service) Predbat can scrape directly from the Octopus Web Site, this may
-have its own issues due to a change of format. If you enable this then sessions will be considered even if you forget to sign-up so be careful!
+not work in future if Octopus ever change the website format. If you enable this then sessions will be considered by Predbat even if you forget to sign-up to free electricity sessions in your Octopus account so be careful!
 
 ```yaml
   octopus_free_url: 'http://octopus.energy/free-electricity'
