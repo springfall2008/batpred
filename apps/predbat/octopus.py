@@ -1070,7 +1070,13 @@ class Octopus:
                 self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
                 return pdata
 
-        r = requests.get(url)
+        try:
+            r = requests.get(url)
+        except requests.exceptions.ConnectionError:
+            self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+            self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
+            return None
+
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
@@ -1193,7 +1199,12 @@ class Octopus:
         while url and pages < 3:
             if self.debug_enable:
                 self.log("Download {}".format(url))
-            r = requests.get(url)
+            try:
+                r = requests.get(url)
+            except requests.exceptions.ConnectionError:
+                self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+                self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
+                return {}
             if r.status_code not in [200, 201]:
                 self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
