@@ -1,4 +1,6 @@
-### 🚀 Feature: Plugin System Implementation
+# 🚀 Feature: Plugin System Implementation
+
+## Summary
 
 **Core Plugin System (`plugin_system.py`)**
 
@@ -18,7 +20,7 @@
 - **Web interface**: New endpoint registration system allows plugins to add custom HTTP endpoints dynamically
 - **Graceful shutdown**: Ensures all plugins are properly cleaned up
 
-### 🔧 Technical Details
+## 🔧 Technical Details
 
 - Plugin files must end with `_plugin.py` for auto-discovery
 - Plugins can be simple classes, inherit from `PredBatPlugin`, or use initialization functions
@@ -26,7 +28,7 @@
 - Full error handling and logging throughout the plugin lifecycle
 - No breaking changes to existing functionality
 
-### 🎯 Use Cases
+## 🎯 Use Cases
 
 This plugin system enables:
 
@@ -36,7 +38,7 @@ This plugin system enables:
 - **Custom notification systems**
 - **Extended data processing** and analysis
 
-### 🧪 Backward Compatibility
+## 🧪 Backward Compatibility
 
 - Fully backward compatible - no changes to existing functionality
 - Plugin system is optional and gracefully handles failures
