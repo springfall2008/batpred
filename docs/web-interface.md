@@ -104,11 +104,23 @@ and full explanation of Predbat's control entities and what they do can be found
 
 ### apps.yaml View
 
+The apps view allows you to look at your configuration and to modify the values within the web browser without having to edit the yaml directly.
+Click the edit button to change a value, when all the edits are complete hit save to save the apps.yaml and restart predbat.
+
+<img width="1746" height="764" alt="image" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
+
 Predbat validates your apps.yaml and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
 
 ![image](images/web-interface-apps-yaml-validation-error.png)
 
 Further details of the apps.yaml error can be found in the [Predbat Log](output-data.md#log-view)
+
+### Editor
+
+The editor view allows you to edit apps.yaml as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
+will be disabled pending a fix.
+
+<img width="1746" height="476" alt="image" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
 
 ### Log View
 

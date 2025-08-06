@@ -2,6 +2,6 @@
     "MD007": { "indent": 4 },
     "MD013": {"line_length": 250},
     "MD029": false,
-    "MD033": { "allowed_elements": [BR]},
+    "MD033": { "allowed_elements": [BR, IMG]},
     "MD036": false
   }
