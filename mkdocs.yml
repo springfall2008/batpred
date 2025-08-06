@@ -28,7 +28,7 @@ nav:
     - todo-list.md
     - developing.md
     - rest_api.md
-    - plugin.md
+    - plugins.md
   - 'Predheat':
     - predheat.md
 markdown_extensions:
