@@ -2670,10 +2670,10 @@ function typeIsEntity(value) {
 function typeIsNumerical(value) {
     // Check if the value is a number (integer or float)
     try {
-        if (newValue.includes('.')) {
-            parseFloat(newValue);
+        if (value.includes('.')) {
+            parseFloat(value);
         } else {
-            parseInt(newValue);
+            parseInt(value);
         }
     } catch (e) {
         return false; // Not a numerical value
@@ -3359,7 +3359,7 @@ function saveNestedValue(rowId) {
         // Otherwise it's a string (currency symbol, short text, etc.)
     } else {
         // If value hasn't changed, try to detect original type
-        if (typeIsEntity(originalValue)) {
+        if (typeIsNumerical(originalValue)) {
             valueType = 'numerical';
         }
     }
@@ -3646,6 +3646,8 @@ function discardAllChanges() {
                             converted_value = int(new_value)
                 except ValueError:
                     return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {new_value}"})
+                
+                print(f"Updating {path_or_arg} to {converted_value} (type: {change_type}, nested: {is_nested}) convert_value_type: {type(converted_value)})")
 
                 # Update the value in the YAML data
                 if is_nested:
