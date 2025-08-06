@@ -115,6 +115,13 @@ Predbat validates your apps.yaml and if there are any configuration issues it di
 
 Further details of the apps.yaml error can be found in the [Predbat Log](output-data.md#log-view)
 
+### Editor
+
+The editor view allows you to edit apps.yaml as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
+will be disabled pending a fix.
+
+<img width="1746" height="476" alt="image" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
+
 ### Log View
 
 Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so the Log view provides an easy way to see and download the Predbat logfile.
