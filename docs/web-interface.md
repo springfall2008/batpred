@@ -104,7 +104,7 @@ and full explanation of Predbat's control entities and what they do can be found
 
 ### apps.yaml View
 
-The apps view allows you to look at your configuration and to modify the values within the web browser without having to edit the yaml directly. 
+The apps view allows you to look at your configuration and to modify the values within the web browser without having to edit the yaml directly.
 Click the edit button to change a value, when all the edits are complete hit save to save the apps.yaml and restart predbat.
 
 <img width="1746" height="764" alt="image" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
