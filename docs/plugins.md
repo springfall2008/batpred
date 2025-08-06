@@ -1,17 +1,19 @@
 ### 🚀 Feature: Plugin System Implementation
 
 **Core Plugin System (`plugin_system.py`)**
+
 - **Auto-discovery**: Automatically finds and loads plugins from multiple directories (`plugins/`, same directory, parent directory)
 - **Flexible plugin detection**: Supports multiple plugin patterns (classes ending in 'Plugin'', `PREDBAT_PLUGIN` marker, `initialize_plugin()` function)
 - **Lifecycle hooks**: Provides four key integration points:
-  - `on_init`: Called when plugin system initializes
-  - `on_update`: Called during each update cycle
-  - `on_shutdown`: Called during graceful shutdown
-  - `on_web_start`: Called when web interface starts
+    - `on_init`: Called when plugin system initializes
+    - `on_update`: Called during each update cycle
+    - `on_shutdown`: Called during graceful shutdown
+    - `on_web_start`: Called when web interface starts
 - **Error resilience**: Continues loading other plugins even if one fails
 - **Base class**: Optional `PredBatPlugin` base class for standardized plugin development
 
 **Integration Points**
+
 - **Main application**: Plugin system initializes after web interface startup and calls update hooks during each cycle
 - **Web interface**: New endpoint registration system allows plugins to add custom HTTP endpoints dynamically
 - **Graceful shutdown**: Ensures all plugins are properly cleaned up
@@ -27,6 +29,7 @@
 ### 🎯 Use Cases
 
 This plugin system enables:
+
 - **Custom metrics collection** (Prometheus, InfluxDB, etc.)
 - **Additional web interfaces** and dashboards
 - **Third-party integrations** without modifying core code
