@@ -4886,6 +4886,9 @@ document.addEventListener('DOMContentLoaded', function() {
             postdata = await request.post()
             apps_content = postdata.get("apps_content", "")
 
+            # Remove dos line endings
+            apps_content = apps_content.replace("\r\n", "\n").replace("\r", "\n")
+
             # Find the apps.yaml file path
             apps_yaml_path = "apps.yaml"
             # Create backup
