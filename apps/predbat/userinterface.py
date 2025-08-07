@@ -42,6 +42,7 @@ DEBUG_EXCLUDE_LIST = [
     "octopus_api_direct_task",
     "ge_cloud_direct",
     "ge_cloud_direct_task",
+    "plugin_system",
 ]
 
 
