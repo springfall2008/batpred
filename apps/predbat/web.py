@@ -412,7 +412,7 @@ class WebInterface:
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
             return text
-        
+
         debug_enable, ignore = self.base.get_ha_config("debug_enable", None)
         read_only, ignore = self.base.get_ha_config("set_read_only", None)
         mode, ignore = self.base.get_ha_config("mode", None)
@@ -440,18 +440,18 @@ class WebInterface:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
-        
+
         # Editable Mode field
         text += "<tr><td>Mode</td><td>"
         text += f'<form style="display: inline;" method="post" action="./dash">'
         text += f'<select name="mode" class="dashboard-select" onchange="this.form.submit()">'
-        for option in self.base.config_index.get('mode', {}).get("options", []):
+        for option in self.base.config_index.get("mode", {}).get("options", []):
             selected = "selected" if option == mode else ""
             text += f'<option value="{option}" {selected}>{option}</option>'
-        text += '</select></form></td></tr>\n'
-        
+        text += "</select></form></td></tr>\n"
+
         text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
-        
+
         # Editable Debug Enable field
         text += "<tr><td>Debug Enable</td><td>"
         text += f'<form style="display: inline;" method="post" action="./dash">'
@@ -459,8 +459,8 @@ class WebInterface:
         if debug_enable:
             text += f'<input type="hidden" name="debug_enable" value="off">'
         text += f'<input type="checkbox" name="debug_enable" value="on" class="dashboard-checkbox" {debug_checked} onchange="this.form.submit()">'
-        text += '</form></td></tr>\n'
-        
+        text += "</form></td></tr>\n"
+
         # Editable Set Read Only field
         text += "<tr><td>Set Read Only</td><td>"
         text += f'<form style="display: inline;" method="post" action="./dash">'
@@ -468,7 +468,7 @@ class WebInterface:
         if read_only:
             text += f'<input type="hidden" name="set_read_only" value="off">'
         text += f'<input type="checkbox" name="set_read_only" value="on" class="dashboard-checkbox" {readonly_checked} onchange="this.form.submit()">'
-        text += '</form></td></tr>\n'
+        text += "</form></td></tr>\n"
         if self.base.arg_errors:
             count_errors = len(self.base.arg_errors)
             text += "<tr><td>Config</td><td bgcolor=#ff7777>apps.yaml has {} errors</td></tr>\n".format(count_errors)
@@ -1666,7 +1666,7 @@ body.dark-mode .log-menu a.active {
         Save the Predbat config from an HTML page
         """
         postdata = await request.post()
-        
+
         # Process only the submitted form data
         for pitem in postdata:
             new_value = postdata[pitem]
@@ -1846,7 +1846,7 @@ body.dark-mode .log-menu a.active {
         try:
             # Parse form data
             data = await request.post()
-            
+
             # Handle the different types of controls
             for key, value in data.items():
                 if key == "mode":
@@ -1861,7 +1861,7 @@ body.dark-mode .log-menu a.active {
 
             # Log the update
             self.log(f"Dashboard status updated: {dict(data)}")
-            
+
         except Exception as e:
             self.log(f"ERROR: Failed to update dashboard status: {str(e)}")
 
@@ -3916,7 +3916,7 @@ function discardAllChanges() {
                     if checked:
                         text += f'<input type="hidden" name="{useid}" value="off">'
                     text += f'<input type="checkbox" name="{useid}" value="on" class="dashboard-checkbox" {checked} onchange="saveFilterValue(); this.form.submit();">'
-                    text += f'</form></td>\n'
+                    text += f"</form></td>\n"
                 elif itemtype == "input_number":
                     input_number_with_save = input_number.replace('onchange="javascript: this.form.submit();"', 'onchange="saveFilterValue(); this.form.submit();"')
                     text += "<td>{}</td>\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
