@@ -2674,7 +2674,7 @@ function typeIsNumerical(value) {
     // Check if the string value can be number (integer or float)
 
     // Check if the value is a valid number
-    if (!/^-?\d*\.?\d+$/.test(value)) {
+    if (!/^-?\\d*\\.?\\d+$/.test(value)) {
         return false; // Not a valid numerical format
     }
 
