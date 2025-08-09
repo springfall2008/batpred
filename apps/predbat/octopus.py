@@ -1357,6 +1357,11 @@ class Octopus:
         else:
             kwh = slot.get("chargeKwh", None)
 
+        # Remove empty slots
+        if kwh is None and location == "" and source == "":
+            return 0, 0, 0, source, location
+
+        # Create kWh if missing
         if kwh is None:
             kwh = org_minutes * self.car_charging_rate[0] / 60.0
 
@@ -1386,7 +1391,17 @@ class Octopus:
         for slot in octopus_slots:
             start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot)
             if kwh > 0:
-                slots_decoded.append((start_minutes, end_minutes, kwh, source, location))
+                # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap
+                for current_slot in slots_decoded:
+                    current_start, current_end, current_kwh, current_source, current_location = current_slot
+                    if (start_minutes < current_end) and (end_minutes > current_start):
+                        if start_minutes < current_start:
+                            end_minutes = current_start
+                        elif end_minutes > current_end:
+                            start_minutes = current_end
+                # Only add the slot if it has a non-zero duration
+                if start_minutes != end_minutes:
+                    slots_decoded.append((start_minutes, end_minutes, kwh, source, location))
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])

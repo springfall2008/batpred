@@ -2613,14 +2613,17 @@ function editValue(rowId) {
     const argName = row.dataset.argName;
     const originalValue = row.dataset.originalValue;
 
+    // Check if there's a pending change, use that value instead of original
+    const currentValue = pendingChanges[argName] ? pendingChanges[argName].newValue : originalValue;
+
     // Check if this is an entity string (contains dots)
-    if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown
-        showEntityDropdown(rowId, originalValue);
+        showEntityDropdown(rowId, currentValue);
     } else {
         // Show regular text input for non-entity values
         valueCell.innerHTML = `
-            <input type="text" class="edit-input" id="input_${rowId}" value="${originalValue}">
+            <input type="text" class="edit-input" id="input_${rowId}" value="${currentValue}">
             <button class="save-button" onclick="saveValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelEdit(${rowId})">Cancel</button>
         `;
@@ -2660,7 +2663,7 @@ function cancelEdit(rowId) {
 }
 
 function typeIsEntity(value) {
-    if (value.match(/^[a-zA-Z]+\\.\\S+/) && isNaN(parseFloat(value)))
+    if (value.match(/^[a-zA-Z]+\\.\\S+/) && !typeIsNumerical(value))
     {
         return true; // This looks like an entity ID (contains dots but is not a number)
     }
@@ -2668,19 +2671,36 @@ function typeIsEntity(value) {
 }
 
 function typeIsNumerical(value) {
-    // Check if the value is a number (integer or float)
+    // Check if the string value can be number (integer or float)
+
+    // Check if the value is a valid number
+    if (!/^-?\d*\.?\d+$/.test(value)) {
+        return false; // Not a valid numerical format
+    }
+
     try {
         if (value.includes('.')) {
-            parseFloat(value);
+            value = parseFloat(value);
+            console.log("Parsed as float:", value);
         } else {
-            parseInt(value);
+            value = parseInt(value);
+            console.log("Parsed as integer:", value);
         }
     } catch (e) {
         return false; // Not a numerical value
     }
-    return true; // This is a numerical value
+    return !isNaN(value); // Check if it's a valid number
 }
 
+function determineValueType(value) {
+    let valueType = 'string';
+    if (typeIsEntity(value)) {
+        valueType = 'entity';
+    } else if (typeIsNumerical(value)) {
+        valueType = 'numerical';
+    }
+    return valueType;
+}
 
 function saveValue(rowId) {
     const row = document.getElementById('row_' + rowId);
@@ -2696,21 +2716,9 @@ function saveValue(rowId) {
     }
 
     // Determine if this is an entity or numerical value
-    let valueType = 'string';
-    if (typeIsEntity(newValue)) {
-        // This looks like an entity ID (contains dots but is not a number)
-        valueType = 'entity';
-    } else {
-       if (typeIsNumerical(newValue)) {
-            valueType = 'numerical';
-       }
-    }
-
-    // Try to parse as number to validate (only for numerical values)
+    let valueType = determineValueType(originalValue);
     if (valueType === 'numerical' && newValue !== originalValue) {
-        if (typeIsNumerical(newValue)) {
-        }
-        else {
+        if (!typeIsNumerical(newValue)) {
             showMessage('Invalid number format', 'error');
             return;
         }
@@ -3303,14 +3311,17 @@ function editNestedValue(rowId) {
     const nestedPath = row.dataset.nestedPath;
     const originalValue = row.dataset.nestedOriginal;
 
+    // Check if there's a pending change, use that value instead of original
+    const currentValue = pendingChanges[nestedPath] ? pendingChanges[nestedPath].newValue : originalValue;
+
     // Check if this is an entity string (contains dots)
-    if (originalValue && originalValue.match(/^[a-zA-Z]+\\.\\S+/)) {
+    if (currentValue && currentValue.match(/^[a-zA-Z]+\\.\\S+/)) {
         // Show entity dropdown for nested values
-        showNestedEntityDropdown(rowId, originalValue);
+        showNestedEntityDropdown(rowId, currentValue);
     } else {
         // Replace the value cell content with an input field for non-entity values
         valueCell.innerHTML = `
-            : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${originalValue}">
+            : <input type="text" class="edit-input" id="nested_input_${rowId}" value="${currentValue}">
             <button class="save-button" onclick="saveNestedValue(${rowId})">Apply</button>
             <button class="cancel-button" onclick="cancelNestedEdit(${rowId})">Cancel</button>
         `;
@@ -3350,17 +3361,11 @@ function saveNestedValue(rowId) {
     }
 
     // Determine the value type and validate accordingly
-    let valueType = 'string';
-    if (newValue !== originalValue) {
-        // Try to parse as number first
-        if (typeIsNumerical(newValue)) {
-            valueType = 'numerical';
-        }
-        // Otherwise it's a string (currency symbol, short text, etc.)
-    } else {
-        // If value hasn't changed, try to detect original type
-        if (typeIsNumerical(originalValue)) {
-            valueType = 'numerical';
+    let valueType = determineValueType(originalValue);
+    if (valueType === 'numerical' && newValue !== originalValue) {
+        if (!typeIsNumerical(newValue)) {
+            showMessage('Invalid number format', 'error');
+            return;
         }
     }
 
