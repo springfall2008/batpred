@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Inverter setup - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Inverter setup";
+        var mkdocs_page_input_path = "inverter-setup.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Inverter setup</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#givenergy-with-givtcp">GivEnergy with GivTCP</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#solis-inverters">Solis Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#solax-gen4-inverters">Solax Gen4 Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#sofar-inverters">Sofar Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#huawei-inverters">Huawei Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#solaredge-inverters">SolarEdge Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#givenergy-with-ge_cloud">GivEnergy with ge_cloud</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#givenergy-with-ems">GivEnergy with EMS</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#givenergyoctopus-cloud-direct-no-home-assistant">GivEnergy/Octopus Cloud Direct - No Home Assistant</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#fox">Fox</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#lux-power">Lux Power</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#growatt-with-solar-assistant">Growatt with Solar Assistant</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#sunsynk">Sunsynk</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#sigenergy-sigenstor">Sigenergy Sigenstor</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#i-want-to-add-an-unsupported-inverter-to-predbat">I want to add an unsupported inverter to Predbat</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#inverter-control-option">Inverter control option</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#has_rest_api">has_rest_api</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#has_mqtt_api">has_mqtt_api</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#service-api">Service API</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#charge_start_service">charge_start_service</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#charge_freeze_service">charge_freeze_service</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#discharge_start_service">discharge_start_service</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#discharge_freeze_service">discharge_freeze_service</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#charge_stop_service">charge_stop_service</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#discharge_stop_service">discharge_stop_service</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#output_charge_control">output_charge_control</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#charge_control_immediate">charge_control_immediate</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#current_dp">current_dp</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#has_charge_enable_time">has_charge_enable_time</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#has_discharge_enable_time">has_discharge_enable_time</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#has_target_soc">has_target_soc</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#has_reserve_soc">has_reserve_soc</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#has_timed_pause">has_timed_pause</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#charge_time_format">charge_time_format</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#charge_time_entity_is_option">charge_time_entity_is_option</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#clock_time_format">clock_time_format</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#soc_units">soc_units</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#time_button_press">time_button_press</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#support_charge_freeze">support_charge_freeze</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#support_discharge_freeze">support_discharge_freeze</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#has_ge_inverter_mode">has_ge_inverter_mode</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#num_load_entities">num_load_entities</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#write_and_poll_sleep">write_and_poll_sleep</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#has_idle_time">has_idle_time</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#can_span_midnight">can_span_midnight</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#charge_discharge_with_rate">charge_discharge_with_rate</a>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Predbat automation API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">Inverter setup</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="inverter-setup">Inverter setup</h1>
+<p>PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other inverter models:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Name</th>
+<th style="text-align: left;">Integration</th>
+<th style="text-align: left;">Template</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><a href="#givenergy-with-givtcp">GivEnergy with GivTCP</a></td>
+<td style="text-align: left;"><a href="https://github.com/britkat1980/ha-addons">GivTCP</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml">givenergy_givtcp.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#solis-inverters">Solis Hybrid inverters</a></td>
+<td style="text-align: left;"><a href="https://github.com/wills106/homeassistant-solax-modbus">Solax Modbus integration</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml">ginlong_solis.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#solax-gen4-inverters">Solax Gen4 inverters</a></td>
+<td style="text-align: left;"><a href="https://github.com/wills106/homeassistant-solax-modbus">Solax Modbus integration</a><BR>in Modbus Power Control Mode</td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml">solax_sx4.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#sofar-inverters">Sofar inverters</a></td>
+<td style="text-align: left;"><a href="https://github.com/cmcgerty/Sofar2mqtt">Sofar MQTT integration</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml">sofar.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#huawei-inverters">Huawei inverters</a></td>
+<td style="text-align: left;"><a href="https://github.com/wlcrs/huawei_solar">Huawei Solar</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml">huawei.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#solaredge-inverters">SolarEdge inverters</a></td>
+<td style="text-align: left;"><a href="https://github.com/WillCodeForCats/solaredge-modbus-multi">Solaredge Modbus Multi</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml">solaredge.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#givenergy-with-ge_cloud">Givenergy with GE Cloud</a></td>
+<td style="text-align: left;"><a href="https://github.com/springfall2008/ge_cloud">ge_cloud</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml">givenergy_cloud.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#givenergy-with-ems">Givenergy with GE Cloud EMS</a></td>
+<td style="text-align: left;"><a href="https://github.com/springfall2008/ge_cloud">ge_cloud EMS</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml">givenergy_ems.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#givenergyoctopus-cloud-direct---no-home-assistant">Givenergy/Octopus No Home Assistant</a></td>
+<td style="text-align: left;">n/a</td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml">ge_cloud_octopus_standalone.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#sunsynk">SunSynk</a></td>
+<td style="text-align: left;"><a href="https://github.com/kellerza/sunsynk">Sunsynk</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml">sunsynk.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#fox">Fox</a></td>
+<td style="text-align: left;"><a href="https://github.com/nathanmarlor/foxess_modbus">Foxess</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml">fox.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#lux-power">LuxPower</a></td>
+<td style="text-align: left;"><a href="https://github.com/guybw/LuxPython_DEV">LuxPython</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml">luxpower.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#growatt-with-solar-assistant">Growatt with Solar Assistant</a></td>
+<td style="text-align: left;"><a href="https://solar-assistant.io/help/home-assistant/setup">Solar Assistant</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml">spa.yaml</a> <a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml">sph.yaml</a></td>
+</tr>
+<tr>
+<td style="text-align: left;"><a href="#sigenergy-sigenstor">SigEnergy</a></td>
+<td style="text-align: left;"><a href="https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration">SigEnergy</a></td>
+<td style="text-align: left;"><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml">sigenergy_sigenstor.yaml</a></td>
+</tr>
+</tbody>
+</table>
+<p>Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.</p>
+<p>NB: By default the apps.yaml template for GivTCP is installed with Predbat.
+If you are using a different inverter then you will need to copy the appropriate apps.yaml template from the above list and use it to <strong>replace the GivTCP apps.yaml</strong> - if
+you copy but don't replace the standard template then Predbat will not function correctly.</p>
+<h2 id="givenergy-with-givtcp">GivEnergy with GivTCP</h2>
+<p>It's recommended that you first watch the <a href="https://www.youtube.com/watch?v=ygD9KyciX54">Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek</a>.
+Although the video covers GivTCP v2 and v3 has been recently released, the installation and setup process are very similar.</p>
+<p>The below instructions assume you are installing GivTCP v3, with changes highlighted against GivTCP v2 as covered in the video.</p>
+<ol>
+<li>Install Mosquitto Broker add-on:</li>
+</ol>
+<ul>
+<li>Go to Settings / Add-ons / Add-on Store (bottom right)</li>
+<li>Scroll down the add-on store list, to find 'Mosquitto broker', click on the add-on, then click 'INSTALL'</li>
+<li>Once the Mosquitto broker has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on, and click 'START' to start the add-on</li>
+<li>Next, configure Mosquitto broker by going to Settings / Devices and Services / Integrations.
+Mosquitto broker should appear as a Discovered integration so click the blue 'CONFIGURE' button, then SUBMIT to complete configuring Mosquitto broker</li>
+<li>With GivTCP v3 you no longer need to create a dedicated Home Assistant user for MQTT so this part of the video can be skipped over</li>
+</ul>
+<ol start="2">
+<li>Install the GivTCP add-on:</li>
+</ol>
+<ul>
+<li>Go to Settings / Add-ons / Add-on Store</li>
+<li>Click the three dots in the top right corner, then Repositories</li>
+<li>You'll need to add the GivTCP repository as an additional custom repository so paste/type
+'<a href="https://github.com/britkat1980/ha-addons'">https://github.com/britkat1980/ha-addons</a>' into the text box and click 'Add' the 'Close'<BR>
+NB: this URL is for GivTCP v3, not v2 as covered in the video.</li>
+<li>Click the back button and then re-navigate to Settings / Add-ons / Add-on Store so Home Assistant picks up the GivTCP add-on from the custom repository</li>
+<li>Scroll down the add-on store list, to find 'GivTCP-V3', you should see the three addons; the production version, the latest beta and the latest dev versions.
+Click on the 'GivTCP' add-on, then click 'INSTALL'</li>
+<li>Once GivTCP has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on</li>
+</ul>
+<ol start="3">
+<li>Configure GivTCP:</li>
+</ol>
+<ul>
+<li>The configuration process for GivTCP in v3 has changed from that shown in the video,
+the Configuration tab is no longer used and all configuration is now done via the add-on's Web interface</li>
+<li>On the GivTCP add-on, click 'START' to start the add-on</li>
+<li>Once the add-on has started, click 'Open Web UI' or go to <a href="http://homeassistant.local:8099/">http://homeassistant.local:8099/</a>, then click 'Go to Config Page' to configure GivTCP</li>
+<li>GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct</li>
+<li>If you have a single AIO then for Predbat to be able to communicate via REST to the AIO, it MUST be the first device configured in GivTCP.  Conversely if you have a gateway and multiple AIO's then the gateway MUST be the first device in GivTCP</li>
+<li>If you have multiple inverters you may wish to change the default device prefixes that GivTCP assigns ('givtcp', 'givtcp2', 'givtcp3', etc)
+to make it easier to identify your devices within Home Assistant.<BR>
+For example, if you have a gateway and two AIOs you could use the prefixes 'GW', 'AIO-1' and 'AIO-2'.
+The prefixes should be set before you start using GivTCP in anger
+as changing the prefixes later on will result in both the old and new sensor names appearing in Home Assistant with the 'old' sensors being "unavailable".<BR>
+Note that if you do change the givtcp prefixes then you will also have to edit the apps.yaml configuration file to match,
+and change the sensor names that Predbat is looking for (by default prefixed 'givtcp_xxx') to your new sensor naming structure</li>
+<li>Click Next and Next to get to the Selfrun page, and turn on Self Run. The Self Run Loop Timer is how often GivTCP will retrieve data from your inverters - it's
+recommended that set this to a value between 20 and 60, but not less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
+and won't communicate with the GivEnergy portal and app</li>
+<li>GivTCP now auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant;
+you won't need to create a dedicated MQTT user or enter the details on the MQTT page</li>
+<li>You don't need to configure the Influx page. Tariff and Palm pages can also be skipped as these functions are done by Predbat</li>
+<li>(Optional) On the Web page, you can turn the Dashboard on to see a simple power flow diagram for your inverters (similar to the GivEnergy mobile app)</li>
+<li>On the 'Misc' page check that 'Print Raw' is set to on for added monitoring</li>
+<li>Finally, click 'Save and Restart' and GivTCP should start communicating with your inverters
+and will automatically create a set of 'givtcp_xxx' entities in Home Assistant for your inverter data, inverter controls and battery data</li>
+<li>Check the GivTCP Log tab that there aren't any errors; it should end with 'Publishing Home Assistant Discovery messages'</li>
+</ul>
+<ol start="4">
+<li>Before you start using GivTCP to control your inverter</li>
+</ol>
+<p>Verify in the GivEnergy portal settings the following inverter settings are set correctly as these are settings that Predbat doesn't control, and if not set correctly could affect your battery activity:</p>
+<ul>
+<li>"Inverter Charge Power Percentage" is set to 100 (Predbat has its own low-rate charge control you can use if you wish)</li>
+<li>"Inverter Discharge Power Percentage" is set to 100. If you do wish to set a lower discharge rate then its recommended that instead you set <a href="../apps-yaml/#inverter-control-configurations">inverter_limit_discharge in apps.yaml</a> to the rate</li>
+<li>"Battery Cutoff % Limit" is set to 4</li>
+<li>"Enable AC Charge Upper Limit' is enabled (if you have this option)</li>
+<li>That charge slot 2 (or more) are disabled (as Predbat only uses slot1)</li>
+<li>That discharge slot 2 (or more) are disabled  (as Predbat only uses slot1)</li>
+</ul>
+<ol start="5">
+<li>Specific Predbat configuration requirements for certain GivEnergy equipment</li>
+</ol>
+<p>The rest of the <a href="../install/">Predbat installation instructions</a> should now be followed,
+but its worth highlighting that there are a few specific settings that should be set for certain GivEnergy equipment.
+These settings are documented in the appropriate place in the documentation, but for ease of identification, are repeated here:</p>
+<ul>
+<li>If you are using GivTCP v3 and have an AIO or 3-phase inverter then you will need to manually set <a href="../apps-yaml/#geserial">geserial in apps.yaml</a> to your inverter serial number as the auto-detect doesn't work for this setup</li>
+<li>If you have a single AIO then control is directly to the AIO. Ensure <a href="../apps-yaml/#geserial">geserial in apps.yaml</a> is correctly picking the AIO and comment out geserial2 lines</li>
+<li>If you have multiple AIOs then all control of the AIOs is done through the Gateway so <a href="../apps-yaml/#geserial">geserial in apps.yaml</a> should be set to the Gateway serial number</li>
+<li>If you have multiple AIOs you might want to consider setting <a href="../apps-yaml/#inverter-control-configurations">inverter charge and discharge limits</a>
+unless you want to charge and discharge at the full 12kWh!</li>
+<li>If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set <a href="../apps-yaml/#battery-size-scaling">battery_scaling in apps.yaml</a>
+as the battery size is incorrectly reported to GivTCP</li>
+<li>If you have an older inverter (AC3 or Gen 1 hybrid) with firmware that has battery pause support you may need to <a href="../apps-yaml/#schedule">comment out pause start and end time controls in apps.yaml</a></li>
+<li>If you have a Gen 2, Gen 3 or AIO then you may need to set <a href="../apps-yaml/#inverter-reserve-maximum">inverter_reserve_max in apps.yaml</a> to 98.
+If you have a Gen 1 or a firmware version that allows the reserve being set to 100 then you can change the default from 98 to 100</li>
+<li>If your inverter has been wired as an EPS (Emergency Power Supply) or AIO 'whole home backup', consider setting
+<a href="../customisation/#inverter-control-options">input_number.predbat_set_reserve_min</a> to reserve some battery power for use in emergencies.</li>
+</ul>
+<p><strong>NB: GivTCP and Predbat do not currently yet work together for 3-phase inverters</strong>.
+This is being worked on by the author of GivTCP, e.g. see <a href="https://github.com/britkat1980/giv_tcp/issues/218">GivTCP issue: unable to charge or discharge 3 phase inverters with predbat</a></p>
+<h2 id="solis-inverters">Solis Inverters</h2>
+<p>To run PredBat with Solis hybrid inverters, follow the following steps:</p>
+<ol>
+<li>Install PredBat as per the <a href="../installation-summary/">Installation Summary</a></li>
+<li>Ensure that you have the Solax Modbus integration running. There are a number of entities which this integration disables by default that you
+   will need to enable via the Home Assistant GUI:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Name</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>sensor.solisx_rtc</code></td>
+<td style="text-align: left;">Real Time Clock</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>sensor.solisx_battery_power</code></td>
+<td style="text-align: left;">Battery Power</td>
+</tr>
+</tbody>
+</table>
+<ol start="4">
+<li>Instead of <code>apps.yaml</code> use <code>ginlong_solis.yaml</code> from this Repo as your starting template.
+   The majority of settings should be correct but please check.
+   You will need to un-comment the <code>template</code> line to enable it. Save it to the appropriate <a href="../apps-yaml/#appsyaml-settings">Predbat software directory</a>.
+   Set <strong>solax_modbus_new</strong> in apps.yaml to True if you have integration version 2024.03.2 or greater</li>
+<li>Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is <code>Timed Charge/Discharge</code>.
+   If you want to use the <code>Reserve</code> functionality within PredBat you will need to select <code>Backup/Reserve</code> (code 51) instead but be aware that
+   this is not fully tested. In due course, these mode settings will be incorporated into the code.</li>
+<li>Your inverter will require a "button press" triggered by Predbat to update the schedules. Some Solis inverter integrations feature a combined charge/discharge update button, in which case a single entry of:</li>
+</ol>
+<pre><code class="language-yaml">charge_discharge_update_button:
+  - button.solis_charge_discharge
+</code></pre>
+<p>is sufficient. For other configurations (for example using the "solis_fb00" plugin) where separate buttons are used for charging and discharging, provide both:</p>
+<pre><code class="language-yaml">charge_update_button:
+  - button.solis_charge
+discharge_update_button:
+  - button.solis_discharge
+</code></pre>
+<p>Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.</p>
+<h2 id="solax-gen4-inverters">Solax Gen4 Inverters</h2>
+<p>Use the template configuration from: <a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml">solax.sx4.yaml</a></p>
+<ul>
+<li>Set <strong>solax_modbus_new</strong> in apps.yaml to True if you have integration version 2024.03.2 or greater</li>
+</ul>
+<p>Please see this ticket in Github for ongoing discussion: <a href="https://github.com/springfall2008/batpred/issues/259">https://github.com/springfall2008/batpred/issues/259</a></p>
+<h2 id="sofar-inverters">Sofar Inverters</h2>
+<p>For this integration, the key elements are:</p>
+<ul>
+<li>Hardware - <a href="https://www.instructables.com/Sofar2mqtt-Remote-Control-for-Sofar-Solar-Inverter/">sofar2mqtt EPS board</a> - Relatively easy to solder and flash, or can be bought pre-made.</li>
+<li>Software - <a href="https://github.com/cmcgerty/Sofar2mqtt">Sofar MQTT integration</a> - MQTT integration</li>
+<li>Home Assistant configuration - <a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yaml">sofar_inverter.yaml</a> (in templates directory),
+defines the custom HA entities and should be added to HA's <code>configuration.yaml</code>. This is the default Sofar HA configuration with a couple of additional inputs to support battery capacity.</li>
+<li>
+<p>Predbat configuration - <a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml">sofar.yaml</a> template for Predbat (in templates directory). This file should be copied to apps.yaml</p>
+</li>
+<li>
+<p>Please note that the inverter needs to be put into "Passive Mode" for the sofar2mqtt to control the inverter.</p>
+</li>
+<li>This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%</li>
+<li>Note: You will need to change the min reserve in Home Assistant to match your minimum battery level (<strong>input_number.predbat_set_reserve_min</strong>).</li>
+</ul>
+<p>Please see this ticket in Github for ongoing discussions: <a href="https://github.com/springfall2008/batpred/issues/395">https://github.com/springfall2008/batpred/issues/395</a></p>
+<h2 id="huawei-inverters">Huawei Inverters</h2>
+<p>The discussion ticket is here: <a href="https://github.com/springfall2008/batpred/issues/684">https://github.com/springfall2008/batpred/issues/684</a></p>
+<ul>
+<li>Please copy the template apps.yaml from <a href="https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml">https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml</a> and modify them for your system</li>
+<li>Ensure you set <strong>input_number.predbat_set_reserve_min</strong> to the minimum value for your system which may be 12%</li>
+</ul>
+<h2 id="solaredge-inverters">SolarEdge Inverters</h2>
+<p>The discussion ticket is here: <a href="https://github.com/springfall2008/batpred/issues/181">https://github.com/springfall2008/batpred/issues/181</a></p>
+<ul>
+<li>Please copy the template apps.yaml from <a href="https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml">https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml</a> and modify them for your system</li>
+<li>The default entity name prefix for the integration is 'solaredge' but if you have changed this on installation then you will need to amend the apps.yaml template and the template sensors to match your new prefix</li>
+<li>Ensure that <strong>number.solaredge_i1_storage_command_timeout</strong> is set to a reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled</li>
+<li>
+<p>Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
+and <strong>switch.solaredge_i1_advanced_power_control</strong> must be on.</p>
+</li>
+<li>
+<p>For <strong>pv_today</strong>, <strong>pv_power</strong> and <strong>load_power</strong> sensors to work you need to create these as a template within your Home Assistant <code>configuration.yaml</code>.
+Please see: <a href="https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c">https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c</a>. These sensors are not critical so you can just comment it out in apps.yaml if you can't get it to work</p>
+</li>
+</ul>
+<pre><code class="language-yaml">template:
+  - sensor:
+      - name: &quot;Solar Panel Production W&quot;
+        unique_id: solar_panel_production_w
+        unit_of_measurement: &quot;W&quot;
+        icon: mdi:solar-power
+        state: &gt;
+          {% set i1_dc_power = states('sensor.solaredge_i1_dc_power') | float(0) %}
+          {% set b1_dc_power = states('sensor.solaredge_b1_dc_power') | float(0) %}
+          {% if (i1_dc_power + b1_dc_power &lt;= 0) %}
+            0
+          {% else %}
+            {{ (i1_dc_power + b1_dc_power) }}
+          {% endif %}
+        availability: &gt;
+          {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
+
+      - name: &quot;Solar House Consumption W&quot;
+        unique_id: solar_house_consumption_w
+        unit_of_measurement: &quot;W&quot;
+        icon: mdi:home
+        state: &gt;
+          {% set i1_ac_power = states('sensor.solaredge_i1_ac_power') | float(0) %}
+          {% set m1_ac_power = states('sensor.solaredge_m1_ac_power') | float(0) %}
+          {% if (i1_ac_power - m1_ac_power &lt;= 0) %}
+            0
+          {% else %}
+            {{ (i1_ac_power - m1_ac_power) }}
+          {% endif %}
+        availability: &gt;
+          {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
+
+sensor:
+  - platform: integration
+    source: sensor.solar_panel_production_w
+    method: left
+    unit_prefix: k
+    name: solar_panel_production_kwh
+</code></pre>
+<p>If you have multiple batteries connected to your SolarEdge inverter and are using the SolarEdge Modbus Multi integration, this enumerates the multiple batteries as b1, b2, b3, etc with separate entities per battery.</p>
+<p>You will need to make a number of changes to the solaredge apps.yaml, replacing the following entries:</p>
+<pre><code class="language-yaml">  battery_rate_max:
+    - sensor.calc_power_batteries_max_charge_power # maximum charge power of all the batteries
+  battery_power:
+    - sensor.calc_power_batteries_dc_power
+  soc_percent:
+    - sensor.calc_battery_all_state # average SoC of the batteries
+  soc_max:
+    - sensor.calc_battery_total_capacity # combined kWh maximum value of all the batteries
+  soc_kw:
+    - sensor.calc_battery_current_capacity
+</code></pre>
+<ul>
+<li>set charge_rate and discharge_rate to the SolarEdge inverter values, e.g. 5000</li>
+</ul>
+<p>And add the following additional template sensors to configuration.yaml:</p>
+<pre><code class="language-yaml">    - sensor:
+      # Template sensor for Max Battery Charge rate
+      # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
+      # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
+      - name: &quot;Calc Power - Batteries Max Charge Power&quot;
+        unique_id: calc_power_batteries_max_charge_power
+        unit_of_measurement: &quot;W&quot;
+        device_class: &quot;power&quot;
+        state_class: &quot;measurement&quot;
+        state: &gt;
+          {% set myB1 = float(states('sensor.solaredge_b1_max_charge_power'),0) %}
+          {% set myB2 = float(states('sensor.solaredge_b2_max_charge_power'),0) %}
+          {% set myB3 = float(states('sensor.solaredge_b3_max_charge_power'),0) %}
+          {% set myValue = ((myB1 + myB2 + myB3)) | int %}
+          {{ (myValue if (myValue) &gt; 5000 else 5000) }}
+
+      # Calculate Total Battery Power Value
+      - name: &quot;Calc Power - Batteries DC Power&quot;
+        unique_id: calc_power_batteries_dc_power
+        unit_of_measurement: &quot;W&quot;
+        device_class: &quot;power&quot;
+        state_class: &quot;measurement&quot;
+        state: &gt;
+          {% set myB1 = float(states('sensor.solaredge_b1_dc_power'),0) %}
+          {% set myB2 = float(states('sensor.solaredge_b2_dc_power'),0) %}
+          {% set myB3 = float(states('sensor.solaredge_b3_dc_power'),0) %}
+          {% set myValue = ((myB1 + myB2 + myB3)) %}
+          {{ myValue }}
+
+      # Average state of charge across the batteries
+      - name: &quot;Calc Battery All State&quot;
+        unique_id: calc_battery_all_state
+        unit_of_measurement: &quot;%&quot;
+        state: &gt;
+          {% set myB1 = float(states('sensor.solaredge_b1_state_of_energy'),0) %}
+          {% set myB2 = float(states('sensor.solaredge_b2_state_of_energy'),0) %}
+          {% set myB3 = float(states('sensor.solaredge_b3_state_of_energy'),0) %}
+          {% set myValue = ((myB1 + myB2 + myB3) / 3) | round(0) %}
+          {{ myValue }}
+
+      # Total Energy Stored in the Batteries
+      - name: &quot;Calc Battery Total Capacity&quot;
+        unique_id: calc_battery_total_capacity
+        unit_of_measurement: kWh
+        state: &gt;
+          {% set myB1 = float(states('sensor.solaredge_b1_maximum_energy'),0) %}
+          {% set myB2 = float(states('sensor.solaredge_b2_maximum_energy'),0) %}
+          {% set myB3 = float(states('sensor.solaredge_b3_maximum_energy'),0) %}
+          {% set myValue = ((myB1 + myB2 + myB3)) %}
+          {{ myValue }}
+
+      # Current Energy Stored in the Batteries
+      - name: &quot;Calc Battery Current Capacity&quot;
+        unique_id: calc_battery_current_capacity
+        unit_of_measurement: kWh
+        state: &gt;
+          {% set myValue = (float(states('sensor.calc_battery_all_state'),0) / 100) * float(states('sensor.calc_battery_total_capacity'),0) %}
+          {{ myValue }}
+</code></pre>
+<h2 id="givenergy-with-ge_cloud">GivEnergy with ge_cloud</h2>
+<p>This is an experimental system, please discuss it on the ticket: <a href="https://github.com/springfall2008/batpred/issues/905">https://github.com/springfall2008/batpred/issues/905</a></p>
+<ul>
+<li>First set up ge_cloud integration using your API key <a href="https://github.com/springfall2008/ge_cloud">https://github.com/springfall2008/ge_cloud</a></li>
+<li>Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit<ul>
+<li>Set geserial to your inverter serial number</li>
+</ul>
+</li>
+<li>Make sure that the 'discharge down to' registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled in the portal (if you have them)</li>
+</ul>
+<h2 id="givenergy-with-ems">GivEnergy with EMS</h2>
+<ul>
+<li>First set up ge_cloud integration using your API key <a href="https://github.com/springfall2008/ge_cloud">https://github.com/springfall2008/ge_cloud</a></li>
+<li>Now copy the template givenergy_ems.yaml from templates into your apps.yaml and edit<ul>
+<li>Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)</li>
+<li>Set geseriale to the EMS inverter serial number (look in HA for the entity names)</li>
+</ul>
+</li>
+<li>Turn off charge, export and discharge slots 2, 3 and 4 as Predbat will only use slot 1 - set the start and end times for these to 00:00</li>
+</ul>
+<h2 id="givenergyoctopus-cloud-direct-no-home-assistant">GivEnergy/Octopus Cloud Direct - No Home Assistant</h2>
+<ul>
+<li>Take the template and enter your GivEnergy API key directly into apps.yaml</li>
+<li>Set your Octopus API key in apps.yaml</li>
+<li>Set your Solcast API key in apps.yaml</li>
+<li>Review any other configuration settings</li>
+</ul>
+<p>Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.</p>
+<h2 id="fox">Fox</h2>
+<p><strong>Experimental</strong></p>
+<ul>
+<li>I've managed to get Batpred working on my Fox ESS inverter, connected via an Elfin EW11 modbus and using Nathan's Fox ESS Modbus tool.
+See: <a href="https://github.com/springfall2008/batpred/issues/1401">https://github.com/springfall2008/batpred/issues/1401</a></li>
+</ul>
+<p>The template is in the templates area, give it a try</p>
+<h2 id="lux-power">Lux Power</h2>
+<p>This requires the LuxPython component which integrates with your Lux Power inverter</p>
+<ul>
+<li>Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required</li>
+<li>LuxPower does not have a SoC max entity in kWh and the SoC percentage entity never reports the battery reaching 100%, so create the following template helper sensors:</li>
+</ul>
+<pre><code class="language-text">name: Lux SoC Max kWh
+template:
+  {{ (states(&quot;sensor.lux_battery_capacity_ah&quot;) |float) *
+     (states(&quot;sensor.lux_battery_voltage_live&quot;) | float) / 1000}}
+unit of measurement: kWh
+device class: Energy
+state class: Total
+</code></pre>
+<pre><code class="language-text">name: Lux Battery SoC Corrected
+template:
+  {% set soc = states('sensor.lux_battery')|int %}
+  {% set charging_stopped = states('sensor.lux_bms_limit_charge_live')|float == 0 %}
+  {% if charging_stopped and soc &gt; 97 %}
+    100
+  {% else %}
+    {{ soc }}
+  {% endif %}
+unit of measurement: %
+device class: Battery
+state class: Measurement
+</code></pre>
+<h2 id="growatt-with-solar-assistant">Growatt with Solar Assistant</h2>
+<p>You need to have a Solar Assistant installation <a href="https://solar-assistant.io">https://solar-assistant.io</a></p>
+<p>Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates into your apps.yaml and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.</p>
+<h2 id="sunsynk">Sunsynk</h2>
+<ul>
+<li>Copy the Sunsynk apps.yaml template and edit for your system.</li>
+<li>Create the following Home Assistant automations:</li>
+</ul>
+<pre><code class="language-yaml">alias: Predbat Charge / Discharge Control
+description: &quot;Turn SunSynk charge/discharge on/off to mirror Predbat&quot;
+trigger:
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_charging
+    to: &quot;on&quot;
+    id: predbat_charge_on
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_charging
+    to: &quot;off&quot;
+    id: predbat_charge_off
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_exporting
+    to: &quot;on&quot;
+    id: predbat_discharge_on
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_exporting
+    to: &quot;off&quot;
+    id: predbat_discharge_off
+condition: []
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id:
+              - predbat_charge_on
+        sequence:
+          - service: switch.turn_on
+            data: {}
+            target:
+              entity_id: switch.sunsynk_grid_charge_timezone1
+      - conditions:
+          - condition: trigger
+            id:
+              - predbat_charge_off
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id:
+                - switch.sunsynk_grid_charge_timezone1
+            data: {}
+      - conditions:
+          - condition: trigger
+            id:
+              - predbat_discharge_on
+        sequence:
+          - service: switch.turn_on
+            data: {}
+            target:
+              entity_id: switch.sunsynk_solar_sell
+      - conditions:
+          - condition: trigger
+            id:
+              - predbat_discharge_off
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id:
+                - switch.sunsynk_solar_sell
+            data: {}
+mode: single
+</code></pre>
+<pre><code class="language-yaml">alias: PredBat - Copy Charge Limit
+description: Copy Battery SOC to all timezone (time) slots
+trigger:
+  - platform: state
+    entity_id:
+      - number.sunsynk_set_soc_timezone1
+    to: null
+condition: []
+action:
+  - service: number.set_value
+    data_template:
+      entity_id:
+        - number.sunsynk_set_soc_timezone2
+        - number.sunsynk_set_soc_timezone3
+        - number.sunsynk_set_soc_timezone4
+        - number.sunsynk_set_soc_timezone5
+        - number.sunsynk_set_soc_timezone6
+      value: &quot;{{ states('number.sunsynk_set_soc_timezone1')|int(20) }}&quot;
+mode: single
+</code></pre>
+<ul>
+<li>Create the following templates sensors in your configuration.yaml:</li>
+</ul>
+<pre><code class="language-yaml">template:
+  sensor:
+    - name: &quot;sunsynk_max_battery_charge_rate&quot;
+      unit_of_measurement: &quot;w&quot;
+      state_class: measurement
+      state: &gt;
+        {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+        * states('sensor.sunsynk_battery_voltage')|float]|min }}
+
+    - name: &quot;sunsynk_max_battery_discharge_rate&quot;
+      unit_of_measurement: &quot;w&quot;
+      state_class: measurement
+      state: &gt;
+        {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+        * states('sensor.sunsynk_battery_voltage')|float]|min }}
+
+    - name: &quot;sunsynk_charge_rate_calc&quot;
+      unit_of_measurement: &quot;w&quot;
+      state_class: measurement
+      state: &gt;
+        {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+        * states('sensor.sunsynk_battery_voltage')|float]|min }}
+
+    - name: &quot;sunsynk_discharge_rate_calc&quot;
+      unit_of_measurement: &quot;w&quot;
+      state_class: measurement
+      state: &gt;
+        {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+         * states('sensor.sunsynk_battery_voltage')|float]|min }}
+</code></pre>
+<h2 id="sigenergy-sigenstor">Sigenergy Sigenstor</h2>
+<p>To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to follow the steps below:</p>
+<ul>
+<li>make sure the inverter is already integrated into Home Assistant. Here is a (<a href="https://github.com/TypQxQ/Sigenergy-Local-Modbus">repo</a>) with full integration (this is the Python version of the Sigenergy Home Assistant integration).</li>
+<li>Copy the template <a href="/templates/sigenergy_sigenstor.yaml">sigenergy_sigenstor.yaml</a> template over your apps.yaml and edit for your system.</li>
+</ul>
+<p>The following additions are needed to facilitate integration with Predbat and need to put put in Home Assistant <code>configuration.yaml</code> or a package yaml:</p>
+<pre><code class="language-yaml">    input_select:
+      predbat_requested_mode:
+        name: &quot;Predbat Requested Mode&quot;
+        options:
+          - &quot;Demand&quot;
+          - &quot;Charging&quot;
+          - &quot;Freeze Charging&quot;
+          - &quot;Discharging&quot;
+          - &quot;Freeze Discharging&quot;
+        initial: &quot;Demand&quot;
+        icon: mdi:battery-unknown
+
+    automation:
+      - id: predbat_requested_mode_action
+        alias: &quot;Predbat Requested Mode Action&quot;
+        description: &quot;Acts as a mapper for the input_select.predbat_requested_mode to the select.sigen_plant_remote_ems_control_mode&quot;
+        mode: single
+        triggers:
+          - trigger: state
+            entity_id:
+              - input_select.predbat_requested_mode
+        conditions: []
+        actions:
+          - action: select.select_option
+            metadata: {}
+            target:
+              entity_id: select.sigen_plant_remote_ems_control_mode
+            data:
+              option: &gt;
+                {% if is_state('input_select.predbat_requested_mode', &quot;Demand&quot;) %}Maximum Self Consumption
+                {% elif is_state('input_select.predbat_requested_mode', &quot;Charging&quot;) %}Command Charging (PV First)
+                {% elif is_state('input_select.predbat_requested_mode', &quot;Freeze Charging&quot;) %}Command Charging (PV First)
+                {% elif is_state('input_select.predbat_requested_mode', &quot;Discharging&quot;) %}Command Discharging (PV First)
+                {% elif is_state('input_select.predbat_requested_mode', &quot;Freeze Discharging&quot;) %}Command Discharging (ESS First)
+                {% endif %}
+          - choose:
+              # Set charging limit to 0 when requested mode is Freeze Charging
+              - conditions:
+                  - condition: state
+                    entity_id: input_select.predbat_requested_mode
+                    state: &quot;Freeze Charging&quot;
+                sequence:
+                  - service: number.set_value
+                    data_template:
+                      entity_id: number.sigen_plant_ess_max_charging_limit
+                      value: 0
+
+              # Set discharging limit to 0 when requested mode is Freeze Discharging
+              - conditions:
+                  - condition: state
+                    entity_id: input_select.predbat_requested_mode
+                    state: &quot;Freeze Discharging&quot;
+                sequence:
+                  - service: number.set_value
+                    data_template:
+                      entity_id: number.sigen_plant_ess_max_discharging_limit
+                      value: 0
+
+              # If neither of the above conditions are met, set the limits to the input numbers
+              - conditions:
+                  - condition: not
+                    conditions:
+                      - condition: state
+                        entity_id: input_select.predbat_requested_mode
+                        state: &quot;Freeze Charging&quot;
+                      - condition: state
+                        entity_id: input_select.predbat_requested_mode
+                        state: &quot;Freeze Discharging&quot;
+                sequence:
+                  - service: number.set_value
+                    data_template:
+                      entity_id: number.sigen_plant_ess_max_charging_limit
+                      value: &quot;{{ [(states('input_number.charge_rate') | float / 1000) | round(2), states('sensor.sigen_inverter_ess_rated_charge_power') | float] | min}}&quot;
+                  - service: number.set_value
+                    data_template:
+                      entity_id: number.sigen_plant_ess_max_discharging_limit
+                      value: &quot;{{ [(states('input_number.discharge_rate') | float / 1000) | round(2), states('sensor.sigen_inverter_ess_rated_discharge_power') | float] | min}}&quot;
+
+      - id: &quot;automation_sigen_ess_max_charging_limit_input_number_action&quot;
+        alias: &quot;Predbat max charging limit action&quot;
+        description: &quot;Mapper from input_number.charge_rate to number.sigen_plant_ess_max_charging_limit&quot;
+        triggers:
+          - trigger: state
+            entity_id: input_number.charge_rate
+        action:
+          - action: number.set_value
+            target:
+              entity_id: number.sigen_plant_ess_max_charging_limit
+            data:
+              value: &quot;{{ (states('input_number.charge_rate')| float / 1000) | round(2) }}&quot;
+        mode: single
+
+      - id: &quot;automation_sigen_ess_max_discharging_limit_input_number_action&quot;
+        alias: &quot;Predbat max discharging limit action&quot;
+        description: &quot;Mapper from input_number.discharge_rate to number.sigen_plant_ess_max_discharging_limit&quot;
+        triggers:
+          - trigger: state
+            entity_id: input_number.discharge_rate
+        action:
+          - action: number.set_value
+            target:
+              entity_id: number.sigen_plant_ess_max_discharging_limit
+            data:
+              value: &quot;{{ (states('input_number.discharge_rate')| float / 1000) | round(2) | int }}&quot;
+        mode: single
+
+    input_number:
+      charge_rate:
+        name: Battery charge rate
+        initial: 6950
+        min: 0
+        max: 20000
+        step: 1
+        mode: box
+        unit_of_measurement: W
+
+      discharge_rate:
+        name: Battery discharge rate
+        initial: 8000
+        min: 0
+        max: 20000
+        step: 1
+        mode: box
+        unit_of_measurement: W
+</code></pre>
+<h2 id="i-want-to-add-an-unsupported-inverter-to-predbat">I want to add an unsupported inverter to Predbat</h2>
+<ul>
+<li>First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have</li>
+<li>Create a GitHub ticket for support and add what you know to the ticket</li>
+<li>Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter</li>
+<li>You can create a new inverter type in apps.yaml and change the options as to which controls it has</li>
+<li>Set <a href="../apps-yaml/#inverter_type">inverter_type in apps.yaml</a> to match the custom inverter definition ('MINE' in the example below)</li>
+<li>The easy way to integrate using Home Assistant services to start charges and discharges, edit the template below:</li>
+</ul>
+<pre><code class="language-yaml">  inverter_type: MINE
+  inverter:
+    name: &quot;My Shiny new Inverter&quot;
+    has_rest_api: False
+    has_mqtt_api: False
+    output_charge_control: &quot;power&quot;
+    has_charge_enable_time: False
+    has_discharge_enable_time: False
+    has_target_soc: False
+    has_reserve_soc: False
+    charge_time_format: &quot;S&quot;
+    charge_time_entity_is_option: False
+    soc_units: &quot;%&quot;
+    num_load_entities: 1
+    has_ge_inverter_mode&quot;: False
+    time_button_press: False
+    clock_time_format: &quot;%Y-%m-%d %H:%M:%S&quot;
+    write_and_poll_sleep: 2
+    has_time_window: False
+    support_charge_freeze: False
+    support_discharge_freeze&quot;: False
+
+  # Services to control charging/discharging
+  charge_start_service:
+    service: select.select_option
+    entity_id: &quot;select.solaredge_i1_storage_command_mode&quot;
+    option: &quot;Charge from Solar Power and Grid&quot;
+  charge_stop_service:
+    service: select.select_option
+    entity_id: &quot;select.solaredge_i1_storage_command_mode&quot;
+    option: &quot;Charge from Solar Power&quot;
+  discharge_start_service:
+    service: select.select_option
+    entity_id: &quot;select.solaredge_i1_storage_command_mode&quot;
+    option: &quot;Maximize Self Consumption&quot;
+
+</code></pre>
+<h2 id="inverter-control-option">Inverter control option</h2>
+<p>The following options are supported per inverter:</p>
+<h3 id="has_rest_api">has_rest_api</h3>
+<p>When True the REST API will be used to fetch data/control the inverter. This is currently only for GivEnergy inverters with GivTCP and <strong>givtcp_rest</strong> must be set in apps.yaml</p>
+<h3 id="has_mqtt_api">has_mqtt_api</h3>
+<p>When True the MQTT API to Home Assistant will be used to issue control messages for the inverter</p>
+<p>The MQTT/publish service is used with the topic as defined by <strong>mqtt_topic</strong> in apps.yaml</p>
+<p>Messages will be sent through these controls:</p>
+<p>Values that are updated:</p>
+<ul>
+<li><strong>topic</strong>/set/reserve  - payload=reserve</li>
+<li><strong>topic</strong>/set/charge_rate - payload=new_rate</li>
+<li><strong>topic</strong>/set/discharge_rate - payload=new_rate</li>
+<li><strong>topic</strong>/set/target_soc - payload=target_soc</li>
+</ul>
+<p>These three change between battery charge/discharge and auto (idle) mode:</p>
+<ul>
+<li><strong>topic</strong>/set/charge - payload=charge_rate</li>
+<li><strong>topic</strong>/set/discharge - payload=discharge_rate</li>
+<li><strong>topic</strong>/set/auto - payload=true</li>
+</ul>
+<h3 id="service-api">Service API</h3>
+<p>When True a Home Assistant service will be used to issue control messages for the inverter</p>
+<p>For each service you wish to use it must be defined in apps.yaml.</p>
+<p>There are two ways to define a service, the basic mode:</p>
+<pre><code class="language-yaml">  charge_start_service: my_service_name_charge
+</code></pre>
+<p>Will call my_service_name_charge for the charge start service.</p>
+<p>Or the custom method:</p>
+<pre><code class="language-yaml">  charge_start_service:
+    - service: my_charge_start_service
+      device_id: &quot;{device_id}&quot;
+      power: &quot;{power}&quot;
+      soc: &quot;{target_soc}&quot;
+      charge_start_time: &quot;{charge_start_time}&quot;
+      charge_end_time: &quot;{charge_end_time}&quot;
+</code></pre>
+<p>Here you can define all the values passed to the service and use the default values from the template or define your own.</p>
+<p>You can also call more than one service e.g:</p>
+<pre><code class="language-yaml">  charge_start_service:
+    - service: my_charge_start_service
+      device_id: &quot;{device_id}&quot;
+      power: &quot;{power}&quot;
+      soc: &quot;{target_soc}&quot;
+    - service: switch.turn_off
+      entity_id: switch.tsunami_charger
+</code></pre>
+<p>Note: By default the service will only be called once until things change, e.g. <strong>charge_start_service</strong> will be called once and then won't be called again until <strong>charge_stop_service</strong> stops the charge.
+If however, you want the service to be called on each Predbat run then you should set <strong>repeat</strong> to True for the given service e.g:</p>
+<pre><code class="language-yaml">  charge_start_service:
+    - service: my_charge_start_service
+      device_id: &quot;{device_id}&quot;
+      power: &quot;{power}&quot;
+      soc: &quot;{target_soc}&quot;
+      repeat: True
+</code></pre>
+<h4 id="charge_start_service">charge_start_service</h4>
+<p>Called to start a charge</p>
+<p>The default options passed in are:</p>
+<ul>
+<li>device_id - as defined in apps.yaml by <strong>device_id</strong></li>
+<li>target_soc - The SOC to charge to</li>
+<li>power - The charge power to use</li>
+<li>charge_start_time - Start time for the charge</li>
+<li>charge_end_time - End time for the charge</li>
+</ul>
+<h4 id="charge_freeze_service">charge_freeze_service</h4>
+<p>If defined will be called for freeze charge, otherwise, charge_start_service is used for freeze charge also.</p>
+<h4 id="discharge_start_service">discharge_start_service</h4>
+<p>Called to start a discharge</p>
+<p>The default options passed in are:</p>
+<ul>
+<li>device_id - as defined in apps.yaml by <strong>device_id</strong></li>
+<li>target_soc - The SOC to discharge to</li>
+<li>power - The discharge power to use</li>
+</ul>
+<h4 id="discharge_freeze_service">discharge_freeze_service</h4>
+<p>If defined will be called for Discharge freeze, otherwise, discharge_start_service is used for freeze discharge also.</p>
+<h4 id="charge_stop_service">charge_stop_service</h4>
+<p>Called to stop a charge</p>
+<p>device_id - as defined in apps.yaml by <strong>device_id</strong></p>
+<h4 id="discharge_stop_service">discharge_stop_service</h4>
+<p>Called to stop a discharge, if not set then <strong>charge_stop_service</strong> will be used instead</p>
+<ul>
+<li>device_id - as defined in apps.yaml by <strong>device_id</strong></li>
+</ul>
+<h3 id="output_charge_control">output_charge_control</h3>
+<p>Set to power, current or none</p>
+<p>When power the inverter has a <strong>charge_rate</strong> and <strong>discharge_rate</strong> setting in watts defined in apps.yaml</p>
+<p>When current the inverter has  <strong>timed_charge_current</strong> and <strong>timed_discharge_current</strong> setting in amps defined in apps.yaml</p>
+<h3 id="charge_control_immediate">charge_control_immediate</h3>
+<p>When True the inverter uses <strong>timed_charge_current</strong> and <strong>timed_discharge_current</strong> to control charging and discharging by setting current levels directly, instead of following a time-based plan.</p>
+<h3 id="current_dp">current_dp</h3>
+<p>Sets the number of decimal places when setting the current in Amps, which should be 0 or 1</p>
+<h3 id="has_charge_enable_time">has_charge_enable_time</h3>
+<p>When True the inverter has a setting defined in apps.yaml called <strong>scheduled_charge_enable</strong> when can be used to enable/disable timed charging.</p>
+<h3 id="has_discharge_enable_time">has_discharge_enable_time</h3>
+<p>When True the inverter has a setting defined in apps.yaml called <strong>scheduled_discharge_enable</strong> when can be used to enable/disable timed discharging.</p>
+<h3 id="has_target_soc">has_target_soc</h3>
+<p>When True the inverter has a target charge SoC setting in apps.yaml called <strong>charge_limit</strong>.
+When False charging must be turned on and off by Predbat rather than the inverter doing it based on the target SoC %.</p>
+<h3 id="has_reserve_soc">has_reserve_soc</h3>
+<p>When True the inverter has a discharge reserve SoC setting in apps.yaml called <strong>reserve</strong> which is the target % to discharge the battery down to.
+When False discharging must be turned on and off by Predbat rather than the inverter doing it based on discharge Soc %.</p>
+<h3 id="has_timed_pause">has_timed_pause</h3>
+<p>When True the inverter has a setting in apps.yaml called <strong>pause_mode</strong> and settings <strong>pause_start_time</strong> and <strong>pause_end_time</strong> which can be used to pause the inverter from
+charging and discharging the battery - this is for GivEnergy systems only right now.</p>
+<h3 id="charge_time_format">charge_time_format</h3>
+<p>When set to "HH:MM:SS" the inverter has:</p>
+<p><strong>charge_start_time</strong> <strong>charge_end_time</strong>
+<strong>discharge_start_time</strong> <strong>discharge_end_time</strong></p>
+<p>Which are option selectors in the format HH:MM:SS (e.g. 12:23:00) where seconds are always 00.</p>
+<p>When set to "H M" the inverter has:</p>
+<p><strong>charge_start_hour</strong> <strong>charge_end_hour</strong> <strong>charge_start_minute</strong> <strong>charge_end_minute</strong>
+<strong>discharge_start_hour</strong> <strong>discharge_end_hour</strong> <strong>discharge_start_minute</strong> <strong>discharge_end_minute</strong></p>
+<p>Settings in apps.yaml which can be used to set the start and end times of charges and discharges</p>
+<h3 id="charge_time_entity_is_option">charge_time_entity_is_option</h3>
+<p>When True <strong>charge_start_time</strong> <strong>charge_end_time</strong> <strong>discharge_start_time</strong> and <strong>discharge_end_time</strong> are all Options, when false they are number values.</p>
+<h3 id="clock_time_format">clock_time_format</h3>
+<p>Defines the time format of the inverter clock setting <strong>inverter_time</strong> in apps.yaml</p>
+<h3 id="soc_units">soc_units</h3>
+<p>Defines the units of the SOC setting (currently not used)</p>
+<h3 id="time_button_press">time_button_press</h3>
+<p>When true the inverter has a button press which is needed to update the inverter registers from the Home Assistant values.</p>
+<p>The apps.yaml setting <strong>charge_discharge_update_button</strong> is the entity name of the button that must be pressed and polled until it updates after each inverter register change.</p>
+<h3 id="support_charge_freeze">support_charge_freeze</h3>
+<p>When True the inverter supports charge freeze modes</p>
+<h3 id="support_discharge_freeze">support_discharge_freeze</h3>
+<p>When True the inverter supports discharge freeze modes</p>
+<h3 id="has_ge_inverter_mode">has_ge_inverter_mode</h3>
+<p>When True the inverter as the GivEnergy inverter modes (ECO, Timed Export etc).</p>
+<h3 id="num_load_entities">num_load_entities</h3>
+<p>Sets the number of <strong>load_power_n</strong> settings in apps.yaml are present in addition to <strong>load_power</strong> (the default)</p>
+<h3 id="write_and_poll_sleep">write_and_poll_sleep</h3>
+<p>Sets the number of seconds between polls of inverter settings</p>
+<h3 id="has_idle_time">has_idle_time</h3>
+<p>When True the inverter has an idle time register which must be set to the start and end times for ECO mode (GivEnergy EMS)</p>
+<h3 id="can_span_midnight">can_span_midnight</h3>
+<p>When True start and end times for charge and discharge can span midnight e.g. 23:00:00 - 01:00:00 is a 2-hour slot.</p>
+<h3 id="charge_discharge_with_rate">charge_discharge_with_rate</h3>
+<p>When True when charging discharge rate must be 0 and visa-versa. When false the rate does not have to change.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../install/" class="btn btn-neutral float-left" title="Install details"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../energy-rates/" class="btn btn-neutral float-right" title="Energy rates">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../install/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../energy-rates/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

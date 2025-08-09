@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Predbat Plan card - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Predbat Plan card";
+        var mkdocs_page_input_path = "predbat-plan-card.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Predbat automation API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Predbat Plan card</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#displaying-the-predbat-plan">Displaying the Predbat plan</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#understanding-the-predbat-plan">Understanding the Predbat plan</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#debug-mode-for-predbat-plan">Debug mode for Predbat Plan</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#customising-and-reformatting-the-predbat-plan">Customising and Reformatting the Predbat Plan</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#pv-prediction-summary">PV Prediction summary</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Viewing Predbat data</li>
+      <li class="breadcrumb-item active">Predbat Plan card</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="predbat-plan-card">Predbat Plan card</h1>
+<p>Predbat can create its own plan card which can be added to your Home Assistant dashboard.</p>
+<p>At a glance, the Predbat plan shows you the plan going forward for home demand, EV charging, iBoost and your battery, and any actions that Predbat is planning to take.</p>
+<h2 id="displaying-the-predbat-plan">Displaying the Predbat plan</h2>
+<p>Firstly install the <a href="https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card">HTML template card</a> in HACS:</p>
+<ul>
+<li>In HACS, click on Frontend</li>
+<li>Click the blue <em>Explore and download repositories</em> button and type 'HTML'</li>
+<li>Click on 'HTML Jinja2 Template card', then click the blue 'Download', then 'Download' again to install it</li>
+<li>When prompted to 'reload your browser', click 'Reload'</li>
+</ul>
+<p><em>NB: Do not install the very similarly named 'Lovelace Html card', it won't work!  You must install the 'HTML Jinja2 Template card'.</em></p>
+<p>Next, on a Home Assistant dashboard, click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete the template card configuration and copy/paste the following to display the Predbat plan:</p>
+<pre><code class="language-yaml">type: custom:html-template-card
+title: Predbat plan
+ignore_line_breaks: true
+content: |
+  {{ state_attr('predbat.plan_html', 'html') }}
+</code></pre>
+<p>You should see something like this:</p>
+<p><img alt="image" src="../images/predbat-html-plan.png" /></p>
+<p>If you get an error 'Custom element doesn't exist: html-template-card' then you've not installed the Jinja2 template card correctly from HACS.</p>
+<h2 id="understanding-the-predbat-plan">Understanding the Predbat plan</h2>
+<p>For every half-hour period (slot) that Predbat has planned for (the <em>forecast_hours</em> setting in <code>apps.yaml</code>), the Predbat plan shows:</p>
+<ul>
+<li>The import rate in pence for that slot</li>
+<li>The export rate in pence for that slot</li>
+<li>What 'status' Predbat will be in (e.g. Charging, Discharging)</li>
+<li>Any limit applied (e.g. charging to 70%)</li>
+<li>Forecast Solar generation (from Solcast)</li>
+<li>Forecast house load (from your historical load data)</li>
+<li>Planned car charging (if car charging is configured in Predbat)</li>
+<li>Planned iBoost immersion heating (if iBoost is configured)</li>
+<li>What the battery SoC will be at the start of the 30-minute slot</li>
+<li>The forecast cost for the half-hour slot</li>
+<li>A running total cost</li>
+<li>Forecast CO2 Carbon intensity and Carbon footprint emitted by the grid's electricity generation, and the direction of travel over the slot (if carbon forecasting is enabled)</li>
+</ul>
+<p>Rate symbols (import and export):</p>
+<ul>
+<li>? &#8518; - Rate that has been modified based on <strong>input_number.predbat_metric_future_rate_offset_import</strong> or <strong>input_number.predbat_metric_future_rate_offset_export</strong></li>
+<li>? &#x2696; - Rate that has been estimated using future rate estimation data (e.g. Nordpool)</li>
+<li>&#61; - Rate that has been overridden by the user's apps.yaml</li>
+<li>&#177; - Rate that has been adjusted with a rate offset in the user's apps.yaml</li>
+<li>&dollar; - Rate that has been adjusted for an Octopus Saving session</li>
+<li>? - Rate that has not yet been defined and the previous day's data was used instead</li>
+</ul>
+<p>Battery SoC symbols:</p>
+<ul>
+<li>&rarr; - Current SoC expected to remain level</li>
+<li>&searr; - Current SoC expected to fall</li>
+<li>&nearr; - Current SoC expected to rise</li>
+</ul>
+<p>Cost symbols:</p>
+<ul>
+<li>&rarr; - Current cost expected to remain level</li>
+<li>&searr; - Current cost expected to fall (due to export)</li>
+<li>&nearr; - Current cost expected to rise (due to import or standing charge)</li>
+</ul>
+<p>Explaining each column in the Predbat plan in more detail:</p>
+<ul>
+<li>
+<p><strong>Time</strong> - Predbat plans your home, solar and battery load in 30-minute slots, on the :00 and :30 minutes past each hour.
+The Predbat slots are therefore aligned to Octopus Agile slots or rate change times on any other tariff.</p>
+</li>
+<li>
+<p><strong>Import</strong> - The import rate for that time slot in pence.<BR>
+The rate will be coloured Blue if the price is zero pence or negative,
+Green if the rate is less than the import rate threshold,
+Red if the rate is more than 1.5 times the import rate threshold,
+and Yellow if the rate is between 1 and 1.5 times the import rate threshold.<BR>
+See the <a href="../customisation/#battery-margins-and-metrics-options">Predbat customisation guide</a> for an explanation of the import rate threshold (and overriding it), but in essence
+Predbat will consider blue and green-coloured slots as preferred candidates for importing, yellow and red (higher rates) will not.<BR>
+If battery charging is planned by Predbat for a particular slot, the import rate for that slot will be highlighted in bold text.</p>
+</li>
+<li>
+<p><strong>Export</strong> - Similarly, the export rate for that time slot in pence.<BR>
+The rate will be coloured White if the price is less than the export rate threshold,
+Yellow if it is more than the export rate threshold,
+and pale Red if the rate is more than 1.5 times the export rate threshold.<BR>
+So in essence, Yellow and Red coloured export rates will be considered as priorities for exporting, and White will not.<BR>
+If battery discharging is planned by Predbat for a particular slot, the export rate for that slot will be highlighted in bold text.</p>
+</li>
+<li>
+<p><strong>State</strong> - <a href="../what-does-predbat-do/#predbat-status">Predbat's status</a> controls whether the battery is charging, discharging to support house load (Demand mode),
+discharging and force exported, or being held at the current level.<BR>
+Alongside the state is an arrow which points upwards if the battery SoC is increasing (i.e. charging), to the right if the battery SoC remains constant,
+or downwards if the battery SoC is decreasing (i.e. discharging).<BR>
+If Predbat's plan has been over-ridden and the <a href="../customisation/#manual-control">slot has been manually controlled</a> to be a Charging slot, Discharging or Idle,
+then alongside the State and battery SoC arrow will be an upside down 'F' indicating it is a 'Forced' activity.<BR>
+The slot will be coloured Green for Charging, Yellow for Discharging, Silver Grey for Freeze Charging, Dark Grey for Freeze Discharging, Pale Blue for Hold Charging or White for Idle.<BR>
+NB: The Predbat plan is shown in 30-minute time slots but Predbat actually plans battery activity in 5-minute segments within the 30-minute slot.
+If the Home Assistant control <em>switch.predbat_calculate_export_oncharge</em> is set to True,
+then within a 30-minute slot (and depending on import and export rates), Predbat could potentially plan for there to be both
+charging and discharging activity - if Predbat plans this, the state will show as both Charging and Exporting in the same slot.</p>
+</li>
+<li>
+<p><strong>Limit %</strong> - Alongside any battery activity (charging, discharging, etc) there will be a SoC limit. This limit is what the SoC is planned to be at the end of the 30-minute time slot.
+e.g. 'Charge&nearr; 70%' is charge to 70% SoC, and 'Exp&searr; 4%' is force exporting the battery to the 4% reserve level.</p>
+</li>
+<li>
+<p><strong>PV kWh</strong> - The predicted solar forecast for the half-hour slot, estimated from the <a href="../apps-yaml/#solcast-solar-forecast">Solcast Forecast</a>.<BR>
+If the PV forecast is above 0.2kWh for the slot it will be coloured Melon Red with a little sun symbol, above 0.1kWh it will be Yellow with a sun symbol,
+otherwise, it will be Silver-Grey.</p>
+</li>
+<li>
+<p><strong>Load kWh</strong> - The predicted house load for the half-hour slot, estimated as a weighted average of the number of <a href="../apps-yaml/#basics">days_previous</a>
+<a href="../apps-yaml/#historical-data">Historical data</a> from your inverter or other house load sensor.<BR>
+If the load forecast is 0.5kWh or above for the slot it will be coloured Orangey-Red, from 0.25kWh to 0.5 it will be coloured Yellow,
+above 0 to 0.25, it will be Light Green, and if zero, it will be coloured White.</p>
+</li>
+<li>
+<p><strong>Clip kWh</strong> - (Only shown if <strong>switch.predbat_plan_debug</strong> is turned on), shows the total amount of energy predicted to be lost due to clipping either due to your inverter not being able to handle all the PV that
+has been generated (due to lack of AC capacity or DC charging), or due to an export limit being set.<BR>
+If the amount of solar clipping predicted to occur in that slot is more than 0.1kWh then the kWh will be coloured Orange, if its more than 0.01kWh it will be coloured Yellow, otherwise, it will be White.</p>
+</li>
+<li>
+<p><strong>Xload kWh</strong> - (Only shown if <strong>switch.predbat_plan_debug</strong> is turned on), shows the load that was added externally to Predbat with <strong>load_forecast</strong> settings, this might come from
+PredAI, PredHeat or other sources depending on your configuration.</p>
+</li>
+<li>
+<p><strong>Car kWh</strong> - The total predicted car charging for the half-hour slot. This column will only be shown if <em>num_cars</em> in <code>apps.yaml</code> is 1 or more.<BR>
+If the car is planned to be charged in that slot then the kWh will be coloured Yellow, otherwise, it will be White.</p>
+</li>
+<li>
+<p><strong>iBoost kWh</strong> - The energy planned for solar diverter immersion heating such as iBoost or MyEnergi Eddi.
+This column will only be shown if <em>switch.predbat_iboost_enable</em> is set to True.<BR>
+If the solar diverter is planned to be on in that slot then the kWh will be coloured Yellow, otherwise it will be White.</p>
+</li>
+<li>
+<p><strong>SoC %</strong> - The estimate of battery State of Charge percentage <em>at the start</em> of the time slot
+together with an arrow pointing up, to the right or downwards to indicate whether the battery SoC is increasing, remaining constant or decreasing during the time slot.<BR>
+The 'SoC %' can be read in conjunction with the 'Limit %'; the SoC column gives the estimated SoC at the beginning of the slot,
+the Limit column the estimated SoC at the end of the slot.<BR>
+If the SoC is 50% or greater it will be coloured Green, 20% or greater, Yellow, and if less than 20%, Orangey-Red.</p>
+</li>
+<li>
+<p><strong>Cost</strong> - The estimated cost in pence for the time slot together with an arrow indicating whether the total cost today is increasing, staying flat or decreasing.<BR>
+If the cost for the slot is 10p or more it will be coloured Orangey-Red, &frac12;p or more it will be coloured Yellow, -&frac12;p or less it will be coloured Green,
+otherwise, it will be coloured White.</p>
+</li>
+<li>
+<p><strong>Total</strong> - The total cumulative cost so far for 'today' at the start of the slot, including the standing charge.
+At midnight tonight this cumulative cost will be reset to the daily standing charge (or zero if metric_standing_charge wasn't set in <code>apps.yaml</code>).<BR>
+Due to the way Predbat works, the total cost is always reported (in Predbat output entities, this HTML plan, in the <a href="../creating-charts/">Apex charts</a>, etc)
+as starting from midnight today and adding on from there.<BR>
+Looking at the sample Predbat plan above as an example, the plan starts at 10:00 with the total cost today already being £3.13. The house load is then fully met through the day and evening
+by the battery (with some PV top-up charging) so the total cost remains constant at £3.13.<BR>
+In the 22:30 and 23:00 slots there is a little grid import, and then at 23:30 there's grid import and the battery starts to be charged.
+As you can see the Total continues to increase in the plan past midnight with each Total being
+the Total from the preceding slot plus the Cost estimate from the preceding slot - a reminder that Total gives the running total <em>at the start</em> of the slot.<BR>
+The total cost is always coloured White.</p>
+</li>
+<li>
+<p><strong>CO2 (g/kWh)</strong> - The estimated CO2 Carbon intensity emitted by the grid when generating electricity at the start of the 30-minute slot.
+This column will only be shown if <em>switch.predbat_carbon_enable</em> is set to True.<BR>
+The CO2 value will be coloured according to how high the carbon footprint intensity is: greater or equal to 450g/kWh it will be deep red; greater or equal to 290, dark red;
+then golden orange from 200 upwards; yellow from 120; green from 40 and light green if less than 40.</p>
+</li>
+<li>
+<p><strong>CO2 (kg)</strong> - The estimated CO2 Carbon footprint that the grid will emit generating electricity at the start of the slot and the direction of travel over the slot.
+This column will only be shown if <em>switch.predbat_carbon_enable</em> is set to True.<BR>
+The carbon amount in kg will be coloured according to the direction of travel over the slot; if the carbon value rises by 10kg or more it will be orange with an upward arrow;
+if falling by 10kg or more it will be green with a downwards arrow, and in the middle, white with a horizontal arrow.</p>
+</li>
+</ul>
+<h2 id="debug-mode-for-predbat-plan">Debug mode for Predbat Plan</h2>
+<p>If <a href="../customisation/#expert-mode">Predbat expert mode</a> is turned on then a number of additional controls and switches are made available in Home Assistant.</p>
+<p>If <strong>switch.predbat_plan_debug</strong> is then turned on then the Predbat plan shows additional 'debugging' information for the import rate, export rate, load and PV columns, and the clip kWh column described above.</p>
+<p>The Predbat plan will now look like this with plan_debug turned on:</p>
+<p><img alt="IMAGE" src="../images/predbat-html-debug-plan.png" /></p>
+<p>Import and Export rates will now show the actual rate (according to how you have set up the <a href="../energy-rates/">energy rates</a>) and also in brackets the <em>effective</em> import or export rate.</p>
+<p>The <em>effective rate</em> takes into account <a href="../customisation/#battery-loss-options">battery and inverter energy losses</a> for charging and discharging and converting from DC to AC and vice-versa.
+Note that the Cost and Total columns are always based on the actual Import and Export rate.</p>
+<p>Using the above debug plan as an example:</p>
+<ul>
+<li>
+<p>At 22:30 the battery is being charged. The actual import rate is 14.07p, but after conversion losses to store the grid AC into the DC battery,
+the energy being put into the battery has effectively cost 14.81p - for every 1kWh of AC grid import you don't get 1kWh of DC stored in the battery,
+so 1kWh of battery charge has effectively cost slightly more than the import rate.</p>
+</li>
+<li>
+<p>At 00:30 the battery is being force exported and excess energy (above the estimated house load of 0.47kWh) will be exported.
+The actual export rate is 18.22p but after losses converting the stored DC battery charge into AC to supply the home and export it,
+the energy being exported has effectively only earned 17.31p - it will take slightly more than 1kWh of stored DC battery charge to get 1kWh of AC to use or export
+so each discharged and exported kWh earns slightly less.</p>
+</li>
+<li>
+<p>Putting these together, at 00:00, the effective import rate (after losses) is 13.93p, the effective export rate is 17.31p,
+so even though battery and inverter conversion losses have been incurred, there is still a 3.38p profit per kWh and
+Predbat plans to charge and then export the battery in the same slot to generate that profit.</p>
+</li>
+</ul>
+<p>With debug mode turned on, the Load column shows the predicted load in kWh for the half-hour slot and in brackets the modelled load variance value using the <a href="../customisation/#cloud-coverage-and-load-variance">load variance model</a>.</p>
+<p>The PV column in debug mode changes shows the predicted PV generation in kWh for the half-hour slot and the Solcast 10% forecast in brackets.
+Note that Predbat's forecasted PV generation already contains a <strong>input_number.predbat_pv_metric10_weight</strong> <a href="../customisation/#scaling-and-weight-options">weighted value of the Solcast 10% forecast</a>.</p>
+<p>Note that the values in brackets in the load and PV columns are each only shown if they are non-zero.</p>
+<p>The debug mode on the Predbat plan can be quite useful to understand from the import and export rates <em>after conversion losses</em>, why Predbat plans to charge or force export the battery.
+There's a further <a href="../faq/#the-plan-doesnt-charge-or-discharge-when-i-expect-it-to">explanation of the Predbat forecast and plan</a> in the FAQ's.</p>
+<h2 id="customising-and-reformatting-the-predbat-plan">Customising and Reformatting the Predbat Plan</h2>
+<p>An additional independent front-end Home Assistant component the 'Predbat Table Card' is available on HACS that gives a number of additional customisation and configuration options
+to tailor how the Predbat plan looks and is highly recommended if you want to change the standard plan look and feel:</p>
+<ul>
+<li>Change the sequence of columns and which columns are shown in the plan</li>
+<li>Restyle the columns, or retain the Predbat original colour scheme</li>
+<li>Apply custom light/dark themes</li>
+<li>Show the weather forecast alongside the plan</li>
+<li>Display different columns for different screen widths, e.g. less detail on a phone, more on a tablet/PC</li>
+</ul>
+<p><img alt="image" src="https://private-user-images.githubusercontent.com/157808562/444870513-36b5d735-be00-4b7c-80f7-d1e9cc8de06c.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTQxNjk2ODQsIm5iZiI6MTc1NDE2OTM4NCwicGF0aCI6Ii8xNTc4MDg1NjIvNDQ0ODcwNTEzLTM2YjVkNzM1LWJlMDAtNGI3Yy04MGY3LWQxZTljYzhkZTA2Yy5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBVkNPRFlMU0E1M1BRSzRaQSUyRjIwMjUwODAyJTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDI1MDgwMlQyMTE2MjRaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT1jMjFmMzlmZjY0Y2NlMWI5NDZmZGNiNWY3MmM1MzU2Njk0NzJkMTdmNTEyODRlNzAwYzhiODU5YjY2N2Q3OWJmJlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCJ9.qauGQt3-U419Z9vdU4iP5VQr_wjXMQ12ZBm_sskUsMk" /></p>
+<p>See the <a href="https://github.com/pacemaker82/PredBat-Table-Card">Predbat Table Card repository</a> for more details.</p>
+<h2 id="pv-prediction-summary">PV Prediction summary</h2>
+<p>The same author of the Predbat Table Card has produced a nice visualisation for the Solar Forecast for the next few days:</p>
+<p><img alt="image" src="https://private-user-images.githubusercontent.com/157808562/470713447-2d4ae4a5-2e2b-4bf4-8750-24a0ab1b1e01.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTQxNjk1NjgsIm5iZiI6MTc1NDE2OTI2OCwicGF0aCI6Ii8xNTc4MDg1NjIvNDcwNzEzNDQ3LTJkNGFlNGE1LTJlMmItNGJmNC04NzUwLTI0YTBhYjFiMWUwMS5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBVkNPRFlMU0E1M1BRSzRaQSUyRjIwMjUwODAyJTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDI1MDgwMlQyMTE0MjhaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT01ZGRjNDkwNTI2YmQ5Y2M3Mzg0MmJhODFiN2I3MWRlYzA3ODAyOWEzMjgxZGE5YTMzZDNiOWI0OWNhMDMxMmM0JlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCJ9.ZGRPpggO-o9t0u5XJb1FMvyUz6Iu_YErR0G5vVOQevk" /></p>
+<p>See the <a href="https://github.com/pacemaker82/PV-Card-Preview">PV Card Preview repository</a></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../web-interface/" class="btn btn-neutral float-left" title="Web Interface"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../creating-charts/" class="btn btn-neutral float-right" title="Creating the charts">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../web-interface/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../creating-charts/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

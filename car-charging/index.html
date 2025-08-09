@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Car charging - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Car charging";
+        var mkdocs_page_input_path = "car-charging.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Car charging</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#configure-appsyaml-for-your-car-charging">Configure apps.yaml for your car charging</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#car-charging-planning">Car Charging Planning</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#additional-car-charging-configurations">Additional Car charging configurations</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#example-ev-and-charger-setup">Example EV and charger setup</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Predbat automation API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">Car charging</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="car-charging">Car charging</h1>
+<p>As a bare minimum, a HA-controllable smart plug with a granny charger could be used,
+but do consider there could be an electrical spike to the car if the smart plug is turned off when the car is charging. A proper car charger and HA integration are preferable.</p>
+<p>You will first need to have installed the appropriate Home Assistant integration for your car charger.</p>
+<h2 id="configure-appsyaml-for-your-car-charging">Configure apps.yaml for your car charging</h2>
+<p>Start by configuring the <a href="../apps-yaml/#car-charging-integration">Car charging settings in apps.yaml</a>.</p>
+<h2 id="car-charging-planning">Car Charging Planning</h2>
+<p>There are two ways that Predbat can plan the slots for charging your car:</p>
+<ul>
+<li>
+<p>If you have the Intelligent Octopus import tariff, have completed enrollment of your car/charger to Intelligent Octopus (requires a compatible charger or car),
+and you have installed the Octopus Energy integration - in which case Predbat will use the car charging slots allocated by Octopus Energy in battery prediction.
+The <a href="https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/">Octopus Energy integration supports Octopus Intelligent</a>,
+and through that, Predbat gets most of the information it needs.</p>
+<ul>
+<li><strong>octopus_intelligent_slot</strong> in <code>apps.yaml</code> is pre-configured with a regular expression to point to the Intelligent Slot sensor in the Octopus Energy integration.
+You should not need to change this, but it is worth checking the <a href="../output-data/#predbat-logfile">Predbat logfile</a> to confirm that it has found your Octopus account details</li>
+<li>Set <strong>switch.predbat_octopus_intelligent_charging</strong> to True</li>
+<li>Information about the car's battery size will be automatically extracted from the Octopus Energy integration</li>
+<li>You should set the car's current SoC sensor, <strong>car_charging_soc</strong> in <code>apps.yaml</code> to point to a Home Assistant sensor
+that specifies the car's current % charge level to have accurate results. This should normally be a sensor provided by your car charger
+If you don't have this available for your charger then Predbat will assume the car's current charge level is 0%</li>
+<li>If you set <strong>car_charging_limit</strong> in <code>apps.yaml</code> then Predbat can also know if the car's limit is set lower than in Intelligent Octopus.
+If you don't set this Predbat will default to 100%.</li>
+<li>You can use <strong>car_charging_now</strong> as a workaround to indicate your car is charging but the Intelligent API hasn't reported it</li>
+<li>The switch <strong>switch.predbat_octopus_intelligent_consider_full</strong> (<em>expert mode</em>)
+when turned on will cause Predbat to predict when your car battery is full and assume no further charging will occur.
+This can be useful if Octopus does not know your car battery's state of charge but you have a sensor setup in Predbat (<strong>car_charging_soc</strong>) which does know the current charge level.
+Predbat will still assume all Octopus charging slots are low rates even if some are not used by your car.
+The default for this option is False.</li>
+<li>The switch <strong>switch.predbat_octopus_intelligent_ignore_unplugged</strong> (<em>expert mode</em>)
+can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
+This will only work correctly if <strong>car_charging_planned</strong> is set correctly in apps.yaml to detect your car being plugged in</li>
+<li>Let the Octopus app control when your car charges.</li>
+</ul>
+<p><em>TIP:</em> If you have a Zappi EV charger then you have to set it to Eco+ mode for IOG to control it.
+If Predbat starts exporting your battery (e.g. prior to the IOG cheap overnight period) then the Zappi can treat the exported energy as excess solar and start charging the EV battery with it!<BR>
+To prevent this happening, in the Zappi configuration set the Export Margin to 8000W so that the Zappi will only charge the EV from excess solar when more than 8000W is being exported (which should never happen).</p>
+</li>
+<li>
+<p>Predbat-led charging - Here Predbat plans and can initiate the car charging based on the upcoming low import rate slots</p>
+<ul>
+<li>Ensure <strong>car_charging_limit</strong>, <strong>car_charging_soc</strong> and <strong>car_charging_planned</strong> are set correctly in <code>apps.yaml</code> to point to the appropriate sensors from your EV (see <a href="../apps-yaml/#car-charging-integration">Car charging config in apps.yaml</a>)</li>
+<li>Check (and if necessary add) the sensor response value from the sensor configured in <strong>car_charging_planned</strong> that is returned
+when the car is 'plugged in and ready to charge' is in the list of <strong>car_charging_planned_response</strong> values configured in apps.yaml</li>
+<li>If your car does not have a state of charge (SoC) sensor you can set <strong>switch.predbat_car_charging_manual_soc</strong> to True
+to have Predbat create <strong>input_number.predbat_car_charging_manual_soc_kwh</strong> which will hold the cars SoC in kWh.<BR>
+You will need to manually set this to the car's current charge level before charging, Predbat will increment it during
+charging sessions but will not reset it automatically.<BR>
+NB: <strong>input_number.predbat_car_charging_manual_soc_kwh</strong> must be set to the current kWh value of your car battery NOT a percentage SoC figure
+otherwise, Predbat won't know how much energy there currently is in the battery.<BR>
+NB2: If you have <strong>car_charging_soc</strong> set and working for your car SoC sensor in apps.yaml, <strong>switch.predbat_car_charging_manual_soc</strong> must be set to Off
+as otherwise the car SoC sensor will be ignored</li>
+<li>Ensure <strong>switch.predbat_octopus_intelligent_charging</strong> in Home Assistant is set to Off</li>
+<li>Set <strong>input_number.predbat_car_charging_rate</strong> to the car's charging rate in kW per hour (e.g. 7.5 for 7.5kWh)<ul>
+<li>If you have more than one car then <strong>input_number.predbat_car_charging_rate_1</strong> will be the second car etc.</li>
+</ul>
+</li>
+<li>Set <strong>select.predbat_car_charging_plan_time</strong> to the time you want the car charging to be completed by</li>
+<li>Turn on <strong>switch.predbat_car_charging_plan_smart</strong> if you want to use the cheapest slots only. When disabled (turned off) all low-rate slots will be used in time order</li>
+<li>You can set <strong>input_number.predbat_car_charging_plan_max_price</strong> if you want to set a maximum price in pence per kWh to charge your car (e.g. 10p).
+If you set this to zero, this feature is disabled, and all low-rate slots will be used. This may mean you need to use expert mode and change your low-rate
+threshold to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. Flux)</li>
+<li><em>WARNING: Do not set <strong>car_charging_now</strong> or you will create a circular dependency.</em></li>
+<li>Predbat will set <strong>binary_sensor.predbat_car_charging_slot</strong> when it determines the car can be charged;
+you will need to write a Home Assistant automation based on this sensor to control when your car charges.<BR>
+A sample automation to start/stop car charging using a Zappi car charger and the <a href="https://github.com/CJNE/ha-myenergi">MyEnergi Zappi integration</a> is as follows,
+this should be adapted for your charger type and how it controls starting/stopping car charging:</li>
+</ul>
+</li>
+</ul>
+<pre><code class="language-yaml">alias: Car charging
+description: &quot;Start/stop car charging based on Predbat determined slots&quot;
+triggers:
+  - trigger: state
+    entity_id:
+      - binary_sensor.predbat_car_charging_slot
+actions:
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: binary_sensor.predbat_car_charging_slot
+            state: &quot;on&quot;
+        sequence:
+          &lt;commands to turn on your car charger, e.g.&gt;
+          - service: select.select_option
+            data:
+              option: Eco+
+            target:
+              entity_id: select.myenergi_zappi_charge_mode
+      - conditions:
+          - condition: state
+            entity_id: binary_sensor.predbat_car_charging_slot
+            state: &quot;off&quot;
+        sequence:
+          &lt;commands to turn off your car charger, e.g.&gt;
+          - service: select.select_option
+            data:
+              option: Stopped
+            target:
+              entity_id: select.myenergi_zappi_charge_mode
+mode: single
+</code></pre>
+<p>NOTE: <a href="../apps-yaml/#multiple-electric-cars">Multiple cars</a> can be planned with Predbat.</p>
+<h2 id="additional-car-charging-configurations">Additional Car charging configurations</h2>
+<p>If you have one charger and multiple cars configured in Predbat then set <strong>car_charging_exclusive</strong> in apps.yaml to True to indicate that only one
+car may charge at once (the first car reporting as plugged in will be considered as charging). If you set this to False then it is assumed each car
+can charge independently and hence two or more could charge at once</p>
+<pre><code class="language-yaml">  car_charging_exclusive:
+    - True
+    - True
+</code></pre>
+<p>See <a href="../apps-yaml/#car-charging-filtering">Car charging filtering</a> and <a href="../apps-yaml/#planned-car-charging">Planned car charging</a>
+in the <a href="../apps-yaml/">apps.yaml settings</a> section of the documentation.</p>
+<ul>
+<li>
+<p><strong>switch.predbat_car_charging_from_battery</strong> - When set to True the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
+When set to False home battery discharge will be prevented when your car charges, and all load from the car and home will be from the grid.
+This is achieved by setting the battery discharge rate to 0 during car charging and to the maximum otherwise.
+The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan,
+e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.</p>
+</li>
+<li>
+<p><strong>input_number.predbat_car_charging_loss</strong> gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
+A good setting is 0.08 which is 8%.</p>
+</li>
+</ul>
+<h2 id="example-ev-and-charger-setup">Example EV and charger setup</h2>
+<p>Sample setup and Predbat automation to use the cheapest charging slots with no/limited Home Assistant Integration.</p>
+<p>MG4 EV Vehicle with a Hypervolt Car Charger. There is no 3rd party integration with the MG (so no idea of the car's current SoC), and the Hypervolt car charger doesn't understand when an EV is plugged in.</p>
+<p>Yet it can be stopped and started with a 3rd party integration.</p>
+<p>In Home Assistant, create a helper entity (Settings / Devices &amp; Services / Helpers) of type 'Number' and set 'Unit of Measurement' to 'kWh':</p>
+<ul>
+<li>Car Max Charge - input_number.car_max_charge</li>
+</ul>
+<p>Create a 'Dropdown' helper entity that has two options 'true' and 'false' (in lowercase):</p>
+<ul>
+<li>Car Charger Plugged in - input_select.car_charger_plugged_in</li>
+</ul>
+<p>Within the <code>apps.yaml</code> configuration file specify the following configuration settings:</p>
+<p>Find the line for <strong>car_charger_battery_size</strong> and enter the Car Battery Size in kWh:</p>
+<p><strong>Example</strong></p>
+<pre><code class="language-yaml">  car_charging_battery_size:
+    - 61.7
+</code></pre>
+<p>Specify the Car Charging Limit to use the Car Max Charge helper entity created earlier:</p>
+<pre><code class="language-yaml">  car_charging_limit:
+    - 'input_number.car_max_charge'
+</code></pre>
+<p>Find <strong>car_charging_planned</strong> and replace the template Wallbox and Zappi regular expression with your new dropdown helper entity:</p>
+<pre><code class="language-yaml">  car_charging_planned:
+    - 'input_select.car_charger_plugged_in'
+</code></pre>
+<p>Find <strong>car_charging_planned_response</strong> and add <strong>'true'</strong> to the list:</p>
+<pre><code class="language-yaml">  car_charging_planned_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+</code></pre>
+<p>If possible, add an entity keeping track of the kWh used for car charging to <strong>car_charging_energy</strong>.</p>
+<p>If your charging device doesn't keep track of kWh you can measure the power sent to the car charger
+(e.g. from the EV charger integration or an energy monitor/smart plug for the EV charger) then you can create another helper entity to convert kW power into kWh:</p>
+<p>Create a helper entity (Settings / Devices &amp; Services / Helpers) of type 'Integration - Riemann Sum integral':</p>
+<ul>
+<li>Name : car_energy_used</li>
+<li>Input sensor : <em>sensor that measures power consumed by the car charger</em></li>
+<li>Integration method : Right Riemann sum</li>
+<li>Metric prefix : k (kilo)</li>
+</ul>
+<p>Please look into <a href="URL">Integration - Riemann sum integral</a> to convert kW into kWh.</p>
+<p>And add your custom car charging energy sensor in apps.yaml in place of the template Wallbox and Zappi regular expression:</p>
+<p><strong>Example</strong></p>
+<pre><code class="language-yaml">car_charging_energy: 'sensor.car_energy_used'
+</code></pre>
+<p><strong>car_charging_now</strong> must be commented out (hashed out) in <code>apps.yaml</code>:</p>
+<pre><code class="language-yaml">  #car_charging_now:
+  #  - off
+</code></pre>
+<p>Save the <code>apps.yaml</code> file and exit.</p>
+<p>In Home Assistant, turn <strong>on</strong> the following Predbat control switches:</p>
+<ul>
+<li><strong>switch.predbat_car_charging_hold</strong></li>
+<li><strong>switch.predbat_car_charging_manual_soc</strong></li>
+<li><strong>switch.predbat_car_charging_plan_smart</strong></li>
+</ul>
+<p>And turn <strong>off</strong> the Predbat control switch:</p>
+<ul>
+<li><strong>switch.predbat_octopus_intelligent_charging</strong></li>
+</ul>
+<p><strong>HA Charging Slot Automation</strong></p>
+<p>In Home Assistant (Settings / Automation &amp; Scenes), create an automation to monitor the Predbat car charging slot sensor and turn the charger on and off according to the Predbat plan
+(the numeric entity id's below would need replacing with the appropriate sensor name for your car charger):</p>
+<pre><code class="language-yaml">alias: Car Charging Slot
+description: &quot;&quot;
+triggers:
+  - trigger: state
+    entity_id:
+      - binary_sensor.predbat_car_charging_slot
+actions:
+  - if:
+      - condition: state
+        entity_id: binary_sensor.predbat_car_charging_slot
+        state: &quot;off&quot;
+    then:
+      - type: turn_off
+        entity_id: f6de2df0758744aba60f6b5f
+        domain: switch
+  - if:
+      - condition: state
+        entity_id: binary_sensor.predbat_car_charging_slot
+        state: &quot;on&quot;
+    then:
+      - type: turn_on
+        entity_id: f6de2df0758744aba60f6b5f
+        domain: switch
+mode: single
+</code></pre>
+<p>Finally, for simplicity, add the below entities to your HA Dashboard so you can set them when needed:</p>
+<ul>
+<li>Car Max Charge - input_number.car_max_charge</li>
+<li>Car Manual SoC - input_number.predbat_car_charging_manual_soc_kwh</li>
+<li>Car Charger Plugged in - input_select.car_charger_plugged_in</li>
+</ul>
+<p>Annoyingly, you have to calculate the kWh your vehicle has in total by taking the Percentage left in the car / 100 * Total Car Battery capacity.<BR>
+For example:</p>
+<pre><code class="language-text">65/100*61.7=40.1
+</code></pre>
+<p>Enter '40.1' into 'Car Manual SoC' and '80%' into 'Car Max charge'.</p>
+<p>Once the charger is switched to <strong>true</strong> and your Car Max charge (target SoC) % is higher than the kWh currently in the car,
+Predbat will plan and charge the car with the kW that are needed to reach the target SoC.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../apps-yaml/" class="btn btn-neutral float-left" title="apps.yaml settings"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../configuration-guide/" class="btn btn-neutral float-right" title="Configuration guide">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../apps-yaml/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../configuration-guide/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Support 3rd party devices/integrations - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Support 3rd party devices/integrations";
+        var mkdocs_page_input_path = "devices.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Support 3rd party devices/integrations</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#wallbox-pulsar">Wallbox Pulsar</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#zappi">Zappi</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#tesla">Tesla</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#toyota">Toyota</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#renault">Renault</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#new-ohme-integration">New Ohme Integration</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#old-ohme-hacs-integration">Old Ohme HACS Integration</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#podpoint">PodPoint</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#hypervolt">Hypervolt</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#octopus-energy">Octopus Energy</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#nordpool">Nordpool</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#for-adjustment-to-octopus-intelligent">For adjustment to Octopus Intelligent</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#as-your-energy-rates-eg-for-those-in-norway">As your energy rates (e.g. for those in Norway)</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#solcast">Solcast</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Predbat automation API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">Support 3rd party devices/integrations</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="support-3rd-party-devicesintegrations">Support 3rd party devices/integrations</h1>
+<p>This section of the documentation describes the configuration required for different 3rd party devices/integrations, typically EV chargers.  If you have a device not listed then please raise a GitHub ticket with your configuration.</p>
+<h2 id="wallbox-pulsar">Wallbox Pulsar</h2>
+<p><a href="https://www.home-assistant.io/integrations/wallbox/">https://www.home-assistant.io/integrations/wallbox/</a></p>
+<p>Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in</p>
+<pre><code class="language-yaml">  car_charging_energy: 're:sensor.wallbox_portal_added_energy'
+  car_charging_planned:
+    - 're:sensor.wallbox_portal_status_description'
+</code></pre>
+<p>Wallbox works with Octopus Intelligent GO and can be triggered via Octopus themselves or an HA automation linked to the Predbat slot sensor</p>
+<h2 id="zappi">Zappi</h2>
+<p><a href="https://github.com/CJNE/ha-myenergi">https://github.com/CJNE/ha-myenergi</a></p>
+<p>Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in</p>
+<pre><code class="language-yaml">  car_charging_energy: 're:sensor.myenergi_zappi_[0-9a-z]+_charge_added_session'
+  car_charging_planned:
+    - 're:sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+</code></pre>
+<h2 id="tesla">Tesla</h2>
+<p><a href="https://github.com/alandtse/tesla">https://github.com/alandtse/tesla</a></p>
+<p>Can be used to extract the car's current SoC and Charge limit. Also can be used to control the cars charging with an automation linked to the Predbat slot sensor</p>
+<pre><code class="language-yaml">  car_charging_limit:
+    - 're:number.xxx_charge_limit'
+  car_charging_soc:
+    - 're:sensor.xxx_battery'
+</code></pre>
+<h2 id="toyota">Toyota</h2>
+<p><a href="https://github.com/DurgNomis-drol/ha_toyota">https://github.com/DurgNomis-drol/ha_toyota</a> - For Toyota EU cars only</p>
+<p>Can be used to extract the car's current SoC.</p>
+<pre><code class="language-yaml">  car_charging_soc:
+    - 'sensor.toyota_XXX_battery_level'
+</code></pre>
+<p>Example sensor name for BZ4X - <code>sensor.toyota_bz4x_battery_level</code></p>
+<h2 id="renault">Renault</h2>
+<p><a href="https://www.home-assistant.io/integrations/renault">https://www.home-assistant.io/integrations/renault</a></p>
+<p>Can be used to extract the car's current SoC.</p>
+<pre><code class="language-yaml">  car_charging_soc:
+    - 'sensor.battery'
+</code></pre>
+<h2 id="new-ohme-integration">New Ohme Integration</h2>
+<p><a href="https://www.home-assistant.io/integrations/ohme">https://www.home-assistant.io/integrations/ohme</a></p>
+<p>The in-built Home Assistant Ohme integration can be used with Predbat both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.</p>
+<p>If you are on the Octopus Intelligent GO tariff the integration can be used to map out the cars charging slots into Predbat so that Predbat charges or stops your battery discharging into the car when its charging.</p>
+<p><strong>car charging energy</strong></p>
+<pre><code class="language-yaml">  ohme_name: 're:time.ohme_(.+)_target_time'
+  car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
+</code></pre>
+<p><strong>Car charging planned</strong></p>
+<pre><code class="language-yaml">  car_charging_planned:
+    - &quot;sensor.ohme_{ohme_name}_status&quot;
+
+  car_charging_planned_response:
+    - &quot;yes&quot;
+    - &quot;on&quot;
+    - &quot;true&quot;
+    - &quot;connected&quot;
+    - &quot;ev connected&quot;
+    - &quot;charging&quot;
+    - &quot;paused&quot;
+    - &quot;waiting for car demand&quot;
+    - &quot;waiting for ev&quot;
+    - &quot;scheduled&quot;
+    - &quot;enabled&quot;
+    - &quot;latched&quot;
+    - &quot;locked&quot;
+    - &quot;plugged in&quot;
+    - &quot;plugged_in&quot;
+    - &quot;Plugged in&quot;
+    - &quot;pending_approval&quot;
+</code></pre>
+<p><strong>Octopus Intelligent GO</strong></p>
+<p>Replace XXX with your device ID which can be found by going to 'Developer Tools', Selecting 'Actions', Selecting 'Ohme: List Charge Slots'
+then selecting your Device from the drop down menu. Then click on 'Go to YAML mode' and copy the long string after config_entry:</p>
+<p><img alt="image" src="https://github.com/user-attachments/assets/fce4bce1-c6f7-49fe-96bc-7d062977059b" /></p>
+<pre><code class="language-yaml">  octopus_intelligent_slot: 'ohme.list_charge_slots'
+  octopus_intelligent_slot_action_config: 'XXX'
+  octopus_ready_time: 'time.ohme_{ohme_name}_target_time'
+  octopus_charge_limit: 'number.ohme_{ohme_name}_target_percentage'
+</code></pre>
+<p>Note: You should turn on <strong>switch.predbat_octopus_intelligent_ignore_unplugged</strong> as the Ohme charger does not clear its schedule when unplugged.</p>
+<p><strong>Using Ohme car charging plans on other tariff e.g. Agile</strong></p>
+<pre><code class="language-yaml">  octopus_ready_time: 'time.ohme_{ohme_name}_target_time'
+  octopus_charge_limit: 'number.ohme_{ohme_name}_target_percentage'
+  octopus_slot_low_rate: False
+</code></pre>
+<p>Note: You should turn on <strong>switch.predbat_octopus_intelligent_ignore_unplugged</strong> as the Ohme charger does not clear its schedule when unplugged.</p>
+<h2 id="old-ohme-hacs-integration">Old Ohme HACS Integration</h2>
+<p><a href="https://github.com/dan-r/HomeAssistant-Ohme">https://github.com/dan-r/HomeAssistant-Ohme</a></p>
+<p>Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.</p>
+<p>If you are on the Octopus Intelligent GO tariff the integration can be used to map out the cars charging slots into Predbat so that Predbat charges or stops your battery discharging into the car when its charging.</p>
+<p><strong>car charging energy</strong></p>
+<pre><code class="language-yaml">  car_charging_energy: 'sensor.ohme_session_energy'
+</code></pre>
+<p><strong>Octopus Intelligent GO</strong></p>
+<pre><code class="language-yaml">  octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  octopus_ready_time: 'time.ohme_target_time'
+  octopus_charge_limit: 'number.ohme_target_percentage'
+</code></pre>
+<p>Note: You should turn on <strong>switch.predbat_octopus_intelligent_ignore_unplugged</strong> as the Ohme charger does not clear its schedule when unplugged.</p>
+<p><strong>Using Ohme car charging plans on other tariff e.g. Agile</strong></p>
+<pre><code class="language-yaml">  octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  octopus_ready_time: 'time.ohme_target_time'
+  octopus_charge_limit: 'number.ohme_target_percent'
+  octopus_slot_low_rate: False
+</code></pre>
+<p>Note: You should turn on <strong>switch.predbat_octopus_intelligent_ignore_unplugged</strong> as the Ohme charger does not clear its schedule when unplugged.</p>
+<p><strong>Determine if the car is charging now</strong></p>
+<p>Normally not recommended if you are on Intelligent GO, but can be useful for ad-hoc charging not planned via Predbat</p>
+<pre><code class="language-yaml">  car_charging_now:
+    - 'binary_sensor.ohme_car_charging'
+</code></pre>
+<h2 id="podpoint">PodPoint</h2>
+<p><a href="https://github.com/mattrayner/pod-point-home-assistant-component">https://github.com/mattrayner/pod-point-home-assistant-component</a></p>
+<p>Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.</p>
+<pre><code class="language-yaml">  car_charging_energy: 're:(sensor.psl_[0-9]+_current_energy)'
+  car_charging_planned:
+    - 're:(sensor.psl_[0-9]+_status)'
+  car_charging_planned_response:
+    - 'plugged in'
+    - 'connected-waiting-for-schedule'
+    - 'suspended-evse'
+    - 'pending'
+    - 'charging'
+  car_charging_now:
+    - 're:(sensor.psl_[0-9]+_status)'
+  car_charging_now_response:
+    - 'charging'
+</code></pre>
+<p>Also can be used to control the cars charging with an automation linked to the Predbat slot sensor.
+The device needs to be set to 'Smart' mode in the PodPoint app. Your automation trigger should then set the <code>switch.psl_XXXXXX_charging_allowed</code> to on. And off to stop charging. This uses the PodPoint schedule override setting to start/stop the charge.</p>
+<h2 id="hypervolt">Hypervolt</h2>
+<p><a href="https://github.com/gndean/home-assistant-hypervolt-charger">https://github.com/gndean/home-assistant-hypervolt-charger</a></p>
+<p>Can be used both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in (only V3 models).</p>
+<p>For plugged-in detection on V2 models, see guidance <a href="https://springfall2008.github.io/batpred/car-charging/#example-ev-and-charger-setup">https://springfall2008.github.io/batpred/car-charging/#example-ev-and-charger-setup</a>.</p>
+<pre><code class="language-yaml">  car_charging_energy: 're:(sensor.hypervolt_session_energy_total_increasing)'
+  car_charging_planned:
+    - 're:(binary_sensor.hypervolt_car_plugged)'
+  car_charging_planned_response:
+    - 'on'
+  car_charging_now:
+    - 're:(sensor.hypervolt_charging_readiness)'
+  car_charging_now_response:
+    - 'charging'
+</code></pre>
+<p>Note: <strong>sensor.hypervolt_session_energy_total_increasing</strong> defaults to 'unknown' between charging sessions.</p>
+<p><strong>Agile Tariff</strong></p>
+<p>To automate the schedule charging with Predbat, set up the automation to detect when there is a change to <code>binary_sensor.predbat_car_charging_slot</code>.</p>
+<p>Ensure that <code>select.hypervolt_charge_mode</code> is in 'Boost', when Predbat charging slot is 'on', set <code>select.hypervolt_activation_mode</code> to 'Plug and Charge', when it is 'off' set the 'Schedule', this is the recommended method for start/stop charging.</p>
+<h2 id="octopus-energy">Octopus Energy</h2>
+<p><a href="https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy">https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy</a></p>
+<p>Can be used for energy rates, car charging and saving sessions</p>
+<p><strong>For energy rate</strong></p>
+<pre><code class="language-yaml">  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+</code></pre>
+<p><strong>For Octopus Intelligent GO</strong></p>
+<pre><code class="language-yaml">  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
+</code></pre>
+<p><strong>For Octopus Saving sessions</strong></p>
+<pre><code class="language-yaml">  octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
+  octopus_saving_session_octopoints_per_penny: 8
+</code></pre>
+<h2 id="nordpool">Nordpool</h2>
+<h3 id="for-adjustment-to-octopus-intelligent">For adjustment to Octopus Intelligent</h3>
+<p>This is built into Predbat, see the <a href="../apps-yaml/">apps.yaml configuration guide</a></p>
+<h3 id="as-your-energy-rates-eg-for-those-in-norway">As your energy rates (e.g. for those in Norway)</h3>
+<p><a href="https://github.com/custom-components/nordpool/">https://github.com/custom-components/nordpool/</a></p>
+<p>Can be linked to Predbat to provide energy rates in your region e.g:</p>
+<pre><code class="language-yaml">  metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
+</code></pre>
+<h2 id="solcast">Solcast</h2>
+<p><a href="https://github.com/BJReplay/ha-solcast-solar">https://github.com/BJReplay/ha-solcast-solar</a></p>
+<p>For solar forecast data</p>
+<pre><code class="language-yaml">  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+</code></pre>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../faq/" class="btn btn-neutral float-left" title="FAQ"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../manual-api/" class="btn btn-neutral float-right" title="Predbat automation API">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../faq/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../manual-api/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Install details - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Install details";
+        var mkdocs_page_input_path = "install.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Install details</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#inverter-control-install">Inverter Control install</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#editing-configuration-files-in-home-assistant">Editing Configuration Files in Home Assistant</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#predbat-add-on-install">Predbat add-on install</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#solcast-install">Solcast Install</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#predbat-direct-solcast-method">Predbat direct Solcast method</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#predbat-direct-to-forecastsolar">Predbat direct to forecast.solar</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#solcast-home-assistant-integration-method">Solcast Home Assistant integration method</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#energy-rates">Energy Rates</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuring-predbat">Configuring Predbat</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#predbat-output-and-configuration-controls">Predbat Output and Configuration Controls</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#ready-to-light-the-touch-paper">Ready to light the touch-paper</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#updating-predbat">Updating Predbat</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#update-via-home-assistant">Update via Home Assistant</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#predbat-built-in-update">Predbat built-in update</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#upgrading-from-appdaemon-to-predbat-add-on">Upgrading from AppDaemon to Predbat add-on</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#backing-up-home-assistant-and-predbat">Backing up Home Assistant and Predbat</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#uninstalling-predbat">Uninstalling Predbat</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Predbat automation API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">Install details</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="install">Install</h1>
+<p>These instructions will take you through the process of installing and configuring Predbat for first-time use.</p>
+<p>If you have a working Predbat installation using AppDaemon and are changing to use the Predbat add-on,
+the <a href="#upgrading-from-appdaemon-to-predbat-add-on">AppDaemon to Predbat add-on upgrade process</a> is described below.</p>
+<p>It's recommended that you watch the <a href="../video-guides/">Predbat Video Guides</a> before you start.</p>
+<p>We have tried to make the documentation as comprehensive as possible but a level of familiarity with the basics of
+Home Assistant, Add-ons, Integrations, Entities, File Editing and YAML is assumed.
+There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a few useful videos to introduce you to Home Assistant and displaying inverter data:</p>
+<ul>
+<li><a href="https://www.youtube.com/watch?v=Frd-C7ZeZAo">What is Home Assistant from Smart Home Junkie</a></li>
+<li><a href="https://www.youtube.com/watch?v=nETF43QJebA">YAML Basics from This Smart Home</a></li>
+<li><a href="https://www.youtube.com/watch?v=jzpm89956Pw">Installing HACS from Speak to the Geek</a></li>
+<li><a href="https://www.youtube.com/watch?v=YPPpwTKIz7M">Setting up the Energy dashboard for GivEnergy inverters from Speak to the Geek</a></li>
+<li><a href="https://www.youtube.com/watch?v=C4Zh35E9wJE">Power Flow Card Plus from Speak to the Geek</a></li>
+</ul>
+<p>If you get stuck, please read the <a href="../faq/">FAQs</a> and if necessary raise a <a href="https://github.com/springfall2008/batpred/issues">Github ticket</a> for support.</p>
+<h2 id="inverter-control-install">Inverter Control install</h2>
+<p>You will need to install an integration to communicate with and control your inverter. The specific integration you need will depend on the brand of inverter you have:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Brand</th>
+<th style="text-align: left;">Integration</th>
+<th style="text-align: left;">GitHub Link</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">GivEnergy</td>
+<td style="text-align: left;">GivTCP</td>
+<td style="text-align: left;"><a href="https://github.com/britkat1980/ha-addons">https://github.com/britkat1980/ha-addons</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">GivEnergy</td>
+<td style="text-align: left;">GivEnergy Cloud</td>
+<td style="text-align: left;"><a href="https://github.com/springfall2008/ge_cloud">https://github.com/springfall2008/ge_cloud</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">GivEnergy EMS</td>
+<td style="text-align: left;">GivEnergy Cloud</td>
+<td style="text-align: left;"><a href="https://github.com/springfall2008/ge_cloud">https://github.com/springfall2008/ge_cloud</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">Solis</td>
+<td style="text-align: left;">SolaX ModBus</td>
+<td style="text-align: left;"><a href="https://github.com/wills106/homeassistant-solax-modbus">https://github.com/wills106/homeassistant-solax-modbus</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">Solax Gen4</td>
+<td style="text-align: left;">Solax Modbus</td>
+<td style="text-align: left;"><a href="https://github.com/wills106/homeassistant-solax-modbus">https://github.com/wills106/homeassistant-solax-modbus</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">Sofar</td>
+<td style="text-align: left;">Sofar MQTT</td>
+<td style="text-align: left;"><a href="https://github.com/cmcgerty/Sofar2mqtt">https://github.com/cmcgerty/Sofar2mqtt</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">Huawei</td>
+<td style="text-align: left;">Huawei Modbus</td>
+<td style="text-align: left;"><a href="https://github.com/wlcrs/huawei_solar">https://github.com/wlcrs/huawei_solar</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">SolarEdge</td>
+<td style="text-align: left;">SolarEdge Modbus</td>
+<td style="text-align: left;"><a href="https://github.com/WillCodeForCats/solaredge-modbus-multi">https://github.com/WillCodeForCats/solaredge-modbus-multi</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">SunSynk</td>
+<td style="text-align: left;">SunSynk Modbus</td>
+<td style="text-align: left;"><a href="https://github.com/kellerza/sunsynk">https://github.com/kellerza/sunsynk</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">Fox</td>
+<td style="text-align: left;">Fox Modbus</td>
+<td style="text-align: left;"><a href="https://github.com/nathanmarlor/foxess_modbus">https://github.com/nathanmarlor/foxess_modbus</a></td>
+</tr>
+<tr>
+<td style="text-align: left;">LuxPower</td>
+<td style="text-align: left;">LuxPython</td>
+<td style="text-align: left;"><a href="https://github.com/guybw/LuxPython_DEV">https://github.com/guybw/LuxPython_DEV</a></td>
+</tr>
+</tbody>
+</table>
+<p>Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.</p>
+<p>Please see <a href="../inverter-setup/">Inverter Setup</a> for details on installing and configuring the appropriate inverter control software
+so that Home Assistant is able to 'see' and manage your inverter.</p>
+<p>You will need at least 24 hours of history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).</p>
+<p>NB: If you have multiple GivEnergy AIOs or a 3-phase inverter, GivTCP version 3 is required.</p>
+<h2 id="editing-configuration-files-in-home-assistant">Editing Configuration Files in Home Assistant</h2>
+<p>The basic configuration for Predbat is stored in a configuration file called <code>apps.yaml</code>.
+A standard template apps.yaml file will be installed as part of the Predbat installation and you will need to edit and customise this configuration file for your own system setup.</p>
+<p>You will therefore need a method of editing configuration files within your Home Assistant environment.</p>
+<p>There are several ways to achieve this in Home Assistant, but two of the simplest are to use either the File Editor or Studio Code Server add-ons.
+Whichever you use is a personal preference. File Editor is a bit simpler, Studio Code Server is more powerful
+but does require HACS (the Home Assistant Community Store) to be installed first.</p>
+<p>If you do not have one of these file editors already installed in Home Assistant:</p>
+<ul>
+<li>For Studio Code Server you will need to install HACS first.</li>
+<li>Go to Settings / Add-ons / Add-on Store (bottom right)</li>
+<li>Scroll down the add-on store list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the add-on, click 'INSTALL'</li>
+<li>Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the add-on</li>
+</ul>
+<p>Thereafter whenever you need to edit a configuration file in Home Assistant you can navigate to Settings / Add-ons / <em>editor_you_chose_to_use</em> / 'OPEN WEB UI'.
+You can also turn the 'Show in sidebar' option on to give a quicker way to directly access the editor.</p>
+<p>If you are using the File Editor to edit Predbat's configuration files, you will need to turn <strong>OFF</strong> the <strong>Enforce Basepath</strong> option
+to access files in different directories (i.e. within the add-ons directory):</p>
+<ul>
+<li>From the File editor add-on page, click on the 'Configuration' tab to change this setting). It is set to 'On' by default:<BR>
+<img alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7" /></li>
+</ul>
+<p>If you are using Studio Code Server it will default to showing just files and folders in the /config directory.
+To access the entire HA directory structure, click the three horizontal bars to the left of 'Explorer', File, Open Folder, type '/' (root) and click OK.</p>
+<h2 id="predbat-add-on-install">Predbat add-on install</h2>
+<p><strong>Recommended</strong></p>
+<p>The simplest way to install Predbat now is with the Predbat add-on.</p>
+<p>Go to settings, add-ons, select Add-on Store, three dots on the top right, Repositories, then add the following repo
+'<a href="https://github.com/springfall2008/predbat_addon">https://github.com/springfall2008/predbat_addon</a>' to the list and click close. Now refresh the list and find Predbat, click on it and click 'install'.
+Ensure 'start on boot' is enabled and click 'start'.</p>
+<p><strong>NOTE:</strong> Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file <code>apps.yaml</code> and the Predbat logfile.</p>
+<p>These are located under the Home Assistant directory <code>/addon_configs/6adb4f0d_predbat</code> which contains:</p>
+<ul>
+<li><strong>predbat.log</strong> - Predbat's active logfile that reports details of what Predbat is doing, and details of any errors</li>
+<li><strong>apps.yaml</strong> - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.</li>
+</ul>
+<p>You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on) to open the directory <code>/addon_configs/6adb4f0d_predbat</code> and view these files.</p>
+<p>The Predbat web interface will work through the Predbat add-on, you can click on the 'Web UI' button to open it once Predbat is running.</p>
+<p>If you wish to use Docker with Predbat it is recommended you read the Docker installation instructions inside the Predbat.</p>
+<h2 id="solcast-install">Solcast Install</h2>
+<p>Predbat needs a solar forecast to predict solar generation and battery charging.
+If you do have solar panels it's recommended to use the Solcast integration to retrieve your forecast solar generation.</p>
+<p>If you do not want to use Solcast you can also use Forecast.solar (less accurate) - see below.</p>
+<p>If you don't have one already, register for a free <a href="https://solcast.com/">Solcast hobbyist account</a> and enter the details of your system.
+You can create 2 sites maximum under one (free hobbyist) account, if you have more aspects then it suggests you average the angle based on the number of panels
+e.g. $7/10 * 240^\circ + 3/10 * 120^\circ$.</p>
+<p><strong>Hybrid inverters only</strong>: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
+(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let Predbat handle any necessary clipping instead.
+When supplied with the unclipped Solcast forecast data, Predbat can allow in its model for PV over the inverter capacity going to battery charging
+(bypassing the hybrid inverter).</p>
+<p>You will need your API key for the next steps:</p>
+<p><img alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/e6cce04f-2677-4722-b269-eb051be5c769" /></p>
+<h3 id="predbat-direct-solcast-method">Predbat direct Solcast method</h3>
+<p>Predbat can obtain the solar forecast directly from Solcast and the Solcast integration described below is not required.</p>
+<p>First, get your API key from the Solcast website, then as described in the <a href="../apps-yaml/#solcast-solar-forecast">Solcast apps.yaml documentation</a>,
+uncomment the Solcast cloud interface settings in <code>apps.yaml</code> and set the API key correctly:</p>
+<pre><code class="language-yaml">  solcast_host: 'https://api.solcast.com.au/'
+  solcast_api_key: 'xxxx'
+  solcast_poll_hours: 8
+</code></pre>
+<p>NB: If you use Predbat to obtain your Solcast solar forecast then you can't
+<a href="https://www.home-assistant.io/dashboards/energy/#solar-production-graph">include the Solar Forecast within the Home Assistant Energy dashboard</a>
+as you can with the Solcast integration described below.<BR>
+The Solcast integration also contains a 'solar dampening' feature that may be useful to reduce the solar forecast that Predbat receives at certain times of day,
+e.g. if your panels are shaded by trees or buildings.</p>
+<h3 id="predbat-direct-to-forecastsolar">Predbat direct to forecast.solar</h3>
+<p>The Forecast.solar service can also be used in Predbat, the free version offer access without an API Key but is limited to hourly data and does not provide any 10% or 90% data.
+Predbat Solar calibration can use past data to improve this information and provide the 10% data.</p>
+<p>You can create one or more rooftops by providing a list of the data for each one, they will be summed up automatically.</p>
+<p>The latitude and longitude are your location in world, or for the UK you can set a postcode.</p>
+<p>The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
+The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
+The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
+The optional forecast_solar_max_age setting sets the number of hours between updates to PV data, the default is 8.</p>
+<pre><code class="language-yaml">  forecast_solar:
+    - postcode: SW1A 2AB
+      kwp: 3
+      azimuth: 45
+      declination: 45
+      efficiency: 0.95
+  forecast_solar_max_age: 4
+</code></pre>
+<p>or you can set longitude and latitude if you are not in the UK or postcode does not work:</p>
+<pre><code class="language-yaml">      latitude: 51.5072
+      longitude: -0.1276
+</code></pre>
+<p>Optionally you can set an api_key for personal or professional accounts and you can also set 'days' to define how many future days of data the forecast includes (2 for free, 3 for personal or 6 for professional)</p>
+<pre><code class="language-yaml">  forecast_solar:
+    - postcode: SW1A 2AB
+      api_key: 'xxxxx'
+      days: 3
+</code></pre>
+<p>Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.</p>
+<h3 id="solcast-home-assistant-integration-method">Solcast Home Assistant integration method</h3>
+<p>Install the Solcast integration (<a href="https://github.com/BJReplay/ha-solcast-solar">https://github.com/BJReplay/ha-solcast-solar</a>), create a free <a href="https://solcast.com/">Solcast account</a>,
+configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.</p>
+<p>Predbat is configured in <code>apps.yaml</code> to automatically discover the Solcast forecast entities created by the Solcast integration in Home Assistant.</p>
+<p>If you don't have any solar generation then use a file editor to comment out the following lines from the Solar forecast part of the <code>apps.yaml</code> configuration:</p>
+<pre><code class="language-yaml">  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+</code></pre>
+<p>Note that Predbat does not update Solcast integration for you so you will need to create your own Home Assistant automation that updates the solar
+forecast a few times a day (e.g. dawn, dusk, and just before your nightly charge slot). Keep in mind hobbyist accounts only have 10 polls per day
+so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls need to be kept under the limit or you will experience failures.</p>
+<p>Due to the popularity of the Solcast Hobbyist service, Solcast has introduced rate limiting for Hobbyist (free) accounts. If your update gets a 429 error then this is due to rate limiting.
+Solcast recommends that you poll for updated solar forecasts at random times, i.e. don't poll at precisely X o'clock and zero seconds.
+The Solcast integration will auto-retry if it gets a 429 error,
+but to minimise the potential rate limiting the sample Solcast automation below contains non-precise poll times for just this reason.</p>
+<p>Example Solcast update automation script:</p>
+<pre><code class="language-yaml">alias: Solcast update
+description: &quot;Update Solcast solar forecast&quot;
+triggers:
+  - trigger: time
+    at:
+      - &quot;06:02:34&quot;
+      - &quot;12:07:47&quot;
+      - &quot;18:09:56&quot;
+      - &quot;23:11:18&quot;
+conditions: []
+actions:
+  - action: solcast_solar.update_forecasts
+    data: {}
+mode: single
+</code></pre>
+<p>Manually run the automation and then make sure the Solcast integration is working in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
+and check that you can see the half-hourly solar forecasts in the Solcast entities.</p>
+<h2 id="energy-rates">Energy Rates</h2>
+<p>Predbat needs to know what your electricity import and export rates are to optimise battery charging and discharging to minimise your expenditure.</p>
+<p>These rates are configured in Predbat's <code>apps.yaml</code> configuration file. Follow the instructions in the <a href="../energy-rates/">Energy Rates</a> document.</p>
+<p><strong>Note:</strong> that if you are using the Octopus integration the 'sensor.octopus_xxx' and 'event.octopus_xxx' entities must have a similar pattern of
+names for Predbat to work correctly - see the <a href="../faq/">FAQ's</a> if they are not.</p>
+<h2 id="configuring-predbat">Configuring Predbat</h2>
+<p>You will need to use a file editor (either the File editor or Studio Code Server add-on) to edit the <code>apps.yaml</code> file in Home Assistant
+to configure Predbat - see <a href="../apps-yaml/#Basics">Configuring apps.yaml</a>.</p>
+<p>When Predbat starts up initially it will perform a sanity check of itself and the configuration and confirm the right files are present.
+You will see this check in the log, should it fail a warning will be issued and <strong>predbat.status</strong> will also reflect the warning.
+While the above warning might not prevent Predbat from starting up, you should fix the issue ASAP as it may cause future problems.</p>
+<p><strong>Note:</strong> If you are running the Predbat through the Predbat add-on or via Docker you will get a logfile warning message</p>
+<h2 id="predbat-output-and-configuration-controls">Predbat Output and Configuration Controls</h2>
+<p>As described above, the basic configuration of Predbat is held in the <code>apps.yaml</code> configuration file.</p>
+<p>When Predbat first runs it will create a number of output and configuration control entities in Home Assistant which are used to fine-tune how Predbat operates.
+The entities are all prefixed <em>predbat</em> and can be seen (and changed) from the Settings / Devices &amp; Services / Entities list in Home Assistant.</p>
+<p>It is recommended that you create a dashboard page with all the required entities to control Predbat
+and another page to display Predbat's charging and discharging plan for your battery.</p>
+<p>The <a href="../output-data/">Output Data</a> section describes these points in more detail including using the auto-generated <code>predbat_dashboard.yaml</code> dashboard file.</p>
+<p>The Home Assistant entity <strong>predbat.status</strong> contains details of what status Predbat is currently in (e.g. Idle, Charging, Error).
+Detailed progress messages and error logging are written to the <a href="../output-data/#predbat-logfile">Predbat logfile</a> which you can view within Home Assistant using a <a href="#editing-configuration-files-in-home-assistant">file editor</a>.</p>
+<p>The <a href="../configuration-guide/">Predbat Configuration Guide</a> gives an overview of the main Predbat configuration items and
+detail of 'standard Predbat configuration' settings for different electricity tariff types - e.g. a cheap overnight rate,
+multiple import rates during the day, and variable tariffs such as Agile, etc.</p>
+<p>The detailed <a href="../customisation/">Predbat Customisation Guide</a> details all the Predbat configuration items (switches, input numbers, etc) in Home Assistant, and what each of them does.</p>
+<p>The Predbat <a href="../web-interface/">Web Interface</a> provides an easy way to view all of the Predbat configuration items, check apps.yaml for errors, and view the logfile.</p>
+<h2 id="ready-to-light-the-touch-paper">Ready to light the touch-paper</h2>
+<p>By now you should have successfully installed and configured Predbat and the other components it is dependent upon
+(e.g. an inverter controller such as GivTCP, Solcast solar forecast, Octopus Energy integration, etc).</p>
+<p><img alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/48cffa4a-5f05-4cbc-9356-68eb3d8fb730" /></p>
+<p>You have checked the <a href="../output-data/#predbat-logfile">Predbat log file</a> doesn't have any errors (there is a lot of output in the logfile, this is normal).</p>
+<p>You have <a href="../customisation/">configured Predbat's control entities</a>, <a href="../web-interface/#appsyaml-view">checked for apps.yaml errors</a>, created some <a href="../output-data/#displaying-output-data">dashboard pages to control and monitor Predbat</a>,
+and are ready to start Predbat generating your plan.</p>
+<p>You may initially want to set <strong>select.predbat_mode</strong> to <em>Monitor</em> to see how Predbat operates, e.g. by studying the <a href="../predbat-plan-card/">Predbat Plan</a>.
+In <em>Monitor</em> mode Predbat will monitor (but not change) the current inverter settings and predict the battery SoC based on predicted Solar Generation and House Load.<BR>
+NB: In <em>Monitor</em> mode Predbat will <em>NOT</em> plan any battery charge or discharge activity of its own,
+it will report on the predicted battery charge level based on the current inverter charge &amp; discharge settings, predicted house load and predicted solar generation.</p>
+<p>In order to enable Predbat to start generating your plan you must delete the 'template: True' line in <code>apps.yaml</code> once you are happy with your configuration.</p>
+<p>Predbat will automatically run, analyse your house load, battery status, solar prediction, etc and produce a plan based on the current battery settings.</p>
+<p>Check the <a href="../output-data/#predbat-logfile">Predbat logfile</a> again for errors. Voluminous output is quite normal but any errors or warnings should be investigated.
+Read the <a href="../faq/">Predbat FAQ's</a> for answers to common questions you may have.
+Also, check the <a href="../what-does-predbat-do/#predbat-status">Predbat status <strong>predbat.status</strong></a> - major errors will also be flagged here.</p>
+<p>Once Predbat is running successfully the recommended next step is to start Predbat planning your inverter charging and discharging activity, but not (yet) make any changes to the inverter.
+This enables you to get a feel for the Predbat plan and further <a href="../customisation/">customise Predbat's settings</a> to meet your needs.</p>
+<p>Set <strong>select.predbat_mode</strong> to the correct <a href="../customisation/#predbat-mode">mode of operation</a> for your system - usually 'Control charge' or 'Control charge &amp; discharge'.
+Also, you should set <strong>switch.predbat_set_read_only</strong> to True to stop Predbat from making any changes to your inverter.</p>
+<p>You can see the planned solar and grid charging and discharging activity in the <a href="../predbat-plan-card/">Predbat Plan</a>.
+Another set of views can be seen in the detailed <a href="../creating-charts/">Apex Charts showing Predbat's predictions</a>.</p>
+<p>Once you are happy with the plan Predbat is producing, and are ready to let Predbat start controlling your inverter charging and discharging,
+set the switch <strong>switch.predbat_set_read_only</strong> to False and Predbat will start controlling your inverter.</p>
+<h2 id="updating-predbat">Updating Predbat</h2>
+<p>Note that any future updates to Predbat will not overwrite the <code>apps.yaml</code> configuration file that you have tailored to your setup.
+If new Predbat releases introduce new features to apps.yaml you may therefore need to manually copy across the new apps.yaml settings from the <a href="../apps-yaml/#templates">Template apps.yaml</a>.</p>
+<h2 id="update-via-home-assistant">Update via Home Assistant</h2>
+<p><strong>Recommended</strong></p>
+<p>Predbat can now be updated using the Home Assistant update feature. When a new release is available you should see it in the Home Assistant settings:</p>
+<p><img alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/516c77b8-7258-45e7-868f-eea40ee380ac" /></p>
+<p>Click on the update and select Install:</p>
+<p><img alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/e708899d-a4aa-4bd4-b7d1-1c6687dd7e23" /></p>
+<h2 id="predbat-built-in-update">Predbat built-in update</h2>
+<p><strong>Recommended for manual selection of versions or automatic updates</strong></p>
+<p>Predbat can now update itself, just select the version of Predbat you want to install from the <strong>select.predbat_update</strong> drop-down menu,
+the latest version will be at the top of the list. Predbat will update itself and automatically restart.</p>
+<p>Alternatively, if you turn on <strong>switch.predbat_auto_update</strong>, Predbat will automatically update itself as new releases are published on GitHub.</p>
+<p><img alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9" /></p>
+<p>Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the <strong>select.predbat_update</strong> selector,
+or by enabling the <strong>switch.predbat_auto_update</strong> to auto-update Predbat.</p>
+<h2 id="upgrading-from-appdaemon-to-predbat-add-on">Upgrading from AppDaemon to Predbat add-on</h2>
+<p>These steps assume you already have a working Predbat system and want to upgrade to using the Predbat add-on instead of using either the AppDaemon or the AppDaemon-predbat add-on.</p>
+<p>Using the Predbat add-on is the strategic direction for Predbat and resolves some performance and data load issues that can occur with AppDaemon.
+The Predbat code that runs is the same and the configuration is exactly the same, it is just changing the 'container' that Predbat runs within.</p>
+<ol>
+<li>
+<p>Before starting, watch the <a href="https://www.youtube.com/watch?v=PvGyENVJup8">installing Predbat add-on video</a></p>
+</li>
+<li>
+<p>Although the upgrade steps are low risk, take a full backup of Home Assistant before starting</p>
+</li>
+<li>
+<p><a href="#predbat-add-on-install">Install the Predbat add-on</a>:</p>
+<ul>
+<li>Add the Predbat add-on to the list of Repositories in the add-on store</li>
+<li>Install the Predbat add-on</li>
+<li>But <strong>do not</strong> start it - <em>yet</em></li>
+</ul>
+</li>
+<li>
+<p><a href="#editing-configuration-files-in-home-assistant">Install a file editor</a> if you don't have one already installed - either File Editor or Studio Code Server, it doesn't matter</p>
+</li>
+<li>
+<p>Shutdown your existing AppDaemon or AppDaemon-predbat add-on:</p>
+<ul>
+<li>Go to Settings/Add-ons</li>
+<li>Click on the existing AppDaemon/AppDaemon-predbat add-on</li>
+<li>Click STOP, and untick 'Start on boot'</li>
+</ul>
+</li>
+<li>
+<p>Briefly start the new Predbat add-on so that it creates the addon_config folder and the template <code>apps.yaml</code> file:</p>
+<ul>
+<li>Go to Settings/Add-ons</li>
+<li>Click on the Predbat add-on</li>
+<li>Click START, wait a minute for the add-on to initialise itself, then click STOP. A predbat status warning that you have a template apps.yaml file is normal and can be ignored</li>
+</ul>
+</li>
+<li>
+<p>Open your file editor and open your existing <code>apps.yaml</code> file:</p>
+<ul>
+<li>
+<p>If you are using the old 'combined AppDaemon/Predbat add-on installation method' it's in the directory <code>/addon_configs/46f69597_appdaemon-predbat/apps</code>,
+or</p>
+</li>
+<li>
+<p>with the old HACS Appdaemon add-on then Predbat installation method it's in <code>/config/appdaemon/apps/batpred/config/</code></p>
+</li>
+</ul>
+</li>
+<li>
+<p>Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)</p>
+</li>
+<li>
+<p>Now open the template <code>apps.yaml</code> file that's supplied with the Predbat add-on and has been created in the directory <code>/addon_configs/6adb4f0d_predbat</code>,
+select all the contents of the template apps.yaml file, and paste in the contents of your existing apps.yaml, overwriting the template with your specific configuration</p>
+</li>
+<li>
+<p>Now you are ready to swap from running the AppDaemon or AppDaemon-predbat add-on to the Predbat add-on:</p>
+<ul>
+<li>Go to Settings/Add-ons</li>
+<li>Click on the existing AppDaemon/AppDaemon-predbat add-on</li>
+<li>Make sure it is not running and 'Start on boot' is not ticked</li>
+<li>Click the back arrow</li>
+<li>Click on the Predbat add-on</li>
+<li>Click START, and tick 'Start on boot'</li>
+</ul>
+</li>
+<li>
+<p>If you are using the <a href="../output-data/#predbat-error-monitor">Predbat automatic monitor</a> then you will need to enable the predbat_running binary sensor and change the automation,
+replacing the AppDaemon add-on id (a0d7b954_appdaemon) with 'a06adb4f0d_predbat', and 'binary_sensor.appdaemon_running' with 'binary_sensor.predbat_running'.</p>
+</li>
+</ol>
+<p>And that's it.</p>
+<p>You should check the Log tab to ensure it all starts properly, but it should do as you've copied over your existing configuration.</p>
+<p>Note that if you are using the <a href="#predbat-direct-solcast-method">Predbat direct connection to Solcast</a> then the Predbat add-on will need to download your solar forecast
+so will use up one or two of your daily API calls (hobbyist accounts have a 10 API calls a day limit).
+If you are using the <a href="#solcast-home-assistant-integration-method">Solcast integration</a> then this won't be required.</p>
+<p>You may find that the Predbat add-on installed with an older version of Predbat than you were previously using,
+which might require you to <a href="#predbat-built-in-update">update Predbat to the correct version</a>.</p>
+<ol start="11">
+<li>When you are happily running the Predbat add-on you can delete the AppDaemon or AppDaemon-predbat add-on.</li>
+</ol>
+<h2 id="backing-up-home-assistant-and-predbat">Backing up Home Assistant and Predbat</h2>
+<p>It's strongly recommended that you implement an automatic mechanism to back up your Home Assistant and Predbat system.</p>
+<p>There are several ways of backing up Home Assistant but one of the simplest is the <a href="https://github.com/sabeechen/hassio-google-drive-backup">Home Assistant Google Drive Backup</a>
+which is an add-on that runs every night, automatically makes a backup of Home Assistant (including Predbat), and copies that backup to a Google Drive for safekeeping.</p>
+<p>If you create a new Google account specifically for your Home Assistant backups you will automatically get 15Gb of free Google Drive storage, enough for a couple of weeks of backups.</p>
+<p>As well as the full Home Assistant backup you manually copy the contents of Predbat's <code>apps.yaml</code> configuration file to somewhere safe so that if you accidentally mis-edit it,
+you can get Predbat working quickly again by copying it back again.</p>
+<h2 id="uninstalling-predbat">Uninstalling Predbat</h2>
+<p>Incredible though it may be to imagine, its possible you may want to uninstall Predbat.</p>
+<p>Removing the Predbat add-on is easy, System / Add-ons / Predbat then select 'Uninstall'.</p>
+<p>Its recommended that you do a full restart of Home Assistant and all add-on's after removing Predbat.</p>
+<p>You will find that entities created by Predbat unfortunately don't get removed when you remove the Predbat add-on, and as they do not have unique Home Assistant id's, they can't be removed from the Devices &amp; Services / Entities list.</p>
+<p>To remove the Predbat entities you will need to use a different mechanism and purge them from Home Assistant:</p>
+<ul>
+<li>Developer Tools / Actions</li>
+<li>Search for 'Recorder: Purge Entities'</li>
+<li>Tick 'Domains to remove' and enter 'predbat' as the domain</li>
+<li>Tick 'Entity globs to remove' and enter '<em>.predbat_</em>'</li>
+<li>Tick 'Days to keep' and set to zero days</li>
+</ul>
+<p>Then click 'Perform Action'</p>
+<p>This will remove the Predbat entities.  Then do another full reboot of Home Assistant all the add-on's.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../installation-summary/" class="btn btn-neutral float-left" title="Install summary"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../inverter-setup/" class="btn btn-neutral float-right" title="Inverter setup">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../installation-summary/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../inverter-setup/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
