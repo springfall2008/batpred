@@ -1671,69 +1671,18 @@ def run_load_octopus_slots_tests(my_predbat):
     failed |= run_load_octopus_slot_test("test8", my_predbat, slots6, expected_slots5, False, 0, 10, 1.0)
     if failed:
         return failed
-    
+
     today_string = my_predbat.midnight_utc.strftime("%Y-%m-%dT")
     sample_bad = [
-        {
-            "charge_in_kwh": -1.29,
-            "end": today_string + "15:00:00+01:00",
-            "location": "AT_HOME",
-            "source": None,
-            "start": today_string + "14:30:00+01:00"
-        },
-        {
-            "charge_in_kwh": -3.17,
-            "end": today_string + "15:30:00+01:00",
-            "location": "AT_HOME",
-            "source": None,
-            "start": today_string + "15:00:00+01:00"
-        },
-        {
-            "charge_in_kwh": -3.18,
-            "end": today_string + "16:00:00+01:00",
-            "location": "AT_HOME",
-            "source": None,
-            "start": today_string + "15:30:00+01:00"
-        },
-        {
-            "charge_in_kwh": -3.14,
-            "end": today_string + "16:30:00+01:00",
-            "location": "AT_HOME",
-            "source": None,
-            "start": today_string + "16:00:00+01:00"
-        },
-        {
-            "charge_in_kwh": -7.47,
-            "end": today_string + "17:30:00+01:00",
-            "location": None,
-            "source": "smart-charge",
-            "start": today_string + "16:26:00+01:00"
-        },
-        {
-            "charge_in_kwh": -3.0,
-            "end": today_string + "18:00:00+01:00",
-            "location": None,
-            "source": "smart-charge",
-            "start": today_string + "17:30:00+01:00"
-        },
-        {
-            "charge_in_kwh": -3.5,
-            "end": today_string + "03:00:00+01:00",
-            "location": None,
-            "source": "smart-charge",
-            "start": today_string + "02:30:00+01:00"
-        },
-        {
-            "charge_in_kwh": -3.5,
-            "end": today_string + "05:30:00+01:00",
-            "location": None,
-            "source": "smart-charge",
-            "start": today_string + "05:00:00+01:00"
-        },
-        {
-            "end": today_string + "18:00:00+01:00",
-            "start": today_string + "17:30:00+01:00"
-        }
+        {"charge_in_kwh": -1.29, "end": today_string + "15:00:00+01:00", "location": "AT_HOME", "source": None, "start": today_string + "14:30:00+01:00"},
+        {"charge_in_kwh": -3.17, "end": today_string + "15:30:00+01:00", "location": "AT_HOME", "source": None, "start": today_string + "15:00:00+01:00"},
+        {"charge_in_kwh": -3.18, "end": today_string + "16:00:00+01:00", "location": "AT_HOME", "source": None, "start": today_string + "15:30:00+01:00"},
+        {"charge_in_kwh": -3.14, "end": today_string + "16:30:00+01:00", "location": "AT_HOME", "source": None, "start": today_string + "16:00:00+01:00"},
+        {"charge_in_kwh": -7.47, "end": today_string + "17:30:00+01:00", "location": None, "source": "smart-charge", "start": today_string + "16:26:00+01:00"},
+        {"charge_in_kwh": -3.0, "end": today_string + "18:00:00+01:00", "location": None, "source": "smart-charge", "start": today_string + "17:30:00+01:00"},
+        {"charge_in_kwh": -3.5, "end": today_string + "03:00:00+01:00", "location": None, "source": "smart-charge", "start": today_string + "02:30:00+01:00"},
+        {"charge_in_kwh": -3.5, "end": today_string + "05:30:00+01:00", "location": None, "source": "smart-charge", "start": today_string + "05:00:00+01:00"},
+        {"end": today_string + "18:00:00+01:00", "start": today_string + "17:30:00+01:00"},
     ]
 
     loaded_slots = my_predbat.load_octopus_slots(sample_bad, False)

@@ -1358,7 +1358,7 @@ class Octopus:
             kwh = slot.get("chargeKwh", None)
 
         # Remove empty slots
-        if kwh is None and location=="" and source == "":
+        if kwh is None and location == "" and source == "":
             return 0, 0, 0, source, location
 
         # Create kWh if missing
