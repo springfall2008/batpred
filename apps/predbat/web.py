@@ -2677,7 +2677,7 @@ function typeIsNumerical(value) {
     if (!/^-?\d*\.?\d+$/.test(value)) {
         return false; // Not a valid numerical format
     }
-    
+
     try {
         if (value.includes('.')) {
             value = parseFloat(value);
