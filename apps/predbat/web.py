@@ -1515,7 +1515,7 @@ var options = {
         }
 
         // Handle rate override option function
-        function handleRateOverride(time, rate, action) {
+        function handleRateOverride(time, rate, action, clear) {
             console.log("Rate override:", time, "Rate:", rate, "Action:", action);
             // Create a form data object to send the override parameters
             const formData = new FormData();
@@ -1537,7 +1537,11 @@ var options = {
                 if (data.success) {
                     // Show success message
                     const messageElement = document.createElement('div');
-                    messageElement.textContent = `Rate set to ${rate}p/kWh for ${time}`;
+                    if (clear) {
+                        messageElement.textContent = `Manual rate cleared for ${time}`;
+                    } else {
+                        messageElement.textContent = `Rate set to ${rate}p/kWh for ${time}`;
+                    }
                     messageElement.style.position = 'fixed';
                     messageElement.style.top = '65px';
                     messageElement.style.right = '10px';
@@ -1563,14 +1567,8 @@ var options = {
             })
             .catch(error => {
                 console.error('Error:', error);
-                    alert('Error setting rate override: ' + (data.message || 'Unknown error'));
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('Error setting rate override: ' + error.message);
+                alert('Error setting rate override: ' + (error.message || 'Unknown error'));
             });
-
             // Close dropdown after selection
             closeDropdowns();
         }
@@ -1726,8 +1724,10 @@ var options = {
             if is_import:
                 if int(import_minute) in manual_import_rates:
                     override_active = True
+                    import_rate = manual_import_rates[int(import_minute)]
             elif int(import_minute) in manual_export_rates:
                 override_active = True
+                import_rate = manual_export_rates[int(import_minute)]
 
             button_html = f"""<td {import_tag} class="clickable-time-cell {'override-active' if override_active else ''}" onclick="toggleForceDropdown('{dropdown_id}')">
                 {import_rate_text}
@@ -1736,18 +1736,18 @@ var options = {
             """
             if override_active:
                 action = "Clear Import" if is_import else "Clear Export"
-                button_html += f"""<a onclick="handleRateOverride('{import_minute_str}', '{import_rate}', '{action}')">{action}</a>"""
+                button_html += f"""<a onclick="handleRateOverride('{import_minute_str}', '{import_rate}', '{action}', true)">{action}</a>"""
             else:
                 # Add input field for custom rate entry
                 default_rate = self.base.get_arg("manual_import_value") if is_import else self.base.get_arg("manual_export_value")
                 action = "Set Import" if is_import else "Set Export"
                 button_html += f"""
                     <div style="padding: 12px 16px;">
-                        <label style="display: block; margin-bottom: 5px; color: inherit;">{action} Rate (p/kWh):</label>
+                        <label style="display: block; margin-bottom: 5px; color: inherit;">{action} {import_minute_str} Rate:</label>
                         <input type="number" id="{input_id}" step="0.1" value="{default_rate}"
                                style="width: 80px; padding: 4px; margin-bottom: 8px; border-radius: 3px;">
                         <br>
-                        <button onclick="handleRateOverride('{import_minute_str}', document.getElementById('{input_id}').value, '{action}')"
+                        <button onclick="handleRateOverride('{import_minute_str}', document.getElementById('{input_id}').value, '{action}', false)"
                                 style="padding: 6px 12px; border-radius: 3px; font-size: 12px;">
                             Set Rate
                         </button>
