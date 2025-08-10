@@ -291,7 +291,7 @@ class UserInterface:
                         await self.async_restore_settings_yaml(None)
                     else:
                         await self.async_restore_settings_yaml(value)
-                elif item.get("manual"):
+                elif item.get("manual") or item.get("manual_rate"):
                     await self.async_manual_select(item["name"], value)
                 elif item.get("api"):
                     await self.async_api_select(item["name"], value)
@@ -938,6 +938,12 @@ class UserInterface:
             if ha_value is not None:
                 if item.get("manual"):
                     self.manual_times(name, new_value=ha_value)
+                elif item.get("manual_rate"):
+                    if "_import" in item["name"]:
+                        # Manual import rate
+                        self.manual_rates(name, new_value=ha_value, default_rate=self.get_arg("manual_import_value"))
+                    else:
+                        self.manual_rates(name, new_value=ha_value, default_rate=self.get_arg("manual_export_value"))
                 elif item.get("api"):
                     self.api_select_update(name, new_value=ha_value)
                 else:
@@ -1113,6 +1119,7 @@ class UserInterface:
         Selection on manual times dropdown
         """
         item = self.config_index.get(config_item)
+        manual_rate = item.get("manual_rate", False)
         if not item:
             return
         if not value:
@@ -1146,7 +1153,17 @@ class UserInterface:
 
         if not item_value:
             item_value = "off"
-        self.manual_times(config_item, new_value=item_value)
+
+        if manual_rate:
+            # Update manual rates sensor
+            if "_import" in item["name"]:
+                # Manual import rate
+                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_import_value"))
+            else:
+                # Manual export rate
+                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_export_value"))
+        else:
+            self.manual_times(config_item, new_value=item_value)
 
         # Update other drop downs that may need this time excluding
         for item in self.CONFIG_ITEMS:
@@ -1245,6 +1262,76 @@ class UserInterface:
             values = "off"
         self.expose_config(config_item, values, force=True)
         return time_overrides
+
+    def manual_rates(self, config_item, exclude=[], new_value=None, default_rate=0):
+        """
+        Update manual rates sensor
+        """
+        rate_overrides_minutes = {}
+        rate_overrides = []
+        minutes_now = int(self.minutes_now / 30) * 30
+        manual_rate_max = 18 * 60
+
+        # Deconstruct the value into a list of minutes
+        item = self.config_index.get(config_item)
+        if new_value:
+            values = new_value
+        else:
+            values = item.get("value", "")
+        values = values.replace("+", "")
+        values_list = []
+        if values:
+            values_list = values.split(",")
+        for value in values_list:
+            if value == "off":
+                continue
+            if "=" in value:
+                rate_time, rate_value = value.split("=")
+            else:
+                rate_time = value
+                rate_value = default_rate
+            try:
+                start_time = datetime.strptime(rate_time, "%H:%M:%S")
+            except (ValueError, TypeError):
+                start_time = None
+            if start_time:
+                minutes = start_time.hour * 60 + start_time.minute
+                if minutes < minutes_now:
+                    minutes += 24 * 60
+                if (minutes - minutes_now) < manual_rate_max:
+                    rate_overrides.append((minutes, rate_value))
+                    for minute in range(minutes, minutes + 30):
+                        rate_overrides_minutes[minute] = rate_value
+
+        # Reconstruct the list in order based on minutes
+        values_list = []
+        for minute, rate in rate_overrides:
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+            if minute_str not in exclude:
+                values_list.append(minute_str + "=" + str(rate))
+        values = ",".join(values_list)
+        if values:
+            values = "+" + values
+
+        # Create the new dropdown
+        time_values = []
+        for minute in range(minutes_now, minutes_now + manual_rate_max, 30):
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+            if minute in rate_overrides_minutes:
+                rate_value = rate_overrides_minutes[minute]
+                minute_str = "{}={}".format(minute_str, rate_value)
+                minute_str = "[" + minute_str + "]"
+            time_values.append(minute_str)
+
+        if values not in time_values:
+            time_values.append(values)
+        time_values.append("off")
+        item["options"] = time_values
+        if not values:
+            values = "off"
+        self.expose_config(config_item, values, force=True)
+
+        return rate_overrides_minutes
 
     def manual_times(self, config_item, exclude=[], new_value=None):
         """

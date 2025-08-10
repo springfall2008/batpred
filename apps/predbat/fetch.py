@@ -1237,6 +1237,7 @@ class Fetch:
             self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
+            self.rate_import = self.apply_manual_rates(self.rate_import, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
             self.rate_scan(self.rate_import, print=True)
         else:
             self.log("Warning: No import rate data provided")
@@ -1250,6 +1251,7 @@ class Fetch:
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
             self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.rate_export, self.rate_export_replicated)
+            self.rate_export = self.apply_manual_rates(self.rate_export, self.manual_export_rates, is_import=False, rate_replicate=self.rate_export_replicated)
             self.rate_scan_export(self.rate_export, print=True)
         else:
             self.log("Warning: No export rate data provided")
@@ -1513,6 +1515,26 @@ class Fetch:
         if rate_low_count:
             rate_low_average = dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
+
+    def apply_manual_rates(self, rates, manual_items, is_import=True, rate_replicate={}):
+        """
+        Apply manual rates to the rates dictionary
+        """
+        if not manual_items:
+            return rates
+
+        for minute in manual_items:
+            rate = manual_items[minute]
+            try:
+                rate = float(rate)
+            except (ValueError, TypeError):
+                self.log("Warn: Bad rate {} provided in manual rates".format(rate))
+                self.record_status("Bad rate {} provided in manual rates".format(rate), had_errors=True)
+                continue
+            rates[minute] = rate
+            rate_replicate[minute] = "manual"
+
+        return rates
 
     def basic_rates(self, info, rtype, prev=None, rate_replicate={}):
         """
@@ -2242,6 +2264,8 @@ class Fetch:
         self.manual_demand_times = self.manual_times("manual_demand")
         self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
+        self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
+        self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()
