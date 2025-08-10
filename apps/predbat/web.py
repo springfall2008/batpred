@@ -1563,7 +1563,12 @@ var options = {
             })
             .catch(error => {
                 console.error('Error:', error);
-                alert('Error setting import override: ' + error.message);
+                    alert('Error setting rate override: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error setting rate override: ' + error.message);
             });
 
             // Close dropdown after selection
