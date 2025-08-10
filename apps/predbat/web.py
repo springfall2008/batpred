@@ -1514,7 +1514,7 @@ var options = {
             }
         }
 
-        // Handle import override option function
+        // Handle rate override option function
         function handleRateOverride(time, rate, action) {
             console.log("Rate override:", time, "Rate:", rate, "Action:", action);
             // Create a form data object to send the override parameters
