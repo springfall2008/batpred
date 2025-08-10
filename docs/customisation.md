@@ -576,7 +576,7 @@ In summary:
 
 In some cases, you may want to override Predbat's planned behaviour and make a decision yourself. One way to achieve this is to put Predbat into
 read-only mode using **switch.predbat_set_read_only**. When going to read-only mode the inverter will be put back to the default settings and you should then
-control it yourself using GivTCP or the App appropriate to your inverter.
+control it yourself using your inverter controls directly.
 
 A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:
 
@@ -602,6 +602,12 @@ hold at the current level. The grid may be used if solar is not enough to cover 
 
 The **select.predbat_manual_freeze_export** selector is used to force Predbat to freeze export during a 30-minute slot, this implies the battery will not charge but will
 still discharge for the house load. Any solar will be exported to the grid.
+
+The **select.predbat_manual_import_rates** selected is used to override the import rates for a 30-minute slot, the rate selected will be that configured in **input_number.predbat_manual_import_value**
+which can be adjusted prior to making a selection. As with the other selectors the secltion can be cleared by selecting the option in square brackets or by using **clear**
+
+The **select.predbat_manual_export_rates** selected is used to override the export rates for a 30-minute slot, the rate selected will be that configured in **input_number.predbat_manual_export_value**
+which can be adjusted prior to making a selection. As with the other selectors the secltion can be cleared by selecting the option in square brackets or by using **clear**
 
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
 slot expires (they do not repeat).
