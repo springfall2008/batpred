@@ -604,10 +604,10 @@ The **select.predbat_manual_freeze_export** selector is used to force Predbat to
 still discharge for the house load. Any solar will be exported to the grid.
 
 The **select.predbat_manual_import_rates** selected is used to override the import rates for a 30-minute slot, the rate selected will be that configured in **input_number.predbat_manual_import_value**
-which can be adjusted prior to making a selection. As with the other selectors the secltion can be cleared by selecting the option in square brackets or by using **clear**
+which can be adjusted prior to making a selection. As with the other selectors the selection can be cleared by selecting the option in square brackets or by using **off**
 
 The **select.predbat_manual_export_rates** selected is used to override the export rates for a 30-minute slot, the rate selected will be that configured in **input_number.predbat_manual_export_value**
-which can be adjusted prior to making a selection. As with the other selectors the secltion can be cleared by selecting the option in square brackets or by using **clear**
+which can be adjusted prior to making a selection. As with the other selectors the selection can be cleared by selecting the option in square brackets or by using **off**
 
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
 slot expires (they do not repeat).
