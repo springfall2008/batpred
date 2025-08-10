@@ -412,7 +412,7 @@ class WebInterface:
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
             return text
-        
+
         debug_enable, ignore = self.base.get_ha_config("debug_enable", None)
         read_only, ignore = self.base.get_ha_config("set_read_only", None)
         mode, ignore = self.base.get_ha_config("mode", None)
@@ -440,18 +440,18 @@ class WebInterface:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
-        
+
         # Editable Mode field
         text += "<tr><td>Mode</td><td>"
         text += f'<form style="display: inline;" method="post" action="./dash">'
         text += f'<select name="mode" class="dashboard-select" onchange="this.form.submit()">'
-        for option in self.base.config_index.get('mode', {}).get("options", []):
+        for option in self.base.config_index.get("mode", {}).get("options", []):
             selected = "selected" if option == mode else ""
             text += f'<option value="{option}" {selected}>{option}</option>'
-        text += '</select></form></td></tr>\n'
-        
+        text += "</select></form></td></tr>\n"
+
         text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
-        
+
         # Editable Debug Enable field
         text += "<tr><td>Debug Enable</td><td>"
         text += f'<form style="display: inline;" method="post" action="./dash">'
@@ -1742,7 +1742,7 @@ body.dark-mode .log-menu a.active {
         Save the Predbat config from an HTML page
         """
         postdata = await request.post()
-        
+
         # Process only the submitted form data
         for pitem in postdata:
             new_value = postdata[pitem]
@@ -1922,7 +1922,7 @@ body.dark-mode .log-menu a.active {
         try:
             # Parse form data
             data = await request.post()
-            
+
             # Handle the different types of controls
             for key, value in data.items():
                 if key == "mode":
@@ -1937,7 +1937,7 @@ body.dark-mode .log-menu a.active {
 
             # Log the update
             self.log(f"Dashboard status updated: {dict(data)}")
-            
+
         except Exception as e:
             self.log(f"ERROR: Failed to update dashboard status: {str(e)}")
 
