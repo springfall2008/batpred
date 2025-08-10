@@ -497,6 +497,8 @@ class Output:
                 symbol = "? &#x2696;"
             elif adjust_type == "user":
                 symbol = "&#61;"
+            elif adjust_type == "manual":
+                symbol = "&#8526;"
             elif adjust_type == "increment":
                 symbol = "&#177;"
             elif adjust_type == "saving":
@@ -1387,9 +1389,9 @@ class Output:
 
             # Table row
             html += '<tr style="color:black">'
-            html += "<td bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
-            html += "<td " + cell_style + " bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
-            html += "<td " + cell_style + " bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
+            html += "<td id=time bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
+            html += "<td id=import data-minute=" + str(minute) + " data-rate=" + str(rate_value_import) + " " + cell_style + " bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
+            html += "<td id=export data-minute=" + str(minute) + " data-rate=" + str(rate_value_export) + " " + cell_style + " bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
             if start_span:
                 if split:  # for slots that are both charging and exporting, just output the (split cell) state
                     html += "<td "

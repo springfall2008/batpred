@@ -122,7 +122,13 @@ class WebInterface:
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_post("/plan_override", self.html_plan_override)
+        app.router.add_post("/rate_override", self.html_rate_override)
         app.router.add_post("/restart", self.html_restart)
+        app.router.add_get("/api/state", self.html_api_get_state)
+        app.router.add_get("/api/ping", self.html_api_ping)
+        app.router.add_post("/api/state", self.html_api_post_state)
+        app.router.add_post("/api/service", self.html_api_post_service)
+        app.router.add_post("/api/login", self.html_api_login)
 
         # Register any dynamically registered endpoints
         for endpoint in self.registered_endpoints:
@@ -132,11 +138,6 @@ class WebInterface:
                 app.router.add_post(endpoint["path"], endpoint["handler"])
             # Add more methods as needed
             self.log(f"Added registered endpoint: {endpoint['method']} {endpoint['path']}")
-        app.router.add_get("/api/state", self.html_api_get_state)
-        app.router.add_get("/api/ping", self.html_api_ping)
-        app.router.add_post("/api/state", self.html_api_post_state)
-        app.router.add_post("/api/service", self.html_api_post_service)
-        app.router.add_post("/api/login", self.html_api_login)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -1446,6 +1447,49 @@ var options = {
         body.dark-mode .override-active {
             background-color: #93264c !important; /* Darker pink for dark mode */
         }
+
+        /* Rate input field styles */
+        .dropdown-content input[type="number"] {
+            background-color: #fff;
+            color: #333;
+            border: 1px solid #ccc;
+        }
+
+        .dropdown-content input[type="number"]:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        .dropdown-content button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+
+        .dropdown-content button:hover {
+            background-color: #45a049;
+        }
+
+        /* Dark mode styles for input and button */
+        body.dark-mode .dropdown-content input[type="number"] {
+            background-color: #444;
+            color: #e0e0e0;
+            border-color: #666;
+        }
+
+        body.dark-mode .dropdown-content input[type="number"]:focus {
+            border-color: #4CAF50;
+        }
+
+        body.dark-mode .dropdown-content button {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        body.dark-mode .dropdown-content button:hover {
+            background-color: #45a049;
+        }
         </style>
 
         <script>
@@ -1460,7 +1504,7 @@ var options = {
         }
 
         // Toggle dropdown menu
-        function toggleDropdown(id) {
+        function toggleForceDropdown(id) {
             closeDropdowns();
             var dropdown = document.getElementById(id);
             if (dropdown.style.display === "block") {
@@ -1468,6 +1512,62 @@ var options = {
             } else {
                 dropdown.style.display = "block";
             }
+        }
+
+        // Handle import override option function
+        function handleRateOverride(time, rate, action) {
+            console.log("Rate override:", time, "Rate:", rate, "Action:", action);
+            // Create a form data object to send the override parameters
+            const formData = new FormData();
+            formData.append('time', time);
+            formData.append('rate', rate);
+            formData.append('action', action);
+            // Send the override request to the server
+            fetch('./rate_override', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.json();
+                }
+                throw new Error('Failed to set import override');
+            })
+            .then(data => {
+                if (data.success) {
+                    // Show success message
+                    const messageElement = document.createElement('div');
+                    messageElement.textContent = `Rate set to ${rate}p/kWh for ${time}`;
+                    messageElement.style.position = 'fixed';
+                    messageElement.style.top = '65px';
+                    messageElement.style.right = '10px';
+                    messageElement.style.padding = '10px';
+                    messageElement.style.backgroundColor = '#4CAF50';
+                    messageElement.style.color = 'white';
+                    messageElement.style.borderRadius = '4px';
+                    messageElement.style.zIndex = '1000';
+                    document.body.appendChild(messageElement);
+
+                    // Auto-remove message after 3 seconds
+                    setTimeout(() => {
+                        messageElement.style.opacity = '0';
+                        messageElement.style.transition = 'opacity 0.5s';
+                        setTimeout(() => messageElement.remove(), 500);
+                    }, 3000);
+
+                    // Reload the page to show the updated plan
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    alert('Error setting import override: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error setting import override: ' + error.message);
+            });
+
+            // Close dropdown after selection
+            closeDropdowns();
         }
 
         // Handle option selection
@@ -1540,7 +1640,9 @@ var options = {
         html_plan = self.base.html_plan
 
         # Regular expression to find time cells in the table
-        time_pattern = r"<td .*>((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2})</td>"
+        time_pattern = r"<td id=time.*?>((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2})</td>"
+        import_pattern = r"<td id=import data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"
+        export_pattern = r"<td id=export data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"
 
         # Counter for creating unique IDs for dropdowns
         dropdown_counter = 0
@@ -1551,6 +1653,8 @@ var options = {
         manual_freeze_export_times = self.base.manual_times("manual_freeze_export")
         manual_demand_times = self.base.manual_times("manual_demand")
         manual_all_times = manual_charge_times + manual_export_times + manual_demand_times + manual_freeze_charge_times + manual_freeze_export_times
+        manual_import_rates = self.base.manual_rates("manual_import_rates")
+        manual_export_rates = self.base.manual_rates("manual_export_rates")
 
         # Function to replace time cells with cells containing dropdowns
         def add_button_to_time(match):
@@ -1570,7 +1674,7 @@ var options = {
                 override_class = "override-active"
 
             # Create clickable cell and dropdown HTML
-            button_html = f"""<td bgcolor={cell_bg_color} onclick="toggleDropdown('{dropdown_id}')" class="clickable-time-cell {override_class}">
+            button_html = f"""<td bgcolor={cell_bg_color} onclick="toggleForceDropdown('{dropdown_id}')" class="clickable-time-cell {override_class}">
                 {time_text}
                 <div class="dropdown">
                     <div id="{dropdown_id}" class="dropdown-content">
@@ -1595,9 +1699,66 @@ var options = {
 
             return button_html
 
-        # Process the HTML plan to add buttons to time cells
+        def add_button_to_export(match):
+            return add_button_to_import(match, is_import=False)
 
+        def add_button_to_import(match, is_import=True):
+            """
+            Add import rate button to import cells
+            """
+            nonlocal dropdown_counter
+            dropdown_id = f"dropdown_{dropdown_counter}"
+            input_id = f"rate_input_{dropdown_counter}"
+            dropdown_counter += 1
+
+            import_minute = match.group(1)
+            import_rate = match.group(2).strip()
+            import_tag = match.group(3).strip()
+            import_rate_text = match.group(4).strip()
+            import_minute_to_time = self.base.midnight_utc + timedelta(minutes=int(import_minute))
+            import_minute_str = import_minute_to_time.strftime("%a %H:%M")
+            override_active = False
+            if is_import:
+                if int(import_minute) in manual_import_rates:
+                    override_active = True
+            elif int(import_minute) in manual_export_rates:
+                override_active = True
+
+            button_html = f"""<td {import_tag} class="clickable-time-cell {'override-active' if override_active else ''}" onclick="toggleForceDropdown('{dropdown_id}')">
+                {import_rate_text}
+                <div class="dropdown">
+                    <div id="{dropdown_id}" class="dropdown-content">
+            """
+            if override_active:
+                action = "Clear Import" if is_import else "Clear Export"
+                button_html += f"""<a onclick="handleRateOverride('{import_minute_str}', '{import_rate}', '{action}')">{action}</a>"""
+            else:
+                # Add input field for custom rate entry
+                default_rate = self.base.get_arg('manual_import_value') if is_import else self.base.get_arg('manual_export_value')
+                action = "Set Import" if is_import else "Set Export"
+                button_html += f"""
+                    <div style="padding: 12px 16px;">
+                        <label style="display: block; margin-bottom: 5px; color: inherit;">{action} Rate (p/kWh):</label>
+                        <input type="number" id="{input_id}" step="0.1" value="{default_rate}" 
+                               style="width: 80px; padding: 4px; margin-bottom: 8px; border-radius: 3px;">
+                        <br>
+                        <button onclick="handleRateOverride('{import_minute_str}', document.getElementById('{input_id}').value, '{action}')" 
+                                style="padding: 6px 12px; border-radius: 3px; font-size: 12px;">
+                            Set Rate
+                        </button>
+                    </div>
+                """
+            button_html += f"""
+                    </div>
+                </div>
+            </td>"""
+
+            return button_html
+        
+        # Process the HTML plan to add buttons to time cells
         processed_html = re.sub(time_pattern, add_button_to_time, html_plan)
+        processed_html = re.sub(import_pattern, add_button_to_import, processed_html)
+        processed_html = re.sub(export_pattern, add_button_to_export, processed_html)
 
         text += processed_html + "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -5561,6 +5722,67 @@ window.addEventListener('resize', function() {
             add_days += 7
         override_time += timedelta(days=add_days)
         return override_time
+
+    async def html_rate_override(self, request):
+        """
+        Handle POST request for rate overrides
+        """
+        try:
+            # Parse form data
+            data = await request.post()
+            time_str = data.get("time")
+            action = data.get("action")
+            rate = data.get("rate")
+
+            try:
+                rate= float(rate)
+            except (TypeError, ValueError):
+                rate = 0.0
+
+            # Log the override request
+            self.log(f"Rate override requested: {action} at {time_str}")
+
+            # Validate inputs
+            if not time_str or not action:
+                self.log("ERROR: Missing required parameters for rate override")
+                return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
+
+            now_utc = self.base.now_utc
+            override_time = self.get_override_time_from_string(time_str)
+
+            minutes_from_now = (override_time - now_utc).total_seconds() / 60
+            if minutes_from_now >= 17 * 60:
+                return web.json_response({"success": False, "message": "Override time must be within 17 hours from now."}, status=400)
+
+            selection_option = "{}={}".format(override_time.strftime("%H:%M:%S"), rate)
+            clear_option = "[{}={}]".format(override_time.strftime("%H:%M:%S"), rate)
+            if action == "Clear Import":
+                await self.base.async_manual_select("manual_import_rates", clear_option)
+            elif action == "Set Import":
+                item = self.base.config_index.get("manual_import_value", {})
+                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_import_rates", selection_option)
+            elif action == "Clear Export":
+                await self.base.async_manual_select("manual_export_rates", clear_option)
+            elif action == "Set Export":
+                item = self.base.config_index.get("manual_export_value", {})
+                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_export_rates", selection_option)
+            else:
+                self.log("ERROR: Unknown action for rate override")
+                return web.json_response({"success": False, "message": "Unknown action"}, status=400)
+
+            # Refresh plan
+            self.base.update_pending = True
+            self.base.plan_valid = False
+
+            # Return html plan again
+            self.log("Rate override processed successfully")
+            return web.json_response({"success": True}, status=200)
+
+        except Exception as e:
+            self.log(f"ERROR: Failed to process rate override: {str(e)}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
 
     async def html_plan_override(self, request):
         """
