@@ -457,14 +457,14 @@ class WebInterface:
         text += f'<form style="display: inline;" method="post" action="./dash">'
         toggle_class = "toggle-switch active" if debug_enable else "toggle-switch"
         text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'debug_enable\')"></button>'
-        text += '</form></td></tr>\n'
-        
+        text += "</form></td></tr>\n"
+
         # Editable Set Read Only field
         text += "<tr><td>Set Read Only</td><td>"
         text += f'<form style="display: inline;" method="post" action="./dash">'
         toggle_class = "toggle-switch active" if read_only else "toggle-switch"
         text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'set_read_only\')"></button>'
-        text += '</form></td></tr>\n'
+        text += "</form></td></tr>\n"
         if self.base.arg_errors:
             count_errors = len(self.base.arg_errors)
             text += "<tr><td>Config</td><td bgcolor=#ff7777>apps.yaml has {} errors</td></tr>\n".format(count_errors)
@@ -1086,11 +1086,11 @@ class WebInterface:
     function toggleSwitch(element, fieldName) {
         // Toggle the active class
         element.classList.toggle('active');
-        
+
         // Determine the new value
         const isActive = element.classList.contains('active');
         const newValue = isActive ? 'on' : 'off';
-        
+
         // Find the associated form and hidden input
         const form = element.closest('form');
         if (form) {
@@ -1103,12 +1103,12 @@ class WebInterface:
                 form.appendChild(hiddenInput);
             }
             hiddenInput.value = newValue;
-            
+
             // If saveFilterValue function exists (config page), call it
             if (typeof saveFilterValue === 'function') {
                 saveFilterValue();
             }
-            
+
             // Submit the form
             form.submit();
         }
@@ -3990,7 +3990,7 @@ function discardAllChanges() {
                     toggle_class = "toggle-switch active" if value else "toggle-switch"
                     text += f'<td><form style="display: inline;" method="post" action="./config">'
                     text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'{useid}\')"></button>'
-                    text += f'</form></td>\n'
+                    text += f"</form></td>\n"
                 elif itemtype == "input_number":
                     input_number_with_save = input_number.replace('onchange="javascript: this.form.submit();"', 'onchange="saveFilterValue(); this.form.submit();"')
                     text += "<td>{}</td>\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
