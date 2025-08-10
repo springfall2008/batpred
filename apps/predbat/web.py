@@ -455,19 +455,15 @@ class WebInterface:
         # Editable Debug Enable field
         text += "<tr><td>Debug Enable</td><td>"
         text += f'<form style="display: inline;" method="post" action="./dash">'
-        debug_checked = "checked" if debug_enable else ""
-        if debug_enable:
-            text += f'<input type="hidden" name="debug_enable" value="off">'
-        text += f'<input type="checkbox" name="debug_enable" value="on" class="dashboard-checkbox" {debug_checked} onchange="this.form.submit()">'
+        toggle_class = "toggle-switch active" if debug_enable else "toggle-switch"
+        text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'debug_enable\')"></button>'
         text += '</form></td></tr>\n'
         
         # Editable Set Read Only field
         text += "<tr><td>Set Read Only</td><td>"
         text += f'<form style="display: inline;" method="post" action="./dash">'
-        readonly_checked = "checked" if read_only else ""
-        if read_only:
-            text += f'<input type="hidden" name="set_read_only" value="off">'
-        text += f'<input type="checkbox" name="set_read_only" value="on" class="dashboard-checkbox" {readonly_checked} onchange="this.form.submit()">'
+        toggle_class = "toggle-switch active" if read_only else "toggle-switch"
+        text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'set_read_only\')"></button>'
         text += '</form></td></tr>\n'
         if self.base.arg_errors:
             count_errors = len(self.base.arg_errors)
@@ -864,9 +860,45 @@ class WebInterface:
             font-size: 14px;
         }
 
-        .dashboard-checkbox {
-            transform: scale(1.2);
+        /* Toggle switch styles */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 24px;
+            background-color: #ccc;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            border: none;
+            outline: none;
             margin-right: 5px;
+            vertical-align: middle;
+        }
+
+        .toggle-switch.active {
+            background-color: #f44336;
+        }
+
+        .toggle-switch::before {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background-color: white;
+            border-radius: 50%;
+            transition: transform 0.3s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .toggle-switch.active::before {
+            transform: translateX(36px);
+        }
+
+        .toggle-switch:hover {
+            opacity: 0.8;
         }
 
         /* Dark mode form controls */
@@ -878,6 +910,19 @@ class WebInterface:
 
         body.dark-mode .dashboard-select:focus {
             border-color: #4CAF50;
+        }
+
+        /* Dark mode toggle switch styles */
+        body.dark-mode .toggle-switch {
+            background-color: #555 !important;
+        }
+
+        body.dark-mode .toggle-switch.active {
+            background-color: #f44336 !important;
+        }
+
+        body.dark-mode .toggle-switch::before {
+            background-color: #e0e0e0;
         }
 
         .menu-bar {
@@ -1035,6 +1080,37 @@ class WebInterface:
                 console.error('Error:', error);
                 alert('Error initiating restart: ' + error.message);
             });
+        }
+    }
+
+    function toggleSwitch(element, fieldName) {
+        // Toggle the active class
+        element.classList.toggle('active');
+        
+        // Determine the new value
+        const isActive = element.classList.contains('active');
+        const newValue = isActive ? 'on' : 'off';
+        
+        // Find the associated form and hidden input
+        const form = element.closest('form');
+        if (form) {
+            // Create or update the hidden input for the value
+            let hiddenInput = form.querySelector('input[name="' + fieldName + '"]');
+            if (!hiddenInput) {
+                hiddenInput = document.createElement('input');
+                hiddenInput.type = 'hidden';
+                hiddenInput.name = fieldName;
+                form.appendChild(hiddenInput);
+            }
+            hiddenInput.value = newValue;
+            
+            // If saveFilterValue function exists (config page), call it
+            if (typeof saveFilterValue === 'function') {
+                saveFilterValue();
+            }
+            
+            // Submit the form
+            form.submit();
         }
     }
     </script>
@@ -2310,7 +2386,7 @@ body.dark-mode .message-error {
 }
 
 .toggle-button.active {
-    background-color: #4CAF50;
+    background-color: #f44336;
 }
 
 .toggle-button::before {
@@ -2336,15 +2412,15 @@ body.dark-mode .message-error {
 
 /* Dark mode toggle styles */
 body.dark-mode .toggle-button {
-    background-color: #555;
+    background-color: #555 !important;
 }
 
 body.dark-mode .toggle-button.active {
-    background-color: #4CAF50;
+    background-color: #f44336 !important;
 }
 
 body.dark-mode .toggle-button::before {
-    background-color: #e0e0e0;
+    background-color: #e0e0e0 !important;
 }
 
 /* Save controls styles */
@@ -3911,11 +3987,9 @@ function discardAllChanges() {
                     text += '<td class="cfg_modified">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
 
                 if itemtype == "switch":
-                    checked = "checked" if value else ""
+                    toggle_class = "toggle-switch active" if value else "toggle-switch"
                     text += f'<td><form style="display: inline;" method="post" action="./config">'
-                    if checked:
-                        text += f'<input type="hidden" name="{useid}" value="off">'
-                    text += f'<input type="checkbox" name="{useid}" value="on" class="dashboard-checkbox" {checked} onchange="saveFilterValue(); this.form.submit();">'
+                    text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'{useid}\')"></button>'
                     text += f'</form></td>\n'
                 elif itemtype == "input_number":
                     input_number_with_save = input_number.replace('onchange="javascript: this.form.submit();"', 'onchange="saveFilterValue(); this.form.submit();"')
