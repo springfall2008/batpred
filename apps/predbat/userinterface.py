@@ -939,7 +939,7 @@ class UserInterface:
                 if item.get("manual"):
                     self.manual_times(name, new_value=ha_value)
                 elif item.get("manual_rate"):
-                    if '_import' in item["name"]:
+                    if "_import" in item["name"]:
                         # Manual import rate
                         self.manual_rates(name, new_value=ha_value, default_rate=self.get_arg("manual_import_value"))
                     else:
@@ -1153,15 +1153,15 @@ class UserInterface:
 
         if not item_value:
             item_value = "off"
-        
+
         if manual_rate:
             # Update manual rates sensor
-            if '_import' in item["name"]:
+            if "_import" in item["name"]:
                 # Manual import rate
-                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg('manual_import_value'))
+                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_import_value"))
             else:
                 # Manual export rate
-                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg('manual_export_value'))
+                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_export_value"))
         else:
             self.manual_times(config_item, new_value=item_value)
 
@@ -1285,7 +1285,7 @@ class UserInterface:
         for value in values_list:
             if value == "off":
                 continue
-            if '=' in value:
+            if "=" in value:
                 rate_time, rate_value = value.split("=")
             else:
                 rate_time = value
@@ -1332,7 +1332,7 @@ class UserInterface:
         self.expose_config(config_item, values, force=True)
 
         return rate_overrides_minutes
-    
+
     def manual_times(self, config_item, exclude=[], new_value=None):
         """
         Update manual times sensor

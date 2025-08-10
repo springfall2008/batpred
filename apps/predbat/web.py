@@ -1734,15 +1734,15 @@ var options = {
                 button_html += f"""<a onclick="handleRateOverride('{import_minute_str}', '{import_rate}', '{action}')">{action}</a>"""
             else:
                 # Add input field for custom rate entry
-                default_rate = self.base.get_arg('manual_import_value') if is_import else self.base.get_arg('manual_export_value')
+                default_rate = self.base.get_arg("manual_import_value") if is_import else self.base.get_arg("manual_export_value")
                 action = "Set Import" if is_import else "Set Export"
                 button_html += f"""
                     <div style="padding: 12px 16px;">
                         <label style="display: block; margin-bottom: 5px; color: inherit;">{action} Rate (p/kWh):</label>
-                        <input type="number" id="{input_id}" step="0.1" value="{default_rate}" 
+                        <input type="number" id="{input_id}" step="0.1" value="{default_rate}"
                                style="width: 80px; padding: 4px; margin-bottom: 8px; border-radius: 3px;">
                         <br>
-                        <button onclick="handleRateOverride('{import_minute_str}', document.getElementById('{input_id}').value, '{action}')" 
+                        <button onclick="handleRateOverride('{import_minute_str}', document.getElementById('{input_id}').value, '{action}')"
                                 style="padding: 6px 12px; border-radius: 3px; font-size: 12px;">
                             Set Rate
                         </button>
@@ -1754,7 +1754,7 @@ var options = {
             </td>"""
 
             return button_html
-        
+
         # Process the HTML plan to add buttons to time cells
         processed_html = re.sub(time_pattern, add_button_to_time, html_plan)
         processed_html = re.sub(import_pattern, add_button_to_import, processed_html)
@@ -5735,7 +5735,7 @@ window.addEventListener('resize', function() {
             rate = data.get("rate")
 
             try:
-                rate= float(rate)
+                rate = float(rate)
             except (TypeError, ValueError):
                 rate = 0.0
 

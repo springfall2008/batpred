@@ -1535,7 +1535,7 @@ class Fetch:
             rate_replicate[minute] = "manual"
 
         return rates
-    
+
     def basic_rates(self, info, rtype, prev=None, rate_replicate={}):
         """
         Work out the energy rates based on user supplied time periods
@@ -2264,8 +2264,8 @@ class Fetch:
         self.manual_demand_times = self.manual_times("manual_demand")
         self.manual_all_times = self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
         self.manual_api = self.api_select_update("manual_api")
-        self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg('manual_import_value'))
-        self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg('manual_export_value'))
+        self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
+        self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()
