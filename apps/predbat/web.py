@@ -1531,7 +1531,7 @@ var options = {
                 if (response.ok) {
                     return response.json();
                 }
-                throw new Error('Failed to set import override');
+                throw new Error('Failed to set rate override');
             })
             .then(data => {
                 if (data.success) {
