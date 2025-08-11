@@ -1442,6 +1442,7 @@ var options = {
         /* Override cell styling */
         .override-active {
             position: relative;
+            background-color: #FFC0CB !important; /* Light pink for light mode */
         }
 
         body.dark-mode .override-active {
@@ -1571,6 +1572,7 @@ var options = {
             });
             // Close dropdown after selection
             closeDropdowns();
+        
         }
 
         // Handle option selection
@@ -1739,7 +1741,7 @@ var options = {
                 button_html += f"""<a onclick="handleRateOverride('{import_minute_str}', '{import_rate}', '{action}', true)">{action}</a>"""
             else:
                 # Add input field for custom rate entry
-                default_rate = self.base.get_arg("manual_import_value") if is_import else self.base.get_arg("manual_export_value")
+                default_rate = self.base.get_arg("manual_import_value", 0.0) if is_import else self.base.get_arg("manual_export_value", 0.0)
                 action = "Set Import" if is_import else "Set Export"
                 button_html += f"""
                     <div style="padding: 12px 16px;">
