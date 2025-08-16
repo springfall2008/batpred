@@ -1607,7 +1607,7 @@ INVERTER_DEF = {
         "has_ge_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%Y-%m-%dT%H:%M:%S",
-        "write_and_poll_sleep": 5,
+        "write_and_poll_sleep": 10,
         "has_time_window": False,
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
