@@ -1572,7 +1572,7 @@ var options = {
             });
             // Close dropdown after selection
             closeDropdowns();
-        
+
         }
 
         // Handle option selection

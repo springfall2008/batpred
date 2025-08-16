@@ -862,7 +862,7 @@ class Inverter:
         else:
             self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
             self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
-    
+
         # Scale charge and discharge rates with battery scaling
         self.charge_rate_now = max(self.charge_rate_now * self.base.battery_rate_max_scaling, self.battery_rate_min)
         self.discharge_rate_now = max(self.discharge_rate_now * self.base.battery_rate_max_scaling_discharge, self.battery_rate_min)
@@ -1272,7 +1272,7 @@ class Inverter:
             current_rate = self.battery_rate_max_raw
 
         return current_rate
-    
+
     def get_current_charge_rate(self):
         """
         Get the current charge rate in watts
