@@ -440,7 +440,7 @@ class Execute:
                     elif not disabled_export:
                         inverter.adjust_export_immediate(int(self.export_limits_best[0]))
                     else:
-                        inverter.adjust_export_immediate(0)
+                        inverter.adjust_export_immediate(100)
 
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
@@ -524,7 +524,7 @@ class Execute:
                 else:
                     inverter.adjust_charge_immediate(0)
             if not isExporting and self.set_export_window:
-                inverter.adjust_export_immediate(0)
+                inverter.adjust_export_immediate(100)
 
             # Reset reserve as discharge is enable but not running right now
             if self.set_reserve_enable and resetReserve:
@@ -601,7 +601,7 @@ class Execute:
                 if self.set_export_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                     inverter.adjust_force_export(False)
-                    inverter.adjust_export_immediate(0)
+                    inverter.adjust_export_immediate(100)
                     self.isExporting = False
 
         self.inverter_needs_reset = False

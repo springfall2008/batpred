@@ -2302,8 +2302,8 @@ def run_inverter_tests():
         return failed
 
     failed |= test_call_adjust_export_immediate("export_immediate1", my_predbat, ha, inv, dummy_items, 100, repeat=True)
-    failed |= test_call_adjust_export_immediate("export_immediate3", my_predbat, ha, inv, dummy_items, 0, repeat=True)
-    failed |= test_call_adjust_export_immediate("export_immediate4", my_predbat, ha, inv, dummy_items, 50, charge_stop=True)
+    failed |= test_call_adjust_export_immediate("export_immediate3", my_predbat, ha, inv, dummy_items, 0, repeat=False, charge_stop=True)
+    failed |= test_call_adjust_export_immediate("export_immediate4", my_predbat, ha, inv, dummy_items, 50)
     failed |= test_call_adjust_export_immediate("export_immediate5", my_predbat, ha, inv, dummy_items, 49)
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, repeat=True)
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, discharge_start_time="00:00:00", discharge_end_time="09:00:00")
@@ -3088,7 +3088,7 @@ def run_execute_test(
         if assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze != True:
             print("ERROR: Inverter {} Immediate charge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_charge_soc_freeze))
             failed = True
-        assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 0
+        assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 100
         if not set_export_window:
             assert_soc_target_force_dis = -1
         if inverter.immediate_discharge_soc_target != assert_soc_target_force_dis:
@@ -3142,9 +3142,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
         # my_predbat.best_soc_keep = 1
-        my_predbat.set_charge_freeze = True
-        my_predbat.set_export_freeze = True
-        my_predbat.combine_export_slots = False
+        # my_predbat.set_charge_freeze = True
+        # my_predbat.set_export_freeze = True
+        # my_predbat.combine_export_slots = False
         # my_predbat.set_export_freeze = False
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_tweak_plan = False
