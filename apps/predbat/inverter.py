@@ -853,29 +853,16 @@ class Inverter:
         if self.rest_api:
             self.rest_data = self.rest_readData()
 
+        self.charge_rate_now = self.get_current_charge_rate()
+        self.discharge_rate_now = self.get_current_discharge_rate()
+
         if self.rest_data:
             self.charge_enable_time = self.rest_data["Control"]["Enable_Charge_Schedule"] == "enable"
             self.discharge_enable_time = self.rest_data["Control"]["Enable_Discharge_Schedule"] == "enable"
-            self.charge_rate_now = self.rest_data["Control"]["Battery_Charge_Rate"] / MINUTE_WATT
-            self.discharge_rate_now = self.rest_data["Control"]["Battery_Discharge_Rate"] / MINUTE_WATT
         else:
             self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
             self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
-
-            if "charge_rate" in self.base.args:
-                self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0, required_unit="W") / MINUTE_WATT
-            elif "charge_rate_percent" in self.base.args:
-                self.charge_rate_now = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
-            else:
-                self.charge_rate_now = self.battery_rate_max_raw
-
-            if "discharge_rate" in self.base.args:
-                self.discharge_rate_now = self.base.get_arg("discharge_rate", index=self.id, default=2600.0, required_unit="W") / MINUTE_WATT
-            elif "discharge_rate_percent" in self.base.args:
-                self.discharge_rate_now = self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
-            else:
-                self.discharge_rate_now = self.battery_rate_max_raw
-
+    
         # Scale charge and discharge rates with battery scaling
         self.charge_rate_now = max(self.charge_rate_now * self.base.battery_rate_max_scaling, self.battery_rate_min)
         self.discharge_rate_now = max(self.discharge_rate_now * self.base.battery_rate_max_scaling_discharge, self.battery_rate_min)
@@ -1265,6 +1252,27 @@ class Inverter:
         else:
             self.base.log("Inverter {} Current reserve is {} already at target".format(self.id, current_reserve))
 
+    def get_current_discharge_rate(self):
+        """
+        Get the current discharge rate in watts
+        """
+
+        if self.rest_data and "Control" in self.rest_data and "Battery_Discharge_Rate" in self.rest_data["Control"]:
+            current_rate = self.rest_data["Control"]["Battery_Discharge_Rate"]
+        else:
+            if "discharge_rate_percent" in self.base.args:
+                current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
+            else:
+                current_rate = self.base.get_arg("discharge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
+
+        try:
+            current_rate = int(current_rate)
+        except (ValueError, TypeError) as e:
+            self.base.log("Error: Inverter {} charge discharge {} is not a number, setting to {}W".format(current_rate, self.id, self.battery_rate_max_raw))
+            current_rate = self.battery_rate_max_raw
+
+        return current_rate
+    
     def get_current_charge_rate(self):
         """
         Get the current charge rate in watts
@@ -1275,12 +1283,12 @@ class Inverter:
             if "charge_rate_percent" in self.base.args:
                 current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100
             else:
-                current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0, required_unit="W")
+                current_rate = self.base.get_arg("charge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
         try:
             current_rate = int(current_rate)
         except (ValueError, TypeError) as e:
-            self.base.log("Error: Inverter {} charge rate {} is not a number, setting to 2600W".format(current_rate, self.id))
-            current_rate = 2600
+            self.base.log("Error: Inverter {} charge rate {} is not a number, setting to {}W".format(current_rate, self.id, self.battery_rate_max_raw))
+            current_rate = self.battery_rate_max_raw
 
         return current_rate
 
@@ -1344,14 +1352,7 @@ class Inverter:
         *If the inverter uses current rather than power we create a dummy entity for the power anyway but also write to the current entity
         """
         new_rate = int(new_rate + 0.5)
-
-        if self.rest_data:
-            current_rate = self.rest_data["Control"]["Battery_Discharge_Rate"]
-        else:
-            if "discharge_rate_percent" in self.base.args:
-                current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
-            else:
-                current_rate = self.base.get_arg("discharge_rate", index=self.id, default=2600.0, required_unit="W")
+        current_rate = self.get_current_discharge_rate()
 
         if abs(current_rate - new_rate) > (self.battery_rate_max_discharge * MINUTE_WATT / 20):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
@@ -2041,6 +2042,9 @@ class Inverter:
         Alternative enable and disable of timed charging for non-GE inverters
         """
 
+        current_rate_charge = self.get_current_charge_rate()
+        current_rate_discharge = self.get_current_discharge_rate()
+
         if self.inverter_type == "GS":
             # Solis just has a single switch for both directions
             # Need to check the logic of how this is called if both charging and exporting
@@ -2076,9 +2080,12 @@ class Inverter:
 
         # MQTT
         if direction == "charge" and enable:
-            self.mqtt_message("set/charge", payload=int(self.battery_rate_max_charge * MINUTE_WATT))
+            self.mqtt_message("set/charge", payload=int(current_rate_charge))
         elif direction == "discharge" and enable:
-            self.mqtt_message("set/discharge", payload=int(self.battery_rate_max_discharge * MINUTE_WATT))
+            self.mqtt_message("set/discharge", payload=int(current_rate_discharge))
+        elif current_rate_discharge == 0:
+            # Model disable discharge in eco mode with force discharge at rate 0
+            self.mqtt_message("set/discharge", payload=int(current_rate_discharge))
         else:
             self.mqtt_message("set/auto", payload="true")
 
