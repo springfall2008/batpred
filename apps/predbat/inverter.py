@@ -2217,7 +2217,7 @@ class Inverter:
         """
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}
-        if target_soc > 0 and target_soc < 100:
+        if target_soc < 100:
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
                 "target_soc": target_soc,
