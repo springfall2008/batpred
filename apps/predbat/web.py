@@ -1573,7 +1573,7 @@ var options = {
                     // Reload the page to show the updated plan
                     setTimeout(() => location.reload(), 1000);
                 } else {
-                    alert('Error setting import override: ' + (data.message || 'Unknown error'));
+                    alert('Error setting rate override: ' + (data.message || 'Unknown error'));
                 }
             })
             .catch(error => {
@@ -1584,6 +1584,67 @@ var options = {
             closeDropdowns();
 
         }
+
+        // Handle rate override option function
+        function handleLoadOverride(time, adjustment, action, clear) {
+            console.log("Load override:", time, "Adjustment:", adjustment, "Action:", action);
+            // Create a form data object to send the override parameters
+            const formData = new FormData();
+            formData.append('time', time);
+            formData.append('rate', adjustment);
+            formData.append('action', action);
+            // Send the override request to the server
+            fetch('./rate_override', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.json();
+                }
+                throw new Error('Failed to set rate override');
+            })
+            .then(data => {
+                if (data.success) {
+                    // Show success message
+                    const messageElement = document.createElement('div');
+                    if (clear) {
+                        messageElement.textContent = `Manual load adjustment cleared for ${time}`;
+                    } else {
+                        messageElement.textContent = `Load adjustment set to ${adjustment} for ${time}`;
+                    }
+                    messageElement.style.position = 'fixed';
+                    messageElement.style.top = '65px';
+                    messageElement.style.right = '10px';
+                    messageElement.style.padding = '10px';
+                    messageElement.style.backgroundColor = '#4CAF50';
+                    messageElement.style.color = 'white';
+                    messageElement.style.borderRadius = '4px';
+                    messageElement.style.zIndex = '1000';
+                    document.body.appendChild(messageElement);
+
+                    // Auto-remove message after 3 seconds
+                    setTimeout(() => {
+                        messageElement.style.opacity = '0';
+                        messageElement.style.transition = 'opacity 0.5s';
+                        setTimeout(() => messageElement.remove(), 500);
+                    }, 3000);
+
+                    // Reload the page to show the updated plan
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    alert('Error setting load adjustment override: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error setting load adjustment override: ' + (error.message || 'Unknown error'));
+            });
+            // Close dropdown after selection
+            closeDropdowns();
+
+        }
+
 
         // Handle option selection
         function handleTimeOverride(time, action) {
@@ -1658,6 +1719,7 @@ var options = {
         time_pattern = r"<td id=time.*?>((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2})</td>"
         import_pattern = r"<td id=import data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"
         export_pattern = r"<td id=export data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"
+        load_pattern = r"<td id=load data-minute=(\S+) (.*?)>(.*?)</td>"
 
         # Counter for creating unique IDs for dropdowns
         dropdown_counter = 0
@@ -1670,6 +1732,7 @@ var options = {
         manual_all_times = manual_charge_times + manual_export_times + manual_demand_times + manual_freeze_charge_times + manual_freeze_export_times
         manual_import_rates = self.base.manual_rates("manual_import_rates")
         manual_export_rates = self.base.manual_rates("manual_export_rates")
+        manual_load_adjust = self.base.manual_rates("manual_load_adjust")
 
         # Function to replace time cells with cells containing dropdowns
         def add_button_to_time(match):
@@ -1772,10 +1835,61 @@ var options = {
 
             return button_html
 
+        def add_button_to_load(match):
+            """
+            Add load rate button to load cells
+            """
+            nonlocal dropdown_counter
+            dropdown_id = f"dropdown_{dropdown_counter}"
+            input_id = f"load_input_{dropdown_counter}"
+            dropdown_counter += 1
+
+            load_minute = match.group(1)
+            load_tag = match.group(2).strip()
+            load_text = match.group(3).strip()
+            load_minute_to_time = self.base.midnight_utc + timedelta(minutes=int(load_minute))
+            load_minute_str = load_minute_to_time.strftime("%a %H:%M")
+            override_active = False
+            if int(load_minute) in manual_load_adjust:
+                override_active = True
+                load_adjust = manual_load_adjust[int(load_minute)]
+
+            button_html = f"""<td {load_tag} class="clickable-time-cell {'override-active' if override_active else ''}" onclick="toggleForceDropdown('{dropdown_id}')">
+                {load_text}
+                <div class="dropdown">
+                    <div id="{dropdown_id}" class="dropdown-content">
+            """
+            if override_active:
+                action = "Clear Load"
+                button_html += f"""<a onclick="handleLoadOverride('{load_minute_str}', '{load_adjust}', '{action}', true)">{action}</a>"""
+            else:
+                # Add input field for custom rate entry
+                default_adjust = self.base.get_arg("manual_load_value", 0.0)
+                action = "Set Load"
+                button_html += f"""
+                    <div style="padding: 12px 16px;">
+                        <label style="display: block; margin-bottom: 5px; color: inherit;">{action} {load_minute_str} Adjustment:</label>
+                        <input type="number" id="{input_id}" step="0.1" value="{default_adjust}"
+                               style="width: 80px; padding: 4px; margin-bottom: 8px; border-radius: 3px;">
+                        <br>
+                        <button onclick="handleLoadOverride('{load_minute_str}', document.getElementById('{input_id}').value, '{action}', false)"
+                                style="padding: 6px 12px; border-radius: 3px; font-size: 12px;">
+                            Set Load Adjustment
+                        </button>
+                    </div>
+                """
+            button_html += f"""
+                    </div>
+                </div>
+            </td>"""
+
+            return button_html
+
         # Process the HTML plan to add buttons to time cells
         processed_html = re.sub(time_pattern, add_button_to_time, html_plan)
         processed_html = re.sub(import_pattern, add_button_to_import, processed_html)
         processed_html = re.sub(export_pattern, add_button_to_export, processed_html)
+        processed_html = re.sub(load_pattern, add_button_to_load, processed_html)
 
         text += processed_html + "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -5757,11 +5871,11 @@ window.addEventListener('resize', function() {
                 rate = 0.0
 
             # Log the override request
-            self.log(f"Rate override requested: {action} at {time_str}")
+            self.log(f"Rate override requested: {action} at {time_str} value {rate}")
 
             # Validate inputs
             if not time_str or not action:
-                self.log("ERROR: Missing required parameters for rate override")
+                self.log("ERROR: Missing required parameters for override")
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
 
             now_utc = self.base.now_utc
@@ -5785,6 +5899,12 @@ window.addEventListener('resize', function() {
                 item = self.base.config_index.get("manual_export_value", {})
                 await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_export_rates", selection_option)
+            elif action == "Set Load":
+                item = self.base.config_index.get("manual_load_value", {})
+                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_load_adjust", selection_option)
+            elif action == "Clear Load":
+                await self.base.async_manual_select("manual_load_adjust", clear_option)
             else:
                 self.log("ERROR: Unknown action for rate override")
                 return web.json_response({"success": False, "message": "Unknown action"}, status=400)

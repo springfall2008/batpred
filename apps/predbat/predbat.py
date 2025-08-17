@@ -378,6 +378,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.manual_api = []
         self.manual_import_rates = {}
         self.manual_export_rates = {}
+        self.manual_load_adjust = {}
         self.config_index = {}
         self.dashboard_index = []
         self.dashboard_index_app = {}

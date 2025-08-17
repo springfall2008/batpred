@@ -603,11 +603,21 @@ hold at the current level. The grid may be used if solar is not enough to cover 
 The **select.predbat_manual_freeze_export** selector is used to force Predbat to freeze export during a 30-minute slot, this implies the battery will not charge but will
 still discharge for the house load. Any solar will be exported to the grid.
 
-The **select.predbat_manual_import_rates** selected is used to override the import rates for a 30-minute slot, the rate selected will be that configured in **input_number.predbat_manual_import_value**
+The **select.predbat_manual_import_rates** selector is used to override the import rates for a 30-minute slot, the rate selected will be that configured in **input_number.predbat_manual_import_value**
 which can be adjusted prior to making a selection. As with the other selectors the selection can be cleared by selecting the option in square brackets or by using **off**
 
-The **select.predbat_manual_export_rates** selected is used to override the export rates for a 30-minute slot, the rate selected will be that configured in **input_number.predbat_manual_export_value**
+If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=rate e.g. 12:30:00=29.5
+
+The **select.predbat_manual_export_rates** selector is used to override the export rates for a 30-minute slot, the rate selected will be that configured in **input_number.predbat_manual_export_value**
 which can be adjusted prior to making a selection. As with the other selectors the selection can be cleared by selecting the option in square brackets or by using **off**
+
+If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=rate e.g. 12:30:00=29.5
+
+The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load for a 30-minute slot, the adjustment in kWh (which is added to the predicted load) will be that
+configured in **input_number.predbat_manual_load_value** which can be adjusted prior to making a selection. As with the other selectors the selection can be cleared by selecting the option in
+square brackets or by using **off**
+
+If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=adjustment e.g. 12:30:00=0.5
 
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
 slot expires (they do not repeat).
