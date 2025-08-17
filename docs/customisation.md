@@ -613,8 +613,8 @@ which can be adjusted prior to making a selection. As with the other selectors t
 
 If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=rate e.g. 12:30:00=29.5
 
-The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load for a 30-minute slot, the adjustment in kWh (which is added to the predicted load) will be that 
-configured in **input_number.predbat_manual_load_value** which can be adjusted prior to making a selection. As with the other selectors the selection can be cleared by selecting the option in 
+The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load for a 30-minute slot, the adjustment in kWh (which is added to the predicted load) will be that
+configured in **input_number.predbat_manual_load_value** which can be adjusted prior to making a selection. As with the other selectors the selection can be cleared by selecting the option in
 square brackets or by using **off**
 
 If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=adjustment e.g. 12:30:00=0.5
