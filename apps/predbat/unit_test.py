@@ -1831,7 +1831,7 @@ def test_inverter_self_test(test_name, my_predbat):
     rest = dummy_rest.get_commands()
     repeats = INVERTER_MAX_RETRY_REST  # configurable number of repeats
     expected = []
-    
+
     # Define the command patterns
     commands = [
         ["dummy/setChargeTarget", {"chargeToPercent": 100}],
@@ -1847,7 +1847,7 @@ def test_inverter_self_test(test_name, my_predbat):
         ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
         ["dummy/setBatteryMode", {"mode": "Timed Export"}],
     ]
-    
+
     # Generate expected list with repeats
     for command in commands:
         for _ in range(repeats):
