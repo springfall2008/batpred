@@ -1159,9 +1159,14 @@ class UserInterface:
             if "_import" in item["name"]:
                 # Manual import rate
                 self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_import_value"))
-            else:
+            elif "_export" in item["name"]:
                 # Manual export rate
                 self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_export_value"))
+            elif "_load" in item["name"]:
+                # Manual load rate
+                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_load_value"))
+            else:
+                self.log("Warn: Manual rate sensor {} not recognised".format(config_item))
         else:
             self.manual_times(config_item, new_value=item_value)
 
@@ -1294,6 +1299,12 @@ class UserInterface:
                 start_time = datetime.strptime(rate_time, "%H:%M:%S")
             except (ValueError, TypeError):
                 start_time = None
+
+            try:
+                rate_value = float(rate_value)
+            except (ValueError, TypeError):
+                rate_value = default_rate
+
             if start_time:
                 minutes = start_time.hour * 60 + start_time.minute
                 if minutes < minutes_now:

@@ -86,6 +86,7 @@ class Fetch:
         load_scaling_dynamic=None,
         base_offset=None,
         flip=False,
+        load_adjust={},
     ):
         """
         Create cached step data for historical array
@@ -126,6 +127,9 @@ class Fetch:
             if load_forecast:
                 for offset in range(step):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
+            if load_adjust:
+                load_extra += load_adjust.get(minute_absolute, 0) * step / 30.0  # The kWh figure is for the 30 minute period in question so divide by 30 and times by step
+            load_extra = max(load_extra, -value) # Don't allow going to negative load values
             values[minute] = dp4((value + load_extra) * scaling_dynamic * scale_today * scale_fixed)
 
         # Simple divergence model keeps the same total but brings PV/Load up and down every 5 minutes
@@ -2266,6 +2270,7 @@ class Fetch:
         self.manual_api = self.api_select_update("manual_api")
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
+        self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()
