@@ -1485,11 +1485,21 @@ var options = {
 
         body.dark-mode .dropdown-content button {
             background-color: #4CAF50;
-            color: white;
+            color: white !important;
         }
 
         body.dark-mode .dropdown-content button:hover {
             background-color: #45a049;
+            color: white !important;
+        }
+
+        /* Dark mode styles for labels and text in dropdown */
+        body.dark-mode .dropdown-content label {
+            color: #e0e0e0 !important;
+        }
+
+        body.dark-mode .dropdown-content div {
+            color: #e0e0e0 !important;
         }
         </style>
 
