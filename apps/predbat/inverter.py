@@ -13,7 +13,7 @@ import time
 import pytz
 import requests
 from datetime import datetime, timedelta
-from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES
+from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
 from utils import calc_percent_limit, dp0, dp2, dp3, time_string_to_stamp
 
 TIME_FORMAT_HMS = "%H:%M:%S"
@@ -1443,7 +1443,7 @@ class Inverter:
             return True
 
         retry = 0
-        while current_state != new_value and retry < 6:
+        while current_state != new_value and retry < INVERTER_MAX_RETRY:
             retry += 1
             if domain == "sensor":
                 if new_value:
@@ -1483,7 +1483,7 @@ class Inverter:
             matched = abs(float(current_state) - new_value) <= fuzzy
 
         retry = 0
-        while (not matched) and (retry < 6):
+        while (not matched) and (retry < INVERTER_MAX_RETRY):
             retry += 1
             if domain == "sensor":
                 self.base.set_state_wrapper(entity_id, state=new_value, attributes=self.created_attributes.get(entity_id, {}), required_unit=required_unit)
@@ -1531,7 +1531,7 @@ class Inverter:
         if old_value and (":" in old_value) and (":" in new_value) and (len(old_value) == 5) and (len(new_value) == 8):
             new_value = new_value[:5]
 
-        for retry in range(6):
+        for retry in range(INVERTER_MAX_RETRY):
             if entity_base == "time":
                 service = entity_base + "/set_value"
                 self.base.call_service_wrapper(service, time=new_value, entity_id=entity_id)
@@ -2414,7 +2414,7 @@ class Inverter:
         """
         local_tz = pytz.timezone(self.base.get_arg("timezone", "Europe/London"))
 
-        for retry in range(8):
+        for retry in range(INVERTER_MAX_RETRY):
             self.base.call_service_wrapper("button/press", entity_id=entity_id)
             self.sleep(self.inv_write_and_poll_sleep)
             state = self.base.get_state_wrapper(entity_id, refresh=True)
@@ -2498,14 +2498,14 @@ class Inverter:
         target = int(target)
         url = self.rest_api + "/setChargeTarget"
         data = {"chargeToPercent": target}
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if float(self.rest_data["Control"]["Target_SOC"]) == target:
                 self.count_register_writes += 1
                 self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Inverter {} charge target {} via REST failed".format(self.id, target))
         self.base.record_status("Warn: Inverter {} REST failed to setChargeTarget".format(self.id), had_errors=True)
@@ -2518,15 +2518,15 @@ class Inverter:
         rate = int(rate)
         url = self.rest_api + "/setChargeRate"
         data = {"chargeRate": rate}
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Charge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 12):
                 self.count_register_writes += 1
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Inverter {} set charge rate {} via REST failed got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Charge_Rate"]))
         self.base.record_status("Warn: Inverter {} REST failed to setChargeRate".format(self.id), had_errors=True)
@@ -2539,15 +2539,15 @@ class Inverter:
         rate = int(rate)
         url = self.rest_api + "/setDischargeRate"
         data = {"dischargeRate": rate}
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Discharge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_discharge * MINUTE_WATT / 25):
                 self.count_register_writes += 1
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Inverter {} set discharge rate {} via REST failed got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]))
         self.base.record_status("Warn: Inverter {} REST failed to setDischargeRate to {} got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]), had_errors=True)
@@ -2560,14 +2560,14 @@ class Inverter:
         url = self.rest_api + "/setBatteryMode"
         data = {"mode": inverter_mode}
 
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if inverter_mode == self.rest_data["Control"]["Mode"]:
                 self.count_register_writes += 1
                 self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Set inverter {} mode {} via REST failed".format(self.id, inverter_mode))
         self.base.record_status("Warn: Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
@@ -2580,14 +2580,14 @@ class Inverter:
         url = self.rest_api + "/setBatteryPauseMode"
         data = {"state": pause_mode}
 
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if pause_mode == self.rest_data["Control"]["Battery_pause_mode"]:
                 self.count_register_writes += 1
                 self.base.log("Set inverter {} pause mode {} via REST successful on retry {}".format(self.id, pause_mode, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Set inverter {} pause mode {} via REST failed".format(self.id, pause_mode))
         self.base.record_status("Warn: Inverter {} REST failed to setBatteryPauseMode got {}".format(self.id, self.rest_data["Control"]["Battery_pause_mode"]), had_errors=True)
@@ -2601,15 +2601,15 @@ class Inverter:
         result = target
         url = self.rest_api + "/setBatteryReserve"
         data = {"reservePercent": target}
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             result = int(float(self.rest_data["Control"]["Battery_Power_Reserve"]))
             if result == target:
                 self.count_register_writes += 1
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Set inverter {} reserve {} via REST failed on retry {} got {}".format(self.id, target, retry, result))
         self.base.record_status("Warn: Inverter {} REST failed to setReserve to {} got {}".format(self.id, target, result), had_errors=True)
@@ -2622,9 +2622,8 @@ class Inverter:
         url = self.rest_api + "/enableChargeSchedule"
         data = {"state": "enable" if enable else "disable"}
 
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"]["Enable_Charge_Schedule"]
             if isinstance(new_value, str):
@@ -2636,6 +2635,7 @@ class Inverter:
                 self.count_register_writes += 1
                 self.base.log("Set inverter {} charge schedule {} via REST successful on retry {}".format(self.id, enable, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Set inverter {} charge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data["Control"]["Enable_Charge_Schedule"]))
         self.base.record_status("Warn: Inverter {} REST failed to enableChargeSchedule".format(self.id), had_errors=True)
@@ -2648,9 +2648,8 @@ class Inverter:
         url = self.rest_api + "/enableDischargeSchedule"
         data = {"state": "enable" if enable else "disable"}
 
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"]["Enable_Discharge_Schedule"]
             if isinstance(new_value, str):
@@ -2662,6 +2661,7 @@ class Inverter:
                 self.count_register_writes += 1
                 self.base.log("Set inverter {} discharge schedule {} via REST successful on retry {}".format(self.id, enable, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Set inverter {} discharge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data["Control"]["Enable_Discharge_Schedule"]))
         self.base.record_status("Warn: Inverter {} REST failed to enableDischargeSchedule".format(self.id), had_errors=True)
@@ -2674,14 +2674,14 @@ class Inverter:
         url = self.rest_api + "/setPauseSlot"
         data = {"start": start[:5], "finish": finish[:5]}
 
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Battery_pause_start_time_slot"] == start and self.rest_data["Timeslots"]["Battery_pause_end_time_slot"] == finish:
                 self.count_register_writes += 1
                 self.base.log("Inverter {} set pause slot {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Inverter {} set pause slot {} via REST failed".format(self.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setPauseSlot".format(self.id), had_errors=True)
@@ -2694,14 +2694,14 @@ class Inverter:
         url = self.rest_api + "/setChargeSlot1"
         data = {"start": start[:5], "finish": finish[:5]}
 
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
                 self.count_register_writes += 1
                 self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Inverter {} set charge slot 1 {} via REST failed".format(self.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setChargeSlot1".format(self.id), had_errors=True)
@@ -2715,14 +2715,14 @@ class Inverter:
         url = self.rest_api + "/setDischargeTarget"
         data = {"dischargeToPercent": target, "slot": 1}
 
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["raw"]["invertor"]["discharge_target_soc_1"] == target:
                 self.count_register_writes += 1
                 self.base.log("Inverter {} Set export target slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Inverter {} Set export target slot 1 {} via REST failed".format(self.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setExportTarget".format(self.id), had_errors=True)
@@ -2735,14 +2735,14 @@ class Inverter:
         url = self.rest_api + "/setDischargeSlot1"
         data = {"start": start[:5], "finish": finish[:5]}
 
-        for retry in range(5):
+        for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
                 self.count_register_writes += 1
                 self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
+            self.sleep(2)
 
         self.base.log("Warn: Inverter {} Set discharge slot 1 {} via REST failed".format(self.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setDischargeSlot1".format(self.id), had_errors=True)

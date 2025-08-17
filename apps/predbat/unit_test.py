@@ -27,7 +27,7 @@ from prediction import Prediction
 from prediction import wrapped_run_prediction_single
 from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2
 from futurerate import FutureRate
-from config import MINUTE_WATT
+from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST
 from inverter import Inverter
 from compare import Compare
 from web import WebInterface
@@ -1829,68 +1829,29 @@ def test_inverter_self_test(test_name, my_predbat):
     inv.sleep = dummy_sleep
     inv.self_test(my_predbat.minutes_now)
     rest = dummy_rest.get_commands()
-    expected = [
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
+    repeats = INVERTER_MAX_RETRY_REST  # configurable number of repeats
+    expected = []
+    
+    # Define the command patterns
+    commands = [
         ["dummy/setChargeTarget", {"chargeToPercent": 100}],
         ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
         ["dummy/setChargeRate", {"chargeRate": 0}],
         ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
         ["dummy/setDischargeRate", {"dischargeRate": 0}],
         ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
         ["dummy/setBatteryReserve", {"reservePercent": 6}],
         ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
         ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
         ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
         ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
         ["dummy/setBatteryMode", {"mode": "Timed Export"}],
     ]
+    
+    # Generate expected list with repeats
+    for command in commands:
+        for _ in range(repeats):
+            expected.append(command)
     if json.dumps(expected) != json.dumps(rest):
         print("ERROR: Self test should be {} got {}".format(expected, rest))
         failed = True
