@@ -129,7 +129,7 @@ class Fetch:
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
             if load_adjust:
                 load_extra += load_adjust.get(minute_absolute, 0) * step / 30.0  # The kWh figure is for the 30 minute period in question so divide by 30 and times by step
-            load_extra = max(load_extra, -value) # Don't allow going to negative load values
+            load_extra = max(load_extra, -value)  # Don't allow going to negative load values
             values[minute] = dp4((value + load_extra) * scaling_dynamic * scale_today * scale_fixed)
 
         # Simple divergence model keeps the same total but brings PV/Load up and down every 5 minutes

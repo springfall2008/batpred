@@ -1150,7 +1150,7 @@ class Output:
             load_forecast = str(load_forecast)
 
             if minute in self.manual_load_adjust:
-                load_forecast +=  " &#8526;" 
+                load_forecast += " &#8526;"
 
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))
