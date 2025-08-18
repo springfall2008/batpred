@@ -1480,7 +1480,12 @@ class Inverter:
         if isinstance(new_value, str):
             matched = current_state == new_value
         else:
-            matched = abs(float(current_state) - new_value) <= fuzzy
+            try:
+                current_state = float(current_state)
+            except (ValueError, TypeError):
+                self.log("Warn: Inverter {} write_and_poll_value: Current state for {} is {}".format(self.id, name, current_state))
+                current_state = 0.0
+            matched = abs(current_state - new_value) <= fuzzy
 
         retry = 0
         while (not matched) and (retry < INVERTER_MAX_RETRY):
