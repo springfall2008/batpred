@@ -362,12 +362,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.stop_thread = False
         self.solcast_api_limit = None
         self.solcast_api_used = None
-        
+
         # Solcast API request metrics for monitoring
         self.solcast_requests_total = 0
         self.solcast_failures_total = 0
         self.solcast_last_success_timestamp = None
-        
+
         # Forecast.solar API request metrics for monitoring
         self.forecast_solar_requests_total = 0
         self.forecast_solar_failures_total = 0

@@ -208,7 +208,7 @@ class GECloudDirect:
         self.register_entity_map = {}
         self.long_poll_active = False
         self.pending_writes = {}
-        
+
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
@@ -1063,7 +1063,7 @@ class GECloudDirect:
         """
         # Increment request counter
         self.requests_total += 1
-        
+
         url = GE_API_URL + endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
         headers = {
             "Authorization": "Bearer " + self.api_key,

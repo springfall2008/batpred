@@ -301,7 +301,7 @@ class OctopusAPI:
         self.intelligent_device = {}
         self.api_started = False
         self.cache_path = self.base.config_root + "/cache"
-        
+
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
