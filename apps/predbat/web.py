@@ -131,8 +131,8 @@ class WebInterface:
         app.router.add_post("/api/login", self.html_api_login)
 
         # Notify plugin system that web interface is ready
-        if hasattr(self.base, 'plugin_system') and self.base.plugin_system:
-          self.base.plugin_system.call_hooks('on_web_start')
+        if hasattr(self.base, "plugin_system") and self.base.plugin_system:
+            self.base.plugin_system.call_hooks("on_web_start")
 
         # Register any dynamically registered endpoints
         for endpoint in self.registered_endpoints:
