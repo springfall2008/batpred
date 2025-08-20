@@ -208,6 +208,11 @@ class GECloudDirect:
         self.register_entity_map = {}
         self.long_poll_active = False
         self.pending_writes = {}
+        
+        # API request metrics for monitoring
+        self.requests_total = 0
+        self.failures_total = 0
+        self.last_success_timestamp = None
 
     def wait_api_started(self):
         """
@@ -1056,6 +1061,9 @@ class GECloudDirect:
         """
         Basic API call to GE Cloud
         """
+        # Increment request counter
+        self.requests_total += 1
+        
         url = GE_API_URL + endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
         headers = {
             "Authorization": "Bearer " + self.api_key,
@@ -1073,6 +1081,7 @@ class GECloudDirect:
                 response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=TIMEOUT)
         except requests.exceptions.RequestException as e:
             self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
+            self.failures_total += 1
             return None
 
         try:
@@ -1095,12 +1104,15 @@ class GECloudDirect:
         if response.status_code in [200, 201]:
             if data is None:
                 data = {}
+            self.last_success_timestamp = time.time()
             return data
         if response.status_code in [401, 403, 404, 422]:
             # Unauthorized
+            self.failures_total += 1
             return {}
         if response.status_code == 429:
             # Rate limiting so wait up to 30 seconds
+            self.failures_total += 1
             await asyncio.sleep(random.random() * 30)
         return None
 

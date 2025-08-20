@@ -301,6 +301,11 @@ class OctopusAPI:
         self.intelligent_device = {}
         self.api_started = False
         self.cache_path = self.base.config_root + "/cache"
+        
+        # API request metrics for monitoring
+        self.requests_total = 0
+        self.failures_total = 0
+        self.last_success_timestamp = None
         if not os.path.exists(self.cache_path):
             os.makedirs(self.cache_path)
         self.cache_file = self.cache_path + "/octopus.yaml"
@@ -661,18 +666,23 @@ class OctopusAPI:
 
         pages = 0
         while url and pages < 3:
+            self.requests_total += 1
             r = requests.get(url)
             if r.status_code not in [200, 201]:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
                 return {}
             try:
                 data = r.json()
+                self.last_success_timestamp = time.time()
             except requests.exceptions.JSONDecodeError:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
                 return {}
             if "results" in data:
                 mdata += data["results"]
             else:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
                 return {}
             url = data.get("next", None)
@@ -832,6 +842,7 @@ class OctopusAPI:
         """
         await self.async_refresh_token()
         try:
+            self.requests_total += 1
             client = await self.api.async_create_client_session()
             url = f"{self.api.base_url}/v1/graphql/"
             payload = {"query": query}
@@ -839,12 +850,15 @@ class OctopusAPI:
             async with client.post(url, json=payload, headers=headers) as response:
                 response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
                 if response_body and ("data" in response_body):
+                    self.last_success_timestamp = time.time()
                     return response_body["data"]
                 else:
+                    self.failures_total += 1
                     if returns_data:
                         self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
                     return None
         except TimeoutError:
+            self.failures_total += 1
             self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.timeout} exceeded.")
 
         return None
@@ -1071,18 +1085,22 @@ class Octopus:
                 return pdata
 
         try:
+            self.requests_total += 1
             r = requests.get(url)
         except requests.exceptions.ConnectionError:
+            self.failures_total += 1
             self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
             return None
 
         if r.status_code not in [200, 201]:
+            self.failures_total += 1
             self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
             return None
 
         # Return new data
+        self.last_success_timestamp = time.time()
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["data"] = r.text
@@ -1200,24 +1218,30 @@ class Octopus:
             if self.debug_enable:
                 self.log("Download {}".format(url))
             try:
+                self.requests_total += 1
                 r = requests.get(url)
             except requests.exceptions.ConnectionError:
+                self.failures_total += 1
                 self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if r.status_code not in [200, 201]:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             try:
                 data = r.json()
+                self.last_success_timestamp = time.time()
             except requests.exceptions.JSONDecodeError:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if "results" in data:
                 mdata += data["results"]
             else:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
