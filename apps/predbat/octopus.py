@@ -1085,22 +1085,18 @@ class Octopus:
                 return pdata
 
         try:
-            self.requests_total += 1
             r = requests.get(url)
         except requests.exceptions.ConnectionError:
-            self.failures_total += 1
             self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
             return None
 
         if r.status_code not in [200, 201]:
-            self.failures_total += 1
             self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
             return None
 
         # Return new data
-        self.last_success_timestamp = time.time()
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["data"] = r.text
@@ -1218,21 +1214,21 @@ class Octopus:
             if self.debug_enable:
                 self.log("Download {}".format(url))
             try:
-                self.requests_total += 1
+                self.api.requests_total += 1
                 r = requests.get(url)
             except requests.exceptions.ConnectionError:
-                self.failures_total += 1
+                self.api.failures_total += 1
                 self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if r.status_code not in [200, 201]:
-                self.failures_total += 1
+                self.api.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             try:
                 data = r.json()
-                self.last_success_timestamp = time.time()
+                self.api.last_success_timestamp = time.time()
             except requests.exceptions.JSONDecodeError:
                 self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
@@ -1241,7 +1237,7 @@ class Octopus:
             if "results" in data:
                 mdata += data["results"]
             else:
-                self.failures_total += 1
+                self.api.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
