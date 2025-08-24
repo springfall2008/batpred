@@ -1336,14 +1336,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.web_interface_task = None
             self.log("Starting web interface")
             self.web_interface = WebInterface(self)
-            self.web_interface_task = self.create_task(self.web_interface.start())
 
             # Initialize plugin system and discover plugins
             self.init_plugin_system()
 
-            # Allow plugins to register with web interface now that it's started
-            if self.plugin_system:
-                self.plugin_system.call_hooks("on_web_start")
+            self.web_interface_task = self.create_task(self.web_interface.start())
 
             if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
                 self.log("Starting Octopus API interface")
