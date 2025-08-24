@@ -25,6 +25,18 @@ Solcast class deals with fetching solar predictions, processing the data and pub
 
 class Solcast:
     def cache_get_url(self, url, params, max_age=8 * 60):
+        # Check if this is a Solcast API call for metrics tracking
+        is_solcast_api = "solcast.com" in url.lower() or "api.solcast" in url.lower()
+        is_forecast_solar_api = "forecast.solar" in url.lower()
+
+        # Increment request counter for Solcast API calls
+        if is_solcast_api and hasattr(self, "solcast_requests_total"):
+            self.solcast_requests_total += 1
+
+        # Increment request counter for forecast.solar API calls
+        if is_forecast_solar_api and hasattr(self, "forecast_solar_requests_total"):
+            self.forecast_solar_requests_total += 1
+
         # Get data from cache
         age_minutes = 0
         data = None
@@ -58,15 +70,35 @@ class Solcast:
             r = requests.get(url, params=params)
         except requests.exceptions.ConnectionError as e:
             self.log("Warn: Error downloading data from URL {}, error {}".format(url, e))
+            if is_solcast_api and hasattr(self, "solcast_failures_total"):
+                self.solcast_failures_total += 1
+            if is_forecast_solar_api and hasattr(self, "forecast_solar_failures_total"):
+                self.forecast_solar_failures_total += 1
             return data
 
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading data from url {}, code {}".format(url, r.status_code))
+            if is_solcast_api and hasattr(self, "solcast_failures_total"):
+                self.solcast_failures_total += 1
+            if is_forecast_solar_api and hasattr(self, "forecast_solar_failures_total"):
+                self.forecast_solar_failures_total += 1
         else:
             try:
                 data = r.json()
+                if is_solcast_api and hasattr(self, "solcast_last_success_timestamp"):
+                    import time
+
+                    self.solcast_last_success_timestamp = time.time()
+                if is_forecast_solar_api and hasattr(self, "forecast_solar_last_success_timestamp"):
+                    import time
+
+                    self.forecast_solar_last_success_timestamp = time.time()
             except requests.exceptions.JSONDecodeError as e:
                 self.log("Warn: Error downloading data from URL {}, error {} code {} data was {}".format(url, e, r.status_code, r.text))
+                if is_solcast_api and hasattr(self, "solcast_failures_total"):
+                    self.solcast_failures_total += 1
+                if is_forecast_solar_api and hasattr(self, "forecast_solar_failures_total"):
+                    self.forecast_solar_failures_total += 1
                 if data:
                     self.log("Warn: Error downloading data from URL {}, using cached data age {} minutes".format(url, dp1(age_minutes)))
                 else:
