@@ -252,6 +252,7 @@ class Compare:
         self.log("Running scenario for tariff: {}".format(name))
         result_data = self.run_scenario(end_record)
         result_data["existing_tariff"] = existing_tariff
+        result_data["name"] = name
         self.log("Scenario complete for tariff: {} cost {} metric {}".format(name, result_data["cost"], result_data["metric"]))
         if debug:
             with open("compare_{}.html".format(tariff_id), "w") as f:
