@@ -165,7 +165,7 @@ class ChargerPower:
 class OhmeAPI:
     """Ohme API exception."""
 
-    def __init__(self, base, email, password, automatic=False):
+    def __init__(self, base, email, password, ohme_automatic_octopus_intelligent=False):
         self.email = email
         self.base = base
         self.log = base.log
@@ -175,7 +175,7 @@ class OhmeAPI:
         self.stop_api = False
         self.count_errors = 0
         self.queued_events = []
-        self.automatic = automatic
+        self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
 
     def wait_api_started(self):
         """
@@ -222,8 +222,8 @@ class OhmeAPI:
                     print("Ohme API: Started")
                     self.api_started = True
 
-                    if self.automatic and self.client.serial:
-                        await self.automatic_config()
+                    if self.ohme_automatic_octopus_intelligent and self.client.serial:
+                        await self.automatic_config_octopus_intelligent()
 
                 first = False
 
@@ -237,12 +237,12 @@ class OhmeAPI:
         await self.client.close()
         print("Ohme API: Stopped")
 
-    def stop(self):
+    async def stop(self):
         self.stop_api = True
 
-    async def automatic_config(self):
+    async def automatic_config_octopus_intelligent(self):
         """
-        Automatically set the predbat entities to use ohme
+        Automatically set the predbat entities to use ohme via octopus
         """
         self.log("Info: Ohme API: Setting Predbat to use Ohme")
         self.base.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"

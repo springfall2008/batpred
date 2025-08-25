@@ -1384,7 +1384,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             # Ohme API
             if self.get_arg("ohme_login", "", indirect=False) and self.get_arg("ohme_password", "", indirect=False):
                 self.log("Starting Ohme API interface")
-                self.ohme_api_direct = OhmeAPI(self, self.get_arg("ohme_login", "", indirect=False), self.get_arg("ohme_password", "", indirect=False), self.get_arg("ohme_automatic", False))
+                self.ohme_api_direct = OhmeAPI(self, self.get_arg("ohme_login", "", indirect=False), self.get_arg("ohme_password", "", indirect=False), self.get_arg("ohme_automatic_octopus_intelligent", False))
                 self.ohme_api_direct_task = self.create_task(self.ohme_api_direct.start())
                 if not self.ohme_api_direct.wait_api_started():
                     self.log("Error: Ohme API failed to start")
