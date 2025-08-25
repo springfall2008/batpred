@@ -7,7 +7,6 @@
 # Credits to: https://github.com/dan-r/ohmepy for the original code.
 # -----------------------------------------------------------------------------
 
-import logging
 import asyncio
 import json
 from enum import Enum
