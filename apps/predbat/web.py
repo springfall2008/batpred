@@ -704,7 +704,6 @@ class WebInterface:
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-
     def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
         results = {}
         detailedForecast = self.base.dashboard_values.get(entity, {}).get("attributes", {}).get("detailedForecast", {})
@@ -2290,8 +2289,6 @@ var options = {
         Redirect to the default page
         """
         return web.HTTPFound(self.default_page)
-
-
 
     def get_grid_power_icon(self):
         """

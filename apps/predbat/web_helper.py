@@ -1,4 +1,3 @@
-
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2024 - All Rights Reserved
@@ -1539,7 +1538,8 @@ document.addEventListener("DOMContentLoaded", function() {
 });
 </script>
 """
-    return text    
+    return text
+
 
 def get_log_css():
     text = """
@@ -1596,6 +1596,7 @@ body.dark-mode .log-menu a.active {
 </style>
 """
     return text
+
 
 def get_editor_css():
     text = """
@@ -1899,7 +1900,8 @@ body.dark-mode .revert-button:disabled {
     border: 2px solid #555555 !important;
 }
 </style>"""
-    return text    
+    return text
+
 
 def get_editor_js():
     text = """
@@ -2378,8 +2380,9 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 </script>
-""" 
-    return text   
+"""
+    return text
+
 
 def get_plan_css():
     text = """<body>
@@ -2711,7 +2714,8 @@ def get_plan_css():
     });
     </script>
     """
-    return text    
+    return text
+
 
 def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, battery_status_icon, refresh=0, codemirror=False):
     """
@@ -3131,7 +3135,7 @@ function toggleSwitch(element, fieldName) {
         text += '<meta http-equiv="refresh" content="{}" >'.format(refresh)
 
     if codemirror:
-        text += """   
+        text += """
     <!-- CodeMirror Library -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.9/codemirror.min.js"></script>
