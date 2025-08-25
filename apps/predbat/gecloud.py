@@ -405,7 +405,7 @@ class GECloudDirect:
                     )
                 elif measurand == "Energy.Active.Import.Register":
                     self.base.dashboard_item(
-                        entity_name + "_evc_energy_active_import_register", state=state, attributes={"friendly_name": "EV Charger Total Importr", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud"
+                        entity_name + "_evc_energy_active_import_register", state=state, attributes={"friendly_name": "EV Charger Total Import", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud"
                     )
                 elif measurand == "Frequency":
                     self.base.dashboard_item(entity_name + "_evc_frequency", state=state, attributes={"friendly_name": "EV Charger Frequency", "icon": "mdi:ev-station", "unit_of_measurement": "Hz", "device_class": "frequency"}, app="gecloud")

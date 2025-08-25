@@ -1,4 +1,11 @@
-"""Ohme API library."""
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2024 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# Ohme API library.
+# Credits to: https://github.com/dan-r/ohmepy for the original code.
+# -----------------------------------------------------------------------------
 
 import logging
 import asyncio
