@@ -19,9 +19,7 @@ GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"
 VERSION = "1.5.1"
 
 
-JsonValueType = Union[
-    Dict[str, "JsonValueType"], List["JsonValueType"], str, int, float, bool, None
-]
+JsonValueType = Union[Dict[str, "JsonValueType"], List["JsonValueType"], str, int, float, bool, None]
 
 # Ohme attribute table for Home Assistant entities
 ohme_attribute_table = {
@@ -36,7 +34,7 @@ ohme_attribute_table = {
     "target_soc": {"friendly_name": "Ohme Target SOC", "icon": "mdi:battery-charging", "unit_of_measurement": "%", "device_class": "battery", "min": 0, "max": 100, "step": 1},
     "target_time": {"friendly_name": "Ohme Target Time", "icon": "mdi:clock-outline"},
     "preconditioning": {"friendly_name": "Ohme Preconditioning", "icon": "mdi:air-conditioner", "unit_of_measurement": "mins", "min": 0, "max": 60, "step": 5},
-    "slots" : {"friendly_name": "Ohme Charge Slots", "icon": "mdi:calendar-clock"},
+    "slots": {"friendly_name": "Ohme Charge Slots", "icon": "mdi:calendar-clock"},
     "energy": {"friendly_name": "Ohme Session Energy", "icon": "mdi:lightning-bolt", "unit_of_measurement": "Wh", "device_class": "energy"},
     "battery_percent": {"friendly_name": "Ohme Battery Percent", "icon": "mdi:battery", "unit_of_measurement": "%", "device_class": "battery"},
     "current_vehicle": {"friendly_name": "Ohme Current Vehicle", "icon": "mdi:car"},
@@ -45,6 +43,7 @@ ohme_attribute_table = {
 
 BASE_TIME = datetime.datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(0, 24 * 60, 1)]
+
 
 def time_next_occurs(hour: int, minute: int) -> datetime.datetime:
     """Find when this time next occurs."""
@@ -85,16 +84,8 @@ def slot_list(data: Dict[str, Any]) -> List[ChargeSlot]:
     slots: List[ChargeSlot] = []
 
     for slot in session_slots:
-        start_time = (
-            datetime.datetime.fromtimestamp(slot["startTimeMs"] / 1000)
-            .replace(microsecond=0)
-            .astimezone()
-        )
-        end_time = (
-            datetime.datetime.fromtimestamp(slot["endTimeMs"] / 1000)
-            .replace(microsecond=0)
-            .astimezone()
-        )
+        start_time = datetime.datetime.fromtimestamp(slot["startTimeMs"] / 1000).replace(microsecond=0).astimezone()
+        end_time = datetime.datetime.fromtimestamp(slot["endTimeMs"] / 1000).replace(microsecond=0).astimezone()
 
         hours = (end_time - start_time).total_seconds() / 3600
         energy = round((slot["watts"] * hours) / 1000, 2)
@@ -164,6 +155,7 @@ class ChargerPower:
     volts: int | None
     ct_amps: float
 
+
 class OhmeAPI:
     """Ohme API exception."""
 
@@ -172,7 +164,7 @@ class OhmeAPI:
         self.base = base
         self.log = base.log
         self.password = password
-        self.client = OhmeApiClient(email, password, self.log)    
+        self.client = OhmeApiClient(email, password, self.log)
         self.api_started = False
         self.stop_api = False
         self.count_errors = 0
@@ -212,7 +204,7 @@ class OhmeAPI:
                             self.log("Warn: Ohme API: Event handler error: {}".format(e))
                     first = True # Force an immediate update after handling events
 
-                if first or (count_seconds % (30*60)) == 0:
+                if first or (count_seconds % (30 * 60)) == 0:
                     await self.client.async_update_device_info()
                     await self.client.async_get_advanced_settings()
 
@@ -235,7 +227,7 @@ class OhmeAPI:
 
             await asyncio.sleep(1)
             count_seconds += 1
-            
+
         await self.client.async_close()
         print("Ohme API: Stopped")
 
@@ -285,7 +277,7 @@ class OhmeAPI:
             mode = "disconnected"
         else:
             mode = str(mode.value)
-        self.base.dashboard_item(entity_name_sensor + "_mode", state=mode, attributes=ohme_attribute_table.get("mode", {}), app="ohme") 
+        self.base.dashboard_item(entity_name_sensor + "_mode", state=mode, attributes=ohme_attribute_table.get("mode", {}), app="ohme")
 
         if status is None:
             status = "unknown"
@@ -414,6 +406,7 @@ class OhmeAPI:
                     return
                 await self.client.async_approve_charge()
                 self.log("Info: Ohme API: Approved charge")
+
 
 class OhmeApiClient:
     """API client for Ohme EV chargers."""
@@ -563,10 +556,7 @@ class OhmeApiClient:
 
     def _charge_in_progress(self) -> bool:
         """Is a charge in progress? Used to determine if schedule or session should be adjusted."""
-        return (
-            self.status is not ChargerStatus.UNPLUGGED
-            and self.status is not ChargerStatus.PENDING_APPROVAL
-        )
+        return self.status is not ChargerStatus.UNPLUGGED and self.status is not ChargerStatus.PENDING_APPROVAL
 
     # Simple getters
 
@@ -589,10 +579,7 @@ class OhmeApiClient:
             return ChargerStatus.PAUSED
         elif self._charge_session["mode"] == "FINISHED_CHARGE":
             return ChargerStatus.FINISHED
-        elif (
-            self._charge_session.get("power")
-            and self._charge_session["power"].get("watt", 0) > 0
-        ):
+        elif self._charge_session.get("power") and self._charge_session["power"].get("watt", 0) > 0:
             return ChargerStatus.CHARGING
         else:
             return ChargerStatus.PLUGGED_IN
@@ -634,10 +621,7 @@ class OhmeApiClient:
     @property
     def target_soc(self) -> int:
         """Target state of charge."""
-        if (
-            self.status is ChargerStatus.PAUSED
-            and self._charge_session.get("suspendedRule") is not None
-        ):
+        if self.status is ChargerStatus.PAUSED and self._charge_session.get("suspendedRule") is not None:
             return self._charge_session.get("suspendedRule", {}).get("targetPercent", 0)
         elif self._charge_in_progress():
             return int(self._charge_session["appliedRule"]["targetPercent"])
@@ -675,11 +659,7 @@ class OhmeApiClient:
     def next_slot_start(self) -> datetime.datetime | None:
         """Next slot start."""
         return min(
-            (
-                slot.start
-                for slot in self.slots
-                if slot.start > datetime.datetime.now().astimezone()
-            ),
+            (slot.start for slot in self.slots if slot.start > datetime.datetime.now().astimezone()),
             default=None,
         )
 
@@ -687,11 +667,7 @@ class OhmeApiClient:
     def next_slot_end(self) -> datetime.datetime | None:
         """Next slot start."""
         return min(
-            (
-                slot.end
-                for slot in self.slots
-                if slot.end > datetime.datetime.now().astimezone()
-            ),
+            (slot.end for slot in self.slots if slot.end > datetime.datetime.now().astimezone()),
             default=None,
         )
 
@@ -715,23 +691,17 @@ class OhmeApiClient:
 
     async def async_pause_charge(self) -> bool:
         """Pause an ongoing charge"""
-        result = await self._make_request(
-            "POST", f"/v1/chargeSessions/{self.serial}/stop", skip_json=True
-        )
+        result = await self._make_request("POST", f"/v1/chargeSessions/{self.serial}/stop", skip_json=True)
         return bool(result)
 
     async def async_resume_charge(self) -> bool:
         """Resume a paused charge"""
-        result = await self._make_request(
-            "POST", f"/v1/chargeSessions/{self.serial}/resume", skip_json=True
-        )
+        result = await self._make_request("POST", f"/v1/chargeSessions/{self.serial}/resume", skip_json=True)
         return bool(result)
 
     async def async_approve_charge(self) -> bool:
         """Approve a charge"""
-        result = await self._make_request(
-            "PUT", f"/v1/chargeSessions/{self.serial}/approve?approve=true"
-        )
+        result = await self._make_request("PUT", f"/v1/chargeSessions/{self.serial}/approve?approve=true")
         return bool(result)
 
     async def async_max_charge(self, state: bool = True) -> bool:
@@ -765,51 +735,26 @@ class OhmeApiClient:
         """Apply rule to ongoing charge/stop max charge."""
         # Check every property. If we've provided it, use that. If not, use the existing.
         if max_price is None:
-            if (
-                "settings" in self._last_rule
-                and self._last_rule["settings"] is not None
-                and len(self._last_rule["settings"]) > 1
-            ):
+            if "settings" in self._last_rule and self._last_rule["settings"] is not None and len(self._last_rule["settings"]) > 1:
                 max_price = self._last_rule["settings"][0]["enabled"]
             else:
                 max_price = False
 
         if target_percent is None:
-            target_percent = (
-                self._last_rule["targetPercent"]
-                if "targetPercent" in self._last_rule
-                else 80
-            )
+            target_percent = self._last_rule["targetPercent"] if "targetPercent" in self._last_rule else 80
 
         if pre_condition is None:
-            pre_condition = (
-                self._last_rule["preconditioningEnabled"]
-                if "preconditioningEnabled" in self._last_rule
-                else False
-            )
+            pre_condition = self._last_rule["preconditioningEnabled"] if "preconditioningEnabled" in self._last_rule else False
 
         if not pre_condition_length:
-            pre_condition_length = (
-                self._last_rule["preconditionLengthMins"]
-                if (
-                    "preconditionLengthMins" in self._last_rule
-                    and self._last_rule["preconditionLengthMins"] is not None
-                )
-                else 30
-            )
+            pre_condition_length = self._last_rule["preconditionLengthMins"] if ("preconditionLengthMins" in self._last_rule and self._last_rule["preconditionLengthMins"] is not None) else 30
 
         if target_time is None:
             # Default to 9am
-            target_time_cache = (
-                self._last_rule["targetTime"]
-                if "targetTime" in self._last_rule
-                else 32400
-            )
+            target_time_cache = self._last_rule["targetTime"] if "targetTime" in self._last_rule else 32400
             target_time = (target_time_cache // 3600, (target_time_cache % 3600) // 60)
 
-        target_ts = int(
-            time_next_occurs(target_time[0], target_time[1]).timestamp() * 1000
-        )
+        target_ts = int(time_next_occurs(target_time[0], target_time[1]).timestamp() * 1000)
 
         # Convert these to string form
         max_price_str = "true" if max_price else "false"
@@ -821,9 +766,7 @@ class OhmeApiClient:
         )
         return bool(result)
 
-    async def async_change_price_cap(
-        self, enabled: Optional[bool] = None, cap: Optional[float] = None
-    ) -> bool:
+    async def async_change_price_cap(self, enabled: Optional[bool] = None, cap: Optional[float] = None) -> bool:
         """Change price cap settings."""
         settings = await self._make_request("GET", "/v1/users/me/settings")
         if enabled is not None:
@@ -893,9 +836,7 @@ class OhmeApiClient:
 
     async def async_set_configuration_value(self, values: Mapping[str, bool]) -> bool:
         """Set a configuration value or values."""
-        result = await self._make_request(
-            "PUT", f"/v1/chargeDevices/{self.serial}/appSettings", data=values
-        )
+        result = await self._make_request("PUT", f"/v1/chargeDevices/{self.serial}/appSettings", data=values)
         await asyncio.sleep(1)  # The API is slow to update after this request
 
         return bool(result)
@@ -904,9 +845,7 @@ class OhmeApiClient:
         """Set the vehicle to be charged."""
         for vehicle in self._cars:
             if vehicle_to_name(vehicle) == selected_name:
-                result = await self._make_request(
-                    "PUT", f"/v1/car/{vehicle['id']}/select"
-                )
+                result = await self._make_request("PUT", f"/v1/car/{vehicle['id']}/select")
 
                 return True
         return False
@@ -938,27 +877,19 @@ class OhmeApiClient:
         else:
             self.energy = 0
 
-        self.battery = (
-            ((resp.get("car") or {}).get("batterySoc") or {}).get("percent")
-            or (resp.get("batterySoc") or {}).get("percent")
-            or 0
-        )
+        self.battery = ((resp.get("car") or {}).get("batterySoc") or {}).get("percent") or (resp.get("batterySoc") or {}).get("percent") or 0
 
         resp = await self._make_request("GET", "/v1/chargeSessions/nextSessionInfo")
         self._next_session = resp.get("rule", {})
 
     async def async_get_advanced_settings(self) -> None:
         """Get advanced settings (mainly for CT clamp reading)"""
-        resp = await self._make_request(
-            "GET", f"/v1/chargeDevices/{self.serial}/advancedSettings"
-        )
+        resp = await self._make_request("GET", f"/v1/chargeDevices/{self.serial}/advancedSettings")
 
         self._advanced_settings = resp
 
         # clampConnected is not reliable, so check clampAmps being > 0 as an alternative
-        if resp["clampConnected"] or (
-            isinstance(resp.get("clampAmps"), float) and resp.get("clampAmps") > 0
-        ):
+        if resp["clampConnected"] or (isinstance(resp.get("clampAmps"), float) and resp.get("clampAmps") > 0):
             self.ct_connected = True
 
     async def async_update_device_info(self) -> bool:
@@ -1007,7 +938,9 @@ class OhmeApiClient:
 
 
 # Exceptions
-class ApiException(Exception): ...
+class ApiException(Exception):
+    ...
 
 
-class AuthException(ApiException): ...
+class AuthException(ApiException):
+    ...
