@@ -10,17 +10,18 @@
 #
 # Helper functions for web pages
 
+
 def get_apps_js(all_states_json):
     text = (
-            f"""
+        f"""
 <script>
 // Global object to track pending changes
 let pendingChanges = {{}};
 
 // All Home Assistant states for entity dropdown
 const allStates = """
-            + all_states_json
-            + """;
+        + all_states_json
+        + """;
 function showMessage(message, type) {
     const container = document.getElementById('messageContainer');
     container.className = 'message-container message-' + type;
@@ -952,9 +953,9 @@ function discardAllChanges() {
 }
 </script>
 """
-        )
+    )
     return text
-    
+
 
 def get_html_config_css():
     text = """
