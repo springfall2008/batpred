@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Union
 from datetime import timedelta
 from config import TIME_FORMAT_HA
 
-GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY" # cspell:disable-line
+GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
 VERSION = "1.5.1"
 
 
