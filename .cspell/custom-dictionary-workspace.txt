@@ -139,6 +139,7 @@ matplotlib
 maximise
 mdlrc
 measurand
+measurands
 Meteo
 Meteoalarm
 meterpoint
@@ -172,6 +173,7 @@ octo
 octoplus
 octopoints
 Ohme
+ohmepy
 onchange
 oncharge
 oninput
