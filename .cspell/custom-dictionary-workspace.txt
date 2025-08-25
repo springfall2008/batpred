@@ -1,5 +1,7 @@
 # Custom Dictionary Words
 activepower
+measurands
+ohmepy
 adata
 adbase
 AIO
