@@ -234,7 +234,7 @@ class OhmeAPI:
             await asyncio.sleep(1)
             count_seconds += 1
 
-        await self.client.async_close()
+        await self.client.close()
         print("Ohme API: Stopped")
 
     def stop(self):
