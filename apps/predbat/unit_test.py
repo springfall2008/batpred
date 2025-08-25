@@ -3323,7 +3323,7 @@ def run_test_web_if(my_predbat):
     my_predbat.web_interface_task = my_predbat.create_task(my_predbat.web_interface.start())
 
     # Fetch page from 127.0.0.1:5052
-    for page in ["/", "/dash", "/plan", "/config", "/apps", "/charts", "/compare", "/log"]:
+    for page in ["/", "/dash", "/plan", "/config", "/apps", "/charts", "/compare", "/log", "/config", "/entity"]:
         print("Fetch page {}".format(page))
         address = "http://127.0.0.1:5052" + page
         res = requests.get(address)

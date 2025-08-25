@@ -42,6 +42,8 @@ DEBUG_EXCLUDE_LIST = [
     "octopus_api_direct_task",
     "ge_cloud_direct",
     "ge_cloud_direct_task",
+    "ohme_api_direct",
+    "ohme_api_direct_task",
     "plugin_system",
 ]
 
@@ -275,6 +277,9 @@ class UserInterface:
             if "predbat_gecloud_" in entity_id:
                 if self.ge_cloud_direct:
                     await self.ge_cloud_direct.select_event(entity_id, value)
+            if "predbat_ohme" in entity_id:
+                if self.ohme_api_direct:
+                    await self.ohme_api_direct.select_event(entity_id, value)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -330,6 +335,9 @@ class UserInterface:
             if "predbat_gecloud_" in entity_id:
                 if self.ge_cloud_direct:
                     await self.ge_cloud_direct.number_event(entity_id, value)
+            if "predbat_ohme" in entity_id:
+                if self.ohme_api_direct:
+                    await self.ohme_api_direct.number_event(entity_id, value)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -376,6 +384,9 @@ class UserInterface:
             if "predbat_gecloud_" in entity_id:
                 if self.ge_cloud_direct:
                     await self.ge_cloud_direct.switch_event(entity_id, service)
+            if "predbat_ohme" in entity_id:
+                if self.ohme_api_direct:
+                    await self.ohme_api_direct.switch_event(entity_id, service)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):

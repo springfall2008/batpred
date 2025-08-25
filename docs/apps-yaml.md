@@ -826,6 +826,8 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
+- **octopus_api_key** - Sets API key to communicate directly with octopus
+- **octopus_account** - Sets Octopus account number
 
 Note that gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)
 
@@ -980,6 +982,17 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+
+## Ohme car charger - direct integration
+
+Predbat can talk directly to the Ohme charger by setting your login details. When **ohme_automatic_octopus_intelligent** is set then Predbat is automatically
+configured to take Octopus Intelligent car charging slots from Ohme (rather than from Octopus Intelligent directly).
+
+```yaml
+  ohme_login: "user@domain"
+  ohme_password: "xxxxxxxxx"
+  ohme_automatic: true
+```
 
 ## Watch List - automatically start Predbat execution
 
