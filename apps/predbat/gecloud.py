@@ -400,9 +400,13 @@ class GECloudDirect:
                 elif measurand == "Current.Offered":
                     self.base.dashboard_item(entity_name + "_evc_current_offered", state=state, attributes={"friendly_name": "EV Charger Current Offered", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
                 elif measurand == "Energy.Active.Export.Register":
-                    self.base.dashboard_item(entity_name + "_evc_energy_active_export_register", state=state, attributes={"friendly_name": "EV Charger Total Export", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud")
+                    self.base.dashboard_item(
+                        entity_name + "_evc_energy_active_export_register", state=state, attributes={"friendly_name": "EV Charger Total Export", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud"
+                    )
                 elif measurand == "Energy.Active.Import.Register":
-                    self.base.dashboard_item(entity_name + "_evc_energy_active_import_register", state=state, attributes={"friendly_name": "EV Charger Total Importr", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud")
+                    self.base.dashboard_item(
+                        entity_name + "_evc_energy_active_import_register", state=state, attributes={"friendly_name": "EV Charger Total Importr", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud"
+                    )
                 elif measurand == "Frequency":
                     self.base.dashboard_item(entity_name + "_evc_frequency", state=state, attributes={"friendly_name": "EV Charger Frequency", "icon": "mdi:ev-station", "unit_of_measurement": "Hz", "device_class": "frequency"}, app="gecloud")
                 elif measurand == "Power.Active.Export":
@@ -420,7 +424,7 @@ class GECloudDirect:
                 elif measurand == "Voltage":
                     self.base.dashboard_item(entity_name + "_evc_voltage", state=state, attributes={"friendly_name": "EV Charger Voltage", "icon": "mdi:ev-station", "unit_of_measurement": "V", "device_class": "voltage"}, app="gecloud")
                 elif measurand == "RPM":
-                    self.base.dashboard_item(entity_name + "_evc_rpm", state=state, attributes={"friendly_name": "EV Charger Fan Speed", "icon": "mdi:ev-station", "unit_of_measurement": "RPM"}, app="gecloud") 
+                    self.base.dashboard_item(entity_name + "_evc_rpm", state=state, attributes={"friendly_name": "EV Charger Fan Speed", "icon": "mdi:ev-station", "unit_of_measurement": "RPM"}, app="gecloud")
 
     async def publish_status(self, device, status):
         """
