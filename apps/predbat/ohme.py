@@ -210,6 +210,7 @@ class OhmeAPI:
                             await handler(*args)
                         except ApiException as e:
                             self.log("Warn: Ohme API: Event handler error: {}".format(e))
+                    first = True # Force an immediate update after handling events
 
                 if first or (count_seconds % (30*60)) == 0:
                     await self.client.async_update_device_info()
@@ -267,10 +268,10 @@ class OhmeAPI:
         battery = self.client.battery
         vehicle = self.client.current_vehicle
 
-        self.log("Info: Ohme API: Mode: %s, Status: %s, Power: %sW, %sA, %sV, CT: %sA, Max Charge: %s, Available: %s, Target SOC: %s%%, Target Time: %s, Preconditioning: %s mins, Vehicle: %s, Slots: %s" % (
-                 mode, status, power.watts, power.amps, power.volts, power.ct_amps, max_charge, available, target_soc, 
-                 target_time, preconditioning, vehicle, slots)
-                )
+        #self.log("Info: Ohme API: Mode: %s, Status: %s, Power: %sW, %sA, %sV, CT: %sA, Max Charge: %s, Available: %s, Target SOC: %s%%, Target Time: %s, Preconditioning: %s mins, Vehicle: %s, Slots: %s" % (
+        #         mode, status, power.watts, power.amps, power.volts, power.ct_amps, max_charge, available, target_soc, 
+        #         target_time, preconditioning, vehicle, slots)
+        #        )
         
         # Create entity name prefix
         entity_name_sensor = "sensor.predbat_ohme"
@@ -552,7 +553,7 @@ class OhmeApiClient:
                     "User-Agent": f"ohmepy/{VERSION}",
                 },
             ) as resp:
-                self.log("Info: %s request to %s, status code %s" % (method, url, resp.status))
+                #self.log("Info: %s request to %s, status code %s" % (method, url, resp.status))
                 await self._handle_api_error(url, resp)
 
                 if skip_json and method == "POST":
