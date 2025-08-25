@@ -985,9 +985,8 @@ SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for
 
 ## Ohme car charger - direct integration
 
-Predbat can talk directly to the Ohme charger by setting your login details. When **ohme_automatic** is set then Predbat is automatically configured to take
-car charging slots from Ohme (rather than from Octopus Intelligent directly). Recommended if you plan your car charging with Ohme, otherwise set to false
-and then just use the data from Ohme in your automations.
+Predbat can talk directly to the Ohme charger by setting your login details. When **ohme_automatic_octopus_intelligent** is set then Predbat is automatically 
+configured to take Octopus Intlelligent car charging slots from Ohme (rather than from Octopus Intelligent directly).
 
 ```yaml
   ohme_login: "user@domain"
