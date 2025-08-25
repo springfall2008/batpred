@@ -1076,13 +1076,16 @@ class Fetch:
         # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
-        if (self.octopus_api_direct and self.octopus_api_direct.get_intelligent_device()) or (not self.octopus_api_direct and ("octopus_intelligent_slot" in self.args)):
+        slot_is_configured = "octopus_intelligent_slot" in self.args
+        ohme_automatic = self.get_arg("ohme_automatic", False)
+
+        if (self.octopus_api_direct and self.octopus_api_direct.get_intelligent_device()) or (not self.octopus_api_direct and slot_is_configured):
             completed = []
             planned = []
             vehicle = {}
             vehicle_pref = {}
 
-            if self.octopus_api_direct:
+            if self.octopus_api_direct and not ohme_automatic:
                 completed = self.octopus_api_direct.get_intelligent_completed_dispatches()
                 planned = self.octopus_api_direct.get_intelligent_planned_dispatches()
                 vehicle = self.octopus_api_direct.get_intelligent_vehicle()
@@ -1121,7 +1124,7 @@ class Fetch:
 
             if self.num_cars >= 1:
                 # Extract vehicle data if we can get it
-                if vehicle or self.octopus_api_direct:
+                if vehicle or (self.octopus_api_direct and not ohme_automatic):
                     self.car_charging_battery_size[0] = float(vehicle.get("vehicleBatterySizeInKwh", self.car_charging_battery_size[0]))
                     self.car_charging_rate[0] = float(vehicle.get("chargePointPowerInKw", self.car_charging_rate[0]))
                 else:
@@ -1136,7 +1139,7 @@ class Fetch:
                 self.car_charging_limit[0] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0)
 
                 # Extract vehicle preference if we can get it
-                if (vehicle_pref or self.octopus_api_direct) and self.octopus_intelligent_charging:
+                if (vehicle_pref or (self.octopus_api_direct and not ohme_automatic)) and self.octopus_intelligent_charging:
                     octopus_limit = max(float(vehicle_pref.get("weekdayTargetSoc", 100)), float(vehicle_pref.get("weekendTargetSoc", 100)))
                     octopus_ready_time = vehicle_pref.get("weekdayTargetTime", None)
                     if not octopus_ready_time:

@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 from datetime import timedelta
+from config import TIME_FORMAT_HA
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"
 VERSION = "1.5.1"
@@ -166,7 +167,7 @@ class ChargerPower:
 class OhmeAPI:
     """Ohme API exception."""
 
-    def __init__(self, base, email, password):
+    def __init__(self, base, email, password, automatic=False):
         self.email = email
         self.base = base
         self.log = base.log
@@ -176,6 +177,7 @@ class OhmeAPI:
         self.stop_api = False
         self.count_errors = 0
         self.queued_events = []
+        self.automatic = automatic
 
     def wait_api_started(self):
         """
@@ -220,6 +222,10 @@ class OhmeAPI:
                 if not self.api_started:
                     print("Ohme API: Started")
                     self.api_started = True
+
+                    if self.automatic and self.client.serial:
+                        await self.automatic_config()
+
                 first = False
 
             except Exception as e:
@@ -234,6 +240,15 @@ class OhmeAPI:
 
     def stop(self):
         self.stop_api = True
+
+    async def automatic_config(self):
+        """
+        Automatically set the predbat entities to use ohme
+        """
+        self.log("Info: Ohme API: Setting Predbat to use Ohme")
+        self.base.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"
+        self.base.args["octopus_ready_time"] = "select.predbat_ohme_target_time"
+        self.base.args["octopus_charge_limit"] = "number.predbat_ohme_target_percent"
 
     async def publish_data(self):
         """
@@ -289,7 +304,7 @@ class OhmeAPI:
         self.base.dashboard_item(entity_name_binary_sensor + "_available", state="on" if available else "off", attributes=ohme_attribute_table.get("available", {}), app="ohme")
 
         # Publish target data
-        self.base.dashboard_item(entity_name_number + "_target_soc", state=target_soc, attributes=ohme_attribute_table.get("target_soc", {}), app="ohme")
+        self.base.dashboard_item(entity_name_number + "_target_percent", state=target_soc, attributes=ohme_attribute_table.get("target_soc", {}), app="ohme")
 
         # Target time
         target_time_str = "00:00"
@@ -305,9 +320,29 @@ class OhmeAPI:
         # Publish slot information
         num_slots = len(slots) if slots else 0
         slot_attributes = ohme_attribute_table.get("slots", {}).copy()
+
+        planned_dispatches = []
+        completed_dispatches = []
+        slot_active = False
+        for slot in slots:
+            start = slot.start
+            end = slot.end
+            energy = slot.energy
+            is_completed = False
+            if end < datetime.datetime.now().astimezone():
+                is_completed = True
+            if start <= datetime.datetime.now().astimezone() <= end:
+                slot_active = True
+            dispatch = {"start": start.strftime(TIME_FORMAT_HA), "end": end.strftime(TIME_FORMAT_HA), "energy": -energy, "location": "AT_HOME"}
+            if is_completed:
+                completed_dispatches.append(dispatch)
+            else:
+                planned_dispatches.append(dispatch)
+
         if slots:
-            slot_attributes["slots"] = slots
-        self.base.dashboard_item(entity_name_sensor + "_slots", state=num_slots, attributes=slot_attributes, app="ohme")
+            slot_attributes["planned_dispatches"] = planned_dispatches
+            slot_attributes["completed_dispatches"] = completed_dispatches
+        self.base.dashboard_item(entity_name_binary_sensor + "_slot_active", state=slot_active, attributes=slot_attributes, app="ohme")
 
         # Publish energy and battery data
         self.base.dashboard_item(entity_name_sensor + "_energy", state=energy, attributes=ohme_attribute_table.get("energy", {}), app="ohme")
