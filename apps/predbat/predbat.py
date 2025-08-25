@@ -36,10 +36,10 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.24.3"
+THIS_VERSION = "v8.25.0"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -77,6 +77,7 @@ from octopus import Octopus, OctopusAPI
 from energydataservice import Energidataservice
 from solcast import Solcast
 from gecloud import GECloud, GECloudDirect
+from ohme import OhmeAPI
 from execute import Execute
 from plan import Plan
 from fetch import Fetch
@@ -351,6 +352,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.ge_cloud_direct_task = None
         self.octopus_api_direct = None
         self.octopus_api_direct_task = None
+        self.ohme_api_direct = None
+        self.ohme_api_direct_task = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparison = None
         self.predheat = None
@@ -1291,6 +1294,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             if not self.octopus_api_direct_task.is_alive():
                 return False
 
+        if self.ohme_api_direct_task:
+            # Check if the task is still running
+            if not self.ohme_api_direct_task.is_alive():
+                return False
+
         if self.ge_cloud_direct_task:
             # Check if the task is still running
             if not self.ge_cloud_direct_task.is_alive():
@@ -1352,15 +1360,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
             self.web_interface_task = self.create_task(self.web_interface.start())
 
-            if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
+            # Octopus API
+            if self.get_arg("octopus_api_key", "", indirect=False) and self.get_arg("octopus_api_account", "", indirect=False):
                 self.log("Starting Octopus API interface")
-                self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", ""), self.get_arg("octopus_api_account", ""), self)
+                self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", "", indirect=False), self.get_arg("octopus_api_account", "", indirect=False), self)
                 self.octopus_api_direct_task = self.create_task(self.octopus_api_direct.start())
                 if not self.octopus_api_direct.wait_api_started():
                     self.log("Error: Octopus API failed to start")
                     self.record_status("Error: Octopus API failed to start")
                     raise ValueError("Octopus API failed to start")
 
+            # GE Cloud Direct API
             if self.get_arg("ge_cloud_direct", False):
                 self.log("Starting GE cloud direct interface")
                 self.ge_cloud_direct = GECloudDirect(self)
@@ -1370,6 +1380,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                     self.log("Error: GE Cloud API failed to start")
                     self.record_status("Error: GE Cloud API failed to start")
                     raise ValueError("GE Cloud API failed to start")
+
+            # Ohme API
+            if self.get_arg("ohme_login", "", indirect=False) and self.get_arg("ohme_password", "", indirect=False):
+                self.log("Starting Ohme API interface")
+                self.ohme_api_direct = OhmeAPI(self, self.get_arg("ohme_login", "", indirect=False), self.get_arg("ohme_password", "", indirect=False))
+                self.ohme_api_direct_task = self.create_task(self.ohme_api_direct.start())
+                if not self.ohme_api_direct.wait_api_started():
+                    self.log("Error: Ohme API failed to start")
+                    self.record_status("Error: Ohme API failed to start")
+                    raise ValueError("Ohme API failed to start")
+            else:
+                self.log("Ohme EV charger not configured")
 
             # Printable config root
             self.config_root_p = self.config_root
@@ -1435,6 +1457,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             await self.web_interface.stop()
         if self.ge_cloud_direct:
             await self.ge_cloud_direct.stop()
+        if self.ohme_api_direct:
+            await self.ohme_api_direct.stop()
         if self.octopus_api_direct:
             self.octopus_api_direct.stop()
         if self.ha_interface:
