@@ -15,6 +15,7 @@ from octopus import OctopusAPI
 from web import WebInterface
 from ha import HAInterface
 from db_manager import DatabaseManager
+from fox import FoxAPI
 import os
 
 COMPONENT_LIST = {
@@ -88,6 +89,17 @@ COMPONENT_LIST = {
             },
         },
     },
+    "fox": {
+        "class": FoxAPI,
+        "name": "Fox API",
+        "event_filter": "predbat_fox_",
+        "args": {
+            "key": {
+                "required": True,
+                "config": "fox_key",
+            },
+        },
+    }
 }
 
 
