@@ -20,8 +20,6 @@ import threading
 import time
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 
-from db_manager import DatabaseManager  # database functions have been refactored to DatabaseManager
-
 
 class RunThread(threading.Thread):
     def __init__(self, coro):
