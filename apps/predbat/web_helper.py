@@ -1451,6 +1451,216 @@ body.dark-mode .entity-value {
     return text
 
 
+def get_components_css():
+    """
+    Return CSS for components page
+    """
+    text = """
+<style>
+.components-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.component-card {
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
+    background: #fff;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: border-color 0.3s ease;
+}
+
+.component-card.active {
+    border-color: #4CAF50;
+}
+
+.component-card.inactive {
+    border-color: #999;
+    background: #f9f9f9;
+}
+
+.component-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.component-header h3 {
+    margin: 0;
+    color: #333;
+    font-size: 1.2em;
+}
+
+.status-indicator {
+    font-size: 1.5em;
+    margin-right: 8px;
+}
+
+.status-healthy {
+    color: #4CAF50;
+}
+
+.status-error {
+    color: #f44336;
+}
+
+.status-inactive {
+    color: #999;
+}
+
+.status-text {
+    font-weight: bold;
+    font-size: 0.9em;
+}
+
+.component-details {
+    border-top: 1px solid #eee;
+    padding-top: 15px;
+}
+
+.component-details p {
+    margin: 8px 0;
+    font-size: 0.95em;
+}
+
+.component-args {
+    margin-top: 15px;
+}
+
+.component-args h4 {
+    margin: 10px 0;
+    color: #333;
+    font-size: 1em;
+}
+
+.args-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+    margin: 10px 0;
+}
+
+.args-table th {
+    background-color: #f5f5f5;
+    padding: 8px;
+    text-align: left;
+    border: 1px solid #ddd;
+    font-weight: bold;
+}
+
+.args-table td {
+    padding: 8px;
+    border: 1px solid #ddd;
+    vertical-align: top;
+}
+
+.args-table tr.required-arg {
+    background-color: #fff8e1;
+}
+
+.args-table tr.optional-arg {
+    background-color: #f9f9f9;
+}
+
+.entity-count-positive {
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+.entity-count-zero {
+    color: #999;
+    font-weight: bold;
+}
+
+/* Dark mode styles */
+body.dark-mode .component-card {
+    background: #2d2d2d;
+    border-color: #555;
+    color: #e0e0e0;
+}
+
+body.dark-mode .component-card.active {
+    border-color: #4CAF50;
+}
+
+body.dark-mode .component-card.inactive {
+    border-color: #666;
+    background: #1e1e1e;
+}
+
+body.dark-mode .component-header h3 {
+    color: #e0e0e0;
+}
+
+body.dark-mode .component-details {
+    border-top-color: #555;
+}
+
+body.dark-mode .component-args h4 {
+    color: #e0e0e0;
+}
+
+body.dark-mode .args-table th {
+    background-color: #333;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .args-table td {
+    border-color: #555;
+    color: #e0e0e0;
+}
+
+body.dark-mode .args-table tr.required-arg {
+    background-color: #3a3a1a;
+}
+
+body.dark-mode .args-table tr.optional-arg {
+    background-color: #2a2a2a;
+}
+
+body.dark-mode .entity-count-positive {
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+body.dark-mode .entity-count-zero {
+    color: #666;
+    font-weight: bold;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .components-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .component-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 5px;
+    }
+
+    .args-table {
+        font-size: 0.8em;
+    }
+
+    .args-table th,
+    .args-table td {
+        padding: 6px;
+    }
+}
+</style>
+"""
+    return text
+
+
 def get_charts_css():
     text = """
 <style>
@@ -3478,6 +3688,7 @@ setTimeout(function() {
         + config_warning
         + """</a>
 <a href='./apps'>Apps</a>
+<a href='./components'>Components</a>
 <a href='./apps_editor'>Editor</a>
 <a href='./log'>Log</a>
 <a href='./compare'>Compare</a>

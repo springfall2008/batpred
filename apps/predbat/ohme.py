@@ -165,7 +165,7 @@ class ChargerPower:
 class OhmeAPI:
     """Ohme API exception."""
 
-    def __init__(self, base, email, password, ohme_automatic_octopus_intelligent=False):
+    def __init__(self, email, password, ohme_automatic_octopus_intelligent, base):
         self.email = email
         self.base = base
         self.log = base.log
@@ -190,6 +190,12 @@ class OhmeAPI:
             self.log("Warn: Ohme API: Failed to start")
             return False
         return True
+
+    def is_alive(self):
+        """
+        Check if the API is alive
+        """
+        return self.api_started
 
     async def start(self):
         """

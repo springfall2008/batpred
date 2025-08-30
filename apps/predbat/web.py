@@ -18,7 +18,8 @@ from datetime import datetime, timedelta
 import json
 import shutil
 import html as html_module
-from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js
+import time
+from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
@@ -30,7 +31,7 @@ ROOT_YAML_KEY = "pred_bat"
 
 
 class WebInterface:
-    def __init__(self, base) -> None:
+    def __init__(self, web_port, base) -> None:
         self.abort = False
         self.base = base
         self.log = base.log
@@ -42,11 +43,21 @@ class WebInterface:
         self.cost_yesterday_hist = {}
         self.cost_yesterday_car_hist = {}
         self.cost_yesterday_no_car = {}
-        self.web_port = self.base.get_arg("web_port", 5052)
+        self.web_port = web_port
         self.default_log = "warnings"
+        self.api_started = False
 
         # Plugin registration system
         self.registered_endpoints = []
+
+    async def select_event(self, entity_id, value):
+        pass
+
+    async def number_event(self, entity_id, value):
+        pass
+
+    async def switch_event(self, entity_id, service):
+        pass
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -114,6 +125,7 @@ class WebInterface:
         app.router.add_post("/config", self.html_config_post)
         app.router.add_get("/dash", self.html_dash)
         app.router.add_post("/dash", self.html_dash_post)
+        app.router.add_get("/components", self.html_components)
         app.router.add_get("/debug_yaml", self.html_debug_yaml)
         app.router.add_get("/debug_log", self.html_debug_log)
         app.router.add_get("/debug_apps", self.html_debug_apps)
@@ -149,15 +161,34 @@ class WebInterface:
         site = web.TCPSite(runner, "0.0.0.0", self.web_port)
         await site.start()
         print("Web interface started")
+        self.api_started = True
         while not self.abort:
             await asyncio.sleep(1)
         await runner.cleanup()
+        self.api_started = False
         print("Web interface stopped")
 
     async def stop(self):
         print("Web interface stop called")
         self.abort = True
         await asyncio.sleep(1)
+
+    def wait_api_started(self):
+        """
+        Wait for the API to start
+        """
+        self.log("Web: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 240:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: Web: Failed to start")
+            return False
+        return True
+
+    def is_alive(self):
+        return self.api_started
 
     def get_attributes_html(self, entity, from_db=False):
         """
@@ -441,7 +472,7 @@ class WebInterface:
         if status and (("Warn:" in status) or ("Error:" in status)):
             text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
         elif not is_running:
-            text += "<tr><td colspan='2' bgcolor='#ff7777'>Predbat has errors</td></tr>\n"
+            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (with errors)</td></tr>\n".format(status)
         else:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
@@ -2545,6 +2576,118 @@ var options = {
         except Exception as e:
             self.log(f"ERROR: Failed to process plan override: {str(e)}")
             return web.json_response({"success": False, "message": str(e)}, status=500)
+
+    def count_entities_matching_filter(self, event_filter):
+        """
+        Count the number of entities that match the given event filter pattern
+        """
+        count = 0
+        try:
+            # Get all entities from Home Assistant
+            all_entities = self.base.get_state_wrapper()
+            if all_entities:
+                for entity_id in all_entities.keys():
+                    if event_filter in entity_id:
+                        count += 1
+        except Exception as e:
+            self.log(f"Error counting entities for filter '{event_filter}': {e}")
+        return count
+
+    async def html_components(self, request):
+        """
+        Return the Components view as an HTML page showing status of all components
+        """
+        self.default_page = "./components"
+        text = self.get_header("Predbat Components", refresh=60)
+        text += "<body>\n"
+        text += get_components_css()
+
+        text += "<h2>Component Status</h2>\n"
+        text += "<div class='components-grid'>\n"
+
+        # Get all component information
+        all_components = self.base.components.get_all()
+        active_components = self.base.components.get_active()
+
+        for component_name in all_components:
+            from components import COMPONENT_LIST
+
+            component_info = COMPONENT_LIST.get(component_name, {})
+            component = self.base.components.get_component(component_name)
+            is_alive = self.base.components.is_alive(component_name)
+            is_active = component_name in active_components
+
+            # Create component card
+            text += f'<div class="component-card {"active" if is_active else "inactive"}">\n'
+            text += f'<div class="component-header">\n'
+            text += f'<h3>{component_info.get("name", component_name)}</h3>\n'
+
+            # Status indicator
+            if is_active and is_alive:
+                text += '<span class="status-indicator status-healthy">●</span><span class="status-text">Active</span>\n'
+            elif is_active and not is_alive:
+                text += '<span class="status-indicator status-error">●</span><span class="status-text">Error</span>\n'
+            else:
+                text += '<span class="status-indicator status-inactive">●</span><span class="status-text">Disabled</span>\n'
+
+            text += f"</div>\n"
+
+            # Component details
+            text += f'<div class="component-details">\n'
+            text += f"<p><strong>Component:</strong> {component_name}</p>\n"
+
+            # Show args and their current values
+            args_info = component_info.get("args", {})
+            if args_info:
+                text += f'<div class="component-args">\n'
+                text += f"<h4>Configuration:</h4>\n"
+                text += f'<table class="args-table">\n'
+                text += f"<tr><th>Setting</th><th>Required</th><th>Current Value</th></tr>\n"
+
+                for arg_name, arg_info in args_info.items():
+                    required = arg_info.get("required", False)
+                    config_key = arg_info.get("config", "")
+                    default = arg_info.get("default", "")
+
+                    # Get current value
+                    current_value = self.base.get_arg(config_key, default, indirect=False)
+
+                    # Hide sensitive values
+                    display_value = current_value
+                    if any(sensitive in arg_name.lower() for sensitive in ["password", "key", "secret", "token"]):
+                        if current_value:
+                            display_value = "***configured***"
+                        else:
+                            display_value = "***not set***"
+                    elif current_value is None:
+                        display_value = "Not set"
+                    elif current_value == "":
+                        display_value = "Empty"
+
+                    required_text = "Yes" if required else "No"
+                    text += f'<tr class="{"required-arg" if required else "optional-arg"}">\n'
+                    text += f"<td>{config_key}</td>\n"
+                    text += f"<td>{required_text}</td>\n"
+                    text += f"<td>{display_value}</td>\n"
+                    text += f"</tr>\n"
+
+                text += f"</table>\n"
+                text += f"</div>\n"
+
+            # Event filter info - count matching entities
+            event_filter = component_info.get("event_filter", "")
+            if event_filter:
+                # Count entities that match the filter
+                entity_count = self.count_entities_matching_filter(event_filter)
+                count_class = "entity-count-zero" if entity_count == 0 else "entity-count-positive"
+                text += f'<p><strong>Entities:</strong> <span class="{count_class}">num_entities: {entity_count}</span></p>\n'
+
+            text += f"</div>\n"
+            text += f"</div>\n"
+
+        text += "</div>\n"
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
 
     async def html_restart(self, request):
         """

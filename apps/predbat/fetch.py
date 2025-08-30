@@ -1000,11 +1000,12 @@ class Fetch:
         # Log current values
         self.log("Current data so far today: load {} kWh import {} kWh export {} kWh pv {} kWh".format(dp2(self.load_minutes_now), dp2(self.import_today_now), dp2(self.export_today_now), dp2(self.pv_today_now)))
 
+        octopus_api_direct = self.components.get_component("octopus")
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
             self.rate_import = self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False))
-        elif self.octopus_api_direct:
+        elif octopus_api_direct:
             self.log("Downloading import rates directly from Octopus API")
             self.rate_import = self.get_octopus_direct("import")
             if not self.rate_import:
@@ -1032,7 +1033,7 @@ class Fetch:
             self.rate_import = self.basic_rates(self.get_arg("rates_import", [], indirect=False), "rates_import")
 
         # Gas rates if set
-        if self.octopus_api_direct:
+        if octopus_api_direct:
             self.log("Downloading gas rates directly from Octopus API")
             self.rate_gas = self.get_octopus_direct("gas")
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
@@ -1079,16 +1080,16 @@ class Fetch:
         slot_is_configured = "octopus_intelligent_slot" in self.args
         ohme_automatic = self.get_arg("ohme_automatic", False)
 
-        if (self.octopus_api_direct and self.octopus_api_direct.get_intelligent_device()) or (not self.octopus_api_direct and slot_is_configured):
+        if (octopus_api_direct and octopus_api_direct.get_intelligent_device()) or (not octopus_api_direct and slot_is_configured):
             completed = []
             planned = []
             vehicle = {}
             vehicle_pref = {}
 
-            if self.octopus_api_direct and not ohme_automatic:
-                completed = self.octopus_api_direct.get_intelligent_completed_dispatches()
-                planned = self.octopus_api_direct.get_intelligent_planned_dispatches()
-                vehicle = self.octopus_api_direct.get_intelligent_vehicle()
+            if octopus_api_direct and not ohme_automatic:
+                completed = octopus_api_direct.get_intelligent_completed_dispatches()
+                planned = octopus_api_direct.get_intelligent_planned_dispatches()
+                vehicle = octopus_api_direct.get_intelligent_vehicle()
                 vehicle_pref = vehicle
                 self.log("Octopus API planned and completed slots: {} - {}".format(completed, planned))
             else:
@@ -1124,7 +1125,7 @@ class Fetch:
 
             if self.num_cars >= 1:
                 # Extract vehicle data if we can get it
-                if vehicle or (self.octopus_api_direct and not ohme_automatic):
+                if vehicle or (octopus_api_direct and not ohme_automatic):
                     self.car_charging_battery_size[0] = float(vehicle.get("vehicleBatterySizeInKwh", self.car_charging_battery_size[0]))
                     self.car_charging_rate[0] = float(vehicle.get("chargePointPowerInKw", self.car_charging_rate[0]))
                 else:
@@ -1139,7 +1140,7 @@ class Fetch:
                 self.car_charging_limit[0] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0)
 
                 # Extract vehicle preference if we can get it
-                if (vehicle_pref or (self.octopus_api_direct and not ohme_automatic)) and self.octopus_intelligent_charging:
+                if (vehicle_pref or (octopus_api_direct and not ohme_automatic)) and self.octopus_intelligent_charging:
                     octopus_limit = max(float(vehicle_pref.get("weekdayTargetSoc", 100)), float(vehicle_pref.get("weekendTargetSoc", 100)))
                     octopus_ready_time = vehicle_pref.get("weekdayTargetTime", None)
                     if not octopus_ready_time:
@@ -1200,7 +1201,7 @@ class Fetch:
             # Fixed URL for rate export
             self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
             self.rate_export = self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False))
-        elif self.octopus_api_direct:
+        elif octopus_api_direct:
             self.log("Downloading export rates directly from Octopus API")
             self.rate_export = self.get_octopus_direct("export")
         elif "metric_octopus_export" in self.args:
@@ -1225,7 +1226,7 @@ class Fetch:
         self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions()
 
         # Standing charge
-        if self.octopus_api_direct:
+        if octopus_api_direct:
             self.metric_standing_charge = self.get_standing_charge_direct()
             self.log("Octopus Import standing charge is set to {} p".format(self.metric_standing_charge))
         else:
