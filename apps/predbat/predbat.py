@@ -70,7 +70,6 @@ from config import (
 )
 from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
-from ha import HAInterface
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -1278,8 +1277,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
         if not self.ha_interface:
             return False
-        if not self.ha_interface.is_running():
-            return False
 
         if self.components:
             if not self.components.is_all_alive():
@@ -1318,18 +1315,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         try:
             self.reset()
             self.update_time(print=False)
-            self.log("Starting HA interface")
-            try:
-                self.ha_interface = HAInterface(self)
-            except ValueError as e:
-                self.log("Error: Exception raised {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
-                raise e
 
             # Start all sub-components
             self.components = Components(self)
             self.components.start()
+
+            if not self.ha_interface:
+                raise ValueError("HA interface not found")
 
             # Initialize plugin system and discover plugins
             self.init_plugin_system()
@@ -1396,8 +1388,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.stop_thread = True
         if self.components:
             await self.components.stop()
-        if self.ha_interface:
-            self.ha_interface.stop()
 
         await asyncio.sleep(0)
         if hasattr(self, "pool"):

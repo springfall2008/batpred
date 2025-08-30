@@ -416,7 +416,7 @@ class OctopusAPI:
         with open(self.cache_file, "w") as f:
             yaml.dump(octopus_cache, f)
 
-    def stop(self):
+    async def stop(self):
         self.stop_api = True
 
     def get_tariff(self, tariff_type):
