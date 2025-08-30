@@ -43,7 +43,7 @@ class DatabaseManager:
     def is_alive(self):
         """Check if the database manager is alive"""
         return self.api_started
-    
+
     def wait_api_started(self):
         """
         Wait for the API to start

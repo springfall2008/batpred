@@ -14,6 +14,7 @@
     "ignorePaths": [
         "**/*.json",
         "**/*.yaml",
+        ".gitignore",
       ],
     "import": [
         "@cspell/dict-en-gb/cspell-ext.json"
