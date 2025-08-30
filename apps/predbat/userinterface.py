@@ -25,8 +25,7 @@ from config import (
 DEBUG_EXCLUDE_LIST = [
     "pool",
     "ha_interface",
-    "web_interface",
-    "web_interface_task",
+    "components",
     "prediction",
     "logfile",
     "predheat",
@@ -38,12 +37,6 @@ DEBUG_EXCLUDE_LIST = [
     "CONFIG_ITEMS",
     "config_index",
     "comparison",
-    "octopus_api_direct",
-    "octopus_api_direct_task",
-    "ge_cloud_direct",
-    "ge_cloud_direct_task",
-    "ohme_api_direct",
-    "ohme_api_direct_task",
     "plugin_system",
 ]
 
@@ -274,12 +267,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
-                if self.ge_cloud_direct:
-                    await self.ge_cloud_direct.select_event(entity_id, value)
-            if "predbat_ohme" in entity_id:
-                if self.ohme_api_direct:
-                    await self.ohme_api_direct.select_event(entity_id, value)
+            await self.components.select_event(entity_id, value)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -332,12 +320,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
-                if self.ge_cloud_direct:
-                    await self.ge_cloud_direct.number_event(entity_id, value)
-            if "predbat_ohme" in entity_id:
-                if self.ohme_api_direct:
-                    await self.ohme_api_direct.number_event(entity_id, value)
+            await self.components.number_event(entity_id, value)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -381,12 +364,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
-                if self.ge_cloud_direct:
-                    await self.ge_cloud_direct.switch_event(entity_id, service)
-            if "predbat_ohme" in entity_id:
-                if self.ohme_api_direct:
-                    await self.ohme_api_direct.switch_event(entity_id, service)
+            await self.components.switch_event(entity_id, service)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):

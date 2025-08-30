@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 import json
 import shutil
 import html as html_module
+import time
 from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js
 
 from utils import calc_percent_limit, str2time, dp0, dp2
@@ -30,7 +31,7 @@ ROOT_YAML_KEY = "pred_bat"
 
 
 class WebInterface:
-    def __init__(self, base) -> None:
+    def __init__(self, web_port, base) -> None:
         self.abort = False
         self.base = base
         self.log = base.log
@@ -42,11 +43,21 @@ class WebInterface:
         self.cost_yesterday_hist = {}
         self.cost_yesterday_car_hist = {}
         self.cost_yesterday_no_car = {}
-        self.web_port = self.base.get_arg("web_port", 5052)
+        self.web_port = web_port
         self.default_log = "warnings"
+        self.api_started = False
 
         # Plugin registration system
         self.registered_endpoints = []
+
+    async def select_event(self, entity_id, value):
+        pass
+
+    async def number_event(self, entity_id, value):
+        pass
+
+    async def switch_event(self, entity_id, service):
+        pass
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -149,15 +160,35 @@ class WebInterface:
         site = web.TCPSite(runner, "0.0.0.0", self.web_port)
         await site.start()
         print("Web interface started")
+        self.api_started = True
         while not self.abort:
             await asyncio.sleep(1)
         await runner.cleanup()
+        self.api_started = False
         print("Web interface stopped")
 
     async def stop(self):
         print("Web interface stop called")
         self.abort = True
         await asyncio.sleep(1)
+
+    def wait_api_started(self):
+        """
+        Wait for the API to start
+        """
+        self.log("Web: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 240:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: Web: Failed to start")
+            return False
+        return True
+
+
+    def is_alive(self):
+        return self.api_started
 
     def get_attributes_html(self, entity, from_db=False):
         """

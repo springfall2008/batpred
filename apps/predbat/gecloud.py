@@ -190,14 +190,14 @@ OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:
 
 
 class GECloudDirect:
-    def __init__(self, base):
+    def __init__(self, api_key, automatic, base):
         """
         Setup client
         """
         self.base = base
         self.log = base.log
-        self.api_key = self.base.args.get("ge_cloud_key", None)
-        self.automatic = self.base.args.get("ge_cloud_automatic", False)
+        self.api_key = api_key
+        self.automatic = automatic
         self.register_list = {}
         self.settings = {}
         self.status = {}
@@ -230,6 +230,12 @@ class GECloudDirect:
             self.log("Warn: GECloud: API failed to start in required time")
             return False
         return True
+
+    def is_alive(self):
+        """
+        Check if the API is alive
+        """
+        return self.api_started
 
     async def switch_event(self, entity_id, service):
         """

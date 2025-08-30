@@ -261,6 +261,7 @@ class OctopusEnergyApiClient:
             raise Exception("Octopus API KEY is not set")
 
         self.api_key = api_key
+        self.log = log
         self.base_url = "https://api.octopus.energy"
 
         self.default_headers = {"user-agent": f"{user_agent_value}/1.0"}
@@ -310,6 +311,15 @@ class OctopusAPI:
             os.makedirs(self.cache_path)
         self.cache_file = self.cache_path + "/octopus.yaml"
 
+    async def select_event(self, entity_id, value):
+        pass
+
+    async def number_event(self, entity_id, value):
+        pass
+
+    async def switch_event(self, entity_id, service):
+        pass
+
     def wait_api_started(self):
         """
         Wait for the API to start
@@ -323,6 +333,9 @@ class OctopusAPI:
             self.log("Warn: Octopus API: Failed to start")
             return False
         return True
+    
+    def is_alive(self):
+        return self.api_started and self.account_data
 
     async def start(self):
         """
@@ -880,6 +893,8 @@ class OctopusAPI:
                 chargePointVariants = device_result.get("chargePointVariants", [])
                 electricVehicles = device_result.get("electricVehicles", [])
                 devices = device_result.get("devices", [])
+                if not devices:
+                    return result
                 for device in device_result["devices"]:
                     deviceType = device.get("deviceType", None)
                     status = device.get("status", {}).get("current", None)
@@ -1144,8 +1159,9 @@ class Octopus:
                 return pdata
 
         # Retry up to 3 minutes
+        octopus_api_direct = self.components.get_component("octopus")
         for retry in range(3):
-            pdata = self.download_octopus_rates_func(url, api=self.octopus_api_direct)
+            pdata = self.download_octopus_rates_func(url, api=octopus_api_direct)
             if pdata:
                 break
 
@@ -1177,8 +1193,9 @@ class Octopus:
         """
         Get the direct import rates from Octopus
         """
-        if self.octopus_api_direct:
-            tariff = self.octopus_api_direct.get_tariff(tariff_type)
+        octopus_api_direct = self.components.get_component("octopus")
+        if octopus_api_direct:
+            tariff = octopus_api_direct.get_tariff(tariff_type)
             if tariff and ("data" in tariff):
                 if standingCharge:
                     tariff_data = tariff["standing"]
@@ -1642,7 +1659,8 @@ class Octopus:
 
         # Octopus saving session
         octopus_saving_slots = []
-        if self.octopus_api_direct or ("octopus_saving_session" in self.args):
+        octopus_api_direct = self.components.get_component("octopus")
+        if octopus_api_direct or ("octopus_saving_session" in self.args):
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per found
 
@@ -1650,8 +1668,8 @@ class Octopus:
             available_events = []
             state = False
 
-            if self.octopus_api_direct:
-                available_events, joined_events = self.octopus_api_direct.get_saving_session_data()
+            if octopus_api_direct:
+                available_events, joined_events = octopus_api_direct.get_saving_session_data()
             else:
                 entity_id = self.get_arg("octopus_saving_session", indirect=False)
                 if entity_id:
@@ -1673,8 +1691,8 @@ class Octopus:
                     saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                     if code:  # Join the new Octopus saving event and send an alert
                         self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
-                        if self.octopus_api_direct:
-                            self.octopus_api_direct.join_saving_session_event(code)
+                        if octopus_api_direct:
+                            octopus_api_direct.join_saving_session_event(code)
                         else:
                             self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
                         self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
