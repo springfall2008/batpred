@@ -190,7 +190,7 @@ class OhmeAPI:
             self.log("Warn: Ohme API: Failed to start")
             return False
         return True
-    
+
     def is_alive(self):
         """
         Check if the API is alive

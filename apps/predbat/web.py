@@ -187,7 +187,6 @@ class WebInterface:
             return False
         return True
 
-
     def is_alive(self):
         return self.api_started
 
@@ -2612,6 +2611,7 @@ var options = {
 
         for component_name in all_components:
             from components import COMPONENT_LIST
+
             component_info = COMPONENT_LIST.get(component_name, {})
             component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
@@ -2621,7 +2621,7 @@ var options = {
             text += f'<div class="component-card {"active" if is_active else "inactive"}">\n'
             text += f'<div class="component-header">\n'
             text += f'<h3>{component_info.get("name", component_name)}</h3>\n'
-            
+
             # Status indicator
             if is_active and is_alive:
                 text += '<span class="status-indicator status-healthy">●</span><span class="status-text">Active</span>\n'
@@ -2630,50 +2630,50 @@ var options = {
             else:
                 text += '<span class="status-indicator status-inactive">●</span><span class="status-text">Disabled</span>\n'
 
-            text += f'</div>\n'
-            
+            text += f"</div>\n"
+
             # Component details
             text += f'<div class="component-details">\n'
-            text += f'<p><strong>Component:</strong> {component_name}</p>\n'
-            
+            text += f"<p><strong>Component:</strong> {component_name}</p>\n"
+
             # Show args and their current values
             args_info = component_info.get("args", {})
             if args_info:
                 text += f'<div class="component-args">\n'
-                text += f'<h4>Configuration:</h4>\n'
+                text += f"<h4>Configuration:</h4>\n"
                 text += f'<table class="args-table">\n'
-                text += f'<tr><th>Setting</th><th>Required</th><th>Current Value</th></tr>\n'
-                
+                text += f"<tr><th>Setting</th><th>Required</th><th>Current Value</th></tr>\n"
+
                 for arg_name, arg_info in args_info.items():
                     required = arg_info.get("required", False)
                     config_key = arg_info.get("config", "")
                     default = arg_info.get("default", "")
-                    
+
                     # Get current value
                     current_value = self.base.get_arg(config_key, default, indirect=False)
-                    
+
                     # Hide sensitive values
                     display_value = current_value
                     if any(sensitive in arg_name.lower() for sensitive in ["password", "key", "secret", "token"]):
                         if current_value:
-                            display_value = "***configured***" 
+                            display_value = "***configured***"
                         else:
                             display_value = "***not set***"
                     elif current_value is None:
                         display_value = "Not set"
                     elif current_value == "":
                         display_value = "Empty"
-                    
+
                     required_text = "Yes" if required else "No"
                     text += f'<tr class="{"required-arg" if required else "optional-arg"}">\n'
-                    text += f'<td>{config_key}</td>\n'
-                    text += f'<td>{required_text}</td>\n'
-                    text += f'<td>{display_value}</td>\n'
-                    text += f'</tr>\n'
-                
-                text += f'</table>\n'
-                text += f'</div>\n'
-            
+                    text += f"<td>{config_key}</td>\n"
+                    text += f"<td>{required_text}</td>\n"
+                    text += f"<td>{display_value}</td>\n"
+                    text += f"</tr>\n"
+
+                text += f"</table>\n"
+                text += f"</div>\n"
+
             # Event filter info - count matching entities
             event_filter = component_info.get("event_filter", "")
             if event_filter:
@@ -2681,9 +2681,9 @@ var options = {
                 entity_count = self.count_entities_matching_filter(event_filter)
                 count_class = "entity-count-zero" if entity_count == 0 else "entity-count-positive"
                 text += f'<p><strong>Entities:</strong> <span class="{count_class}">num_entities: {entity_count}</span></p>\n'
-            
-            text += f'</div>\n'
-            text += f'</div>\n'
+
+            text += f"</div>\n"
+            text += f"</div>\n"
 
         text += "</div>\n"
         text += "</body></html>\n"

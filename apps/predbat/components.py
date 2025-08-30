@@ -15,17 +15,7 @@ from octopus import OctopusAPI
 from web import WebInterface
 
 COMPONENT_LIST = {
-    "web": {
-        "class": WebInterface,
-        "name": "Web Interface",
-        "args": {
-            "port": {
-                "required": False,
-                "config": "web_port",
-                "default": 5052
-            }
-        }
-    },
+    "web": {"class": WebInterface, "name": "Web Interface", "args": {"port": {"required": False, "config": "web_port", "default": 5052}}},
     "gecloud": {
         "class": GECloudDirect,
         "name": "GivEnergy Cloud Direct",
@@ -37,10 +27,10 @@ COMPONENT_LIST = {
             },
             "automatic": {
                 "required": False,
-                 "default": False,
-                 "config": "ge_cloud_automatic",
-             }
-        }
+                "default": False,
+                "config": "ge_cloud_automatic",
+            },
+        },
     },
     "octopus": {
         "class": OctopusAPI,
@@ -55,7 +45,7 @@ COMPONENT_LIST = {
                 "required": True,
                 "config": "octopus_api_account",
             },
-        }
+        },
     },
     "ohme": {
         "class": OhmeAPI,
@@ -73,10 +63,11 @@ COMPONENT_LIST = {
             "ohme_automatic_octopus_intelligent": {
                 "required": False,
                 "config": "ohme_automatic_octopus_intelligent",
-            }
-        }
+            },
+        },
     },
 }
+
 
 class Components:
     def __init__(self, base):
@@ -108,7 +99,7 @@ class Components:
                     self.log(f"Error: {component_info['name']} API failed to start")
                     self.record_status(f"Error: {component_info['name']} API failed to start")
                     raise ValueError(f"{component_info['name']} API failed to start")
-    
+
     async def stop(self):
         for component_name, component in self.components.items():
             if component:
@@ -120,6 +111,7 @@ class Components:
     """
     Pass through events to the appropriate component
     """
+
     async def select_event(self, entity_id, value):
         for component_name, component in self.components.items():
             if component and COMPONENT_LIST[component_name].get("event_filter", "") in entity_id:
@@ -150,7 +142,7 @@ class Components:
     def get_active(self):
         active_components = [name for name, comp in self.components.items() if comp]
         return active_components
-    
+
     def get_component(self, name):
         return self.components.get(name, None)
 

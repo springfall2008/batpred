@@ -1640,17 +1640,17 @@ body.dark-mode .entity-count-zero {
     .components-grid {
         grid-template-columns: 1fr;
     }
-    
+
     .component-header {
         flex-direction: column;
         align-items: flex-start;
         gap: 5px;
     }
-    
+
     .args-table {
         font-size: 0.8em;
     }
-    
+
     .args-table th,
     .args-table td {
         padding: 6px;
@@ -1659,6 +1659,7 @@ body.dark-mode .entity-count-zero {
 </style>
 """
     return text
+
 
 def get_charts_css():
     text = """

@@ -333,7 +333,7 @@ class OctopusAPI:
             self.log("Warn: Octopus API: Failed to start")
             return False
         return True
-    
+
     def is_alive(self):
         return self.api_started and self.account_data
 

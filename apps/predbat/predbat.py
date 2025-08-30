@@ -1280,7 +1280,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             return False
         if not self.ha_interface.is_running():
             return False
-        
+
         if self.components:
             if not self.components.is_all_alive():
                 return False
@@ -1326,7 +1326,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.log("Error: " + traceback.format_exc())
                 self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
                 raise e
-        
+
             # Start all sub-components
             self.components = Components(self)
             self.components.start()
