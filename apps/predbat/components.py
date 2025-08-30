@@ -24,7 +24,7 @@ COMPONENT_LIST = {
         "args": {
             "db_enable": {"required": True, "config": "db_enable"},
             "db_days": {"required": False, "config": "db_days", "default": 30},
-        }
+        },
     },
     "ha": {
         "class": HAInterface,
@@ -35,15 +35,9 @@ COMPONENT_LIST = {
             "db_enable": {"required": False, "config": "db_enable", "default": False},
             "db_mirror_ha": {"required": False, "config": "db_mirror_ha", "default": False},
             "db_primary": {"required": False, "config": "db_primary", "default": False},
-        }
+        },
     },
-    "web": {
-        "class": WebInterface,
-        "name": "Web Interface",
-        "args": {
-            "port": {"required": False, "config": "web_port", "default": 5052}
-        }
-    },
+    "web": {"class": WebInterface, "name": "Web Interface", "args": {"port": {"required": False, "config": "web_port", "default": 5052}}},
     "gecloud": {
         "class": GECloudDirect,
         "name": "GivEnergy Cloud Direct",
@@ -170,7 +164,7 @@ class Components:
             return False
         if not self.components[name]:
             # Disabled components can be ignored
-            return True        
+            return True
         if not self.component_tasks[name] or not self.component_tasks[name].is_alive():
             return False
         if not self.components[name].is_alive():

@@ -51,6 +51,7 @@ class HAInterface:
     """
     Direct interface to Home Assistant
     """
+
     def is_active(self):
         return self.is_alive()
 
@@ -128,12 +129,11 @@ class HAInterface:
             self.db_manager = self.base.components.get_component("db")
 
         # API Has started
-        self.base.ha_interface = self # Set pointer back to ourselves as other components require this one
+        self.base.ha_interface = self  # Set pointer back to ourselves as other components require this one
         self.api_started = True
 
     async def start(self):
-        """ Async start not required
-        """
+        """Async start not required"""
         self.log("Info: Starting HA interface")
         self.websocket_active = True
         await self.socketLoop()
