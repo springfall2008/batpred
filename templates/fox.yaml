@@ -141,7 +141,7 @@ pred_bat:
   battery_min_soc:
     - number.min_soc
   
-  # You will need to create a template sensor should be negative for import and positive for export
+  # You will need to create a template sensor that should be negative for import and positive for export
   # Example template code:
   #    {% set a = states('sensor.grid_consumption') | float(0) %}
   #    {% set b = states('sensor.feed_in') | float(0) %}
