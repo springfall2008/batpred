@@ -27,6 +27,7 @@ OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M"))
 FOX_DOMAIN = "https://www.foxesscloud.com"
 FOX_LANG = 'en'
 TIMEOUT = 60
+FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
 
 # Dummy attribute table for testing
 fox_attribute_table = {
@@ -45,10 +46,11 @@ class FoxAPI:
         self.failures_total = 0
         self.device_list = []
         self.device_detail = {}
-        self.device_battery_soc_settings = {}
         self.device_power_generation = {}
         self.available_variables = {}
         self.device_values = {}
+        self.device_settings = {}
+        self.device_production = {}
 
     def wait_api_started(self):
         """
@@ -87,13 +89,13 @@ class FoxAPI:
                         sn = device.get('deviceSN', None)
                         if sn:
                             await self.get_device_detail(sn)
-                            await self.get_battery_soc_settings(sn)
+                            await self.get_device_settings(sn)
 
                 if first or (count_seconds % (5*60)) == 0:
                     for device in self.device_list:
                         sn = device.get('deviceSN', None)
                         if sn:
-                            await self.get_device_power_generation(sn)
+                            #await self.get_device_power_generation(sn)
                             await self.get_device_history(sn)
                     await self.publish_data()
 
@@ -230,7 +232,9 @@ class FoxAPI:
                         timestamp = point.get('time', "")
                         value = point.get('value', None)
                         if timestamp and variable and value is not None:
-                            self.device_values[variable] = {'timestamp': timestamp, 'value': value, 'unit': unit, 'name': name}
+                            if deviceSN not in self.device_values:
+                                self.device_values[deviceSN] = {}
+                            self.device_values[deviceSN][variable] = {'timestamp': timestamp, 'value': value, 'unit': unit, 'name': name}
 
     async def get_device_detail(self, deviceSN):
         """
@@ -264,35 +268,66 @@ class FoxAPI:
         GET_DEVICE_INFO = f"/op/v0/device/detail"
         query = {'sn': deviceSN}
         result = await self.request_get(GET_DEVICE_INFO, post=False, datain=query)
-        print("Device detail result: {}".format(result))
         if result:
             self.device_detail[deviceSN] = result
 
-    async def get_battery_soc_settings(self, deviceSN):
+    async def get_device_settings(self, deviceSN):
         """
-        {'minSocOnGrid': 20, 'minSoc': 10}
+        Get device settings
         """
-        GET_BATTERY_SOC = "/op/v0/device/battery/soc/get"
-        device_detail = self.device_detail.get(deviceSN, {})
-        hasBattery = device_detail.get('hasBattery', False)
-        if hasBattery:
-            result = await self.request_get(GET_BATTERY_SOC, datain={'sn': deviceSN})
-            print("Battery SOC result: {}".format(result))
-            if result:
-                self.device_battery_soc_settings[deviceSN] = result
+        for key in FOX_SETTINGS:
+            await self.get_device_setting(deviceSN, key)
 
+    async def get_device_setting(self, deviceSN, key):
+        """
+        Get device setting
+        {'enumList': ['PeakShaving', 'Feedin', 'SelfUse'], 'unit': '', 'precision': 1.0, 'value': 'SelfUse'}
+        """
+        GET_DEVICE_SETTING = "/op/v0/device/setting/get"
+        result = await self.request_get(GET_DEVICE_SETTING, datain={'sn': deviceSN, 'key': key}, post=True)
+        if result:
+            if deviceSN not in self.device_settings:
+                self.device_settings[deviceSN] = {}
+            self.device_settings[deviceSN][key] = result
+            return result
+        return None
+
+    async def set_device_setting(self, deviceSN, key, value):
+        """
+        Set device setting
+        """
+        SET_DEVICE_SETTING = "/op/v0/device/setting/set"
+        result = await self.request_get(SET_DEVICE_SETTING, datain={'sn': deviceSN, 'key': key, 'value': value, 'lang': FOX_LANG}, post=True)
+        if result is None:
+            return False
+        return True
+
+    async def get_device_production(self, deviceSN):
+        """
+        [
+            {'unit': 'kWh', 'values': [0.0, 0.0, 0.0, 0.0, 151.5999999999999, 1079.1000000000004, 979.8999999999996, 871.3999999999987, 0.0, 0.0, 0.0, 0.0], 'variable': 'generation'},
+            {'unit': 'kWh', 'values': [0.0, 0.0, 0.0, 0.0, 68.59999999999991, 685.2, 584.0, 534.3000000000002, 0.0, 0.0, 0.0, 0.0], 'variable': 'feedin'},
+            {'unit': 'kWh', 'values': [0.0, 0.0, 0.0, 0.0, 52.700000000000045, 300.0999999999999, 295.2999999999997, 174.89999999999986, 0.0, 0.0, 0.0, 0.0], 'variable': 'gridConsumption'},
+            {'unit': 'kWh', 'values': [0.0, 0.0, 0.0, 0.0, 36.30000000000007, 149.0, 170.0, 142.39999999999998, 0.0, 0.0, 0.0, 0.0], 'variable': 'chargeEnergyToTal'},
+            {'unit': 'kWh', 'values': [0.0, 0.0, 0.0, 0.0, 52.600000000000136, 219.30000000000018, 253.1999999999997, 225.20000000000027, 0.0, 0.0, 0.0, 0.0], 'variable': 'dischargeEnergyToTal'}
+        ]
+        """
+        GET_DEVICE_PRODUCTION = "/op/v0/device/report/query"
+        year = datetime.now().year
+        variables = ["generation","feedin","gridConsumption","chargeEnergyToTal","dischargeEnergyToTal"]
+        result = await self.request_get(GET_DEVICE_PRODUCTION, datain={'sn': deviceSN, 'year': year, 'dimension': 'year', 'variables': variables}, post=True)
+        if result:
+            self.device_production[deviceSN] = result
+
+    
     async def get_device_power_generation(self, deviceSN):
         """
         {'month': 867.5999999999995, 'today': 17.699999999999818, 'cumulative': 5765.7}
         """
         GET_DEVICE_POWER = "/op/v0/device/generation"
-        device_detail = self.device_detail.get(deviceSN, {})
-        hasBattery = device_detail.get('hasBattery', False)
-        if hasBattery:
-            result = await self.request_get(GET_DEVICE_POWER, datain={'sn': deviceSN})
-            print("Device power generation result: {}".format(result))
-            if result:
-                self.device_power_generation[deviceSN] = result
+        result = await self.request_get(GET_DEVICE_POWER, datain={'sn': deviceSN})
+        if result:
+            self.device_power_generation[deviceSN] = result
 
     async def get_device_list(self):
         """
@@ -338,7 +373,7 @@ class FoxAPI:
         retries = 0
         while retries < 5:
             result = await self.request_get_func(path, post=post, datain=datain)
-            if result:
+            if result is not None:
                 return result
             retries += 1
         return result
@@ -378,12 +413,19 @@ class FoxAPI:
             errno = data.get('errno', 0)
             msg = data.get('msg', '')
             if errno != 0:
-                self.log("Warn: Fox: Error {} from {} message {}".format(errno, url, msg))
                 self.failures_total += 1
+                if errno == 40400:
+                    # Rate limiting so wait up to 10 seconds
+                    self.log("Fox: Rate limiting detected, waiting...")
+                    await asyncio.sleep(random.random() * 10 + 1)
+                else:
+                    self.log("Warn: Fox: Error {} from {} message {}".format(errno, url, msg))
                 return None
             
             if 'result' in data:
                 data = data['result']
+                if data is None:
+                    data = {}
 
             self.last_success_timestamp = time.time()
             return data
@@ -406,26 +448,99 @@ class FoxAPI:
         entity_name_switch = "switch.predbat_fox"
         entity_name_binary_sensor = "binary_sensor.predbat_fox"
 
-        for item_name in self.device_values:
-            item = self.device_values[item_name]
-            state = item.get('value', None)
-            name = item.get('name', item_name)
-            attributes = {
-                'unit_of_measurement': item.get('unit', ''),
-                'friendly_name': name,
-            }
-            entity_id = entity_name_sensor + "_" + item_name.lower()
-            self.base.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
 
-    # Event stubs to queue for main thread
+        for sn in self.device_values:
+            for item_name in self.device_values[sn]:
+                item = self.device_values[sn][item_name]
+                state = item.get('value', None)
+                name = item.get('name', item_name)
+                attributes = {
+                    'unit_of_measurement': item.get('unit', ''),
+                    'friendly_name': name,
+                }
+                entity_id = entity_name_sensor + "_" + sn.lower() + "_" + item_name.lower()
+                self.base.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
+
+        for sn in self.device_settings:
+            for setting in self.device_settings[sn]:
+                item = self.device_settings[sn][setting]
+                state = item.get('value', None)
+                unit = item.get('unit', '')
+                range = item.get('range', {})
+                precision = item.get('precision', 1)
+                enumList = item.get('enumList', [])
+
+                name = setting
+                attributes = {
+                    'unit_of_measurement': unit,
+                    'friendly_name': name,
+                }
+                if enumList:
+                    # Selector
+                    attributes['options'] = enumList
+                    entity_id = entity_name_select + "_" + sn.lower() + "_" + setting.lower()
+                elif range:
+                    # Number
+                    attributes['min'] = range.get('min', 0)
+                    attributes['max'] = range.get('max', 100)
+                    attributes['step'] = precision
+                    entity_id = entity_name_number + "_" + sn.lower() + "_" + setting.lower()
+                else:
+                    # Sensor
+                    entity_id = entity_name_sensor + "_" + sn.lower() + "_" + setting.lower()
+                self.base.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
+
+    async def write_setting_from_event(self, entity_id, value, is_number=False):
+        """
+        Handle write events
+        """
+        entity_id = entity_id.replace("number.predbat_fox_", "")
+        entity_id = entity_id.replace("select.predbat_fox_", "")
+        sn = entity_id.split("_")[0]
+        register_lower = entity_id.split("_")[1]
+        fox_settings_lower = [s.lower() for s in FOX_SETTINGS]
+        serial = None
+        for s in self.device_settings:
+            if s.lower() == sn.lower():
+                serial = s
+                break
+        if not serial:
+            self.log("Warn: Fox: Event, unknown serial number for {}: {}".format(entity_id, sn))
+            return
+        if register_lower in fox_settings_lower:
+            register = FOX_SETTINGS[fox_settings_lower.index(register_lower)]
+            if is_number:
+                step = self.device_settings[serial][register].get('precision', None)
+                if step and step == 1:
+                    try:
+                        value = int(value)
+                    except ValueError:
+                        self.log("Warn: Fox: Invalid integer value for {}: {}".format(entity_id, value))
+                        return
+                else:
+                    try:
+                        value = float(value)
+                    except ValueError:
+                        self.log("Warn: Fox: Invalid number value for {}: {}".format(entity_id, value))
+                        return
+            if await self.set_device_setting(sn, register, value):
+                self.device_settings[serial][register]['value'] = value
+        else:
+            self.log("Warn: Fox: Unknown select event for {}".format(entity_id))
+        await self.publish_data()
+
     async def select_event(self, entity_id, value):
-        pass
+        """
+        Handle select events
+        """
+        await self.write_setting_from_event(entity_id, value)
 
     async def number_event(self, entity_id, value):
-        pass
+        await self.write_setting_from_event(entity_id, value, is_number=True)
 
     async def switch_event(self, entity_id, service):
         pass
+
 
 
 class MockBase:
@@ -450,8 +565,14 @@ async def test_fox_api(api_key):
     mock_base = MockBase()
     
     # Create FoxAPI instance with a lambda that returns the API key
-    fox_api = FoxAPI(lambda: api_key, mock_base)    
-    await fox_api.start()
+    fox_api = FoxAPI(api_key, mock_base)    
+    res = await fox_api.get_device_setting('60KE8020479C034', 'WorkMode')
+    print(res)
+    res =await fox_api.set_device_setting('60KE8020479C034', 'WorkMode', 'SelfUse')
+    print(res)
+    res = await fox_api.get_device_setting('60KE8020479C034', 'WorkMode')
+    print(res)
+    #await fox_api.start()
 
 
 def main():
@@ -462,9 +583,10 @@ def main():
     parser.add_argument("--api-key", required=True, help="Fox API key")
     
     args = parser.parse_args()
+    key = args.api_key
     
     # Run the test
-    asyncio.run(test_fox_api(args.api_key))
+    asyncio.run(test_fox_api(key))
 
 
 if __name__ == "__main__":
