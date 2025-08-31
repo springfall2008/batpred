@@ -99,7 +99,7 @@ COMPONENT_LIST = {
                 "config": "fox_key",
             },
         },
-    }
+    },
 }
 
 
