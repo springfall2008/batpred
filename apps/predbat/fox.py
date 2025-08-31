@@ -26,14 +26,13 @@ OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M"))
 OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M") + ":00") for minute in range(0, 24 * 60, 1)]
 
 FOX_DOMAIN = "https://www.foxesscloud.com"
-FOX_LANG = 'en'
+FOX_LANG = "en"
 TIMEOUT = 60
 FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
 
 # Dummy attribute table for testing
-fox_attribute_table = {
-    "mode": {}
-}
+fox_attribute_table = {"mode": {}}
+
 
 class FoxAPI:
     """Fox API client."""
@@ -83,22 +82,22 @@ class FoxAPI:
         count_seconds = 0
         while not self.stop_api:
             try:
-                if first or (count_seconds % (30*60) == 0):
+                if first or (count_seconds % (30 * 60) == 0):
                     await self.get_device_list()
                     if first:
                         self.log("Fox API: Found {} devices".format(len(self.device_list)))
                     for device in self.device_list:
-                        sn = device.get('deviceSN', None)
+                        sn = device.get("deviceSN", None)
                         if sn:
                             await self.get_device_detail(sn)
                             await self.get_device_settings(sn)
                             await self.get_battery_charging_time(sn)
 
-                if first or (count_seconds % (5*60)) == 0:
+                if first or (count_seconds % (5 * 60)) == 0:
                     for device in self.device_list:
-                        sn = device.get('deviceSN', None)
+                        sn = device.get("deviceSN", None)
                         if sn:
-                            #await self.get_device_power_generation(sn)
+                            # await self.get_device_power_generation(sn)
                             await self.get_device_history(sn)
                     await self.publish_data()
 
@@ -126,30 +125,30 @@ class FoxAPI:
         Get available variables for the device
 
         {
-            'todayYield': {'unit': 'kW', 'Grid-tied inverter': True, 'name': 'Today’s power generation', 'Energy-storage inverter': True}, 
-            'pvPower': {'unit': 'kW', 'Grid-tied inverter': True, 'name': 'PVPower', 'Energy-storage inverter': True}, 
-            'pv1Volt': {'unit': 'V', 'Grid-tied inverter': True, 'name': 'PV1Volt', 'Energy-storage inverter': True}, 
-            'pv1Current': {'unit': 'A', 'Grid-tied inverter': True, 'name': 'PV1Current', 'Energy-storage inverter': True}, 
-            'pv1Power': {'unit': 'kW', 'Grid-tied inverter': True, 'name': 'PV1Power', 'Energy-storage inverter': True}, 
-            'pv2Volt': {'unit': 'V', 'Grid-tied inverter': True, 'name': 'PV2Volt', 'Energy-storage inverter': True}, 
-            'pv2Current': {'unit': 'A', 'Grid-tied inverter': True, 'name': 'PV2Current', 'Energy-storage inverter': True}, 
-            'pv2Power': {'unit': 'kW', 'name': 'PV2Power'}, 
-            ..            
-            'epsPower': {'unit': 'kW', 'Grid-tied inverter': False, 'name': 'EPSPower', 'Energy-storage inverter': True}, 
-            'epsCurrentR': {'unit': 'A', 'Grid-tied inverter': False, 'name': 'EPS-RCurrent', 'Energy-storage inverter': True}, 
-            'epsVoltR': {'unit': 'V', 'Grid-tied inverter': False, 'name': 'EPS-RVolt', 'Energy-storage inverter': True}, 
-            'epsPowerR': {'unit': 'kW', 'Grid-tied inverter': False, 'name': 'EPS-RPower', 'Energy-storage inverter': True}, 
-            'epsCurrentS': {'unit': 'A', 'Grid-tied inverter': False, 'name': 'EPS-SCurrent', 'Energy-storage inverter': True}, 
-            'epsVoltS': {'unit': 'V', 'Grid-tied inverter': False, 'name': 'EPS-SVolt', 'Energy-storage inverter': True}, 
+            'todayYield': {'unit': 'kW', 'Grid-tied inverter': True, 'name': 'Today’s power generation', 'Energy-storage inverter': True},
+            'pvPower': {'unit': 'kW', 'Grid-tied inverter': True, 'name': 'PVPower', 'Energy-storage inverter': True},
+            'pv1Volt': {'unit': 'V', 'Grid-tied inverter': True, 'name': 'PV1Volt', 'Energy-storage inverter': True},
+            'pv1Current': {'unit': 'A', 'Grid-tied inverter': True, 'name': 'PV1Current', 'Energy-storage inverter': True},
+            'pv1Power': {'unit': 'kW', 'Grid-tied inverter': True, 'name': 'PV1Power', 'Energy-storage inverter': True},
+            'pv2Volt': {'unit': 'V', 'Grid-tied inverter': True, 'name': 'PV2Volt', 'Energy-storage inverter': True},
+            'pv2Current': {'unit': 'A', 'Grid-tied inverter': True, 'name': 'PV2Current', 'Energy-storage inverter': True},
+            'pv2Power': {'unit': 'kW', 'name': 'PV2Power'},
+            ..
+            'epsPower': {'unit': 'kW', 'Grid-tied inverter': False, 'name': 'EPSPower', 'Energy-storage inverter': True},
+            'epsCurrentR': {'unit': 'A', 'Grid-tied inverter': False, 'name': 'EPS-RCurrent', 'Energy-storage inverter': True},
+            'epsVoltR': {'unit': 'V', 'Grid-tied inverter': False, 'name': 'EPS-RVolt', 'Energy-storage inverter': True},
+            'epsPowerR': {'unit': 'kW', 'Grid-tied inverter': False, 'name': 'EPS-RPower', 'Energy-storage inverter': True},
+            'epsCurrentS': {'unit': 'A', 'Grid-tied inverter': False, 'name': 'EPS-SCurrent', 'Energy-storage inverter': True},
+            'epsVoltS': {'unit': 'V', 'Grid-tied inverter': False, 'name': 'EPS-SVolt', 'Energy-storage inverter': True},
             'epsPowerS': {'unit': 'kW', 'Grid-tied inverter': False, 'name': 'EPS-SPower', 'Energy-storage inverter': True},
-            'epsCurrentT': {'unit': 'A', 'Grid-tied inverter': False, 'name': 'EPS-TCurrent', 'Energy-storage inverter': True}, 
-            'epsVoltT': {'unit': 'V', 'Grid-tied inverter': False, 'name': 'EPS-TVolt', 'Energy-storage inverter': True}, 
-            'epsPowerT': {'unit': 'kW', 'Grid-tied inverter': False, 'name': 'EPS-TPower', 'Energy-storage inverter': True}, 
-            'RCurrent': {'unit': 'A', 'Grid-tied inverter': True, 'name': 'RCurrent', 'Energy-storage inverter': True}, 
-            'RVolt': {'unit': 'V', 'Grid-tied inverter': True, 'name': 'RVolt', 'Energy-storage inverter': True}, 
-            'RFreq': {'unit': 'Hz', 'Grid-tied inverter': True, 'name': 'RFreq', 'Energy-storage inverter': True}, 
-            'RPower': {'unit': 'kW', 'Grid-tied inverter': True, 'name': 'RPower', 'Energy-storage inverter': True}, 
-            'SCurrent': {'unit': 'A', 'Grid-tied inverter': True, 'name': 'SCurrent', 'Energy-storage inverter': True}, 
+            'epsCurrentT': {'unit': 'A', 'Grid-tied inverter': False, 'name': 'EPS-TCurrent', 'Energy-storage inverter': True},
+            'epsVoltT': {'unit': 'V', 'Grid-tied inverter': False, 'name': 'EPS-TVolt', 'Energy-storage inverter': True},
+            'epsPowerT': {'unit': 'kW', 'Grid-tied inverter': False, 'name': 'EPS-TPower', 'Energy-storage inverter': True},
+            'RCurrent': {'unit': 'A', 'Grid-tied inverter': True, 'name': 'RCurrent', 'Energy-storage inverter': True},
+            'RVolt': {'unit': 'V', 'Grid-tied inverter': True, 'name': 'RVolt', 'Energy-storage inverter': True},
+            'RFreq': {'unit': 'Hz', 'Grid-tied inverter': True, 'name': 'RFreq', 'Energy-storage inverter': True},
+            'RPower': {'unit': 'kW', 'Grid-tied inverter': True, 'name': 'RPower', 'Energy-storage inverter': True},
+            'SCurrent': {'unit': 'A', 'Grid-tied inverter': True, 'name': 'SCurrent', 'Energy-storage inverter': True},
             'SVolt': {'unit': 'V', 'Grid-tied inverter': True, 'name': 'SVolt', 'Energy-storage inverter': True},
             'SFreq': {'unit': 'Hz', 'Grid-tied inverter': True, 'name': 'SFreq', 'Energy-storage inverter': True},
             'SPower': {'unit': 'kW', 'Grid-tied inverter': True, 'name': 'SPower', 'Energy-storage inverter': True},
@@ -198,8 +197,8 @@ class FoxAPI:
             'loads': {'unit': 'kWh', 'Grid-tied inverter': True, 'name': 'Load power consumption', 'Energy-storage inverter': True},
             'feedin': {'unit': 'kWh', 'Grid-tied inverter': True, 'name': 'The total energy of the feeder', 'Energy-storage inverter': True},
             'chargeEnergyToTal': {'unit': 'kWh', 'Grid-tied inverter': False, 'name': 'Total charge energy', 'Energy-storage inverter': True},
-            'dischargeEnergyToTal': {'unit': 'kWh', 'Grid-tied inverter': False, 'name': 'Total discharge energy', 'Energy-storage inverter': True} 
-                    
+            'dischargeEnergyToTal': {'unit': 'kWh', 'Grid-tied inverter': False, 'name': 'Total discharge energy', 'Energy-storage inverter': True}
+
         """
         GET_AVAILABLE_VARIABLES = "/op/v0/device/variable/get"
         result = await self.request_get(GET_AVAILABLE_VARIABLES)
@@ -208,9 +207,9 @@ class FoxAPI:
             for variable_item in result:
                 for variable_id in variable_item:
                     variable = variable_item.get(variable_id, {})
-                    name = variable.get('name', {})
-                    name = name.get(FOX_LANG, '')
-                    variable['name'] = name
+                    name = variable.get("name", {})
+                    name = name.get(FOX_LANG, "")
+                    variable["name"] = name
                     available_data[variable_id] = variable
             self.available_variables = available_data
 
@@ -220,56 +219,56 @@ class FoxAPI:
         """
         GET_DEVICE_HISTORY = "/op/v0/device/history/query"
         timestamp = round(time.time() * 1000)
-        query = {'sn': deviceSN, 'begin': timestamp - 1000*60*60*1, 'end': timestamp}
+        query = {"sn": deviceSN, "begin": timestamp - 1000 * 60 * 60 * 1, "end": timestamp}
         result = await self.request_get(GET_DEVICE_HISTORY, post=True, datain=query)
         if result and isinstance(result, list):
             for item in result:
-                if 'datas' in item:
-                    datas = item['datas']
+                if "datas" in item:
+                    datas = item["datas"]
                     for data_item in datas:
-                        unit = data_item.get('unit', '')
-                        name = data_item.get('name', '')
-                        variable = data_item.get('variable', '')
-                        history = data_item.get('data', [])
+                        unit = data_item.get("unit", "")
+                        name = data_item.get("name", "")
+                        variable = data_item.get("variable", "")
+                        history = data_item.get("data", [])
                         point = history[-1] if history else {}
-                        timestamp = point.get('time', "")
-                        value = point.get('value', None)
+                        timestamp = point.get("time", "")
+                        value = point.get("value", None)
                         if timestamp and variable and value is not None:
                             if deviceSN not in self.device_values:
                                 self.device_values[deviceSN] = {}
-                            self.device_values[deviceSN][variable] = {'timestamp': timestamp, 'value': value, 'unit': unit, 'name': name}
+                            self.device_values[deviceSN][variable] = {"timestamp": timestamp, "value": value, "unit": unit, "name": name}
 
     async def get_device_detail(self, deviceSN):
         """
         Get device information
 
         {
-            'deviceType': 'KH8', 
-            'masterVersion': '1.34', 
-            'afciVersion': '', 
-            'hasPV': True, 
-            'deviceSN': 
-            '60KE8020479C034', 
-            'slaveVersion': '1.01', 
-            'capacity': 8, 
-            'hasBattery': True, 
+            'deviceType': 'KH8',
+            'masterVersion': '1.34',
+            'afciVersion': '',
+            'hasPV': True,
+            'deviceSN':
+            '60KE8020479C034',
+            'slaveVersion': '1.01',
+            'capacity': 8,
+            'hasBattery': True,
             'function': {'scheduler': True},
- 
-            'hardwareVersion': '--', 
-            'managerVersion': '1.28', 
-            'stationName': '2 Dona Fold', 
-            'moduleSN': '609W6EUF46MB519', 
-            'batteryList': 
-                [{'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'bcu', 'version': '1.005'}, 
-                 {'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'bmu', 'version': '1.05', 'capacity': 10360}, 
-                 {'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'ivu', 'version': '0.00'}], 
-            'productType': 'KH', 
-            'stationID': '2958ff16-13a5-4ab9-957a-79e938f86a19', 
+
+            'hardwareVersion': '--',
+            'managerVersion': '1.28',
+            'stationName': '2 Dona Fold',
+            'moduleSN': '609W6EUF46MB519',
+            'batteryList':
+                [{'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'bcu', 'version': '1.005'},
+                 {'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'bmu', 'version': '1.05', 'capacity': 10360},
+                 {'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'ivu', 'version': '0.00'}],
+            'productType': 'KH',
+            'stationID': '2958ff16-13a5-4ab9-957a-79e938f86a19',
             'status': 1
         }
         """
         GET_DEVICE_INFO = f"/op/v0/device/detail"
-        query = {'sn': deviceSN}
+        query = {"sn": deviceSN}
         result = await self.request_get(GET_DEVICE_INFO, post=False, datain=query)
         if result:
             self.device_detail[deviceSN] = result
@@ -287,7 +286,7 @@ class FoxAPI:
         {'enumList': ['PeakShaving', 'Feedin', 'SelfUse'], 'unit': '', 'precision': 1.0, 'value': 'SelfUse'}
         """
         GET_DEVICE_SETTING = "/op/v0/device/setting/get"
-        result = await self.request_get(GET_DEVICE_SETTING, datain={'sn': deviceSN, 'key': key}, post=True)
+        result = await self.request_get(GET_DEVICE_SETTING, datain={"sn": deviceSN, "key": key}, post=True)
         if result:
             if deviceSN not in self.device_settings:
                 self.device_settings[deviceSN] = {}
@@ -300,7 +299,7 @@ class FoxAPI:
         Set device setting
         """
         SET_DEVICE_SETTING = "/op/v0/device/setting/set"
-        result = await self.request_get(SET_DEVICE_SETTING, datain={'sn': deviceSN, 'key': key, 'value': value, 'lang': FOX_LANG}, post=True)
+        result = await self.request_get(SET_DEVICE_SETTING, datain={"sn": deviceSN, "key": key, "value": value, "lang": FOX_LANG}, post=True)
         if result is None:
             return False
         return True
@@ -310,7 +309,7 @@ class FoxAPI:
         Set battery charging time
         """
         SET_BATTERY_CHARGING_TIME = "/op/v0/device/battery/forceChargeTime/set"
-        datain = {'sn' : deviceSN}
+        datain = {"sn": deviceSN}
         datain.update(setting)
         result = await self.request_get(SET_BATTERY_CHARGING_TIME, datain=datain, post=True)
         if result is None:
@@ -320,17 +319,17 @@ class FoxAPI:
     async def get_battery_charging_time(self, deviceSN):
         """
         {
-            'enable2': True, 
-            'endTime1': {'hour': 23, 'minute': 59}, 
-            'enable1': True, 
-            'endTime2': {'hour': 5, 'minute': 30}, 
-            'startTime2': {'hour': 0, 'minute': 0}, 
+            'enable2': True,
+            'endTime1': {'hour': 23, 'minute': 59},
+            'enable1': True,
+            'endTime2': {'hour': 5, 'minute': 30},
+            'startTime2': {'hour': 0, 'minute': 0},
             'startTime1': {'hour': 23, 'minute': 30}
         }
 
         """
         GET_BATTERY_CHARGING_TIME = "/op/v0/device/battery/forceChargeTime/get"
-        result = await self.request_get(GET_BATTERY_CHARGING_TIME, datain={'sn': deviceSN}, post=False)
+        result = await self.request_get(GET_BATTERY_CHARGING_TIME, datain={"sn": deviceSN}, post=False)
         if result:
             self.device_battery_charging_time[deviceSN] = result
 
@@ -346,18 +345,17 @@ class FoxAPI:
         """
         GET_DEVICE_PRODUCTION = "/op/v0/device/report/query"
         year = datetime.now().year
-        variables = ["generation","feedin","gridConsumption","chargeEnergyToTal","dischargeEnergyToTal"]
-        result = await self.request_get(GET_DEVICE_PRODUCTION, datain={'sn': deviceSN, 'year': year, 'dimension': 'year', 'variables': variables}, post=True)
+        variables = ["generation", "feedin", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal"]
+        result = await self.request_get(GET_DEVICE_PRODUCTION, datain={"sn": deviceSN, "year": year, "dimension": "year", "variables": variables}, post=True)
         if result:
             self.device_production[deviceSN] = result
 
-    
     async def get_device_power_generation(self, deviceSN):
         """
         {'month': 867.5999999999995, 'today': 17.699999999999818, 'cumulative': 5765.7}
         """
         GET_DEVICE_POWER = "/op/v0/device/generation"
-        result = await self.request_get(GET_DEVICE_POWER, datain={'sn': deviceSN})
+        result = await self.request_get(GET_DEVICE_POWER, datain={"sn": deviceSN})
         if result:
             self.device_power_generation[deviceSN] = result
 
@@ -365,40 +363,39 @@ class FoxAPI:
         """
         [
             {
-            'deviceType': 'KH8', 
-            'hasBattery': True, 
-            'hasPV': True, 
-            'stationName': 
-            '2 Dona Fold', 
-            'moduleSN': '609W6EUF46MB519', 
-            'deviceSN': '60KE8020479C034', 
-            'productType': 'KH', 
-            'stationID': '2958ff16-13a5-4ab9-957a-79e938f86a19', 
+            'deviceType': 'KH8',
+            'hasBattery': True,
+            'hasPV': True,
+            'stationName':
+            '2 Dona Fold',
+            'moduleSN': '609W6EUF46MB519',
+            'deviceSN': '60KE8020479C034',
+            'productType': 'KH',
+            'stationID': '2958ff16-13a5-4ab9-957a-79e938f86a19',
             'status': 1
             }
         ]
         """
         GET_DEVICE_LIST = "/op/v0/device/list"
-        query = {'pageSize': 100, 'currentPage': 1}
+        query = {"pageSize": 100, "currentPage": 1}
         result = await self.request_get(GET_DEVICE_LIST, post=True, datain=query)
         if result:
-            devices = result.get('data', [])
+            devices = result.get("data", [])
             self.device_list = devices
-
 
     def get_headers(self, path):
         headers = {}
         token = self.key
         lang = FOX_LANG
         timestamp = str(round(time.time() * 1000))
-        headers['token'] = token
-        headers['lang'] = lang
-        headers['timestamp'] = timestamp
-        signature = fr'{path}\r\n{token}\r\n{timestamp}'
-        headers['signature'] = hashlib.md5(signature.encode('UTF-8')).hexdigest()
+        headers["token"] = token
+        headers["lang"] = lang
+        headers["timestamp"] = timestamp
+        signature = rf"{path}\r\n{token}\r\n{timestamp}"
+        headers["signature"] = hashlib.md5(signature.encode("UTF-8")).hexdigest()
         return headers
 
-    async def request_get(self, path,  post=False, datain=None):
+    async def request_get(self, path, post=False, datain=None):
         """
         Retry wrapper
         """
@@ -410,10 +407,10 @@ class FoxAPI:
             retries += 1
         return result
 
-    async def request_get_func(self, path,  post=False, datain=None):
+    async def request_get_func(self, path, post=False, datain=None):
         headers = self.get_headers(path)
         url = FOX_DOMAIN + path
-        #print("Request: path {} post {} datain {} headers {}".format(path, post, datain, headers))
+        # print("Request: path {} post {} datain {} headers {}".format(path, post, datain, headers))
         try:
             if post:
                 if datain:
@@ -442,8 +439,8 @@ class FoxAPI:
         if response.status_code in [200, 201]:
             if data is None:
                 data = {}
-            errno = data.get('errno', 0)
-            msg = data.get('msg', '')
+            errno = data.get("errno", 0)
+            msg = data.get("msg", "")
             if errno != 0:
                 self.failures_total += 1
                 if errno == 40400:
@@ -453,9 +450,9 @@ class FoxAPI:
                 else:
                     self.log("Warn: Fox: Error {} from {} message {}".format(errno, url, msg))
                 return None
-            
-            if 'result' in data:
-                data = data['result']
+
+            if "result" in data:
+                data = data["result"]
                 if data is None:
                     data = {}
 
@@ -480,15 +477,14 @@ class FoxAPI:
         entity_name_switch = "switch.predbat_fox"
         entity_name_binary_sensor = "binary_sensor.predbat_fox"
 
-
         for sn in self.device_values:
             for item_name in self.device_values[sn]:
                 item = self.device_values[sn][item_name]
-                state = item.get('value', None)
-                name = item.get('name', item_name)
+                state = item.get("value", None)
+                name = item.get("name", item_name)
                 attributes = {
-                    'unit_of_measurement': item.get('unit', ''),
-                    'friendly_name': f"Fox {sn} {name}",
+                    "unit_of_measurement": item.get("unit", ""),
+                    "friendly_name": f"Fox {sn} {name}",
                 }
                 entity_id = entity_name_sensor + "_" + sn.lower() + "_" + item_name.lower()
                 self.base.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
@@ -496,40 +492,40 @@ class FoxAPI:
         for sn in self.device_settings:
             for setting in self.device_settings[sn]:
                 item = self.device_settings[sn][setting]
-                state = item.get('value', None)
-                unit = item.get('unit', '')
-                range = item.get('range', {})
-                precision = item.get('precision', 1)
-                enumList = item.get('enumList', [])
+                state = item.get("value", None)
+                unit = item.get("unit", "")
+                range = item.get("range", {})
+                precision = item.get("precision", 1)
+                enumList = item.get("enumList", [])
 
                 name = setting
                 attributes = {
-                    'unit_of_measurement': unit,
-                    'friendly_name': f"Fox {sn} {name}",
+                    "unit_of_measurement": unit,
+                    "friendly_name": f"Fox {sn} {name}",
                 }
                 if enumList:
                     # Selector
-                    attributes['options'] = enumList
+                    attributes["options"] = enumList
                     entity_id = entity_name_select + "_" + sn.lower() + "_" + "setting_" + setting.lower()
                 elif range:
                     # Number
-                    attributes['min'] = range.get('min', 0)
-                    attributes['max'] = range.get('max', 100)
-                    attributes['step'] = precision
+                    attributes["min"] = range.get("min", 0)
+                    attributes["max"] = range.get("max", 100)
+                    attributes["step"] = precision
                     entity_id = entity_name_number + "_" + sn.lower() + "_" + "setting_" + setting.lower()
                 else:
                     # Sensor
                     entity_id = entity_name_sensor + "_" + sn.lower() + "_" + "setting_" + setting.lower()
                 self.base.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
-        
+
         for sn in self.device_battery_charging_time:
             setting = self.device_battery_charging_time[sn]
-            enable1 = setting.get('enable1', False)
-            enable2 = setting.get('enable2', False)
-            endTime1 = setting.get('endTime1', {})
-            endTime2 = setting.get('endTime2', {})
-            startTime1 = setting.get('startTime1', {})
-            startTime2 = setting.get('startTime2', {})
+            enable1 = setting.get("enable1", False)
+            enable2 = setting.get("enable2", False)
+            endTime1 = setting.get("endTime1", {})
+            endTime2 = setting.get("endTime2", {})
+            startTime1 = setting.get("startTime1", {})
+            startTime2 = setting.get("startTime2", {})
             startTime1_str = f"{startTime1.get('hour', 0):02}:{startTime1.get('minute', 0):02}" + ":00"
             startTime2_str = f"{startTime2.get('hour', 0):02}:{startTime2.get('minute', 0):02}" + ":00"
             endTime1_str = f"{endTime1.get('hour', 0):02}:{endTime1.get('minute', 0):02}" + ":00"
@@ -537,14 +533,14 @@ class FoxAPI:
 
             # Times are selector
             entity_id_battery_charging_time = entity_name_select + "_" + sn.lower() + "_battery_charging_time"
-            self.base.dashboard_item(entity_id_battery_charging_time + "_start1", state=startTime1_str, attributes={'friendly_name': f"Fox {sn} Battery Charging Time Start 1", "options" : OPTIONS_TIME_FULL}, app="fox")
-            self.base.dashboard_item(entity_id_battery_charging_time + "_start2", state=startTime2_str, attributes={'friendly_name': f"Fox {sn} Battery Charging Time Start 2", "options" : OPTIONS_TIME_FULL}, app="fox")
-            self.base.dashboard_item(entity_id_battery_charging_time + "_end1", state=endTime1_str, attributes={'friendly_name': f"Fox {sn} Battery Charging Time End 1", "options" : OPTIONS_TIME_FULL}, app="fox")
-            self.base.dashboard_item(entity_id_battery_charging_time + "_end2", state=endTime2_str, attributes={'friendly_name': f"Fox {sn} Battery Charging Time End 2", "options" : OPTIONS_TIME_FULL}, app="fox")
+            self.base.dashboard_item(entity_id_battery_charging_time + "_start1", state=startTime1_str, attributes={"friendly_name": f"Fox {sn} Battery Charging Time Start 1", "options": OPTIONS_TIME_FULL}, app="fox")
+            self.base.dashboard_item(entity_id_battery_charging_time + "_start2", state=startTime2_str, attributes={"friendly_name": f"Fox {sn} Battery Charging Time Start 2", "options": OPTIONS_TIME_FULL}, app="fox")
+            self.base.dashboard_item(entity_id_battery_charging_time + "_end1", state=endTime1_str, attributes={"friendly_name": f"Fox {sn} Battery Charging Time End 1", "options": OPTIONS_TIME_FULL}, app="fox")
+            self.base.dashboard_item(entity_id_battery_charging_time + "_end2", state=endTime2_str, attributes={"friendly_name": f"Fox {sn} Battery Charging Time End 2", "options": OPTIONS_TIME_FULL}, app="fox")
             # Enable 1 and 2 are switches
             entity_id_battery_charging_time = entity_name_switch + "_" + sn.lower() + "_battery_charging_time"
-            self.base.dashboard_item(entity_id_battery_charging_time + "_enable1", state="on" if enable1 else "off", attributes={'friendly_name': f"Fox {sn} Battery Charging Time Enable 1"}, app="fox")
-            self.base.dashboard_item(entity_id_battery_charging_time + "_enable2", state="on" if enable2 else "off", attributes={'friendly_name': f"Fox {sn} Battery Charging Time Enable 2"}, app="fox")
+            self.base.dashboard_item(entity_id_battery_charging_time + "_enable1", state="on" if enable1 else "off", attributes={"friendly_name": f"Fox {sn} Battery Charging Time Enable 1"}, app="fox")
+            self.base.dashboard_item(entity_id_battery_charging_time + "_enable2", state="on" if enable2 else "off", attributes={"friendly_name": f"Fox {sn} Battery Charging Time Enable 2"}, app="fox")
 
     async def write_setting_from_event(self, entity_id, value, is_number=False):
         """
@@ -567,7 +563,7 @@ class FoxAPI:
         if register_lower in fox_settings_lower:
             register = FOX_SETTINGS[fox_settings_lower.index(register_lower)]
             if is_number:
-                step = self.device_settings[serial][register].get('precision', None)
+                step = self.device_settings[serial][register].get("precision", None)
                 if step and step == 1:
                     try:
                         value = int(value)
@@ -581,7 +577,7 @@ class FoxAPI:
                         self.log("Warn: Fox: Invalid number value for {}: {}".format(entity_id, value))
                         return
             if await self.set_device_setting(sn, register, value):
-                self.device_settings[serial][register]['value'] = value
+                self.device_settings[serial][register]["value"] = value
         else:
             self.log("Warn: Fox: Unknown select event for {}".format(entity_id))
         await self.publish_data()
@@ -590,28 +586,28 @@ class FoxAPI:
         """
         Handle select events
         """
-        if '_setting_' in entity_id:
+        if "_setting_" in entity_id:
             await self.write_setting_from_event(entity_id, value)
-        elif '_battery_charging_time_' in entity_id:
+        elif "_battery_charging_time_" in entity_id:
             await self.write_battery_charging_time_event(entity_id, value)
 
     async def number_event(self, entity_id, value):
-        if '_setting_' in entity_id:
+        if "_setting_" in entity_id:
             await self.write_setting_from_event(entity_id, value, is_number=True)
 
     async def switch_event(self, entity_id, service):
-        if '_battery_charging_time_' in entity_id:
+        if "_battery_charging_time_" in entity_id:
             await self.write_battery_charging_time_event(entity_id, service)
 
     def apply_service_to_toggle(self, current_value, service):
         """
         Apply a toggle service to the current value.
         """
-        if service == 'turn_on':
+        if service == "turn_on":
             current_value = True
-        elif service == 'turn_off':
+        elif service == "turn_off":
             current_value = False
-        elif service == 'toggle':
+        elif service == "toggle":
             current_value = not current_value
         return current_value
 
@@ -632,34 +628,34 @@ class FoxAPI:
         if not serial:
             self.log("Warn: Fox: Event, unknown serial number for {}: {}".format(entity_id, sn))
             return
-        
+
         state = self.device_battery_charging_time[serial].copy()
-        if '_battery_charging_time_enable1' in entity_id:
-            enable1 = state.get('enable1', False)
-            state['enable1'] = self.apply_service_to_toggle(enable1, value)
-        elif '_battery_charging_time_enable2' in entity_id:
-            enable2 = state.get('enable2', False)
-            state['enable2'] = self.apply_service_to_toggle(enable2, value)
-        elif '_battery_charging_time_start1' in entity_id:
-            start1 = state.get('startTime1', {'hour': 0, 'minute': 0})
-            start1['hour'] = int(value.split(":")[0])
-            start1['minute'] = int(value.split(":")[1])
-            state['startTime1'] = start1
-        elif '_battery_charging_time_start2' in entity_id:
-            start2 = state.get('startTime2', {'hour': 0, 'minute': 0})
-            start2['hour'] = int(value.split(":")[0])
-            start2['minute'] = int(value.split(":")[1])
-            state['startTime2'] = start2
-        elif '_battery_charging_time_end1' in entity_id:
-            end1 = state.get('endTime1', {'hour': 0, 'minute': 0})
-            end1['hour'] = int(value.split(":")[0])
-            end1['minute'] = int(value.split(":")[1])
-            state['endTime1'] = end1
-        elif '_battery_charging_time_end2' in entity_id:
-            end2 = state.get('endTime2', {'hour': 0, 'minute': 0})
-            end2['hour'] = int(value.split(":")[0])
-            end2['minute'] = int(value.split(":")[1])
-            state['endTime2'] = end2
+        if "_battery_charging_time_enable1" in entity_id:
+            enable1 = state.get("enable1", False)
+            state["enable1"] = self.apply_service_to_toggle(enable1, value)
+        elif "_battery_charging_time_enable2" in entity_id:
+            enable2 = state.get("enable2", False)
+            state["enable2"] = self.apply_service_to_toggle(enable2, value)
+        elif "_battery_charging_time_start1" in entity_id:
+            start1 = state.get("startTime1", {"hour": 0, "minute": 0})
+            start1["hour"] = int(value.split(":")[0])
+            start1["minute"] = int(value.split(":")[1])
+            state["startTime1"] = start1
+        elif "_battery_charging_time_start2" in entity_id:
+            start2 = state.get("startTime2", {"hour": 0, "minute": 0})
+            start2["hour"] = int(value.split(":")[0])
+            start2["minute"] = int(value.split(":")[1])
+            state["startTime2"] = start2
+        elif "_battery_charging_time_end1" in entity_id:
+            end1 = state.get("endTime1", {"hour": 0, "minute": 0})
+            end1["hour"] = int(value.split(":")[0])
+            end1["minute"] = int(value.split(":")[1])
+            state["endTime1"] = end1
+        elif "_battery_charging_time_end2" in entity_id:
+            end2 = state.get("endTime2", {"hour": 0, "minute": 0})
+            end2["hour"] = int(value.split(":")[0])
+            end2["minute"] = int(value.split(":")[1])
+            state["endTime2"] = end2
         else:
             self.log("Warn: Fox: Unknown battery charging time event for {}".format(entity_id))
             return
@@ -668,14 +664,16 @@ class FoxAPI:
             self.device_battery_charging_time[serial] = state
             await self.publish_data()
 
+
 class MockBase:
     """Mock base class for testing"""
+
     def __init__(self):
         pass
-    
+
     def log(self, message):
         print(f"LOG: {message}")
-    
+
     def dashboard_item(self, *args, **kwargs):
         print(f"DASHBOARD: {args}, {kwargs}")
 
@@ -685,14 +683,14 @@ async def test_fox_api(api_key):
     Run a test
     """
     print(f"Testing Fox API with key: {api_key[:10]}...")
-    
+
     # Create a mock base object
     mock_base = MockBase()
-    
+
     # Create FoxAPI instance with a lambda that returns the API key
-    fox_api = FoxAPI(api_key, mock_base)    
-    res = await fox_api.get_battery_charging_time('60KE8020479C034')
-    #await fox_api.start()
+    fox_api = FoxAPI(api_key, mock_base)
+    res = await fox_api.get_battery_charging_time("60KE8020479C034")
+    # await fox_api.start()
 
 
 def main():
@@ -701,14 +699,13 @@ def main():
     """
     parser = argparse.ArgumentParser(description="Test Fox API")
     parser.add_argument("--api-key", required=True, help="Fox API key")
-    
+
     args = parser.parse_args()
     key = args.api_key
-    
+
     # Run the test
     asyncio.run(test_fox_api(key))
 
 
 if __name__ == "__main__":
     main()
-
