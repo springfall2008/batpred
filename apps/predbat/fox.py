@@ -364,42 +364,42 @@ class FoxAPI:
 
     async def set_scheduler(self, deviceSN, groups):
         SET_SCHEDULER = "/op/v1/device/scheduler/enable"
-        result = await self.request_get(SET_SCHEDULER, datain={'deviceSN': deviceSN, 'groups': groups}, post=True)
+        result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
         if result:
-            self.device_scheduler[deviceSN]['groups'] = groups
+            self.device_scheduler[deviceSN]["groups"] = groups
 
     async def get_scheduler(self, deviceSN):
         """
         Get device scheduler
         {
-            'enable': 0, 
-            'groups': 
+            'enable': 0,
+            'groups':
                 [
-                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
-                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
-                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
-                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
-                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
-                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
-                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
+                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
+                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
+                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
+                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
+                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
+                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
+                    {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
                     {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}
-                ], 
-            'properties': 
+                ],
+            'properties':
                 {
-                    'startminute': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 59.0}}, 
-                    'fdpwr': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 10500.0}}, 
-                    'endhour': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 23.0}}, 
-                    'endminute': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 59.0}}, 
-                    'fdsoc': {'unit': '%', 'precision': 1.0, 'range': {'min': 10.0, 'max': 100.0}}, 
-                    'starthour': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 23.0}}, 
-                    'workmode': {'enumList': ['ForceDischarge', 'Feedin', 'SelfUse', 'ForceCharge'], 'unit': '', 'precision': 1.0}, 
-                    'minsocongrid': {'unit': '%', 'precision': 1.0, 'range': {'min': 10.0, 'max': 100.0}}, 
+                    'startminute': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 59.0}},
+                    'fdpwr': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 10500.0}},
+                    'endhour': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 23.0}},
+                    'endminute': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 59.0}},
+                    'fdsoc': {'unit': '%', 'precision': 1.0, 'range': {'min': 10.0, 'max': 100.0}},
+                    'starthour': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 23.0}},
+                    'workmode': {'enumList': ['ForceDischarge', 'Feedin', 'SelfUse', 'ForceCharge'], 'unit': '', 'precision': 1.0},
+                    'minsocongrid': {'unit': '%', 'precision': 1.0, 'range': {'min': 10.0, 'max': 100.0}},
                     'maxsoc': {'unit': '%', 'precision': 1.0, 'range': {'min': 10.0, 'max': 100.0}}
                 }
         }
         """
         GET_SCHEDULER = "/op/v1/device/scheduler/get"
-        result = await self.request_get(GET_SCHEDULER, datain={'deviceSN': deviceSN}, post=True)
+        result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
         print(result)
         if result:
             self.device_scheduler[deviceSN] = result
@@ -734,38 +734,38 @@ async def test_fox_api(api_key):
     # Create a mock base object
     mock_base = MockBase()
 
-    sn = '60KE8020479C034'
-    
+    sn = "60KE8020479C034"
+
     # Create FoxAPI instance with a lambda that returns the API key
-    fox_api = FoxAPI(api_key, mock_base)    
+    fox_api = FoxAPI(api_key, mock_base)
     res = await fox_api.get_battery_charging_time(sn)
     print(res)
     res = await fox_api.get_scheduler(sn)
-    groups = res.get('groups', [])
-    # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
+    groups = res.get("groups", [])
+    # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
     new_slot = groups[0].copy()
-    new_slot['enable'] = 1
-    new_slot['workMode'] = 'ForceCharge'
-    new_slot['startHour'] = 23
-    new_slot['startMinute'] = 30
-    new_slot['endHour'] = 23
-    new_slot['endMinute'] = 59
-    new_slot['fdSoc'] = 100
-    new_slot['fdPwr'] = 8000
+    new_slot["enable"] = 1
+    new_slot["workMode"] = "ForceCharge"
+    new_slot["startHour"] = 23
+    new_slot["startMinute"] = 30
+    new_slot["endHour"] = 23
+    new_slot["endMinute"] = 59
+    new_slot["fdSoc"] = 100
+    new_slot["fdPwr"] = 8000
     new_slot2 = groups[1].copy()
-    new_slot2['enable'] = 1
-    new_slot2['workMode'] = 'ForceCharge'
-    new_slot2['startHour'] = 0
-    new_slot2['startMinute'] = 00
-    new_slot2['endHour'] = 5
-    new_slot2['endMinute'] = 29
-    new_slot2['fdSoc'] = 100
-    new_slot2['fdPwr'] = 8000
+    new_slot2["enable"] = 1
+    new_slot2["workMode"] = "ForceCharge"
+    new_slot2["startHour"] = 0
+    new_slot2["startMinute"] = 00
+    new_slot2["endHour"] = 5
+    new_slot2["endMinute"] = 29
+    new_slot2["fdSoc"] = 100
+    new_slot2["fdPwr"] = 8000
 
     print("Sending: {}".format([new_slot, new_slot2]))
     res = await fox_api.set_scheduler(sn, [new_slot, new_slot2])
     print(res)
-    #await fox_api.start()
+    # await fox_api.start()
 
 
 def main():
