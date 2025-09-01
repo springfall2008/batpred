@@ -2634,7 +2634,6 @@ var options = {
 
             # Component details
             text += f'<div class="component-details">\n'
-            text += f"<p><strong>Component:</strong> {component_name}</p>\n"
 
             # Show args and their current values
             args_info = component_info.get("args", {})
