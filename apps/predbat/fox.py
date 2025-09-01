@@ -29,6 +29,7 @@ FOX_DOMAIN = "https://www.foxesscloud.com"
 FOX_LANG = "en"
 TIMEOUT = 60
 FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
+OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 
 # Dummy attribute table for testing
 fox_attribute_table = {"mode": {}}
@@ -53,6 +54,9 @@ class FoxAPI:
         self.device_production = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
+        self.device_current_schedule = {}
+        self.fdpwr_max = {}
+        self.fdsoc_min = {}
 
     def wait_api_started(self):
         """
@@ -93,6 +97,8 @@ class FoxAPI:
                             await self.get_device_detail(sn)
                             await self.get_device_settings(sn)
                             await self.get_battery_charging_time(sn)
+                            await self.get_scheduler(sn)
+                            await self.compute_schedule(sn)
 
                 if first or (count_seconds % (5 * 60)) == 0:
                     for device in self.device_list:
@@ -291,8 +297,11 @@ class FoxAPI:
         if result:
             if deviceSN not in self.device_settings:
                 self.device_settings[deviceSN] = {}
+            print("Device setting for {} = {}".format(deviceSN, result))
             self.device_settings[deviceSN][key] = result
             return result
+        else:
+            print("Failed to get device setting for {} key {}".format(deviceSN, key))
         return None
 
     async def set_device_setting(self, deviceSN, key, value):
@@ -335,6 +344,57 @@ class FoxAPI:
             self.device_battery_charging_time[deviceSN] = result
             return result
         return {}
+
+    async def compute_schedule(self, deviceSN):
+        """
+        Work out the current schedule by looking at battery charging times or scheduler settings
+        """
+        battery_times = self.device_battery_charging_time.get(deviceSN, {})
+        scheduler_times = self.device_scheduler.get(deviceSN, {}).get('groups', [])
+        device_scheduler_enabled = self.device_scheduler.get(deviceSN, {}).get('enabled', False)
+
+        # First convert battery times into the same format as scheduer times
+        # Create an array of 0 - 2 slots containing the battery charge times
+
+        minSocOnGrid = self.device_settings.get(deviceSN, {}).get('MinSocOnGrid', {}).get('value', 10)
+        MinSoc = self.device_settings.get(deviceSN, {}).get('MinSoc', {}).get('value', 10)
+
+        battery_slots = []
+        for i in range(0, 8):
+            if i < len(scheduler_times):
+                battery_slots.append(scheduler_times[i].copy())
+            else:
+                battery_slots.append({
+                    'startHour': 0,
+                    'startMinute': 0,
+                    'endHour': 0,
+                    'endMinute': 0,
+                    'enable': 0,
+                    'fdPwr': self.fdpwr_max.get(deviceSN, 8000),
+                    'workMode': "SelfUse",
+                    'fdSoc': 100,
+                    'minSocOnGrid': minSocOnGrid,
+                })
+
+        if not device_scheduler_enabled:
+            for i in [1, 2]:
+                start_time = battery_times.get(f'startTime{i}', {})
+                end_time = battery_times.get(f'endTime{i}', {})
+                enable = battery_times.get(f'enable{i}', False)
+                if start_time and end_time and enable:
+                    battery_slots[i-1] = {
+                        'startHour': start_time.get('hour', 0),
+                        'startMinute': start_time.get('minute', 0),
+                        'endHour': end_time.get('hour', 0),
+                        'endMinute': end_time.get('minute', 0),
+                        'enable': 1,
+                        'fdPwr': 0,
+                        'workMode': "ForceCharge",
+                        'fdSoc': 100,
+                        'minSocOnGrid': minSocOnGrid,
+                    }
+        self.device_current_schedule[deviceSN] = battery_slots
+        return battery_slots
 
     async def get_device_production(self, deviceSN):
         """
@@ -400,9 +460,11 @@ class FoxAPI:
         """
         GET_SCHEDULER = "/op/v1/device/scheduler/get"
         result = await self.request_get(GET_SCHEDULER, datain={'deviceSN': deviceSN}, post=True)
-        print(result)
         if result:
             self.device_scheduler[deviceSN] = result
+            self.fdpwr_max[deviceSN] = result.get('properties', {}).get('fdpwr', {}).get('range', {}).get('max', 8000)
+            self.fdsoc_min[deviceSN] = result.get('properties', {}).get('fdsoc', {}).get('range', {}).get('min', 10)
+
             return result
         return {}
 
@@ -541,7 +603,7 @@ class FoxAPI:
                 item = self.device_settings[sn][setting]
                 state = item.get("value", None)
                 unit = item.get("unit", "")
-                range = item.get("range", {})
+                value_range = item.get("range", {})
                 precision = item.get("precision", 1)
                 enumList = item.get("enumList", [])
 
@@ -554,10 +616,10 @@ class FoxAPI:
                     # Selector
                     attributes["options"] = enumList
                     entity_id = entity_name_select + "_" + sn.lower() + "_" + "setting_" + setting.lower()
-                elif range:
+                elif value_range:
                     # Number
-                    attributes["min"] = range.get("min", 0)
-                    attributes["max"] = range.get("max", 100)
+                    attributes["min"] = value_range.get("min", 0)
+                    attributes["max"] = value_range.get("max", 100)
                     attributes["step"] = precision
                     entity_id = entity_name_number + "_" + sn.lower() + "_" + "setting_" + setting.lower()
                 else:
@@ -565,29 +627,32 @@ class FoxAPI:
                     entity_id = entity_name_sensor + "_" + sn.lower() + "_" + "setting_" + setting.lower()
                 self.base.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
 
-        for sn in self.device_battery_charging_time:
-            setting = self.device_battery_charging_time[sn]
-            enable1 = setting.get("enable1", False)
-            enable2 = setting.get("enable2", False)
-            endTime1 = setting.get("endTime1", {})
-            endTime2 = setting.get("endTime2", {})
-            startTime1 = setting.get("startTime1", {})
-            startTime2 = setting.get("startTime2", {})
-            startTime1_str = f"{startTime1.get('hour', 0):02}:{startTime1.get('minute', 0):02}" + ":00"
-            startTime2_str = f"{startTime2.get('hour', 0):02}:{startTime2.get('minute', 0):02}" + ":00"
-            endTime1_str = f"{endTime1.get('hour', 0):02}:{endTime1.get('minute', 0):02}" + ":00"
-            endTime2_str = f"{endTime2.get('hour', 0):02}:{endTime2.get('minute', 0):02}" + ":00"
+        for sn in self.device_current_schedule:
+            current_schedule = self.device_current_schedule[sn].copy()
+            for n in range(0, 8):
+                this_schedule = current_schedule.pop(0) if current_schedule else None
+                print("Set schedule {} = {}".format(n, this_schedule))
+                if this_schedule:
+                    enable = this_schedule.get("enable", False)
+                    startHour = this_schedule.get("startHour", 0)
+                    endHour = this_schedule.get("endHour", 0)
+                    startMinute = this_schedule.get("startMinute", 0)
+                    endMinute = this_schedule.get("endMinute", 0)
+                    startTime_str = f"{startHour:02}:{startMinute:02}:00"
+                    endTime_str = f"{endHour:02}:{endMinute:02}:00"
+                    workMode = this_schedule.get("workMode", "SelfUse")
+                else:
+                    enable = False
+                    workMode = "SelfUse"
+                    startTime_str = "00:00:00"
+                    endTime_str = "00:00:00"
 
-            # Times are selector
-            entity_id_battery_charging_time = entity_name_select + "_" + sn.lower() + "_battery_charging_time"
-            self.base.dashboard_item(entity_id_battery_charging_time + "_start1", state=startTime1_str, attributes={"friendly_name": f"Fox {sn} Battery Charging Time Start 1", "options": OPTIONS_TIME_FULL}, app="fox")
-            self.base.dashboard_item(entity_id_battery_charging_time + "_start2", state=startTime2_str, attributes={"friendly_name": f"Fox {sn} Battery Charging Time Start 2", "options": OPTIONS_TIME_FULL}, app="fox")
-            self.base.dashboard_item(entity_id_battery_charging_time + "_end1", state=endTime1_str, attributes={"friendly_name": f"Fox {sn} Battery Charging Time End 1", "options": OPTIONS_TIME_FULL}, app="fox")
-            self.base.dashboard_item(entity_id_battery_charging_time + "_end2", state=endTime2_str, attributes={"friendly_name": f"Fox {sn} Battery Charging Time End 2", "options": OPTIONS_TIME_FULL}, app="fox")
-            # Enable 1 and 2 are switches
-            entity_id_battery_charging_time = entity_name_switch + "_" + sn.lower() + "_battery_charging_time"
-            self.base.dashboard_item(entity_id_battery_charging_time + "_enable1", state="on" if enable1 else "off", attributes={"friendly_name": f"Fox {sn} Battery Charging Time Enable 1"}, app="fox")
-            self.base.dashboard_item(entity_id_battery_charging_time + "_enable2", state="on" if enable2 else "off", attributes={"friendly_name": f"Fox {sn} Battery Charging Time Enable 2"}, app="fox")
+                entity_id_battery_schedule_select = entity_name_select + "_" + sn.lower() + "_battery_schedule"
+                entity_id_battery_schedule_switch = entity_name_switch + "_" + sn.lower() + "_battery_schedule"
+                self.base.dashboard_item(entity_id_battery_schedule_select + f"_start{n}", state=startTime_str, attributes={"friendly_name": f"Fox {sn} Battery Schedule Time Start {n}", "options": OPTIONS_TIME_FULL}, app="fox")
+                self.base.dashboard_item(entity_id_battery_schedule_select + f"_end{n}", state=endTime_str, attributes={"friendly_name": f"Fox {sn} Battery Schedule Time End {n}", "options": OPTIONS_TIME_FULL}, app="fox")
+                self.base.dashboard_item(entity_id_battery_schedule_switch + f"_enable{n}", state="on" if enable else "off", attributes={"friendly_name": f"Fox {sn} Battery Schedule Enable {n}"}, app="fox")
+                self.base.dashboard_item(entity_id_battery_schedule_select + f"_workmode{n}", state=workMode, attributes={"friendly_name": f"Fox {sn} Battery Schedule Work Mode {n}", "options": OPTIONS_WORK_MODE}, app="fox")
 
     async def write_setting_from_event(self, entity_id, value, is_number=False):
         """
@@ -635,16 +700,16 @@ class FoxAPI:
         """
         if "_setting_" in entity_id:
             await self.write_setting_from_event(entity_id, value)
-        elif "_battery_charging_time_" in entity_id:
-            await self.write_battery_charging_time_event(entity_id, value)
+        elif "_battery_schedule" in entity_id:
+            await self.write_battery_schedule_event(entity_id, value)
 
     async def number_event(self, entity_id, value):
         if "_setting_" in entity_id:
             await self.write_setting_from_event(entity_id, value, is_number=True)
 
     async def switch_event(self, entity_id, service):
-        if "_battery_charging_time_" in entity_id:
-            await self.write_battery_charging_time_event(entity_id, service)
+        if "_battery_schedule" in entity_id:
+            await self.write_battery_schedule_event(entity_id, service)
 
     def apply_service_to_toggle(self, current_value, service):
         """
@@ -658,16 +723,38 @@ class FoxAPI:
             current_value = not current_value
         return current_value
 
-    async def write_battery_charging_time_event(self, entity_id, value):
+    def time_string_to_hour_minute(self, value, orig_hour, orig_minute):
         """
-        Handle battery charging time events
+        Convert a time string in the format HH:MM to hour and minute integers.
+        """
+        split_up = value.split(":")
+        if len(split_up) < 2:
+            return orig_hour, orig_minute
+
+        hour = split_up[0]
+        minute = split_up[1]
+        try:
+            hour = int(hour)
+            minute = int(minute)
+        except ValueError:
+            hour = orig_hour
+            minute = orig_minute
+        if hour < 0 or hour > 23:
+            hour = orig_hour
+        if minute < 0 or minute > 59:
+            minute = orig_minute
+        return hour, minute
+
+    async def write_battery_schedule_event(self, entity_id, value):
+        """
+        Handle battery schedule events
         """
 
         entity_id = entity_id.replace("switch.predbat_fox_", "")
         entity_id = entity_id.replace("select.predbat_fox_", "")
         sn = entity_id.split("_")[0]
         serial = None
-        for s in self.device_battery_charging_time:
+        for s in self.device_current_schedule:
             if s.lower() == sn.lower():
                 serial = s
                 break
@@ -675,42 +762,78 @@ class FoxAPI:
         if not serial:
             self.log("Warn: Fox: Event, unknown serial number for {}: {}".format(entity_id, sn))
             return
-
-        state = self.device_battery_charging_time[serial].copy()
-        if "_battery_charging_time_enable1" in entity_id:
-            enable1 = state.get("enable1", False)
-            state["enable1"] = self.apply_service_to_toggle(enable1, value)
-        elif "_battery_charging_time_enable2" in entity_id:
-            enable2 = state.get("enable2", False)
-            state["enable2"] = self.apply_service_to_toggle(enable2, value)
-        elif "_battery_charging_time_start1" in entity_id:
-            start1 = state.get("startTime1", {"hour": 0, "minute": 0})
-            start1["hour"] = int(value.split(":")[0])
-            start1["minute"] = int(value.split(":")[1])
-            state["startTime1"] = start1
-        elif "_battery_charging_time_start2" in entity_id:
-            start2 = state.get("startTime2", {"hour": 0, "minute": 0})
-            start2["hour"] = int(value.split(":")[0])
-            start2["minute"] = int(value.split(":")[1])
-            state["startTime2"] = start2
-        elif "_battery_charging_time_end1" in entity_id:
-            end1 = state.get("endTime1", {"hour": 0, "minute": 0})
-            end1["hour"] = int(value.split(":")[0])
-            end1["minute"] = int(value.split(":")[1])
-            state["endTime1"] = end1
-        elif "_battery_charging_time_end2" in entity_id:
-            end2 = state.get("endTime2", {"hour": 0, "minute": 0})
-            end2["hour"] = int(value.split(":")[0])
-            end2["minute"] = int(value.split(":")[1])
-            state["endTime2"] = end2
-        else:
-            self.log("Warn: Fox: Unknown battery charging time event for {}".format(entity_id))
+        
+        # ID is last char of entity
+        try:
+            id = int(entity_id[-1])
+        except ValueError:
+            self.log("Warn: Fox: Event, invalid ID for {}: {}".format(entity_id, entity_id[-1]))
             return
-        result = await self.set_battery_charging_time(serial, state)
-        if result is not None:
-            self.device_battery_charging_time[serial] = state
-            await self.publish_data()
 
+        current_schedule = self.device_current_schedule.get(serial, []).copy()
+        this_schedule = current_schedule[id] if id < len(current_schedule) else {}
+        enable = this_schedule.get("enable", False)
+        start_time = this_schedule.get("startTime", {"hour": 0, "minute": 0})
+        end_time = this_schedule.get("endTime", {"hour": 0, "minute": 0})
+        work_mode = this_schedule.get("workMode", "SelfUse")
+
+        if "_battery_schedule_enable" in entity_id:
+            this_schedule['enable'] = self.apply_service_to_toggle(enable, value)
+        elif "_battery_schedule_start_time" in entity_id:
+            hour, minute = self.time_string_to_hour_minute(value, start_time["hour"], start_time["minute"])
+            start_time["hour"] = hour
+            start_time["minute"] = minute
+            this_schedule["startTime"] = start_time
+        elif "_battery_schedule_end_time" in entity_id:
+            hour, minute = self.time_string_to_hour_minute(value, end_time["hour"], end_time["minute"])
+            end_time["hour"] = hour
+            end_time["minute"] = minute
+            this_schedule["endTime"] = end_time
+            this_schedule["fdPwr"] = self.fdpwr_max.get(serial, 8000)
+        elif "_battery_schedule_workmode" in entity_id:
+            this_schedule["workMode"] = value if value in OPTIONS_WORK_MODE else work_mode
+            work_mode = this_schedule["workMode"]
+        else:
+            self.log("Warn: Fox: Unknown battery schedule event for {}".format(entity_id))
+            return
+
+        this_schedule["minSocOnGrid"] = self.device_settings.get(serial, {}).get('MinSocOnGrid', {}).get('value', 10)        
+        if work_mode == 'ForceDischarge':
+            this_schedule["fdPwr"] = self.fdpwr_max.get(serial, 8000)
+            this_schedule["fdSoc"] = self.fdsoc_min.get(serial, 10)
+
+        current_schedule[id] = this_schedule
+        device_scheduler_enabled = self.device_scheduler.get(serial, {}).get('enabled', False)
+        for n in range(0, 8):
+            enabled = current_schedule[n].get("enable", False)
+            workMode = current_schedule[n].get("workMode", "SelfUse")
+            if n >= 2 and enabled:
+                device_scheduler_enabled = True
+            if enabled and workMode != "SelfUse":
+                device_scheduler_enabled = True
+
+        if device_scheduler_enabled:
+            result = await self.set_scheduler(serial, current_schedule)
+            if result is not None:
+                self.device_current_schedule[serial] = current_schedule
+                self.device_scheduler[serial]['enabled'] = device_scheduler_enabled
+                await self.publish_data()
+        else:
+            new_battery_charging_time = self.device_battery_charging_time.get(serial, {}).copy()
+            for n in range(0, 2):
+                enabled = current_schedule[n].get("enable", False)
+                startTime = current_schedule[n].get("startTime", {"hour": 0, "minute": 0})
+                endTime = current_schedule[n].get("endTime", {"hour": 0, "minute": 0})
+                if n == 0:
+                    new_battery_charging_time['startTime1'] = startTime
+                    new_battery_charging_time['endTime1'] = endTime
+                else:
+                    new_battery_charging_time['startTime2'] = startTime
+                    new_battery_charging_time['endTime2'] = endTime
+                result = await self.set_battery_charging_time(serial, new_battery_charging_time)
+                if result is not None:
+                    self.device_battery_charging_time[serial] = new_battery_charging_time
+                    await self.publish_data()
 
 class MockBase:
     """Mock base class for testing"""
@@ -738,9 +861,15 @@ async def test_fox_api(api_key):
     
     # Create FoxAPI instance with a lambda that returns the API key
     fox_api = FoxAPI(api_key, mock_base)    
+    #await fox_api.start()
+    res = await fox_api.get_device_settings(sn)
     res = await fox_api.get_battery_charging_time(sn)
-    print(res)
     res = await fox_api.get_scheduler(sn)
+    res = await fox_api.compute_schedule(sn)
+    res = await fox_api.publish_data()
+    print(res)
+
+    """
     groups = res.get('groups', [])
     # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
     new_slot = groups[0].copy()
@@ -766,6 +895,7 @@ async def test_fox_api(api_key):
     res = await fox_api.set_scheduler(sn, [new_slot, new_slot2])
     print(res)
     #await fox_api.start()
+    """
 
 
 def main():
