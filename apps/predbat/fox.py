@@ -350,48 +350,50 @@ class FoxAPI:
         Work out the current schedule by looking at battery charging times or scheduler settings
         """
         battery_times = self.device_battery_charging_time.get(deviceSN, {})
-        scheduler_times = self.device_scheduler.get(deviceSN, {}).get('groups', [])
-        device_scheduler_enabled = self.device_scheduler.get(deviceSN, {}).get('enabled', False)
+        scheduler_times = self.device_scheduler.get(deviceSN, {}).get("groups", [])
+        device_scheduler_enabled = self.device_scheduler.get(deviceSN, {}).get("enabled", False)
 
         # First convert battery times into the same format as scheduer times
         # Create an array of 0 - 2 slots containing the battery charge times
 
-        minSocOnGrid = self.device_settings.get(deviceSN, {}).get('MinSocOnGrid', {}).get('value', 10)
-        MinSoc = self.device_settings.get(deviceSN, {}).get('MinSoc', {}).get('value', 10)
+        minSocOnGrid = self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
+        MinSoc = self.device_settings.get(deviceSN, {}).get("MinSoc", {}).get("value", 10)
 
         battery_slots = []
         for i in range(0, 8):
             if i < len(scheduler_times):
                 battery_slots.append(scheduler_times[i].copy())
             else:
-                battery_slots.append({
-                    'startHour': 0,
-                    'startMinute': 0,
-                    'endHour': 0,
-                    'endMinute': 0,
-                    'enable': 0,
-                    'fdPwr': self.fdpwr_max.get(deviceSN, 8000),
-                    'workMode': "SelfUse",
-                    'fdSoc': 100,
-                    'minSocOnGrid': minSocOnGrid,
-                })
+                battery_slots.append(
+                    {
+                        "startHour": 0,
+                        "startMinute": 0,
+                        "endHour": 0,
+                        "endMinute": 0,
+                        "enable": 0,
+                        "fdPwr": self.fdpwr_max.get(deviceSN, 8000),
+                        "workMode": "SelfUse",
+                        "fdSoc": 100,
+                        "minSocOnGrid": minSocOnGrid,
+                    }
+                )
 
         if not device_scheduler_enabled:
             for i in [1, 2]:
-                start_time = battery_times.get(f'startTime{i}', {})
-                end_time = battery_times.get(f'endTime{i}', {})
-                enable = battery_times.get(f'enable{i}', False)
+                start_time = battery_times.get(f"startTime{i}", {})
+                end_time = battery_times.get(f"endTime{i}", {})
+                enable = battery_times.get(f"enable{i}", False)
                 if start_time and end_time and enable:
-                    battery_slots[i-1] = {
-                        'startHour': start_time.get('hour', 0),
-                        'startMinute': start_time.get('minute', 0),
-                        'endHour': end_time.get('hour', 0),
-                        'endMinute': end_time.get('minute', 0),
-                        'enable': 1,
-                        'fdPwr': 0,
-                        'workMode': "ForceCharge",
-                        'fdSoc': 100,
-                        'minSocOnGrid': minSocOnGrid,
+                    battery_slots[i - 1] = {
+                        "startHour": start_time.get("hour", 0),
+                        "startMinute": start_time.get("minute", 0),
+                        "endHour": end_time.get("hour", 0),
+                        "endMinute": end_time.get("minute", 0),
+                        "enable": 1,
+                        "fdPwr": 0,
+                        "workMode": "ForceCharge",
+                        "fdSoc": 100,
+                        "minSocOnGrid": minSocOnGrid,
                     }
         self.device_current_schedule[deviceSN] = battery_slots
         return battery_slots
@@ -459,11 +461,11 @@ class FoxAPI:
         }
         """
         GET_SCHEDULER = "/op/v1/device/scheduler/get"
-        result = await self.request_get(GET_SCHEDULER, datain={'deviceSN': deviceSN}, post=True)
+        result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
         if result:
             self.device_scheduler[deviceSN] = result
-            self.fdpwr_max[deviceSN] = result.get('properties', {}).get('fdpwr', {}).get('range', {}).get('max', 8000)
-            self.fdsoc_min[deviceSN] = result.get('properties', {}).get('fdsoc', {}).get('range', {}).get('min', 10)
+            self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
+            self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
 
             return result
         return {}
@@ -762,7 +764,7 @@ class FoxAPI:
         if not serial:
             self.log("Warn: Fox: Event, unknown serial number for {}: {}".format(entity_id, sn))
             return
-        
+
         # ID is last char of entity
         try:
             id = int(entity_id[-1])
@@ -778,7 +780,7 @@ class FoxAPI:
         work_mode = this_schedule.get("workMode", "SelfUse")
 
         if "_battery_schedule_enable" in entity_id:
-            this_schedule['enable'] = self.apply_service_to_toggle(enable, value)
+            this_schedule["enable"] = self.apply_service_to_toggle(enable, value)
         elif "_battery_schedule_start_time" in entity_id:
             hour, minute = self.time_string_to_hour_minute(value, start_time["hour"], start_time["minute"])
             start_time["hour"] = hour
@@ -797,13 +799,13 @@ class FoxAPI:
             self.log("Warn: Fox: Unknown battery schedule event for {}".format(entity_id))
             return
 
-        this_schedule["minSocOnGrid"] = self.device_settings.get(serial, {}).get('MinSocOnGrid', {}).get('value', 10)        
-        if work_mode == 'ForceDischarge':
+        this_schedule["minSocOnGrid"] = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
+        if work_mode == "ForceDischarge":
             this_schedule["fdPwr"] = self.fdpwr_max.get(serial, 8000)
             this_schedule["fdSoc"] = self.fdsoc_min.get(serial, 10)
 
         current_schedule[id] = this_schedule
-        device_scheduler_enabled = self.device_scheduler.get(serial, {}).get('enabled', False)
+        device_scheduler_enabled = self.device_scheduler.get(serial, {}).get("enabled", False)
         for n in range(0, 8):
             enabled = current_schedule[n].get("enable", False)
             workMode = current_schedule[n].get("workMode", "SelfUse")
@@ -816,7 +818,7 @@ class FoxAPI:
             result = await self.set_scheduler(serial, current_schedule)
             if result is not None:
                 self.device_current_schedule[serial] = current_schedule
-                self.device_scheduler[serial]['enabled'] = device_scheduler_enabled
+                self.device_scheduler[serial]["enabled"] = device_scheduler_enabled
                 await self.publish_data()
         else:
             new_battery_charging_time = self.device_battery_charging_time.get(serial, {}).copy()
@@ -825,15 +827,16 @@ class FoxAPI:
                 startTime = current_schedule[n].get("startTime", {"hour": 0, "minute": 0})
                 endTime = current_schedule[n].get("endTime", {"hour": 0, "minute": 0})
                 if n == 0:
-                    new_battery_charging_time['startTime1'] = startTime
-                    new_battery_charging_time['endTime1'] = endTime
+                    new_battery_charging_time["startTime1"] = startTime
+                    new_battery_charging_time["endTime1"] = endTime
                 else:
-                    new_battery_charging_time['startTime2'] = startTime
-                    new_battery_charging_time['endTime2'] = endTime
+                    new_battery_charging_time["startTime2"] = startTime
+                    new_battery_charging_time["endTime2"] = endTime
                 result = await self.set_battery_charging_time(serial, new_battery_charging_time)
                 if result is not None:
                     self.device_battery_charging_time[serial] = new_battery_charging_time
                     await self.publish_data()
+
 
 class MockBase:
     """Mock base class for testing"""
@@ -860,8 +863,8 @@ async def test_fox_api(api_key):
     sn = "60KE8020479C034"
 
     # Create FoxAPI instance with a lambda that returns the API key
-    fox_api = FoxAPI(api_key, mock_base)    
-    #await fox_api.start()
+    fox_api = FoxAPI(api_key, mock_base)
+    # await fox_api.start()
     res = await fox_api.get_device_settings(sn)
     res = await fox_api.get_battery_charging_time(sn)
     res = await fox_api.get_scheduler(sn)
@@ -871,7 +874,7 @@ async def test_fox_api(api_key):
 
     """
     groups = res.get('groups', [])
-    # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0}, 
+    # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
     new_slot = groups[0].copy()
     new_slot["enable"] = 1
     new_slot["workMode"] = "ForceCharge"
