@@ -2279,6 +2279,11 @@ class Fetch:
         # Update list of config options to save/restore to
         self.update_save_restore_list()
 
+        # Configure history cache
+        self.history_cache_enable = self.get_arg("history_cache_enable", True)
+        if hasattr(self, 'ha_interface') and self.ha_interface:
+            self.ha_interface.configure_history_cache(self.history_cache_enable)
+
     def load_car_energy(self, now_utc):
         """
         Load previous car charging energy data
