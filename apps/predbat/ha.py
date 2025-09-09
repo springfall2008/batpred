@@ -56,6 +56,9 @@ class HAInterface:
     def is_alive(self):
         if not self.api_started:
             return False
+        # In database mode, component is alive even without websocket connection
+        if self.db_enable and (self.db_primary or not self.ha_key):
+            return True
         if self.websocket_task:
             if not self.websocket_task.is_alive():
                 return False
@@ -133,8 +136,15 @@ class HAInterface:
     async def start(self):
         """Async start not required"""
         self.log("Info: Starting HA interface")
-        self.websocket_active = True
-        await self.socketLoop()
+
+        # Use database mode if configured as primary data source
+        if self.db_enable and self.db_primary and not self.ha_key:
+            self.log("Info: Using database as primary data source")
+            self.websocket_active = False
+            await self.databaseLoop()
+        else:
+            self.websocket_active = True
+            await self.socketLoop()
 
     async def stop(self):
         self.stop_thread = True
@@ -328,6 +338,32 @@ class HAInterface:
             self.log("Error: Web Socket failed to reconnect, stopping....")
             self.websocket_active = False
             raise Exception("Web Socket failed to reconnect")
+
+    async def databaseLoop(self):
+        """
+        Database mode loop - keeps the component task alive while in database mode
+        """
+        self.log("Info: Starting database mode loop")
+
+        # Keep the task alive with periodic health checks
+        while not self.stop_thread:
+            try:
+                # Perform database health checks or maintenance tasks
+                if self.db_enable:
+                    # Could add database connection health check here
+                    # Could add database cleanup/maintenance here
+                    # Could add metrics collection here
+                    pass
+
+                # Sleep for a reasonable interval (30 seconds)
+                await asyncio.sleep(30)
+
+            except Exception as e:
+                self.log(f"Error: Database loop exception: {e}")
+                # Don't break the loop on errors - keep task alive
+                await asyncio.sleep(5)
+
+        self.log("Info: Database mode loop stopped")
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
