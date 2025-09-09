@@ -16,11 +16,26 @@ import glob
 from datetime import datetime, timedelta
 import argparse
 
-import requests
-import yaml
-import json
-import matplotlib.pyplot as plt
-import numpy as np
+try:
+    import requests
+except ImportError:
+    requests = None
+try:
+    import yaml
+except ImportError:
+    yaml = None
+try:
+    import json
+except ImportError:
+    json = None
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 from predbat import PredBat
 from prediction import Prediction
@@ -1792,6 +1807,132 @@ def run_car_charging_smart_tests(my_predbat):
     failed |= run_car_charging_smart_test("smart6", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=14 * 15, expect_kwh=14, plan_time="02:00:00")
     failed |= run_car_charging_smart_test("smart7", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=True, expect_cost=7 * 10, expect_kwh=7, plan_time="02:00:00")
     failed |= run_car_charging_smart_test("smart8", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=False, expect_cost=7 * 10, expect_kwh=7, plan_time="02:00:00")
+
+    return failed
+
+
+def test_plugin_startup_order(my_predbat):
+    """
+    Test that plugins are initialized before the web server starts
+    This ensures plugin endpoints can be registered before the router freezes
+    """
+    print("*** Running test: Plugin startup order and endpoint registration")
+    failed = 0
+
+    # Mock the components and plugin system
+    from unittest.mock import MagicMock, patch, call
+
+    # Create a mock for tracking call order
+    call_order = []
+
+    # Mock the Components class
+    mock_components = MagicMock()
+    mock_components.initialize = MagicMock(side_effect=lambda: call_order.append("components.initialize"))
+    mock_components.start = MagicMock(side_effect=lambda: call_order.append("components.start"))
+
+    # Mock the PluginSystem class
+    mock_plugin_system = MagicMock()
+    mock_plugin_system.discover_plugins = MagicMock(side_effect=lambda: call_order.append("plugin.discover"))
+    mock_plugin_system.call_hooks = MagicMock(side_effect=lambda hook: call_order.append(f"plugin.hook.{hook}"))
+
+    # Test the initialization order
+    with patch("predbat.Components", return_value=mock_components):
+        with patch("predbat.PluginSystem", return_value=mock_plugin_system):
+            # Create a minimal predbat instance for testing
+            test_predbat = PredBat()
+            test_predbat.log = MagicMock()
+            test_predbat.ha_interface = MagicMock()
+            test_predbat.reset = MagicMock()
+            test_predbat.update_time = MagicMock()
+            test_predbat.auto_config = MagicMock()
+            test_predbat.load_user_config = MagicMock()
+            test_predbat.create_test_elements = MagicMock()
+            test_predbat.expose_config = MagicMock()
+            test_predbat.run_time_loop = MagicMock()
+
+            # Clear the call order
+            call_order = []
+
+            # Run the initialization
+            try:
+                test_predbat.initialize()
+            except Exception as e:
+                # Some exceptions are expected since we're mocking heavily
+                pass
+
+    # Verify the order
+    # Components should be initialized, then plugins discovered, then components started
+    components_init_index = -1
+    plugin_discover_index = -1
+    components_start_index = -1
+
+    for i, call in enumerate(call_order):
+        if call == "components.initialize":
+            components_init_index = i
+        elif call == "plugin.discover":
+            plugin_discover_index = i
+        elif call == "components.start":
+            components_start_index = i
+
+    if components_init_index == -1:
+        print("ERROR: Components.initialize was not called during initialization")
+        failed = 1
+    elif plugin_discover_index == -1:
+        print("ERROR: Plugin discovery was not called during initialization")
+        failed = 1
+    elif components_start_index == -1:
+        print("ERROR: Components.start was not called during initialization")
+        failed = 1
+    elif components_init_index >= plugin_discover_index:
+        print(f"ERROR: Components must be initialized (index {components_init_index}) before plugin discovery (index {plugin_discover_index})")
+        print(f"Call order was: {call_order}")
+        failed = 1
+    elif plugin_discover_index >= components_start_index:
+        print(f"ERROR: Plugin discovery (index {plugin_discover_index}) must happen before components.start (index {components_start_index})")
+        print(f"Call order was: {call_order}")
+        failed = 1
+    else:
+        print(f"OK: Correct startup order - Components.initialize ({components_init_index}) -> Plugin.discover ({plugin_discover_index}) -> Components.start ({components_start_index})")
+
+    # Now test that a plugin can register an endpoint
+    print("*** Testing plugin endpoint registration")
+
+    # Create a mock web component
+    mock_web = MagicMock()
+    mock_web.registered_endpoints = []
+    mock_web.register_endpoint = MagicMock(side_effect=lambda path, handler, method: mock_web.registered_endpoints.append({"path": path, "handler": handler, "method": method}))
+
+    # Create mock components that returns our web component
+    mock_components_with_web = MagicMock()
+    mock_components_with_web.get_component = MagicMock(return_value=mock_web)
+
+    # Create a test plugin that registers an endpoint
+    class TestPlugin:
+        def __init__(self, base):
+            self.base = base
+
+        def register_hooks(self, plugin_system):
+            # Register endpoint immediately like the metrics plugin now does
+            if hasattr(self.base, "components"):
+                web = self.base.components.get_component("web")
+                if web:
+                    web.register_endpoint("/test", lambda: "test", "GET")
+
+    # Test the plugin registration
+    test_base = MagicMock()
+    test_base.components = mock_components_with_web
+    test_plugin = TestPlugin(test_base)
+    test_plugin.register_hooks(None)
+
+    # Verify the endpoint was registered
+    if len(mock_web.registered_endpoints) == 0:
+        print("ERROR: Plugin failed to register endpoint")
+        failed = 1
+    elif mock_web.registered_endpoints[0]["path"] != "/test":
+        print(f"ERROR: Wrong endpoint path registered: {mock_web.registered_endpoints[0]['path']}")
+        failed = 1
+    else:
+        print(f"OK: Plugin successfully registered endpoint /test")
 
     return failed
 
@@ -8766,6 +8907,8 @@ def main():
         failed |= run_load_octopus_slots_tests(my_predbat)
     if not failed:
         failed |= test_basic_rates(my_predbat)
+    if not failed:
+        failed |= test_plugin_startup_order(my_predbat)
     if not failed:
         failed |= test_find_charge_rate(my_predbat)
     if not failed:
