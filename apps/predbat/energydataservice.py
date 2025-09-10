@@ -1,6 +1,7 @@
 from datetime import datetime
 from utils import dp4
 
+
 class Energidataservice:
     def fetch_energidataservice_rates(self, entity_id, adjust_key=None):
         """
@@ -54,14 +55,13 @@ class Energidataservice:
 
         return rate_data
 
-    def minute_data_hourly_rates(self, data, forecast_days, midnight_utc, rate_key, from_key,
-                                 adjust_key=None, scale=1.0, use_cent=False):
+    def minute_data_hourly_rates(self, data, forecast_days, midnight_utc, rate_key, from_key, adjust_key=None, scale=1.0, use_cent=False):
         """
         Convert 15-minute rate data into a per-minute dict keyed by minute offset from midnight_utc.
         """
         rate_data = {}
         min_minute = -forecast_days * 24 * 60
-        max_minute =  forecast_days * 24 * 60
+        max_minute = forecast_days * 24 * 60
         interval_minutes = 15  # new feed granularity
 
         for entry in data:
@@ -115,6 +115,6 @@ class Energidataservice:
         if not dt:
             return tariffs.get(s, 0)
         hhmm = f"{dt.hour:02d}:{dt.minute:02d}"  # 08:15
-        h    = str(dt.hour)                      # "8"
-        hh   = f"{dt.hour:02d}"                  # "08"
+        h = str(dt.hour)  # "8"
+        hh = f"{dt.hour:02d}"  # "08"
         return tariffs.get(hhmm, tariffs.get(h, tariffs.get(hh, tariffs.get(s, 0))))
