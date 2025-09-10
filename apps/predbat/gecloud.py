@@ -28,7 +28,7 @@ GE_API_SMART_DEVICE = "smart-device/{uuid}"
 GE_API_SMART_DEVICE_DATA = "smart-device/{uuid}/data"
 GE_API_EVC_DEVICES = "ev-charger"
 GE_API_EVC_DEVICE = "ev-charger/{uuid}"
-GE_API_EVC_DEVICE_DATA = "ev-charger/{uuid}/meter-data?start_time={start_time}&end_time={end_time}&meter_ids[]={meter_ids}"
+GE_API_EVC_DEVICE_DATA = "ev-charger/{uuid}/meter-data?start_time={start_time}&end_time={end_time}&meter_ids[]={meter_ids}&page=1"
 GE_API_EVC_COMMANDS = "ev-charger/{uuid}/commands"
 GE_API_EVC_COMMAND_DATA = "ev-charger/{uuid}/commands/{command}"
 GE_API_EVC_SEND_COMMAND = "ev-charger/{uuid}/commands/{command}"
@@ -731,7 +731,7 @@ class GECloudDirect:
                         serial = self.evc_device[uuid].get("serial", "unknown")
                         self.evc_data[uuid] = await self.async_get_evc_device_data(uuid)
                         self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid)
-                        self.publish_evc_data(serial, self.evc_data[uuid])
+                        await self.publish_evc_data(serial, self.evc_data[uuid])
                 if seconds % 300 == 0:
                     for device in device_list:
                         if seconds == 0 or self.polling_mode or (device == ems_device):
@@ -952,19 +952,26 @@ class GECloudDirect:
         start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_time = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        data = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICE_DATA, uuid=uuid, meter_ids=str(EVC_METER_CHARGER), start_time=start_time, end_time=end_time)
+        # Request all measurands that we want to track
+        measurands = "&".join([f"measurands[]={i}" for i in range(22)])  # All measurands 0-21
+        data = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICE_DATA, uuid=uuid, meter_ids=str(EVC_METER_CHARGER), start_time=start_time, end_time=end_time, measurands=measurands)
         result = {}
         if not data:
             return result
 
-        for meter in data:
-            meter_id = meter.get("meter_id", -1)
+        # Handle the new API response format
+        data_points = data.get("data", []) if isinstance(data, dict) else data
+
+        # Get the latest measurements from the most recent timestamp
+        if data_points:
+            latest_point = data_points[-1]  # Get most recent data point
+            meter_id = latest_point.get("meter_id", -1)
             if meter_id == EVC_METER_CHARGER:
-                for point in meter.get("measurements", []):
-                    measurand = point.get("measurand", None)
+                for measurement in latest_point.get("measurements", []):
+                    measurand = measurement.get("measurand", None)
                     if (measurand is not None) and measurand in EVC_DATA_POINTS:
-                        value = point.get("value", None)
-                        unit = point.get("unit", None)
+                        value = measurement.get("value", None)
+                        unit = measurement.get("unit", None)
                         result[EVC_DATA_POINTS[measurand]] = value
         self.log("EVC device point {}".format(result))
         return result
@@ -1108,12 +1115,12 @@ class GECloudDirect:
         meter = await self.async_get_inverter_data_retry(GE_API_INVERTER_METER, serial)
         return meter
 
-    async def async_get_inverter_data_retry(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command=""):
+    async def async_get_inverter_data_retry(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):
         """
         Retry API call
         """
         for retry in range(RETRIES):
-            data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command)
+            data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command, measurands=measurands)
             if data is not None:
                 break
             await asyncio.sleep(1 * (retry + 1))
@@ -1121,7 +1128,7 @@ class GECloudDirect:
             self.log("Warn: GECloud: Failed to get data from {}".format(endpoint))
         return data
 
-    async def async_get_inverter_data(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command=""):
+    async def async_get_inverter_data(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):
         """
         Basic API call to GE Cloud
         """
@@ -1129,6 +1136,10 @@ class GECloudDirect:
         self.requests_total += 1
 
         url = GE_API_URL + endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
+
+        # Add measurands parameters if provided (for EV charger endpoints)
+        if measurands:
+            url += f"&{measurands}"
         headers = {
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
