@@ -466,7 +466,7 @@ class HAInterface:
 
         def fetch_data(start, end):
             self.log(f"Requesting history for {sensor} from Home Assistant from {start} to {end}")
-            res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)),{"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
+            res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
             return res[0] if res and isinstance(res, list) and len(res) > 0 else []
 
         result = self.history_cache.get_or_fetch(sensor, start, end, fetch_data)

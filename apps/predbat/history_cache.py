@@ -37,8 +37,7 @@ class HistoryCache:
                 pass
         return None
 
-    def get_or_fetch(self, entity_id: str, start_time: datetime, end_time: datetime,
-                     fetch_func) -> Optional[List[Dict]]:
+    def get_or_fetch(self, entity_id: str, start_time: datetime, end_time: datetime, fetch_func) -> Optional[List[Dict]]:
         """Get cached data or fetch missing data using provided function."""
         if not self.enabled:
             return fetch_func(start_time, end_time)
@@ -76,8 +75,7 @@ class HistoryCache:
                     break
 
             # Return filtered cached data
-            return [item for item in cache_entry["data"]
-                    if (ts := self._get_timestamp(item)) and start_time <= ts <= end_time]
+            return [item for item in cache_entry["data"] if (ts := self._get_timestamp(item)) and start_time <= ts <= end_time]
 
     def update_cache(self, entity_id: str, new_data: List[Dict]):
         """Update cache with new data, assuming new_data is chronologically sorted and newer than existing data."""
@@ -103,6 +101,6 @@ class HistoryCache:
             # Update the latest timestamp from the last item in the new data
             if new_data:
                 latest_item = new_data[-1]
-                if (timestamp := self._get_timestamp(latest_item)):
+                if timestamp := self._get_timestamp(latest_item):
                     if cache_entry["latest"] is None or timestamp > cache_entry["latest"]:
                         cache_entry["latest"] = timestamp
