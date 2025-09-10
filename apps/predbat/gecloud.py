@@ -728,7 +728,7 @@ class GECloudDirect:
                         await self.publish_info(device, self.info[device])
                     for uuid in evc_device_list:
                         self.evc_device[uuid] = await self.async_get_evc_device(uuid)
-                        serial = self.evc_device[uuid].get("serial", "unknown")
+                        serial = self.evc_device[uuid].get("serial_number", "unknown")
                         self.evc_data[uuid] = await self.async_get_evc_device_data(uuid)
                         self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid)
                         await self.publish_evc_data(serial, self.evc_data[uuid])
