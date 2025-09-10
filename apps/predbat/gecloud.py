@@ -972,7 +972,7 @@ class GECloudDirect:
                     if (measurand is not None) and measurand in EVC_DATA_POINTS:
                         value = measurement.get("value", None)
                         unit = measurement.get("unit", None)
-                        result[EVC_DATA_POINTS[measurand]] = value
+                        result[measurand] = value
         self.log("EVC device point {}".format(result))
         return result
 
