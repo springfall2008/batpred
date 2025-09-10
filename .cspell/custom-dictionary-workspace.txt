@@ -184,6 +184,7 @@ perc
 percnt
 pitem
 pkwh
+popleft
 postdata
 powerline
 ppdetails
