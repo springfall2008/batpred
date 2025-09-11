@@ -130,6 +130,8 @@ pred_bat:
     - sensor.pv_power_w
   load_power:
     - sensor.load_power
+  grid_power:
+    - sensor.grid_ct
   soc_kw:
     - sensor.bms_actual_kwh_remaining
   soc_percent:
@@ -140,19 +142,6 @@ pred_bat:
     - number.min_soc_on_grid
   battery_min_soc:
     - number.min_soc
-
-  # You will need to create a template sensor that should be negative for import and positive for export
-  # Example template code:
-  #    {% set a = states('sensor.grid_consumption') | float(0) %}
-  #    {% set b = states('sensor.feed_in') | float(0) %}
-  #    {% set result = b - a %}
-  #    {{ result }}
-  # use the resulting template sensor
-  #
-  #grid_power:
-  #  - sensor.template_sensor
-
-
   #reserve:
   #  - number.givtcp_{geserial}_battery_power_reserve
   #inverter_mode:
