@@ -1694,7 +1694,7 @@ INVERTER_DEF = {
         "target_soc_used_for_discharge": False,
     },
     "FoxCloud": {
-        "name" : "FoxCloud",
+        "name": "FoxCloud",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "output_charge_control": "power",
@@ -1719,7 +1719,7 @@ INVERTER_DEF = {
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
-    }
+    },
 }
 
 # Control modes for Solax inverters

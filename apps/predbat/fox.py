@@ -664,10 +664,27 @@ class FoxAPI:
                 self.base.dashboard_item(entity_id_battery_schedule_select + f"_end{n}", state=endTime_str, attributes={"friendly_name": f"Fox {sn} Battery Schedule Time End {n}", "options": OPTIONS_TIME_FULL}, app="fox")
                 self.base.dashboard_item(entity_id_battery_schedule_switch + f"_enable{n}", state="on" if enable else "off", attributes={"friendly_name": f"Fox {sn} Battery Schedule Enable {n}"}, app="fox")
                 self.base.dashboard_item(entity_id_battery_schedule_select + f"_workmode{n}", state=workMode, attributes={"friendly_name": f"Fox {sn} Battery Schedule Work Mode {n}", "options": OPTIONS_WORK_MODE}, app="fox")
-                self.base.dashboard_item(entity_id_battery_schedule_number + f"_fdsoc{n}", state=fdSoc, attributes={"friendly_name": f"Fox {sn} Battery Schedule Force Discharge SOC {n}", "unit_of_measurement": "%", "min": 10, "max": 100, "step": 1}, app="fox")
-                self.base.dashboard_item(entity_id_battery_schedule_number + f"_fdpwr{n}", state=fdPwr, attributes={"friendly_name": f"Fox {sn} Battery Schedule Force Discharge Power {n}", "unit_of_measurement": "W", "min":0, "max": self.fdpwr_max.get(sn, 8000), "step": 100}, app="fox")
-                self.base.dashboard_item(entity_id_battery_schedule_number + f"_maxsoc{n}", state=maxSoc, attributes={"friendly_name": f"Fox {sn} Battery Schedule Force Charge Max SoC {n}", "unit_of_measurement": "%", "min": self.fdsoc_min.get(sn, 10), "max": 100, "step": 1}, app="fox")
-                self.base.dashboard_item(entity_id_battery_schedule_number + f"_minsocongrid{n}", state=minSocOnGrid, attributes={"friendly_name": f"Fox {sn} Battery Schedule Min SoC On Grid {n}", "unit_of_measurement": "%", "min": self.fdsoc_min.get(sn, 10), "max": 100, "step": 1}, app="fox")  
+                self.base.dashboard_item(
+                    entity_id_battery_schedule_number + f"_fdsoc{n}", state=fdSoc, attributes={"friendly_name": f"Fox {sn} Battery Schedule Force Discharge SOC {n}", "unit_of_measurement": "%", "min": 10, "max": 100, "step": 1}, app="fox"
+                )
+                self.base.dashboard_item(
+                    entity_id_battery_schedule_number + f"_fdpwr{n}",
+                    state=fdPwr,
+                    attributes={"friendly_name": f"Fox {sn} Battery Schedule Force Discharge Power {n}", "unit_of_measurement": "W", "min": 0, "max": self.fdpwr_max.get(sn, 8000), "step": 100},
+                    app="fox",
+                )
+                self.base.dashboard_item(
+                    entity_id_battery_schedule_number + f"_maxsoc{n}",
+                    state=maxSoc,
+                    attributes={"friendly_name": f"Fox {sn} Battery Schedule Force Charge Max SoC {n}", "unit_of_measurement": "%", "min": self.fdsoc_min.get(sn, 10), "max": 100, "step": 1},
+                    app="fox",
+                )
+                self.base.dashboard_item(
+                    entity_id_battery_schedule_number + f"_minsocongrid{n}",
+                    state=minSocOnGrid,
+                    attributes={"friendly_name": f"Fox {sn} Battery Schedule Min SoC On Grid {n}", "unit_of_measurement": "%", "min": self.fdsoc_min.get(sn, 10), "max": 100, "step": 1},
+                    app="fox",
+                )
 
     async def write_setting_from_event(self, entity_id, value, is_number=False):
         """
