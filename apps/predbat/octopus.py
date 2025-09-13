@@ -1137,7 +1137,6 @@ class Octopus:
             # Convert Go API format to PredBat format
             for session in sessions:
                 if "session_start" in session and "session_end" in session:
-
                     start_time = datetime.fromisoformat(session["session_start"].replace("Z", "+00:00"))
                     end_time = datetime.fromisoformat(session["session_end"].replace("Z", "+00:00"))
 
@@ -1199,7 +1198,7 @@ class Octopus:
         # The .localize() method makes the naive datetime object aware.
         aware_dt = local_tz.localize(dt)
         return aware_dt
-    
+
     def create_free_session_simple(self, start_hour, end_hour, period, day_num, month):
         """
         Create a free session from basic components (simplified legacy method).
