@@ -216,6 +216,7 @@ class Inverter:
         self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
+        self.inv_has_fox_inverter_mode = INVERTER_DEF[self.inverter_type].get("has_fox_inverter_mode", False)
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -481,7 +482,7 @@ class Inverter:
             self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
             self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
 
-        if not self.inv_has_ge_inverter_mode:
+        if not self.inv_has_ge_inverter_mode and not self.inv_has_fox_inverter_mode:
             self.create_missing_arg("inverter_mode", "Eco")
             self.base.args["inverter_mode"][id] = self.create_entity("inverter_mode", "Eco")
 
@@ -1676,15 +1677,20 @@ class Inverter:
                 self.sleep(30)
             old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
 
-        # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
-        if old_inverter_mode == "Eco (Paused)":
-            old_inverter_mode = "Eco"
+        if not self.inv_has_fox_inverter_mode:
+            # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
+            if old_inverter_mode == "Eco (Paused)":
+                old_inverter_mode = "Eco"
 
-        # Force export or Eco mode?
-        if force_export:
-            new_inverter_mode = "Timed Export"
+        if self.inv_has_fox_inverter_mode:
+            # For fox we only use selfuse as the rest is done by schedule
+            new_inverter_mode = "SelfUse"
         else:
-            new_inverter_mode = "Eco"
+            # Force export or Eco mode?
+            if force_export:
+                new_inverter_mode = "Timed Export"
+            else:
+                new_inverter_mode = "Eco"
 
         # Change inverter mode
         if old_inverter_mode != new_inverter_mode:
@@ -1842,6 +1848,9 @@ class Inverter:
             self.log("Warn: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
             return False
 
+        old_inverter_mode = self.base.get_arg("discharge_inverter_mode", index=self.id, default="ForceExport")
+        new_inverter_mode = "ForceExport"
+
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -1973,6 +1982,9 @@ class Inverter:
 
         # Force export, turn it on after we change the window
         if force_export:
+            if self.inv_has_fox_inverter_mode and old_inverter_mode != new_inverter_mode:
+                self.write_and_poll_option("discharge_inverter_mode", self.base.get_arg("discharge_inverter_mode", indirect=False, index=self.id), new_inverter_mode)
+
             self.adjust_inverter_mode(force_export, changed_start_end=changed_start_end)
             if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
@@ -2287,6 +2299,9 @@ class Inverter:
         else:
             self.log("Warn: Inverter {} unable read charge window as neither REST or discharge_start_time".format(self.id))
 
+        old_inverter_mode = self.base.get_arg("charge_inverter_mode", 'ForceCharge', index=self.id)
+        new_inverter_mode = "ForceCharge"
+
         # Apply clock skew
         charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
         charge_end_time += timedelta(seconds=self.base.inverter_clock_skew_end * 60)
@@ -2362,6 +2377,10 @@ class Inverter:
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
+
+        if self.inv_has_fox_inverter_mode and old_inverter_mode != new_inverter_mode:
+            entity_id = self.base.get_arg("charge_inverter_mode", indirect=False, index=self.id)
+            self.write_and_poll_option("charge_inverter_mode", entity_id, new_inverter_mode)
 
         if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable" or have_disabled:
             # Enable scheduled charge if not turned on
