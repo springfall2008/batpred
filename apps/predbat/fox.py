@@ -13,8 +13,6 @@ import traceback
 import time
 import hashlib
 import requests
-import json
-import sys
 import argparse
 import random
 
