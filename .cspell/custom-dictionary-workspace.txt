@@ -1,4 +1,15 @@
 # Custom Dictionary Words
+starthour
+endhour
+startminute
+endminute
+afci
+datas
+fdsoc
+fdpwr
+minsocongrid
+maxsoc
+workmode
 activepower
 adata
 adbase
