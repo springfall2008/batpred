@@ -1,19 +1,8 @@
 # Custom Dictionary Words
-temperation
-starthour
-endhour
-startminute
-endminute
-afci
-datas
-fdsoc
-fdpwr
-minsocongrid
-maxsoc
-workmode
 activepower
 adata
 adbase
+afci
 AIO
 AIO's
 aiohttp
@@ -59,6 +48,7 @@ dasharray
 datain
 datap
 datapoints
+datas
 dayname
 daynumber
 daysymbol
@@ -79,6 +69,8 @@ elif
 emszzzz
 enctype
 endfor
+endhour
+endminute
 endt
 Energi
 Energidata
@@ -87,6 +79,8 @@ energydataservice
 epod
 euids
 evse
+fdpwr
+fdsoc
 feedin
 fentry
 Fingerbot
@@ -149,6 +143,7 @@ luxpower
 markdownlint
 matplotlib
 maximise
+maxsoc
 mdlrc
 measurand
 measurands
@@ -159,6 +154,7 @@ metricb
 metricmid
 minb
 minmax
+minsocongrid
 minuteb
 Mixergy
 mkdocs
@@ -246,6 +242,8 @@ solisx
 sourcery
 Southwell
 springfall
+starthour
+startminute
 startt
 stdlib
 stepline
@@ -255,6 +253,7 @@ tabindex
 tasmota
 tdata
 tdiff
+temperation
 testname
 thirdparty
 timea
@@ -277,6 +276,7 @@ venv
 Wallbox
 weblink
 welink
+workmode
 writeonly
 xaxis
 xaxistooltip
