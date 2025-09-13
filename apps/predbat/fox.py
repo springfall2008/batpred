@@ -641,18 +641,31 @@ class FoxAPI:
                     startTime_str = f"{startHour:02}:{startMinute:02}:00"
                     endTime_str = f"{endHour:02}:{endMinute:02}:00"
                     workMode = this_schedule.get("workMode", "SelfUse")
+                    fdSoc = this_schedule.get("fdSoc", self.fdsoc_min.get(sn, 10))
+                    fdPwr = this_schedule.get("fdPwr", self.fdpwr_max.get(sn, 8000))
+                    maxSoc = this_schedule.get("maxSoc", 100)
+                    minSocOnGrid = this_schedule.get("minSocOnGrid", self.fdsoc_min.get(sn, 10))
                 else:
                     enable = False
                     workMode = "SelfUse"
                     startTime_str = "00:00:00"
                     endTime_str = "00:00:00"
+                    fdSoc = self.fdsoc_min.get(sn, 10)
+                    fdPwr = self.fdpwr_max.get(sn, 8000)
+                    maxSoc = 100
+                    minSocOnGrid = self.fdsoc_min.get(sn, 10)
 
                 entity_id_battery_schedule_select = entity_name_select + "_" + sn.lower() + "_battery_schedule"
                 entity_id_battery_schedule_switch = entity_name_switch + "_" + sn.lower() + "_battery_schedule"
+                entity_id_battery_schedule_number = entity_name_number + "_" + sn.lower() + "_battery_schedule"
                 self.base.dashboard_item(entity_id_battery_schedule_select + f"_start{n}", state=startTime_str, attributes={"friendly_name": f"Fox {sn} Battery Schedule Time Start {n}", "options": OPTIONS_TIME_FULL}, app="fox")
                 self.base.dashboard_item(entity_id_battery_schedule_select + f"_end{n}", state=endTime_str, attributes={"friendly_name": f"Fox {sn} Battery Schedule Time End {n}", "options": OPTIONS_TIME_FULL}, app="fox")
                 self.base.dashboard_item(entity_id_battery_schedule_switch + f"_enable{n}", state="on" if enable else "off", attributes={"friendly_name": f"Fox {sn} Battery Schedule Enable {n}"}, app="fox")
                 self.base.dashboard_item(entity_id_battery_schedule_select + f"_workmode{n}", state=workMode, attributes={"friendly_name": f"Fox {sn} Battery Schedule Work Mode {n}", "options": OPTIONS_WORK_MODE}, app="fox")
+                self.base.dashboard_item(entity_id_battery_schedule_number + f"_fdsoc{n}", state=fdSoc, attributes={"friendly_name": f"Fox {sn} Battery Schedule Force Discharge SOC {n}", "unit_of_measurement": "%", "min": 10, "max": 100, "step": 1}, app="fox")
+                self.base.dashboard_item(entity_id_battery_schedule_number + f"_fdpwr{n}", state=fdPwr, attributes={"friendly_name": f"Fox {sn} Battery Schedule Force Discharge Power {n}", "unit_of_measurement": "W", "min":0, "max": self.fdpwr_max.get(sn, 8000), "step": 100}, app="fox")
+                self.base.dashboard_item(entity_id_battery_schedule_number + f"_maxsoc{n}", state=maxSoc, attributes={"friendly_name": f"Fox {sn} Battery Schedule Force Charge Max SoC {n}", "unit_of_measurement": "%", "min": self.fdsoc_min.get(sn, 10), "max": 100, "step": 1}, app="fox")
+                self.base.dashboard_item(entity_id_battery_schedule_number + f"_minsocongrid{n}", state=minSocOnGrid, attributes={"friendly_name": f"Fox {sn} Battery Schedule Min SoC On Grid {n}", "unit_of_measurement": "%", "min": self.fdsoc_min.get(sn, 10), "max": 100, "step": 1}, app="fox")  
 
     async def write_setting_from_event(self, entity_id, value, is_number=False):
         """
@@ -793,14 +806,17 @@ class FoxAPI:
         elif "_battery_schedule_workmode" in entity_id:
             this_schedule["workMode"] = value if value in OPTIONS_WORK_MODE else work_mode
             work_mode = this_schedule["workMode"]
+        elif "_battery_schedule_fdsoc" in entity_id:
+            this_schedule["fdSoc"] = value
+        elif "_battery_schedule_fdpwr" in entity_id:
+            this_schedule["fdPwr"] = value
+        elif "_battery_schedule_maxsoc" in entity_id:
+            this_schedule["maxSoc"] = value
+        elif "_battery_schedule_minsocongrid" in entity_id:
+            this_schedule["minSocOnGrid"] = value
         else:
             self.log("Warn: Fox: Unknown battery schedule event for {}".format(entity_id))
             return
-
-        this_schedule["minSocOnGrid"] = self.device_settings.get(serial, {}).get('MinSocOnGrid', {}).get('value', 10)        
-        if work_mode == 'ForceDischarge':
-            this_schedule["fdPwr"] = self.fdpwr_max.get(serial, 8000)
-            this_schedule["fdSoc"] = self.fdsoc_min.get(serial, 10)
 
         current_schedule[id] = this_schedule
         device_scheduler_enabled = self.device_scheduler.get(serial, {}).get('enabled', False)
