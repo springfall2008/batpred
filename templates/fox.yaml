@@ -130,6 +130,8 @@ pred_bat:
     - sensor.pv_power_w
   load_power:
     - sensor.load_power
+  grid_power:
+    - sensor.grid_ct
   soc_kw:
     - sensor.bms_actual_kwh_remaining
   soc_percent:
