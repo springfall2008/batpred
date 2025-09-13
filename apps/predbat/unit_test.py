@@ -1030,6 +1030,7 @@ def test_plugin_startup_order(my_predbat):
 
     return failed
 
+
 def test_inverter_rest_template(
     test_name,
     my_predbat,
@@ -8911,7 +8912,7 @@ def main():
         failed |= run_perf_test(my_predbat)
         if args.perf_only:
             return failed
-        
+
     if not failed:
         failed |= test_plugin_startup_order(my_predbat)
 
