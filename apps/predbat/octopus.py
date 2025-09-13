@@ -1863,6 +1863,7 @@ class Octopus:
         # Octopus saving session
         octopus_saving_slots = []
         octopus_api_direct = self.components.get_component("octopus")
+        print("Octopus_api_direct {}".format(octopus_api_direct))
         if octopus_api_direct or ("octopus_saving_session" in self.args):
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per found
