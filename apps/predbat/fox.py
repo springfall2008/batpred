@@ -353,7 +353,7 @@ class FoxAPI:
         scheduler_times = self.device_scheduler.get(deviceSN, {}).get("groups", [])
         device_scheduler_enabled = self.device_scheduler.get(deviceSN, {}).get("enabled", False)
 
-        # First convert battery times into the same format as scheduer times
+        # First convert battery times into the same format as scheduler times
         # Create an array of 0 - 2 slots containing the battery charge times
 
         minSocOnGrid = self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
