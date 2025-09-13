@@ -45,7 +45,6 @@ from futurerate import FutureRate
 from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST
 from inverter import Inverter
 from compare import Compare
-from web import WebInterface
 from gecloud import GECloudDirect
 from octopus import OctopusAPI
 from components import Components
