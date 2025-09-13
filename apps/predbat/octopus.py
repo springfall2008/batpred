@@ -6,17 +6,19 @@
 
 import requests
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2
 import aiohttp
 import asyncio
 import json
-from datetime import timezone
 import time
 import os
 import yaml
 import traceback
+from config import TIME_FORMAT
+import json
+import pytz
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -1129,17 +1131,12 @@ class Octopus:
 
         # Check if response is JSON (Go API) or HTML (legacy)
         try:
-            import json
-
             data = json.loads(pdata)
             sessions = data.get("sessions", [])
 
             # Convert Go API format to PredBat format
             for session in sessions:
                 if "session_start" in session and "session_end" in session:
-                    from datetime import datetime
-                    from config import TIME_FORMAT
-
                     start_time = datetime.fromisoformat(session["session_start"].replace("Z", "+00:00"))
                     end_time = datetime.fromisoformat(session["session_end"].replace("Z", "+00:00"))
 
@@ -1192,6 +1189,16 @@ class Octopus:
 
         return free_sessions
 
+    def to_aware_tz(self, dt):
+        """
+        Converts a naive datetime object to an aware datetime object
+        using the pytz library.
+        """
+        local_tz = pytz.timezone(self.args.get("timezone", "Europe/London"))
+        # The .localize() method makes the naive datetime object aware.
+        aware_dt = local_tz.localize(dt)
+        return aware_dt
+
     def create_free_session_simple(self, start_hour, end_hour, period, day_num, month):
         """
         Create a free session from basic components (simplified legacy method).
@@ -1218,13 +1225,14 @@ class Octopus:
                 return None
 
             # Create session
-            from datetime import datetime
-            from config import TIME_FORMAT
 
             year = datetime.now().year
             start_time = datetime(year, month_num, day_num, start_hour, 0)
             end_time = datetime(year, month_num, day_num, end_hour, 0)
 
+            # Determine if the specified date is in or out of daylight savings time
+            start_time = self.to_aware_tz(start_time)
+            end_time = self.to_aware_tz(end_time)
             return {"start": start_time.strftime(TIME_FORMAT), "end": end_time.strftime(TIME_FORMAT), "rate": 0.0}
 
         except Exception as e:
@@ -1295,8 +1303,6 @@ class Octopus:
             day = int(re.sub(r"[^\d]", "", day_num))  # Remove "st", "nd", "rd", "th"
 
             # Estimate year (current year or next year if date has passed)
-            from datetime import datetime
-
             now = datetime.now()
             year = now.year
 
@@ -1319,8 +1325,6 @@ class Octopus:
 
                 # If end time crosses midnight, adjust the date
                 if end_hour >= 24:
-                    from datetime import timedelta
-
                     end_time += timedelta(days=1)
 
                 # If the date is in the past, assume it's next year
@@ -1333,8 +1337,6 @@ class Octopus:
                 return None
 
             # Format for PredBat (uses TIME_FORMAT from config.py)
-            from config import TIME_FORMAT
-
             session = {"start": start_time.strftime(TIME_FORMAT), "end": end_time.strftime(TIME_FORMAT), "rate": 0.0}  # Free electricity
 
             return session
@@ -1508,7 +1510,7 @@ class Octopus:
                 except (ValueError, TypeError):
                     start = None
                     end = None
-                    self.log("Warn: Unable to decode Octopus free session start/end time")
+                    self.log("Warn: Unable to decode Octopus free session start/end time {}".format(octopus_free_slot))
 
             if start and end:
                 start_minutes = minutes_to_time(start, self.midnight_utc)
