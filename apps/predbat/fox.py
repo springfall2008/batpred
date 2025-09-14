@@ -233,26 +233,26 @@ class FoxAPI:
         """
         Get real-time data
         [
-            {'datas': 
+            {'datas':
                 [
-                    {'unit': 'kW', 'name': 'PVPower', 'variable': 'pvPower', 'value': 1.8559999999999999}, 
-                    {'unit': 'V', 'name': 'PV1Volt', 'variable': 'pv1Volt', 'value': 372.8}, 
-                    {'unit': 'A', 'name': 'PV1Current', 'variable': 'pv1Current', 'value': 3.0}, 
-                    {'unit': 'kW', 'name': 'PV1Power', 'variable': 'pv1Power', 'value': 1.128}, 
-                    {'unit': 'V', 'name': 'PV2Volt', 'variable': 'pv2Volt', 'value': 236.4}, 
-                    {'unit': 'A', 'name': 'PV2Current', 'variable': 'pv2Current', 'value': 3.0}, 
-                    {'unit': 'kW', 'name': 'PV2Power', 'variable': 'pv2Power', 'value': 0.728}, 
-                    {'unit': 'V', 'name': 'PV3Volt', 'variable': 'pv3Volt', 'value': 3.4}, 
-                    {'unit': 'A', 'name': 'PV3Current', 'variable': 'pv3Current', 'value': 0.0}, 
-                    {'unit': 'kW', 'name': 'PV3Power', 'variable': 'pv3Power', 'value': 0.0}, 
-                    {'unit': 'V', 'name': 'PV4Volt', 'variable': 'pv4Volt', 'value': 0.0}, 
-                    {'unit': 'A', 'name': 'PV4Current', 'variable': 'pv4Current', 'value': 0.0}, 
-                    {'unit': 'kW', 'name': 'PV4Power', 'variable': 'pv4Power', 'value': 0.0}, 
-                    {'unit': 'kW', 'name': 'EPSPower', 'variable': 'epsPower', 'value': 0.0}, 
-                    {'unit': 'A', 'name': 'EPS-RCurrent', 'variable': 'epsCurrentR', 'value': 1.0}, 
-                    {'unit': 'V', 'name': 'EPS-RVolt', 'variable': 'epsVoltR', 'value': 246.4}, 
-                    {'unit': 'kW', 'name': 'EPS-RPower', 'variable': 'epsPowerR', 'value': 0.0}, 
-                    {'unit': 'A', 'name': 'RCurrent', 'variable': 'RCurrent', 'value': 32.3}, 
+                    {'unit': 'kW', 'name': 'PVPower', 'variable': 'pvPower', 'value': 1.8559999999999999},
+                    {'unit': 'V', 'name': 'PV1Volt', 'variable': 'pv1Volt', 'value': 372.8},
+                    {'unit': 'A', 'name': 'PV1Current', 'variable': 'pv1Current', 'value': 3.0},
+                    {'unit': 'kW', 'name': 'PV1Power', 'variable': 'pv1Power', 'value': 1.128},
+                    {'unit': 'V', 'name': 'PV2Volt', 'variable': 'pv2Volt', 'value': 236.4},
+                    {'unit': 'A', 'name': 'PV2Current', 'variable': 'pv2Current', 'value': 3.0},
+                    {'unit': 'kW', 'name': 'PV2Power', 'variable': 'pv2Power', 'value': 0.728},
+                    {'unit': 'V', 'name': 'PV3Volt', 'variable': 'pv3Volt', 'value': 3.4},
+                    {'unit': 'A', 'name': 'PV3Current', 'variable': 'pv3Current', 'value': 0.0},
+                    {'unit': 'kW', 'name': 'PV3Power', 'variable': 'pv3Power', 'value': 0.0},
+                    {'unit': 'V', 'name': 'PV4Volt', 'variable': 'pv4Volt', 'value': 0.0},
+                    {'unit': 'A', 'name': 'PV4Current', 'variable': 'pv4Current', 'value': 0.0},
+                    {'unit': 'kW', 'name': 'PV4Power', 'variable': 'pv4Power', 'value': 0.0},
+                    {'unit': 'kW', 'name': 'EPSPower', 'variable': 'epsPower', 'value': 0.0},
+                    {'unit': 'A', 'name': 'EPS-RCurrent', 'variable': 'epsCurrentR', 'value': 1.0},
+                    {'unit': 'V', 'name': 'EPS-RVolt', 'variable': 'epsVoltR', 'value': 246.4},
+                    {'unit': 'kW', 'name': 'EPS-RPower', 'variable': 'epsPowerR', 'value': 0.0},
+                    {'unit': 'A', 'name': 'RCurrent', 'variable': 'RCurrent', 'value': 32.3},
                     {'unit': 'V', 'name': 'RVolt', 'variable': 'RVolt', 'value': 247.4}
                     ,{'unit': 'Hz', 'name': 'RFreq', 'variable': 'RFreq', 'value': 49.97}
                     ,{'unit': 'kW', 'name': 'RPower', 'variable': 'RPower', 'value': 7.993}
@@ -285,9 +285,9 @@ class FoxAPI:
                     ,{'unit': 'kWh', 'name': 'Total grid electricity consumption', 'variable': 'gridConsumption', 'value': 1712.7}
                     ,{'unit': 'kWh', 'name': 'Load power consumption', 'variable': 'loads', 'value': 4012.8}
                     ,{'unit': 'kWh', 'name': 'The total energy of the feeder', 'variable': 'feedin', 'value': 3730.6}
-                    ,{'unit': 'kWh', 'name': 'Total charge energy', 'variable': 'chargeEnergyToTal', 'value': 1061.0}, 
+                    ,{'unit': 'kWh', 'name': 'Total charge energy', 'variable': 'chargeEnergyToTal', 'value': 1061.0},
                     {'unit': 'kWh', 'name': 'Total discharge energy', 'variable': 'dischargeEnergyToTal', 'value': 1532.6}
-                ], 
+                ],
                 'time': '2025-09-14 18:43:09 BST+0100', 'deviceSN': '60KE8020479C034'}
         ]
         """
@@ -1007,7 +1007,7 @@ class FoxAPI:
         if not direction:
             self.log("Warn: Fox: Event, unknown direction for {}: {}".format(entity_id, sn))
             return
-        
+
         if serial not in self.local_schedule:
             self.local_schedule[serial] = {}
         if direction not in self.local_schedule[serial]:
