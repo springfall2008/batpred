@@ -209,6 +209,7 @@ predbatt
 Predheat
 psum
 pvbat
+pvpower
 pwindow
 pylint
 pyproject
