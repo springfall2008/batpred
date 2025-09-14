@@ -854,8 +854,8 @@ class Inverter:
         if self.rest_api:
             self.rest_data = self.rest_readData()
 
-        self.charge_rate_now = self.get_current_charge_rate()
-        self.discharge_rate_now = self.get_current_discharge_rate()
+        self.charge_rate_now = self.get_current_charge_rate() / MINUTE_WATT
+        self.discharge_rate_now = self.get_current_discharge_rate() / MINUTE_WATT
 
         if self.rest_data:
             self.charge_enable_time = self.rest_data["Control"]["Enable_Charge_Schedule"] == "enable"
