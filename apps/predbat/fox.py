@@ -1024,7 +1024,7 @@ class FoxAPI:
         self.base.args["battery_rate_max"] = [f"sensor.predbat_fox_{device}_battery_rate_max" for device in batteries]
         self.base.args["battery_power"] = [f"sensor.predbat_fox_{device}_invbatpower" for device in batteries]
         self.base.args["grid_power"] = [f"sensor.predbat_fox_{device}_gridconsumptionpower" for device in batteries]
-        self.base.args["pv_power"] = [f"sensor.predbat_fox_{device}_generationpower" for device in pvs]
+        self.base.args["pv_power"] = [f"sensor.predbat_fox_{device}_pvpower" for device in pvs]
         self.base.args["load_power"] = [f"sensor.predbat_fox_{device}_loadspower" for device in batteries]
         self.base.args["soc_percent"] = [f"sensor.predbat_fox_{device}_soc" for device in batteries]
         self.base.args["soc_max"] = [f"sensor.predbat_fox_{device}_battery_capacity" for device in batteries]
