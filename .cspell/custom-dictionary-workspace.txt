@@ -19,6 +19,7 @@ autopep
 autoupdate
 Basepath
 Batpred
+battemperature
 batteri
 batteryb
 bierner
@@ -79,6 +80,7 @@ energydataservice
 epod
 euids
 evse
+exportlimit
 fdpwr
 fdsoc
 feedin
@@ -92,11 +94,14 @@ foxess
 futurerate
 gecloud
 gekey
+generationpower
 geserial
 geseriale
 Ginlong
 GivEnergy
 givtcp
+gridconsumption
+gridconsumptionpower
 growatt
 HACS
 hadashboard
@@ -135,6 +140,7 @@ kvar
 kvarh
 kwhb
 linebreak
+loadspower
 localfolder
 lockstep
 logdata
@@ -203,6 +209,7 @@ predbatt
 Predheat
 psum
 pvbat
+pvpower
 pwindow
 pylint
 pyproject

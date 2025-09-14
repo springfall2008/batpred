@@ -98,6 +98,11 @@ COMPONENT_LIST = {
                 "required": True,
                 "config": "fox_key",
             },
+            "automatic": {
+                "required": False,
+                "default": False,
+                "config": "fox_automatic",
+            },
         },
     },
 }
