@@ -1,4 +1,10 @@
 # Custom Dictionary Words
+gridconsumption
+gridconsumptionpower
+generationpower
+loadspower
+battemperature
+exportlimit
 activepower
 adata
 adbase
