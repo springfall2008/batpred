@@ -134,6 +134,9 @@ class HAInterface:
             self.log("Info: Starting HA interface")
             self.websocket_active = True
             await self.socketLoop()
+        else:
+            while not self.stop_thread:
+                await asyncio.sleep(1)
 
     async def stop(self):
         self.stop_thread = True
