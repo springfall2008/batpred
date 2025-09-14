@@ -36,11 +36,12 @@ fox_attribute_table = {"mode": {}}
 class FoxAPI:
     """Fox API client."""
 
-    def __init__(self, key, base):
+    def __init__(self, key, automatic, base):
         self.base = base
         self.log = base.log
         self.key = key
         self.api_started = False
+        self.automatic = automatic
         self.stop_api = False
         self.failures_total = 0
         self.device_list = []
@@ -99,6 +100,9 @@ class FoxAPI:
                             await self.get_battery_charging_time(sn)
                             await self.get_scheduler(sn)
                             await self.compute_schedule(sn)
+
+                if first and self.automatic:
+                    await self.automatic_config()
 
                 if first or (count_seconds % (5 * 60)) == 0:
                     for device in self.device_list:
@@ -489,7 +493,7 @@ class FoxAPI:
                     value = local_schedule.get(direction, {}).get(attribute, "00:00:00")
                     if value not in OPTIONS_TIME_FULL:
                         value = "00:00:00"
-                    self.base.dashboard_item(entity_id_select, state=value, attributes={"options": OPTIONS_TIME_FULL, "friendly_name": "{} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:clock-outline"}, app="fox")
+                    self.base.dashboard_item(entity_id_select, state=value, attributes={"options": OPTIONS_TIME_FULL, "friendly_name": "Fox {} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:clock-outline"}, app="fox")
                 elif attribute in ["soc", "power"]:
                     value = local_schedule.get(direction, {}).get(attribute, 0)
                     try:
@@ -497,13 +501,13 @@ class FoxAPI:
                     except ValueError:
                         value = 0
                     if attribute == "soc":
-                        self.base.dashboard_item(entity_id_number,  state=value, attributes={"min": 10, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "{} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:gauge"}, app="fox")
+                        self.base.dashboard_item(entity_id_number,  state=value, attributes={"min": 10, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "Fox {} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:gauge"}, app="fox")
                     elif attribute == "power":
                         max_power = self.fdpwr_max.get(deviceSN, 8000)
-                        self.base.dashboard_item(entity_id_number,  state=value, attributes={"min": 0, "max": max_power, "step": 100, "unit_of_measurement": "W", "friendly_name": "{} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:flash"}, app="fox")
+                        self.base.dashboard_item(entity_id_number,  state=value, attributes={"min": 0, "max": max_power, "step": 100, "unit_of_measurement": "W", "friendly_name": "Fox {} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:flash"}, app="fox")
                 elif attribute == "enable":
                     value = local_schedule.get(direction, {}).get(attribute, 0)
-                    self.base.dashboard_item(entity_id_switch,  state="on" if value else "off", attributes={"friendly_name": "{} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:check-circle-outline"}, app="fox")
+                    self.base.dashboard_item(entity_id_switch,  state="on" if value else "off", attributes={"friendly_name": "Fox {} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:check-circle-outline"}, app="fox")
 
     async def get_schedule_settings_ha(self, deviceSN):
         """
@@ -696,7 +700,8 @@ class FoxAPI:
         entity_name_select = "select.predbat_fox"
         entity_name_switch = "switch.predbat_fox"
         entity_name_binary_sensor = "binary_sensor.predbat_fox"
-        for sn in self.device_values:
+        for device in self.device_list:
+            sn = device.get("deviceSN", None)
             detail = self.device_detail.get(sn, {})
             hasPV = detail.get("hasPV", False)
             hasBattery = detail.get("hasBattery", False)
@@ -731,8 +736,9 @@ class FoxAPI:
             self.base.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_rate_max", state=battery_rate_max, attributes={"friendly_name": f"Fox {sn} Battery Max Rate", "unit_of_measurement": "W"}, app="fox")
 
             reserve = int(self.fdsoc_min.get(sn, 10))
-            self.base.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_reserve", state=reserve, attributes={"friendly_name": f"Fox {sn} Battery Reserve", "unit_of_measurement": "%"}, app="fox")
+            self.base.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_reserve_min", state=reserve, attributes={"friendly_name": f"Fox {sn} Battery Reserve Min", "unit_of_measurement": "%"}, app="fox")
 
+        for sn in self.device_values:
             for item_name in self.device_values[sn]:
                 item = self.device_values[sn][item_name]
                 state = item.get("value", None)
@@ -937,6 +943,7 @@ class FoxAPI:
 
                 start_hour, start_minute = self.time_string_to_hour_minute(start_time, 0, 0)
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
+                minSocOnGrid = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
 
                 if direction == "charge":
                     new_schedule.append({
@@ -949,7 +956,7 @@ class FoxAPI:
                         "fdSoc": 100,
                         "maxSoc": soc,
                         "fdPwr": self.fdpwr_max.get(serial, 8000),
-                        "minSocOnGrid": self.fdsoc_min.get(serial, 10)
+                        "minSocOnGrid": minSocOnGrid
                     })
                 elif direction == "discharge":
                     new_schedule.append({
@@ -962,7 +969,7 @@ class FoxAPI:
                         "fdSoc": soc,
                         "maxSoc": 100,
                         "fdPwr": power,
-                        "minSocOnGrid": self.fdsoc_min.get(serial, 10)
+                        "minSocOnGrid": minSocOnGrid
                     })
 
         result = await self.set_scheduler(serial, new_schedule)
@@ -971,6 +978,60 @@ class FoxAPI:
             self.device_scheduler[serial]["enabled"] = 1 if new_schedule else 0
             await self.publish_data()
 
+    async def automatic_config(self):
+        """
+        Automatically configure the base args based on the devices found
+        """
+
+        batteries = []
+        pvs = []
+        for device in self.device_list:
+            sn = device.get("deviceSN", None)
+            detail = self.device_detail.get(sn, {})
+            hasPV = detail.get("hasPV", False)
+            hasBattery = detail.get("hasBattery", False)
+            capacity = detail.get("capacity", 0) * 1000.0
+            hasScheduler = detail.get("function", {}).get("scheduler", False)
+
+            if hasBattery and hasScheduler and capacity > 0:
+                batteries.append(sn.lower())
+            if hasPV:
+                pvs.append(sn.lower())
+
+            print("SN {} hasBattery {} hasScheduler {} capacity {}".format(sn, hasBattery, hasScheduler, capacity))
+
+        print("Found {} batteries and {} PVs".format(len(batteries), len(pvs)))
+
+        num_inverters = len(batteries)
+        self.base.args["inverter_type"] = ["FoxCloud" for _ in range(num_inverters)]
+        self.base.args["num_inverters"] = num_inverters
+        self.base.args["inverter_mode"] = [f"select.predbat_fox_{device}_setting_workmode" for device in batteries]
+        self.base.args["load_today"] = [f"sensor.predbat_fox_{device}_loads" for device in batteries]
+        self.base.args["import_today"] = [f"sensor.predbat_fox_{device}_gridconsumption" for device in batteries]
+        self.base.args["export_today"] = [f"sensor.predbat_fox_{device}_feedin" for device in batteries]
+        self.base.args["pv_today"] = [f"sensor.predbat_fox_{device}_generation" for device in pvs]
+        self.base.args["battery_rate_max"] = [f"sensor.predbat_fox_{device}_battery_rate_max" for device in batteries]
+        self.base.args["battery_power"] = [f"sensor.predbat_fox_{device}_invbatpower" for device in batteries]
+        self.base.args["grid_power"] = [f"sensor.predbat_fox_{device}_gridconsumptionpower" for device in batteries]
+        self.base.args["pv_power"] = [f"sensor.predbat_fox_{device}_generationpower" for device in pvs]
+        self.base.args["load_power"] = [f"sensor.predbat_fox_{device}_loadspower" for device in batteries]
+        self.base.args["soc_percent"] = [f"sensor.predbat_fox_{device}_soc" for device in batteries]
+        self.base.args["soc_max"] = [f"sensor.predbat_fox_{device}_battery_capacity" for device in batteries]
+        self.base.args["reserve"] = [f"sensor.predbat_fox_{device}_battery_minsocongrid" for device in batteries]
+        self.base.args["battery_min_soc"] = [f"sensor.predbat_fox_{device}_battery_reserve_min" for device in batteries]
+        self.base.args["charge_start_time"] = [f"select.predbat_fox_{device}_battery_schedule_charge_start_time" for device in batteries]
+        self.base.args["charge_end_time"] = [f"select.predbat_fox_{device}_battery_schedule_charge_end_time" for device in batteries]
+        self.base.args["charge_limit"] = [f"number.predbat_fox_{device}_battery_schedule_charge_soc" for device in batteries]
+        self.base.args["scheduled_charge_enable"] = [f"switch.predbat_fox_{device}_battery_schedule_charge_enable" for device in batteries]
+        self.base.args["charge_rate"] = [f"number.predbat_fox_{device}_battery_schedule_charge_power" for device in batteries]
+        self.base.args["scheduled_discharge_enable"] = [f"switch.predbat_fox_{device}_battery_schedule_discharge_enable" for device in batteries]
+        self.base.args["discharge_target_soc"] = [f"number.predbat_fox_{device}_battery_schedule_discharge_soc" for device in batteries]
+        self.base.args["discharge_start_time"] = [f"select.predbat_fox_{device}_battery_schedule_discharge_start_time" for device in batteries]
+        self.base.args["discharge_end_time"] = [f"select.predbat_fox_{device}_battery_schedule_discharge_end_time" for device in batteries]
+        self.base.args["discharge_rate"] = [f"number.predbat_fox_{device}_battery_schedule_discharge_power" for device in batteries]
+        self.base.args["battery_temperature"] = [f"sensor.predbat_fox_{device}_battemperature" for device in batteries]
+        self.base.args["inverter_limit"] = [f"sensor.predbat_fox_{device}_inverter_capacity" for device in batteries]
+        self.base.args["export_limit"] = [f"number.predbat_fox_{device}_setting_exportlimit" for device in batteries]
 class MockBase:
     """Mock base class for testing"""
 

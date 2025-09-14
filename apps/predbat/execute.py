@@ -378,6 +378,9 @@ class Execute:
                                     if resetDischarge:
                                         inverter.adjust_discharge_rate(0)
                                         resetDischarge = False
+                                    if self.set_reserve_enable:
+                                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                        resetReserve = False
                                 carHolding = True
                                 self.log("Disabling battery discharge while the car {} is charging".format(car_n))
                                 if "Hold for car" not in status:
@@ -391,11 +394,16 @@ class Execute:
             boostHolding = False
             if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Exporting", "Charging"]:
                 if inverter.inv_has_timed_pause:
-                    inverter.adjust_pause_mode(pause_discharge=True)
-                    resetPause = False
+                    if resetPause:
+                        inverter.adjust_pause_mode(pause_discharge=True)
+                        resetPause = False
                 else:
-                    inverter.adjust_discharge_rate(0)
-                    resetDischarge = False
+                    if resetDischarge:
+                        inverter.adjust_discharge_rate(0)
+                        resetDischarge = False
+                    if self.set_reserve_enable:
+                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                        resetReserve = False
                 boostHolding = True
                 self.log("Disabling battery discharge while iBoost is running")
                 if "Hold for iBoost" not in status:
