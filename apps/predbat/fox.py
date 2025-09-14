@@ -104,12 +104,17 @@ class FoxAPI:
                 if first and self.automatic:
                     await self.automatic_config()
 
+                if first or (count_seconds % (10 * 60)) == 0:
+                    for device in self.device_list:
+                        sn = device.get("deviceSN", None)
+                        if sn:
+                            await self.get_device_history(sn)
+
                 if first or (count_seconds % (5 * 60)) == 0:
                     for device in self.device_list:
                         sn = device.get("deviceSN", None)
                         if sn:
-                            # await self.get_device_power_generation(sn)
-                            await self.get_device_history(sn)
+                            await self.get_real_time_data(sn)
                     await self.publish_data()
 
                 if not self.api_started:
@@ -223,6 +228,88 @@ class FoxAPI:
                     variable["name"] = name
                     available_data[variable_id] = variable
             self.available_variables = available_data
+
+    async def get_real_time_data(self, deviceSN):
+        """
+        Get real-time data
+        [
+            {'datas': 
+                [
+                    {'unit': 'kW', 'name': 'PVPower', 'variable': 'pvPower', 'value': 1.8559999999999999}, 
+                    {'unit': 'V', 'name': 'PV1Volt', 'variable': 'pv1Volt', 'value': 372.8}, 
+                    {'unit': 'A', 'name': 'PV1Current', 'variable': 'pv1Current', 'value': 3.0}, 
+                    {'unit': 'kW', 'name': 'PV1Power', 'variable': 'pv1Power', 'value': 1.128}, 
+                    {'unit': 'V', 'name': 'PV2Volt', 'variable': 'pv2Volt', 'value': 236.4}, 
+                    {'unit': 'A', 'name': 'PV2Current', 'variable': 'pv2Current', 'value': 3.0}, 
+                    {'unit': 'kW', 'name': 'PV2Power', 'variable': 'pv2Power', 'value': 0.728}, 
+                    {'unit': 'V', 'name': 'PV3Volt', 'variable': 'pv3Volt', 'value': 3.4}, 
+                    {'unit': 'A', 'name': 'PV3Current', 'variable': 'pv3Current', 'value': 0.0}, 
+                    {'unit': 'kW', 'name': 'PV3Power', 'variable': 'pv3Power', 'value': 0.0}, 
+                    {'unit': 'V', 'name': 'PV4Volt', 'variable': 'pv4Volt', 'value': 0.0}, 
+                    {'unit': 'A', 'name': 'PV4Current', 'variable': 'pv4Current', 'value': 0.0}, 
+                    {'unit': 'kW', 'name': 'PV4Power', 'variable': 'pv4Power', 'value': 0.0}, 
+                    {'unit': 'kW', 'name': 'EPSPower', 'variable': 'epsPower', 'value': 0.0}, 
+                    {'unit': 'A', 'name': 'EPS-RCurrent', 'variable': 'epsCurrentR', 'value': 1.0}, 
+                    {'unit': 'V', 'name': 'EPS-RVolt', 'variable': 'epsVoltR', 'value': 246.4}, 
+                    {'unit': 'kW', 'name': 'EPS-RPower', 'variable': 'epsPowerR', 'value': 0.0}, 
+                    {'unit': 'A', 'name': 'RCurrent', 'variable': 'RCurrent', 'value': 32.3}, 
+                    {'unit': 'V', 'name': 'RVolt', 'variable': 'RVolt', 'value': 247.4}
+                    ,{'unit': 'Hz', 'name': 'RFreq', 'variable': 'RFreq', 'value': 49.97}
+                    ,{'unit': 'kW', 'name': 'RPower', 'variable': 'RPower', 'value': 7.993}
+                    ,{'unit': '℃', 'name': 'AmbientTemperature', 'variable': 'ambientTemperation', 'value': 33.5}
+                    ,{'unit': '℃', 'name': 'InvTemperation', 'variable': 'invTemperation', 'value': 29.7}
+                    ,{'unit': '℃', 'name': 'batTemperature', 'variable': 'batTemperature', 'value': 33.6}
+                    ,{'unit': 'kW', 'name': 'Load Power', 'variable': 'loadsPower', 'value': 17.046}
+                    ,{'unit': 'kW', 'name': 'Output Power', 'variable': 'generationPower', 'value': 7.993}
+                    ,{'unit': 'kW', 'name': 'Feed-in Power', 'variable': 'feedinPower', 'value': 0.0}
+                    ,{'unit': 'kW', 'name': 'GridConsumption Power', 'variable': 'gridConsumptionPower', 'value': 9.053}
+                    ,{'unit': 'V', 'name': 'InvBatVolt', 'variable': 'invBatVolt', 'value': 400.6}
+                    ,{'unit': 'A', 'name': 'InvBatCurrent', 'variable': 'invBatCurrent', 'value': 16.4}
+                    ,{'unit': 'kW', 'name': 'invBatPower', 'variable': 'invBatPower', 'value': 6.604}
+                    ,{'unit': 'kW', 'name': 'Charge Power', 'variable': 'batChargePower', 'value': 0.0}
+                    ,{'unit': 'kW', 'name': 'Discharge Power', 'variable': 'batDischargePower', 'value': 6.604}
+                    ,{'unit': 'V', 'name': 'BatVolt', 'variable': 'batVolt', 'value': 399.1}
+                    ,{'unit': 'A', 'name': 'BatCurrent', 'variable': 'batCurrent', 'value': 3.9}
+                    ,{'unit': 'kW', 'name': 'MeterPower', 'variable': 'meterPower', 'value': 9.053}
+                    ,{'unit': 'kW', 'name': 'Meter2Power', 'variable': 'meterPower2', 'value': 0.0}
+                    ,{'unit': '%', 'name': 'SoC', 'variable': 'SoC', 'value': 26.0}
+                    ,{'unit': 'kWh', 'name': 'Cumulative power generation', 'variable': 'generation', 'value': 6133.3}
+                    ,{'unit': '0.01kWh', 'name': 'Battery Residual Energy', 'variable': 'ResidualEnergy', 'value': 10.34}
+                    ,{'name': 'Running State', 'variable': 'runningState', 'value': '163'}
+                    ,{'name': 'Battery Status', 'variable': 'batStatus', 'value': '1'}
+                    ,{'name': 'Battery Status Name', 'variable': 'batStatusV2', 'value': 'Charge'}
+                    ,{'name': 'The current error code is reported', 'variable': 'currentFault', 'value': ''}
+                    ,{'name': 'The number of errors', 'variable': 'currentFaultCount', 'value': '0'}
+                    ,{'unit': 'kWh', 'name': 'Battery throughput', 'variable': 'energyThroughput', 'value': 2255.872}
+                    ,{'unit': '%', 'name': 'SOH', 'variable': 'SOH', 'value': 99.0}
+                    ,{'unit': 'kWh', 'name': 'Total grid electricity consumption', 'variable': 'gridConsumption', 'value': 1712.7}
+                    ,{'unit': 'kWh', 'name': 'Load power consumption', 'variable': 'loads', 'value': 4012.8}
+                    ,{'unit': 'kWh', 'name': 'The total energy of the feeder', 'variable': 'feedin', 'value': 3730.6}
+                    ,{'unit': 'kWh', 'name': 'Total charge energy', 'variable': 'chargeEnergyToTal', 'value': 1061.0}, 
+                    {'unit': 'kWh', 'name': 'Total discharge energy', 'variable': 'dischargeEnergyToTal', 'value': 1532.6}
+                ], 
+                'time': '2025-09-14 18:43:09 BST+0100', 'deviceSN': '60KE8020479C034'}
+        ]
+        """
+        GET_REAL_TIME_DATA = "/op/v1/device/real/query"
+        query = {"lang": FOX_LANG, "sns": [deviceSN]}
+        result = await self.request_get(GET_REAL_TIME_DATA, post=True, datain=query)
+        if result and isinstance(result, list):
+            for item in result:
+                if "datas" in item:
+                    timestamp = item.get("time", "")
+                    datas = item["datas"]
+                    for data_item in datas:
+                        unit = data_item.get("unit", "")
+                        name = data_item.get("name", "")
+                        variable = data_item.get("variable", "")
+                        value = data_item.get("value", None)
+                        if unit == "℃":
+                            unit = "°C"
+                        if name and (value is not None):
+                            if deviceSN not in self.device_values:
+                                self.device_values[deviceSN] = {}
+                            self.device_values[deviceSN][variable] = {"timestamp": timestamp, "value": value, "unit": unit, "name": name}
 
     async def get_device_history(self, deviceSN):
         """
@@ -920,30 +1007,51 @@ class FoxAPI:
         if not direction:
             self.log("Warn: Fox: Event, unknown direction for {}: {}".format(entity_id, sn))
             return
+        
+        if serial not in self.local_schedule:
+            self.local_schedule[serial] = {}
+        if direction not in self.local_schedule[serial]:
+            self.local_schedule[serial][direction] = {}
 
         if "_soc" in entity_id:
             try:
                 value = int(value)
             except ValueError:
                 value = 100 if direction == "charge" else self.fdsoc_min.get(serial, 10)
+            if value == self.local_schedule[serial][direction].get("soc", None):
+                # Skip null change
+                return
             self.local_schedule[serial][direction]["soc"] = value
         elif "_power" in entity_id:
             try:
                 value = int(value)
             except ValueError:
                 value = self.fdpwr_max.get(serial, 8000)
+            if value == self.local_schedule[serial][direction].get("power", None):
+                # Skip null change
+                return
             self.local_schedule[serial][direction]["power"] = value
         elif "_start_time" in entity_id:
             if value not in OPTIONS_TIME_FULL:
                 value = "00:00:00"
+            if value == self.local_schedule[serial][direction].get("start_time", None):
+                # Skip null change
+                return
             self.local_schedule[serial][direction]["start_time"] = value
         elif "_end_time" in entity_id:
             if value not in OPTIONS_TIME_FULL:
                 value = "00:00:00"
+            if value == self.local_schedule[serial][direction].get("end_time", None):
+                # Skip null change
+                return
             self.local_schedule[serial][direction]["end_time"] = value
         elif "_enable" in entity_id:
             enable = True if self.local_schedule[serial][direction].get("enable", 0) else False
-            self.local_schedule[serial][direction]["enable"] = 1 if self.apply_service_to_toggle(enable, value) else 0
+            new_enable = 1 if self.apply_service_to_toggle(enable, value) else 0
+            if new_enable == self.local_schedule[serial][direction].get("enable", None):
+                # Skip null change
+                return
+            self.local_schedule[serial][direction]["enable"] = new_enable
         else:
             self.log("Warn: Fox: Event, unknown attribute for {}: {}".format(entity_id, serial))
             return
@@ -963,6 +1071,15 @@ class FoxAPI:
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
                 minSocOnGrid = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
 
+                start_minutes = start_hour * 60 + start_minute
+                end_minutes = end_hour * 60 + end_minute
+                minutes_now = datetime.now().hour * 60 + datetime.now().minute
+                if start_minutes <= minutes_now and end_minutes > minutes_now + 1:
+                    # Schedule seems to not take effect if start time is in the past, so move it forward
+                    start_minutes = minutes_now + 1
+                    start_hour = start_minutes // 60
+                    start_minute = start_minutes % 60
+
                 if direction == "charge":
                     new_schedule.append(
                         {
@@ -975,7 +1092,7 @@ class FoxAPI:
                             "fdSoc": 100,
                             "maxSoc": soc,
                             "fdPwr": self.fdpwr_max.get(serial, 8000),
-                            "minSocOnGrid": minSocOnGrid,
+                            "minSocOnGrid": soc,
                         }
                     )
                 elif direction == "discharge":
@@ -1009,9 +1126,7 @@ class FoxAPI:
             if hasPV:
                 pvs.append(sn.lower())
 
-            print("SN {} hasBattery {} hasScheduler {} capacity {}".format(sn, hasBattery, hasScheduler, capacity))
-
-        print("Found {} batteries and {} PVs".format(len(batteries), len(pvs)))
+        self.log("Fox API: Found {} batteries and {} PVs".format(len(batteries), len(pvs)))
 
         num_inverters = len(batteries)
         self.base.args["inverter_type"] = ["FoxCloud" for _ in range(num_inverters)]
@@ -1024,6 +1139,7 @@ class FoxAPI:
         self.base.args["battery_rate_max"] = [f"sensor.predbat_fox_{device}_battery_rate_max" for device in batteries]
         self.base.args["battery_power"] = [f"sensor.predbat_fox_{device}_invbatpower" for device in batteries]
         self.base.args["grid_power"] = [f"sensor.predbat_fox_{device}_gridconsumptionpower" for device in batteries]
+        self.base.args["grid_power_invert"] = [True for device in batteries]
         self.base.args["pv_power"] = [f"sensor.predbat_fox_{device}_pvpower" for device in pvs]
         self.base.args["load_power"] = [f"sensor.predbat_fox_{device}_loadspower" for device in batteries]
         self.base.args["soc_percent"] = [f"sensor.predbat_fox_{device}_soc" for device in batteries]
