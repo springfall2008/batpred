@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Output data - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Output data";
+        var mkdocs_page_input_path = "output-data.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Predbat automation API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Output data</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#web-interface">Web interface</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#displaying-output-data">Displaying output data</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#creating-a-simple-predbat-dashboard">Creating a simple Predbat dashboard</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#creating-a-compact-predbat-control-dashboard">Creating a compact Predbat control dashboard</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#viewing-the-predbat-plan">Viewing the Predbat plan</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#graphing-the-predbat-predictions">Graphing the Predbat predictions</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#basic-status">Basic status</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#baseline-data">Baseline data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#pv-10-baseline-data">PV 10% Baseline data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#best-prediction-data">Best Prediction data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#best-pv-10-prediction-data">Best PV 10% Prediction data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#in-day-load-adjustment-data">In-day load adjustment data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#today-energy-data">'Today' energy data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#battery-status">Battery status</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#export-trigger">Export trigger</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#prediction-window">Prediction window</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#energy-rate-data">Energy rate data</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#low-rate-import-entities">Low-rate import entities</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#high-rate-export-entities">High-rate export entities</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#other-rate-entities">Other rate entities</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#inverter-data">Inverter data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#car-data">Car data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#iboost-solar-diverter-data">iBoost Solar Diverter data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#carbon-data">Carbon data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#cost-saving-data">Cost saving data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#solar-forecast-data">Solar forecast data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#dummy-inverter-sensors">Dummy inverter sensors</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#alert-data">Alert data</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#predbat-logfile">Predbat Logfile</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#automated-monitoring-that-predbat-and-givtcp-are-running-ok">Automated monitoring that Predbat and GivTCP are running OK</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#givtcp-activity-monitor">GivTCP activity monitor</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#predbat-error-monitor">Predbat error monitor</a>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Viewing Predbat data</li>
+      <li class="breadcrumb-item active">Output data</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="output-data">Output data</h1>
+<p>Each time Predbat runs it outputs a lot of information about the current performance of your solar/battery system and the predicted load, PV, cost, CO2, car charging, etc.</p>
+<p>This section of the documentation explains the different output and logging data that Predbat produces and gives an overview of how to display that information within Home Assistant.
+There can never be a single Predbat dashboard that suits every user, so instead Predbat gives a starter set of displays that can be adapted to your individual needs.</p>
+<h2 id="web-interface">Web interface</h2>
+<p>The <a href="../web-interface/">Predbat Web Interface</a> provides an easy to use way to see and change different aspects of your Predbat system including view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles.</p>
+<p><img alt="image" src="../images/web-interface-plan-view.png" /></p>
+<h2 id="displaying-output-data">Displaying output data</h2>
+<p>Each Predbat configuration item is named <em>input_number.predbat_xxx</em>, <em>switch.predbat_yyy</em> or <em>select.predbat_zzz</em> depending on the control type.</p>
+<h3 id="creating-a-simple-predbat-dashboard">Creating a simple Predbat dashboard</h3>
+<p>Each time Predbat runs it auto-generates a dashboard with the filename <strong>predbat_dashboard.yaml</strong> that can be used as a starter for your own Predbat dashboard.
+Depending on how you installed Predbat this predbat_dashboard.yaml file will be held in one of three different directories in Home Assistant:</p>
+<ul>
+<li>
+<p>if you have used the <a href="../install/#predbat-add-on-install">Predbat add-on installation method</a>, it will be in the directory <code>/addon_configs/6adb4f0d_predbat/</code>,</p>
+</li>
+<li>
+<p>if the <a href="../install/#appdaemon-predbat-combined-install">combined AppDaemon/Predbat add-on installation method</a> was used, it's in <code>/addon_configs/46f69597_appdaemon-predbat/</code>,
+or</p>
+</li>
+<li>
+<p>with the <a href="../install/#predbat-installation-into-appdaemon">HACS, Appdaemon add-on then Predbat installation method</a>, it's <code>/config/appdaemon/apps/batpred/config/</code>.</p>
+</li>
+</ul>
+<p>You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-ons) to open
+the predbat_dashboard.yaml file - see <a href="../install/#editing-configuration-files-in-home-assistant">editing configuration files within Home Assistant</a> if you need to install an editor.</p>
+<p>Once opened, select and copy all the contents of the predbat_dashboard.yaml file and add the contents to a new dashboard page:</p>
+<ul>
+<li>
+<p>Go to System/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'</p>
+</li>
+<li>
+<p>Click the pencil icon in the top right corner, click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete the template card configuration and paste the contents of the predbat_dashboard.yaml file copied earlier, then 'Save'.</p>
+</li>
+</ul>
+<p>This will give you a simple Predbat control and output dashboard that you can then resequence and customise as you wish.</p>
+<p><img alt="image" src="../images/output_data_dashboard_sample.png" /></p>
+<h3 id="creating-a-compact-predbat-control-dashboard">Creating a compact Predbat control dashboard</h3>
+<p>You can also create a dashboard page that's dynamically generated to automatically include all the Predbat control and output entities,
+so when new entities are added in future Predbat releases, you don't have to edit the dashboard.</p>
+<p>Firstly you need to <a href="../install/#hacs-install">install HACS</a> if it isn't already installed, and then install two HACS front-end components:</p>
+<ul>
+<li>Auto Entities (<a href="https://github.com/thomasloven/lovelace-auto-entities">https://github.com/thomasloven/lovelace-auto-entities</a>)
+automatically generates a list of entities that match a wildcard expression</li>
+<li>Lovelace Collapsable Cards (<a href="https://github.com/RossMcMillan92/lovelace-collapsable-cards">https://github.com/RossMcMillan92/lovelace-collapsable-cards</a>)
+wraps the entity lists within a drop-down toggle</li>
+</ul>
+<p>Installation steps:</p>
+<ul>
+<li>Click the HACS icon on the left-hand side panel</li>
+<li>Click 'Frontend'</li>
+<li>Click the three dots in the top right corner then 'Custom Repositories'</li>
+<li>Paste (or type) in the following repository name <code>https://github.com/RossMcMillan92/lovelace-collapsable-cards</code>, choose Type 'Dashboard', and click Add</li>
+<li>Close the Custom Repositories dialogue</li>
+<li>Click 'Explore &amp; Download Repositories'</li>
+<li>Search for 'collapsable cards', click the name of it, check it's the right one, click 'Download', 'Download' again, then 'Reload'</li>
+<li>Click 'Explore &amp; Download Repositories' again, search for 'auto-entities', then 'Download', 'Download', 'Reload'</li>
+</ul>
+<p>Now create the dynamic dashboard:</p>
+<ul>
+<li>Go to Settings/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'</li>
+<li>Click the pencil icon in the top right corner, then the plus symbol on the far right of the next row to create a new View</li>
+<li>Enter a title of the View, then Save</li>
+<li>Click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete the template card configuration and copy/paste the following YAML into the dashboard and click 'Save':</li>
+</ul>
+<pre><code class="language-yaml">type: vertical-stack
+title: Predbat 🦇
+cards:
+  - type: entities
+    entities:
+      - entity: predbat.status
+      - type: weblink
+        name: Predbat Web Console
+        url: /hassio/ingress/6adb4f0d_predbat
+      - entity: update.predbat_version
+      - entity: select.predbat_update
+      - entity: select.predbat_mode
+      - entity: select.predbat_saverestore
+      - entity: switch.predbat_active
+  - type: custom:collapsable-cards
+    title: 🔀 Control
+    defaultOpen: false
+    cards:
+      - type: custom:collapsable-cards
+        title: 🔢 Input Variables
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: input_number.predbat*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 🔀 Switches
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: switch.predbat*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 🔢 Selectors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: select.predbat*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+  - type: custom:collapsable-cards
+    title: '#️⃣ Sensors'
+    defaultOpen: false
+    cards:
+      - type: custom:collapsable-cards
+        title: 💷 Cost Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: predbat.*cost*
+                - entity_id: predbat.*rate*
+                - entity_id: predbat.*metric*
+              exclude:
+                - entity_id: predbat.*start*
+                - entity_id: predbat.*end*
+                - entity_id: predbat.*duration*
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 💷 Saving Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: predbat.*saving*
+              exclude:
+                - entity_id: predbat.*start*
+                - entity_id: predbat.*end*
+                - entity_id: predbat.*duration*
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 🕛 Time/Duration Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: predbat.*start*
+                - entity_id: predbat.*end*
+                - entity_id: predbat.*duration*
+                - entity_id: predbat.*record*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: ⚡ Power Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: predbat.*soc*
+                - entity_id: predbat.*energy*
+                - entity_id: predbat.*load*
+                - entity_id: predbat.*battery*
+                - entity_id: predbat.*kw*
+                - entity_id: predbat.*power*
+                - entity_id: predbat.*charge*
+                - entity_id: predbat.*iboost*
+                - entity_id: predbat.*grid*
+                - entity_id: sensor.predbat_pv*
+              exclude:
+                - entity_id: predbat.*savings*
+                - entity_id: predbat.*start*
+                - entity_id: predbat.*end*
+                - entity_id: predbat.*duration*
+                - entity_id: predbat.*record*
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 1️⃣ Binary Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: binary_sensor.predbat*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+</code></pre>
+<p>This will give you a compact dynamically created list of all Predbat entities which groups the entities by type and is collapsed by default to prevent screen clutter.</p>
+<p><img alt="image" src="../images/output_data_dynamic_dashboard.png" /></p>
+<p>Credit @DJBenson for the code.</p>
+<h3 id="viewing-the-predbat-plan">Viewing the Predbat plan</h3>
+<ul>
+<li><strong>predbat.plan_html</strong> - A sensor that contains an HTML render of the Predbat predicted best plan, detailing import and export rates, predicted house load, solar generation, any solar clipping,
+battery SoC, car and iBoost charging, and Predbat's planned charging and discharging activities.</li>
+</ul>
+<p>The plan is contained in the 'html' attribute, and its recommended to <a href="../predbat-plan-card/">Create the Predbat Plan card</a> as an easy way to see the plan that Predbat has created.</p>
+<p>The sensor also contains the 'text' attribute which gives a HTML formatted brief text description of the Predbat plan.</p>
+<p>If you are using the Predbat add-on or docker then the Predbat plan can also be viewed via the <a href="web-interface#plan-view">'Plan' view of the Predbat web interface</a>, and the text description via the <a href="../web-interface/#dash-view">'Dash' view</a>.</p>
+<h3 id="graphing-the-predbat-predictions">Graphing the Predbat predictions</h3>
+<p>A set of Apex Charts can also be created to see graphically what Predbat plans to do - <a href="../creating-charts/">Creating the charts</a>.  Renditions of the key charts can also be seen in the <a href="../web-interface/#charts-view">'Charts' view of the Predbat web interface</a>.</p>
+<h2 id="basic-status">Basic status</h2>
+<ul>
+<li>
+<p><strong>switch.predbat_active</strong> - Automatically set by Predbat to On when Predbat is busy calculating or controlling your inverter,
+or Off when Predbat is waiting for the next time it needs to perform a plan calculation update.
+If you toggle this switch in Home Assistant it will force Predbat to perform an update now (useful for automations).</p>
+</li>
+<li>
+<p><strong>predbat.status</strong> - Gives the current status &amp; errors and logs any changes that Predbat makes to your inverter.
+The different Predbat status values and their meanings are detailed in <a href="../what-does-predbat-do/#predbat-status">what does Predbat do</a>.</p>
+</li>
+</ul>
+<p><img alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/e24914b8-93d9-4217-812a-ac25a569a52c" /></p>
+<p>predbat.status additionally has the following attributes that are automatically populated:</p>
+<ul>
+<li><strong>Last updated</strong> - date and time that Predbat last updated the plan</li>
+<li><strong>Debug</strong> - A set of arrays containing Predbat's planned charging and discharging time windows and battery limits (in kWh)</li>
+<li><strong>Version</strong> - version of Predbat that's running</li>
+<li><strong>Error</strong> - binary value true or false depending upon whether Predbat is in an error status or nor</li>
+</ul>
+<h2 id="baseline-data">Baseline data</h2>
+<p>Predbat outputs the following sensors to predict what your battery is expected to do <em>over the forecast_hours duration of the plan</em> with no changes made by Predbat.
+This is considered to be the 'baseline' plan:</p>
+<p>NB: All of Predbat's forecasts are from midnight today to the forecast_hours duration (set in apps.yaml) into the future and shouldn't be confused with 'today' figures.</p>
+<p>e.g. predbat.pv_energy is the actual PV energy from midnight today, and for the predicted forecast_hours (typically 48) ahead
+so will be much larger than sensor.solcast_pv_forecast_today which is today's Solcast PV forecast.</p>
+<ul>
+<li>predbat.battery_cycle - Predicted baseline battery cycle in kWh (total kWh processed) with attributes of the prediction every 5 minutes to the end of the plan</li>
+<li>predbat.battery_hours_left - The number of hours left until your home battery is predicted to run out under the baseline plan (stops at the maximum prediction time)</li>
+<li>predbat.battery_power - The sensor is always zero; attributes contain the predicted remaining battery power under the baseline plan, in 5-minute slots, for charting</li>
+<li>predbat.car_soc - The expected charge level of your car at the end of the baseline plan. Can also be charted</li>
+<li>predbat.charge_end - Predicted end time of the next forced battery charging under the baseline plan</li>
+<li>predbat.charge_limit - Predicted baseline battery charge limit for the next charge in percent with attributes of all future battery charging times &amp; limits</li>
+<li>predbat.charge_limit_kw - Predicted baseline battery charge limit for the next charge in kWh with attributes of future charging times &amp; limits</li>
+<li>predbat.charge_start - Predicted start time of the next forced battery charging under the baseline plan</li>
+<li>predbat.duration - The duration of the prediction maximum in hours</li>
+<li>predbat.export_energy - Total kWh of predicted exports under the baseline plan with attributes of the predicted export kWh and their time slots</li>
+<li>predbat.grid_power - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export)
+in kW per 5-minute slots to the end of the baseline plan for charting</li>
+<li>predbat.import_energy - Total kWh of predicted imports under baseline plan with attributes of the predicted import kWh and their time slots</li>
+<li>predbat.import_energy_battery - Total kWh of predicted import energy used to charge the home battery under the baseline plan</li>
+<li>predbat.import_energy_house - Predicted import energy used by the home under the baseline plan that is not provided by your home battery
+(e.g. due to a flat battery or load above the maximum discharge rate)</li>
+<li>predbat.load_energy - Total kWh of predicted house load under the baseline plan with attributes of the predicted load kWh in 5-minute slots to the end of the plan</li>
+<li>predbat.load_power - Total kW of predicted house load power to the end of the baseline plan,
+with attributes of the average instantaneous house load power in kW in 5-minute slots to the end of the plan</li>
+<li>predbat.metric - Total predicted cost for the baseline plan, taking account of predicted solar generation, house load, import and export rates.
+Attributes contain data for charting the cost prediction in 5-minute slots to the end of the plan</li>
+<li>predbat.pv_energy - Predicted PV energy in kWh under the baseline plan with attributes of the predicted PV generation in kWh with time slots</li>
+<li>predbat.pv_power - Predicted PV power now with attributes that contain the predicted PV power in kW per 5-minute slots to the end of the baseline plan for charting</li>
+<li>predbat.soc_kw - Predicted state of charge (in kWh) at the end of the baseline plan prediction, not very useful in itself,
+but the attributes hold prediction data in 5-minute intervals which can be charted with Apex Charts (or similar)</li>
+<li>predbat.soc_min_kwh - Predicted lowest battery SoC value in kWh under the baseline plan with attribute of the date/time that that lowest SoC occurs at</li>
+</ul>
+<h2 id="pv-10-baseline-data">PV 10% Baseline data</h2>
+<p>Predbat outputs the following baseline results under the PV 10% scenario for the forecast_hours duration of the plan, these are known as the 'base10' predictions:</p>
+<ul>
+<li>predbat.base10_export_energy- Total predicted export energy in kWh for the PV 10% scenario, with attributes of the predicted export kWh and their time slots</li>
+<li>predbat.base10_import_energy- Total predicted import energy in kWh for the PV 10% scenario, with attributes of the predicted import kWh and their time slots</li>
+<li>predbat.base10_load_energy - Total predicted house load in kWh for the PV 10% scenario</li>
+<li>predbat.base10_metric - Total predicted cost for the PV 10% scenario, with attributes of the cost prediction in 5-minute slots to the end of the plan for charting</li>
+<li>predbat.base10_pv_energy - Predicted PV 10% energy in kWh with attributes of the predicted PV generation in kWh with time slots</li>
+<li>predbat.soc_kw_base10 - Predicted final state of charge (in kWh) of the battery,
+with attributes of the predicted SoC in 5-minute time slots to the end of the plan under the PV 10% scenario, for charting</li>
+</ul>
+<h2 id="best-prediction-data">Best Prediction data</h2>
+<p>Predbat outputs the following 'best' entities from the forecast (for the forecast_hours duration) based on the lowest cost consumption plan.
+The 'best' plan in Predbat parlance is simply Predbat's lowest cost predicted plan:</p>
+<ul>
+<li>predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed) with attributes of the prediction every 5 minutes to the end of the plan</li>
+<li>predbat.battery_power_best - Predicted remaining battery power in kW with attributes of the future prediction in 5-minute slots</li>
+<li>predbat.best_battery_hours_left - Predicted total number of hours of battery capacity left under the best plan</li>
+<li>predbat.best_charge_end - Predicted end time of the next forced battery charging under the best plan</li>
+<li>predbat.best_charge_limit - Predicted best battery charge limit for the next charge in percent with attributes of all future battery charging times &amp; limits</li>
+<li>predbat.best_charge_limit_kw - Predicted best battery charge limit for the next charge in kWh with attributes of future charging times &amp; limits</li>
+<li>predbat.best_charge_start - Predicted start time of the next forced battery charging under the best plan</li>
+<li>predbat.best_export_end - Predicted end time of the next forced battery export under the best plan</li>
+<li>predbat.best_export_limit - Predicted best battery export limit in percent (will be 0% when discharging or 100% when not)
+with attributes of all future battery exports (kWh and time slots)</li>
+<li>predbat.best_export_limit_kw - Predicted best battery export limit in kWh</li>
+<li>predbat.best_export_start - Predicted start time of the next forced battery export under the best plan</li>
+<li>predbat.best_export_energy - Total kWh of predicted exports under the best plan, with attributes of the predicted export kWh and their time slots</li>
+<li>predbat.best_import_energy - Total kWh of predicted imports under the best plan, with attributes of the predicted import kWh and their time slots</li>
+<li>predbat.best_import_energy_battery - Total kWh of predicted import energy to charge the home battery under the best plan</li>
+<li>predbat.best_import_energy_house - Total kWh of predicted import energy used directly by the house under the best plan
+(e.g. due to a flat battery or the house load is greater than the max discharge rate)</li>
+<li>predbat.best_load_energy - Total kWh of predicted house load energy in kWh under the best plan with attributes of the predicted load kWh in 5 minute slots to the end of the plan</li>
+<li>predbat.best_metric - Total predicted cost for the best plan, taking account of predicted solar generation, house load, import and export rates.
+Attributes contain data for charting the cost prediction in 5-minute slots to the end of the plan</li>
+<li>predbat.best_pv_energy - Predicted PV energy in kWh under the best plan with attributes of the predicted PV generation in kWh with time slots</li>
+<li>predbat.best_soc_min_kwh - Predicted lowest battery SoC value in kWh under the best plan with attribute of the date/time that that lowest SoC occurs at</li>
+<li>predbat.car_soc_best - See <a href="#car-data">Car data</a> below</li>
+<li>predbat.carbon_best - See <a href="#carbon-data">Carbon data</a> below</li>
+<li>predbat.grid_power_best - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export),
+in kW per 5 minute slots to the end of the best plan for charting</li>
+<li>predbat.iboost_best - See <a href="#iboost-solar-diverter-data">iBoost data</a> below</li>
+<li>predbat.load_power_best - Total kW of predicted house load power to the end of the best plan,
+with attributes of the average instantaneous house load power in kW in 5-minute slots to the end of the plan</li>
+<li>predbat.pv_power_best - The sensor is always zero; attributes contain the predicted PV power in kW per 5-minute slots to the end of the best plan for charting</li>
+<li>predbat.soc_kw_best - Predicted final state of charge (in kWh) with attributes of the predicted SoC in 5-minute time slots to the end of the best plan, for charting</li>
+<li>predbat.soc_kw_best_h1 - Single data point for the predicted state of charge in 1 hour (useful for calibration charts, predicted vs actual)</li>
+<li>predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours (useful for calibration charts, predicted vs actual)</li>
+<li>predbat.soc_kw_best_h12 - Single data point for the predicted state of charge in 12 hours (useful for calibration charts, predicted vs actual)</li>
+</ul>
+<h2 id="best-pv-10-prediction-data">Best PV 10% Prediction data</h2>
+<p>Predbat outputs the following best results under the PV 10% scenario for the forecast_hours duration, these are known as the 'best10' prediction:</p>
+<ul>
+<li>predbat.best10_metric - Predicted best cost in pence using the PV 10% solar forecast</li>
+<li>predbat.best10_export_energy- Predicted best export energy in kWh for PV 10%</li>
+<li>predbat.best10_import_energy- Predicted best import energy in kWH for PV 10%</li>
+<li>predbat.best10_load_energy - Predicted best load energy in kWh for PV 10%</li>
+<li>predbat.best10_pv_energy - Predicted best PV 10% energy in kWh</li>
+<li>predbat.soc_kw_best10 - As soc_kw_best but using the PV 10%, also holds minute-by-minute data (in attributes) to be charted</li>
+</ul>
+<h2 id="in-day-load-adjustment-data">In-day load adjustment data</h2>
+<p>The following sensors are used in the in-day adjustment chart - see <a href="../creating-charts/">creating the Predbat charts</a> and <a href="../customisation/#battery-margins-and-metrics-options">in-day load adjustment</a>:</p>
+<ul>
+<li>predbat.load_energy_actual - Total kWh of house load to end of plan, energy up to 'now' taken from today's actual energy, energy after 'now' from Predbat's prediction.
+Attributes of this actual/predicted energy in 5-minute slots from midnight today to the end of the plan for charting</li>
+<li>predbat.load_energy_adjusted - Total kWh of predicted house load to end of the plan, adjusted based on variance of today's actual load
+to the predicted load (based on historical data), dampened according to input_number.predbat_metric_inday_adjust_damping.
+Attributes contain the 5-minute slot forecasts to the end of the plan for charting</li>
+<li>predbat.load_energy_predicted - Total predicted kWh of house load to end of plan, attributes of predicted load in 5-minute slots from midnight today to the end of the plan for charting</li>
+<li>predbat.load_inday_adjustment - the % in-day adjustment factor used to adjust Predbat's predicted load by the actual load today</li>
+</ul>
+<h2 id="today-energy-data">'Today' energy data</h2>
+<p>The following sensor's output by Predbat give the 'today' energy readings.
+They mirror input sensors fed into Predbat in apps.yaml and are used in the data prediction chart - see <a href="../creating-charts/">creating the Predbat charts</a>:</p>
+<ul>
+<li>predbat.export_energy_h0 - Mirrors the export_today sensor configured in apps.yaml and gives today's total kWh of export energy</li>
+<li>predbat.import_energy_h0 - Mirrors the import_today sensor configured in apps.yaml and gives today's total kWh of import energy</li>
+<li>predbat.load_energy_h0 - Mirrors the load_today sensor configured in apps.yaml and gives today's total kWh of house load energy.
+Note that if you have configured <a href="../customisation/#scaling-and-weight-options">load scaling</a> then load_energy_h0 will have been scaled by the scaling factor.</li>
+<li>predbat.pv_energy_h0 - Mirrors the pv_today sensor configured in apps.yaml and gives today's total kWh of generated PV energy</li>
+<li>predbat.soc_kw_h0 - Mirrors the soc_kwh sensor configured in apps.yaml and gives today's total kWh of battery state of charge (SoC).
+Note that if you have configured <a href="../apps-yaml/#battery-size-scaling">battery scaling</a> then soc_kw_h0 will have been scaled by the configured scaling factor</li>
+</ul>
+<h2 id="battery-status">Battery status</h2>
+<p>The following sensors are set based on what Predbat is currently controlling the battery to do:</p>
+<ul>
+<li>binary_sensor.predbat_charging - Set to 'on' when Predbat is force charging the battery (from solar, or if that is insufficient, from grid import), or 'off' otherwise</li>
+<li>binary_sensor.predbat_exporting - Set to 'on' when Predbat is force discharging the battery for export income, 'off' otherwise.</li>
+</ul>
+<p>These are useful for automations if for example, you want to turn off car charging when the battery is being exported.</p>
+<h2 id="export-trigger">Export trigger</h2>
+<ul>
+<li>binary_sensor.predbat_export_trigger_NAME - custom binary sensors that are set to On by Predbat when more than a specified amount of energy is being exported - see <a href="../apps-yaml/#triggers">Triggers in apps.yaml</a></li>
+</ul>
+<h2 id="prediction-window">Prediction window</h2>
+<ul>
+<li>predbat.record - The sensor is always zero; attributes contain the time window for the current predicted plan</li>
+</ul>
+<h2 id="energy-rate-data">Energy rate data</h2>
+<h3 id="low-rate-import-entities">Low-rate import entities</h3>
+<ul>
+<li>predbat.low_rate_cost - The lowest import rate cost in Pence</li>
+<li>predbat.low_rate_duration - The time duration in minutes of the next low rate slot</li>
+<li>predbat.low_rate_end - End time of the next low import rate slot</li>
+<li>predbat.low_rate_start - Start time of the next low import rate slot</li>
+<li>predbat.low_rate_cost_2, predbat.low_rate_end_2, predbat.low_rate_start_2 - The cost and times of the following low import rate slot</li>
+<li>binary_sensor.predbat_low_rate_slot - A sensor that is 'on' to indicate when there is a low energy rate import slot active, 'off' otherwise</li>
+</ul>
+<h3 id="high-rate-export-entities">High-rate export entities</h3>
+<ul>
+<li>predbat.high_rate_export_cost - The highest export rate cost in Pence</li>
+<li>predbat.high_rate_export_duration - The time duration in minutes of the next high rate slot</li>
+<li>predbat.high_rate_export_end - End time of the next high export rate slot</li>
+<li>predbat.high_rate_export_start - Start time of the next high export rate slot</li>
+<li>predbat.high_rate_export_cost_2, predbat.high_rate_export_end_2, predbat.high_rate_export_start_2 - The cost and times of the following high export rate slot</li>
+<li>binary_sensor.predbat_high_rate_export_slot - A sensor that is 'on' to indicate when there is a high export rate slot active, 'off' otherwise</li>
+</ul>
+<h3 id="other-rate-entities">Other rate entities</h3>
+<ul>
+<li>predbat.rates - The current energy import rate in Pence with attributes of yesterday's, today and tomorrow's rates which can be charted</li>
+<li>predbat.rates_export - The current energy export rates in Pence (also can be charted)</li>
+<li>predbat.rates_gas - The current gas rates in Pence (also can be charted)</li>
+<li>predbat.cost_today - The total cost of energy so far today (since midnight) with attributes of the total cost every 5 minutes since midnight today</li>
+<li>predbat.cost_today_export - Same as predbat.cost_today, but for all export income since midnight today</li>
+<li>predbat.cost_today_import - Same as predbat.cost_today, but for all import costs since midnight today</li>
+<li>predbat.cost_hour - The total cost of energy averaged over the last hour</li>
+<li>predbat.cost_today_export - Same as predbat.cost_hour, but for export</li>
+<li>predbat.cost_today_import - Same as predbat.cost_hour, but for import</li>
+<li>predbat.ppkwh_today - The cost in pence/kWh of the house load today accounting for the change in battery level</li>
+<li>predbat.ppkwh_hour - The cost in pence/kWh of the house load averaged over the last hour, accounting for the change in battery level</li>
+</ul>
+<h2 id="inverter-data">Inverter data</h2>
+<p>Some inverters store inverter settings in <a href="../caution/#flash-memory">flash memory that can have a limited number of write cycles</a> so Predbat counts the commands that it sends to the inverter so you can keep track of this:</p>
+<ul>
+<li>predbat.inverter_register_writes is the incrementing total number of writes across all inverters</li>
+</ul>
+<p>If you want to create a utility meter to record daily inverter register writes, add the following to your <code>configuration.yaml</code> (NB: the utility meter has to be defined in YAML, it cannot be configured via the HA User Interface):</p>
+<pre><code class="language-yaml">utility_meter:
+  # Predbat daily inverter writes utility meter
+  predbat_daily_inverter_writes:
+    source: predbat.inverter_register_writes
+    name: Predbat Daily Inverter Writes
+    unique_id: predbat_daily_inverter_writes
+    cycle: daily
+</code></pre>
+<p>Add a card of type 'markdown' to your dashboard to display a simple dashboard of inverter writes:</p>
+<pre><code class="language-yaml">type: markdown
+content: &gt;-
+  {% set dd = (as_timestamp(now()) - as_timestamp(&quot;2024-12-22 17:20:00&quot;)) | timestamp_custom(&quot;%j&quot;)| int %}
+  {% set tw = (states('predbat.inverter_register_writes') | int) %}
+  {{ dd }} days, total {{ tw }} inverter writes
+
+  {{ states('sensor.predbat_daily_inverter_writes')|int }} writes today
+
+  Average {{ (tw / dd ) | int }} writes per day
+</code></pre>
+<p>You'll need to change the hard-coded timestamp "2024-12-12..." to the date/time you first started counting Predbat inverter writes from to get the number of days and average writes per day correct.</p>
+<h2 id="car-data">Car data</h2>
+<ul>
+<li>binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
+as described in <a href="../car-charging/#car-charging-planning">Predbat led car charging</a></li>
+<li>predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format</li>
+<li>predbat.car_soc_best - Predicted charge level of your car in the best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted</li>
+<li>predbat.cost_today_car - Current cost in pence so far today of charging the car, with attribute of the projected future car charging costs and slots</li>
+<li>predbat.cost_total_car - A running total in pence of the below cost_yesterday_car sensor, with attribute of the total in pounds</li>
+<li>predbat.cost_yesterday_car - A sensor that gives the total energy costs in pence of charging the car for yesterday (00:00-23:59 on the previous day)</li>
+</ul>
+<h2 id="iboost-solar-diverter-data">iBoost Solar Diverter data</h2>
+<ul>
+<li>binary_sensor.predbat_iboost_active - A binary sensor indicating when there is excess solar and the solar diverter (e.g. iBoost, Eddi or just plain immersion heater) should be active,
+can be used for automations to trigger the immersion heater boost</li>
+<li>input_number.predbat_iboost_today - Gives the amount of energy modelled that will be sent to the solar diverter today,
+increments during the day and is reset to zero at 11:30pm each night</li>
+<li>predbat.iboost_best - Predicted energy in kWh going into the iBoost solar diverter under the best plan</li>
+</ul>
+<p>You can use the iboost_best sensor to create a custom template sensor that gives the time to next planned iBoost:</p>
+<pre><code class="language-yaml">{% set iboost_times = state_attr(&quot;predbat.iboost_best&quot;,&quot;results&quot;) %}
+{% set times =  iboost_times.keys()|list %}
+{% set iboost_energy =  iboost_times.values()|list  %}
+{% set ni = namespace(x=0) %}
+{% set data = namespace(h_bool=False) %}
+{% set iboost_starts = &quot;&quot; %}
+{% for ni in range(0,times|count()-1) if data.h_bool == false  %}
+{% if iboost_energy[ni+1]-iboost_energy[ni] &gt; 0 %}
+{% set data.h_bool = true %}{{ (as_timestamp (times[ni])-as_timestamp (now()) ) / 3600 | round (0) }}
+{% else %}
+{% endif %}
+{% endfor %}
+{% if data.h_bool == false %}
+{{100}}
+{% endif %}
+</code></pre>
+<p>If no iBoost is imminent then the sensor is set to 100h, and if currently boosting it will produce a small negative answer.</p>
+<p>Thanks to @mogons57 for the template sensor code.</p>
+<h2 id="carbon-data">Carbon data</h2>
+<p>The following sensors output by Predbat give historic and predicted carbon data.
+They are used in the carbon chart - see <a href="../creating-charts/">creating the Predbat charts</a>.</p>
+<ul>
+<li>predbat.carbon - Predicted Carbon energy in g at the end of the plan with attributes giving the breakdown of predicted Carbon impact by half hour time slots</li>
+<li>predbat.carbon_best - Predicted Carbon intensity in g for your home under the best plan based on grid imports, grid exports and the grid's projected carbon intensity</li>
+<li>predbat.carbon_now - A sensor that gives the current Grid Carbon intensity in g/kWh</li>
+<li>predbat.carbon_today - A sensor that tracks your home's Carbon impact today in g based on your grid import minus your grid export</li>
+</ul>
+<h2 id="cost-saving-data">Cost saving data</h2>
+<p>The following sensors output by Predbat give cost-saving data that Predbat achieved, i.e. the financial benefits of using Predbat.
+They are used in the daily cost-saving and total cost-savings charts - see <a href="../creating-charts/">creating the Predbat charts</a>:</p>
+<ul>
+<li>predbat.cost_yesterday - A sensor that gives the total energy costs in pence for yesterday (00:00-23:59 on the previous day)</li>
+<li>predbat.savings_total_actual - A running total in pence of the above cost_yesterday sensor, with attribute of the total in pounds</li>
+<li>predbat.savings_total_predbat - A running total in pence of the below savings_yesterday_predbat sensor, with attribute of the total in pounds</li>
+<li>predbat.savings_total_pvbat - A running total of the below savings_yesterday_pvbat sensor, with attribute of the total in pounds</li>
+<li>predbat.savings_total_soc - A running total of what the final SoC in kWh would have been at the end of each day if you were not using Predbat</li>
+<li>predbat.savings_yesterday_predbat - A sensor which tells you how much money Predbat saved you yesterday compared to not using Predbat,
+and only charging at the lowest import rate in the 24 hour period</li>
+<li>predbat.savings_yesterday_pvbat - A sensor which tells you how much money you saved from using Predbat
+vs not having a PV and battery system at all and all house load being met from grid import</li>
+</ul>
+<h2 id="solar-forecast-data">Solar forecast data</h2>
+<p>The following sensors give the forecast Solar data from Solcast.
+Predbat populates these sensors irrespective of whether you are using the <a href="../install/#solcast-install">Predbat direct Solcast or Solcast integration method</a> to get your Solar forecast,
+but if you are using the Solcast integration then the Predbat sensors mirror the similarly named Solcast integration sensors so could be disabled if you so wish.</p>
+<ul>
+<li>sensor.predbat_pv_today - Tracks the PV forecast in kWh for today, attributes give the remaining amount today and the half-hourly data</li>
+<li>sensor.predbat_pv_tomorrow - Tracks the PV forecast in kWh for tomorrow, attributes give the remaining amount today and the half-hourly data</li>
+<li>sensor.predbat_pv_d2 - Similar to the above, but tracking the PV forecast for the day after tomorrow</li>
+<li>sensor.predbat_pv_d3 - PV forecast for two days after tomorrow</li>
+<li>sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in Watts, attributes give the 10% and 90% power now forecast</li>
+</ul>
+<h2 id="dummy-inverter-sensors">Dummy inverter sensors</h2>
+<p>Predbat can now manage different inverter types, some of which don't have all the same control characteristics. Predbat might create dummy entities for control aspects that your inverter doesn't natively support.</p>
+<p>For example, for each Gen 1 hybrid inverter (N=0, 1, etc if there are multiple inverters), Predbat creates the following dummy inverter entities:</p>
+<ul>
+<li>sensor.predbat_ge_N_idle_end_time</li>
+<li>sensor.predbat_ge_N_idle_start_time</li>
+<li>sensor.predbat_ge_N_scheduled_discharge_enable</li>
+</ul>
+<p>These sensors can be ignored and excluded from the recorder history if you wish.</p>
+<h2 id="alert-data">Alert data</h2>
+<ul>
+<li>predbat.alerts - Gives you data on the currently active weather alert (if configured) and in the attributes a list of all active alerts with their details</li>
+</ul>
+<h2 id="predbat-logfile">Predbat Logfile</h2>
+<p>Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so this file should be checked if <strong>predbat.status</strong> reports an error,
+or if you want to verify that Predbat is running OK.</p>
+<p>There is a lot of output in the logfile, this is normal!</p>
+<p>If you are using the Predbat add-on then the logfile can easily be viewed via the 'Log' tab of the <a href="../web-interface/#log-view">Predbat web interface</a>.</p>
+<p>To directly view the physical logfile, it can be found in one of three different directories in Home Assistant with slightly different filenames depending on how you installed Predbat:</p>
+<ul>
+<li>
+<p>if you have used the <a href="../install/#predbat-add-on-install">Predbat add-on installation method</a>, the logfile will be <code>/addon_configs/6adb4f0d_predbat/predbat.log</code>,</p>
+</li>
+<li>
+<p>if the <a href="../install/#predbat-installation-into-appdaemon">HACS, Appdaemon add-on then Predbat installation method</a>, it's <code>/homeassistant/appdaemon/appdaemon.log</code>, or</p>
+</li>
+<li>
+<p>if the combined AppDaemon/Predbat add-on installation method was used, it's <code>/addon_configs/46f69597_appdaemon-predbat/predbat.log</code>.</p>
+</li>
+</ul>
+<p>You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-ons)
+to view Predbat's logfile if you are not using the Predbat add-on.
+See <a href="../install/#editing-configuration-files-in-home-assistant">editing configuration files within Home Assistant</a> if you need to install an editor.</p>
+<h2 id="automated-monitoring-that-predbat-and-givtcp-are-running-ok">Automated monitoring that Predbat and GivTCP are running OK</h2>
+<p>With GivTCP and Predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
+you may find these automations useful to monitor that GivTCP and Predbat are running OK, and if not, to raise an alert on your mobile device running the Home Assistant Companion app.</p>
+<p>To create a new automation:</p>
+<ul>
+<li>Settings / Automations &amp; Scenes</li>
+<li>Create Automation / Create new Automation</li>
+<li>Three dots (top right corner) / Edit in YAML</li>
+<li>Delete the existing (template) automation code and copy/paste the supplied automation code below</li>
+</ul>
+<h3 id="givtcp-activity-monitor">GivTCP activity monitor</h3>
+<p>This automation will raise an alert if any of the following occur:</p>
+<ul>
+<li>The inverter goes offline for more than 15 minutes</li>
+<li>No last_updated_time received from the inverter for more than 15 minutes</li>
+<li>Inverter temperature less than 5 degrees for more than 15 minutes (should never happen)</li>
+<li>The battery goes offline to the inverter for more than 15 minutes</li>
+<li>GivTCP add-on is not running</li>
+<li>Mosquitto broker add-on is not running</li>
+<li>Predbat/AppDaemon-predbat or AppDaemon add-on (as appropriate) is not running</li>
+</ul>
+<p>The script will need to be customised for your inverter ID, battery ID and mobile details,
+and can be extended for multiple inverters and batteries by duplicating the triggers and adding appropriate battery and inverter IDs.</p>
+<pre><code class="language-yaml">alias: GivTCP activity monitor
+description: Alert when communications to GivTCP have ceased for 15 minutes
+triggers:
+  - trigger: state
+    entity_id: sensor.givtcp_&lt;inverter id&gt;_last_updated_time
+    to: &quot;null&quot;
+    for:
+      minutes: 15
+    variables:
+      alert_text: No GivTCP update received from inverter &lt;id&gt;
+      restart_app: GivTCP
+  - trigger: state
+    entity_id:
+      - sensor.givtcp_&lt;inverter id&gt;_status
+    from: online
+    for:
+      minutes: 15
+    variables:
+      alert_text: No GivTCP update received from inverter &lt;id&gt;
+      restart_app: GivTCP
+  - trigger: numeric_state
+    entity_id:
+      - sensor.givtcp_&lt;inverter id&gt;_invertor_temperature
+    for:
+      minutes: 15
+    below: 10
+    variables:
+      alert_text: No GivTCP update received from inverter &lt;id&gt;
+      restart_app: GivTCP
+  - trigger: state
+    entity_id:
+      - sensor.givtcp_&lt;battery id&gt;_battery_cells
+    to: unknown
+    for:
+      minutes: 15
+    variables:
+      alert_text: Battery &lt;battery_id&gt; is offline to GivTCP
+      restart_app: GivTCP
+  - trigger: state
+    entity_id:
+      - binary_sensor.givtcp_running
+    to: &quot;off&quot;
+    for:
+      minutes: 15
+    variables:
+      alert_text: GivTCP add-on is not running
+      restart_app: GivTCP
+  - trigger: state
+    entity_id:
+      - binary_sensor.mosquitto_broker_running
+    to: &quot;off&quot;
+    for:
+      minutes: 15
+    variables:
+      alert_text: Mosquitto Broker add-on is not running
+      restart_app: Mosquitto
+actions:
+  - action: notify.mobile_app_&lt;your mobile device id&gt;
+    alias: Send a notification
+    data:
+      title: GivTCP communication issue
+      message: |
+        {{now().strftime('%-d %b %H:%M')}} ISSUE:
+        {{ alert_text }} for the past 15 minutes, restarting
+        {{ restart_app }}
+      data:
+        visibility: public
+        persistent: true
+        push:
+          sound:
+            name: default
+            critical: 1
+            volume: 0.8
+          sticky: true
+          color: red
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: &quot;{{ restart_app == 'GivTCP' }}&quot;
+        sequence:
+          - alias: Restart GivTCP add-on
+            action: hassio.addon_restart
+            data:
+              addon: 533ea71a_givtcp
+      - conditions:
+          - condition: template
+            value_template: &quot;{{ restart_app == 'Mosquitto' }}&quot;
+        sequence:
+          - alias: Restart Mosquitto add-on
+            action: hassio.addon_restart
+            data:
+              addon: core_mosquitto
+trace:
+  stored_traces: 20
+mode: single
+</code></pre>
+<p>The last two triggers (GivTCP and Mosquitto running) trigger if any of these add-ons that Predbat is dependent upon are not running.
+You will need to enable a binary sensor for each add-on to be able to use these triggers in the automation:</p>
+<ul>
+<li>Navigate to Settings / Devices and Services / Devices and search for 'GivTCP'</li>
+<li>Click on the GivTCP add-on, and under 'Sensors', click 'XX entities not shown'</li>
+<li>Click the 'Running' sensor, then the cogwheel, and Enable the sensor</li>
+</ul>
+<p>Repeat these steps for the 'Mosquitto' add-on.</p>
+<p>As an extension to the above, if you don't want the automation to restart the failing add-on and instead just send an alert that there is a problem, delete the 'choose' code above.
+Restarting GivTCP does however lose the current GivTCP log-in Home Assistant.</p>
+<p>NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp'.</p>
+<h3 id="predbat-error-monitor">Predbat error monitor</h3>
+<p>This automation will raise an alert if Predbat's status turns to <em>Error</em> for more than 5 minutes.</p>
+<p>In normal operation, Predbat will automatically run and update its forecast every 5 minutes. If the automation detects that Predbat has not done this for 20 minutes,
+then an alert will be raised and the automation will restart the Predbat add-on to try to resolve a 'hung Predbat' issue.</p>
+<p>In the same way for the GivTCP and Mosquitto add-ons above, the last trigger requires you to enable a binary sensor that detects that the Predbat/AppDaemon add-on is running.
+Follow the same steps to enable the binary sensor for either the 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' add-on depending on which Predbat installation method you followed.</p>
+<p>The script will need to be customised for your mobile details.</p>
+<pre><code class="language-yaml">alias: Predbat error monitor
+description: Alert when Predbat has raised an exception
+trace:
+  stored_traces: 20
+triggers:
+  - trigger: template
+    alias: Predbat status contains 'Error' for 5 minutes
+    value_template: &quot;{{ 'Error' in states('predbat.status') }}&quot;
+    for:
+      minutes: 5
+    variables:
+      alert_text: &gt;-
+        Predbat status is {{ states('predbat.status') }}, error={{
+        state_attr('predbat.status', 'error') }}
+  - trigger: state
+    alias: Predbat is in error status for 5 minutes
+    entity_id: predbat.status
+    attribute: error
+    to: &quot;true&quot;
+    for:
+      minutes: 5
+    variables:
+      alert_text: &gt;-
+        Predbat status is {{ states('predbat.status') }}, error={{
+        state_attr('predbat.status', 'error') }}
+  - trigger: state
+    alias: Predbat status.last_updated has not changed for 20 minutes
+    entity_id: predbat.status
+    attribute: last_updated
+    for:
+      minutes: 20
+    variables:
+      alert_text: &gt;-
+        Predbat stalled? Restarting. last_updated=' {{
+        state_attr('predbat.status','last_updated')|as_timestamp|timestamp_custom('%a
+        %H:%M') }}', unchanged for 20 mins; Status='{{ states('predbat.status')
+        }}'
+      restart_predbat: &quot;Y&quot;
+  - trigger: state
+    alias: Predbat add-on not running for 15 minutes
+    entity_id: binary_sensor.predbat_running
+    to: &quot;off&quot;
+    for:
+      minutes: 15
+    variables:
+      alert_text: Predbat add-on is not running, restarting
+      restart_predbat: &quot;Y&quot;
+  - trigger: state
+    alias: predbat_active stuck on for 20 minutes
+    entity_id:
+      - switch.predbat_active
+    for:
+      minutes: 20
+    variables:
+      alert_text: Predbat active has been stuck on (updating the plan) for 20 minutes, restarting
+      restart_predbat: &quot;Y&quot;
+actions:
+  - action: notify.mobile_app_&lt;your mobile device id&gt;
+    alias: Send alert message
+    data:
+      title: Predbat status issue
+      message: |
+        {{now().strftime('%-d %b %H:%M')}} ISSUE:
+        {{ alert_text }}
+      data:
+        visibility: public
+        persistent: true
+        push:
+          sound:
+            name: default
+            critical: 1
+            volume: 0.8
+        sticky: true
+        color: red
+  - if:
+      - condition: template
+        value_template: &quot;{{ restart_predbat == 'Y' }}&quot;
+    then:
+      - action: hassio.addon_restart
+        data:
+          addon: 6adb4f0d_predbat
+        alias: Restart Predbat add-on
+mode: single
+</code></pre>
+<p>NB: If you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon' and change 'binary_sensor.predbat_running' to 'binary_sensor.appdaemon_running'.</p>
+<p>An error alert looks like this:</p>
+<p><img alt="image" src="../images/predbat-status-issue.png" /></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../manual-api/" class="btn btn-neutral float-left" title="Predbat automation API"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../web-interface/" class="btn btn-neutral float-right" title="Web Interface">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../manual-api/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../web-interface/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
