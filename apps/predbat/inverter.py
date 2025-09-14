@@ -1848,9 +1848,6 @@ class Inverter:
             self.log("Warn: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
             return False
 
-        old_inverter_mode = self.base.get_arg("discharge_inverter_mode", index=self.id, default="ForceExport")
-        new_inverter_mode = "ForceExport"
-
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -1982,9 +1979,6 @@ class Inverter:
 
         # Force export, turn it on after we change the window
         if force_export:
-            if self.inv_has_fox_inverter_mode and old_inverter_mode != new_inverter_mode:
-                self.write_and_poll_option("discharge_inverter_mode", self.base.get_arg("discharge_inverter_mode", indirect=False, index=self.id), new_inverter_mode)
-
             self.adjust_inverter_mode(force_export, changed_start_end=changed_start_end)
             if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
@@ -2299,9 +2293,6 @@ class Inverter:
         else:
             self.log("Warn: Inverter {} unable read charge window as neither REST or discharge_start_time".format(self.id))
 
-        old_inverter_mode = self.base.get_arg("charge_inverter_mode", 'ForceCharge', index=self.id)
-        new_inverter_mode = "ForceCharge"
-
         # Apply clock skew
         charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
         charge_end_time += timedelta(seconds=self.base.inverter_clock_skew_end * 60)
@@ -2377,10 +2368,6 @@ class Inverter:
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
-
-        if self.inv_has_fox_inverter_mode and old_inverter_mode != new_inverter_mode:
-            entity_id = self.base.get_arg("charge_inverter_mode", indirect=False, index=self.id)
-            self.write_and_poll_option("charge_inverter_mode", entity_id, new_inverter_mode)
 
         if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable" or have_disabled:
             # Enable scheduled charge if not turned on

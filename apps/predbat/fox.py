@@ -240,6 +240,8 @@ class FoxAPI:
                         point = history[-1] if history else {}
                         timestamp = point.get("time", "")
                         value = point.get("value", None)
+                        if unit == '℃':
+                            unit = '°C'
                         if timestamp and variable and value is not None:
                             if deviceSN not in self.device_values:
                                 self.device_values[deviceSN] = {}
