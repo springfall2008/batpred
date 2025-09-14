@@ -354,7 +354,7 @@ See: <https://github.com/springfall2008/batpred/issues/1401>
 
 The template is in the templates area, give it a try
 
-## Fox Clould
+## Fox Cloud
 
 **Experimental**
 
