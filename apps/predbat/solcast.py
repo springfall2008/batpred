@@ -564,7 +564,7 @@ class Solcast:
                     attributes={
                         "friendly_name": "PV Forecast Now",
                         "state_class": "measurement",
-                        "unit_of_measurement": "W",
+                        "unit_of_measurement": "kWh",
                         "icon": "mdi:solar-power",
                         "device_class": "power",
                         "now10": dp2(power_now10),
