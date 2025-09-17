@@ -38,7 +38,7 @@ import asyncio
 THIS_VERSION = "v8.25.0"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -1320,13 +1320,27 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
 
             # Start all sub-components
             self.components = Components(self)
+            self.components.initialize()
+
+            # Initialize plugin system early so plugins can register web endpoints
+            # before the web server starts
+            try:
+                self.log("Initializing plugin system")
+                self.plugin_system = PluginSystem(self)
+                self.plugin_system.discover_plugins()
+            except Exception as e:
+                self.log("Warning: Failed to initialize plugin system: {}".format(e))
+                self.plugin_system = None
+
+            # Now start all sub-components (including web server which will pick up registered endpoints)
             self.components.start()
 
             if not self.ha_interface:
                 raise ValueError("HA interface not found")
 
-            # Initialize plugin system and discover plugins
-            self.init_plugin_system()
+            # Call plugin initialization hooks after components are ready
+            if self.plugin_system:
+                self.plugin_system.call_hooks("on_init")
 
             # Printable config root
             self.config_root_p = self.config_root
@@ -1504,24 +1518,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.log("Error: " + traceback.format_exc())
                 self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
                 raise e
-
-    def init_plugin_system(self):
-        """
-        Initialize the plugin system and discover plugins
-        """
-        try:
-            self.log("Initializing plugin system")
-            self.plugin_system = PluginSystem(self)
-
-            # Discover and load plugins
-            self.plugin_system.discover_plugins()
-
-            # Call initialization hooks
-            self.plugin_system.call_hooks("on_init")
-
-        except Exception as e:
-            self.log("Warning: Failed to initialize plugin system: {}".format(e))
-            self.plugin_system = None
 
     def register_hook(self, hook_name, callback):
         """

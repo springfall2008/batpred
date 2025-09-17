@@ -15,6 +15,7 @@ from octopus import OctopusAPI
 from web import WebInterface
 from ha import HAInterface
 from db_manager import DatabaseManager
+from fox import FoxAPI
 import os
 
 COMPONENT_LIST = {
@@ -88,6 +89,22 @@ COMPONENT_LIST = {
             },
         },
     },
+    "fox": {
+        "class": FoxAPI,
+        "name": "Fox API",
+        "event_filter": "predbat_fox_",
+        "args": {
+            "key": {
+                "required": True,
+                "config": "fox_key",
+            },
+            "automatic": {
+                "required": False,
+                "default": False,
+                "config": "fox_automatic",
+            },
+        },
+    },
 }
 
 
@@ -98,7 +115,8 @@ class Components:
         self.base = base
         self.log = base.log
 
-    def start(self):
+    def initialize(self):
+        """Initialize components without starting them"""
         for component_name, component_info in COMPONENT_LIST.items():
             have_all_args = True
             self.components[component_name] = None
@@ -114,16 +132,27 @@ class Components:
                 else:
                     arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=False)
             if have_all_args:
-                self.log(f"Starting {component_info['name']} interface")
+                self.log(f"Initializing {component_info['name']} interface")
                 self.components[component_name] = component_info["class"](*arg_dict.values(), self.base)
-                self.component_tasks[component_name] = self.base.create_task(self.components[component_name].start())
-                if not self.components[component_name].wait_api_started():
+
+    def start(self, only=None):
+        """Start all initialized components"""
+        for component_name, component_info in COMPONENT_LIST.items():
+            if only and component_name != only:
+                continue
+            component = self.components.get(component_name)
+            if component:
+                self.log(f"Starting {component_info['name']} interface")
+                self.component_tasks[component_name] = self.base.create_task(component.start())
+                if not component.wait_api_started():
                     self.log(f"Error: {component_info['name']} API failed to start")
-                    self.record_status(f"Error: {component_info['name']} API failed to start")
+                    self.base.record_status(f"Error: {component_info['name']} API failed to start")
                     raise ValueError(f"{component_info['name']} API failed to start")
 
-    async def stop(self):
+    async def stop(self, only=None):
         for component_name, component_info in reversed(list(self.components.items())):
+            if only and component_name != only:
+                continue
             component = self.components[component_name]
             if component:
                 self.log(f"Stopping {component_name} interface")

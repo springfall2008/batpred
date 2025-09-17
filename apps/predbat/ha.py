@@ -57,11 +57,8 @@ class HAInterface:
     def is_alive(self):
         if not self.api_started:
             return False
-        if self.websocket_task:
-            if not self.websocket_task.is_alive():
-                return False
-            if not self.websocket_active:
-                return False
+        if self.ha_key and not self.websocket_active:
+            return False
         return True
 
     def wait_api_started(self):
@@ -92,7 +89,6 @@ class HAInterface:
         self.db = None
         self.db_cursor = None
         self.websocket_active = False
-        self.websocket_task = None
         self.api_errors = 0
         self.stop_thread = False
         self.api_started = False
@@ -104,6 +100,8 @@ class HAInterface:
 
         # Initialize history cache
         self.history_cache = HistoryCache()
+        print("HA URL", self.ha_url)
+        print("HA KEY", self.ha_key)
 
         if not self.ha_key:
             if not (self.db_enable and self.db_primary):
@@ -139,10 +137,13 @@ class HAInterface:
         self.history_cache.configure(enabled)
 
     async def start(self):
-        """Async start not required"""
-        self.log("Info: Starting HA interface")
-        self.websocket_active = True
-        await self.socketLoop()
+        if self.ha_key:
+            self.log("Info: Starting HA interface")
+            self.websocket_active = True
+            await self.socketLoop()
+        else:
+            while not self.stop_thread:
+                await asyncio.sleep(1)
 
     async def stop(self):
         self.stop_thread = True

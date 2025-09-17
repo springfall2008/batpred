@@ -6,17 +6,19 @@
 
 import requests
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2
 import aiohttp
 import asyncio
 import json
-from datetime import timezone
 import time
 import os
 import yaml
 import traceback
+from config import TIME_FORMAT
+import json
+import pytz
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -1119,26 +1121,229 @@ class Octopus:
 
     def download_octopus_free(self, url):
         """
-        Download octopus free session data directly from a URL and process the data
+        Download octopus free session data.
+        If response is JSON, parse as Go API response. Otherwise, use legacy HTML parsing.
         """
-
         free_sessions = []
         pdata = self.download_octopus_free_func(url)
         if not pdata:
             return free_sessions
 
+        # Check if response is JSON (Go API) or HTML (legacy)
+        try:
+            data = json.loads(pdata)
+            sessions = data.get("sessions", [])
+
+            # Convert Go API format to PredBat format
+            for session in sessions:
+                if "session_start" in session and "session_end" in session:
+                    start_time = datetime.fromisoformat(session["session_start"].replace("Z", "+00:00"))
+                    end_time = datetime.fromisoformat(session["session_end"].replace("Z", "+00:00"))
+
+                    start_local = start_time.astimezone(self.local_tz)
+                    end_local = end_time.astimezone(self.local_tz)
+
+                    predbat_session = {"start": start_local.strftime(TIME_FORMAT), "end": end_local.strftime(TIME_FORMAT), "rate": 0.0}
+                    free_sessions.append(predbat_session)
+
+            return free_sessions
+
+        except json.JSONDecodeError:
+            # Not JSON, use legacy HTML parsing
+            return self.download_octopus_free_legacy(url)
+
+    def download_octopus_free_legacy(self, url):
+        """
+        Legacy method: Download and parse HTML directly (fallback only).
+        Kept for backward compatibility when Go API is unavailable.
+        """
+        free_sessions = []
+        pdata = self.download_octopus_free_func(url)
+        if not pdata:
+            return free_sessions
+
+        # Legacy parsing logic - basic pattern matching
         for line in pdata.split("\n"):
-            if "Past sessions" in line:
-                future_line = line.split("<p data-block-key")
-                for fline in future_line:
-                    for this_line in fline.split("<br/>"):
-                        res = re.search(r"<i>\s*(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)", this_line)
-                        self.octopus_free_line(res, free_sessions)
+            # Look for the most common current format
+            # "Last Free Electricity Session: DOUBLE Session 12-2pm, Sunday 7th September"
+            if "Free Electricity Session:" in line or "Last Free Electricity:" in line:
+                # Extract session time and date with regex
+                match = re.search(r"(\d{1,2})-(\d{1,2})(am|pm),?\s+(\w+day)\s+(\d{1,2})(?:st|nd|rd|th)\s+(\w+)", line, re.IGNORECASE)
+                if match:
+                    start_hour = int(match.group(1))
+                    end_hour = int(match.group(2))
+                    period = match.group(3).lower()
+                    day_of_week = match.group(4)
+                    day_num = int(match.group(5))
+                    month = match.group(6)
+
+                    session = self.create_free_session_simple(start_hour, end_hour, period, day_num, month)
+                    if session:
+                        free_sessions.append(session)
+                        self.log(f"Legacy parser found session: {session['start']} to {session['end']}")
+
+            # Legacy format support for older patterns
             if "Free Electricity:" in line:
-                # Free Electricity: Sunday 24th November 7-9am
                 res = re.search(r"Free Electricity:\s+(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)", line)
                 self.octopus_free_line(res, free_sessions)
+
         return free_sessions
+
+    def to_aware_tz(self, dt):
+        """
+        Converts a naive datetime object to an aware datetime object
+        using the pytz library.
+        """
+        local_tz = pytz.timezone(self.args.get("timezone", "Europe/London"))
+        # The .localize() method makes the naive datetime object aware.
+        aware_dt = local_tz.localize(dt)
+        return aware_dt
+
+    def create_free_session_simple(self, start_hour, end_hour, period, day_num, month):
+        """
+        Create a free session from basic components (simplified legacy method).
+        """
+        try:
+            # Adjust hours for AM/PM
+            if period == "pm" and start_hour != 12:
+                start_hour += 12
+                end_hour += 12
+            elif period == "am" and start_hour == 12:
+                start_hour = 0
+                if end_hour == 12:
+                    end_hour = 0
+
+            # Simple month parsing
+            month_names = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+            month_num = None
+            for i, month_name in enumerate(month_names, 1):
+                if month.lower().startswith(month_name[:3]):
+                    month_num = i
+                    break
+
+            if not month_num:
+                return None
+
+            # Create session
+
+            year = datetime.now().year
+            start_time = datetime(year, month_num, day_num, start_hour, 0)
+            end_time = datetime(year, month_num, day_num, end_hour, 0)
+
+            # Determine if the specified date is in or out of daylight savings time
+            start_time = self.to_aware_tz(start_time)
+            end_time = self.to_aware_tz(end_time)
+            return {"start": start_time.strftime(TIME_FORMAT), "end": end_time.strftime(TIME_FORMAT), "rate": 0.0}
+
+        except Exception as e:
+            self.log(f"Error in create_free_session_simple: {e}")
+            return None
+
+    def html_to_text(self, html):
+        """
+        Convert HTML to human-readable text by removing tags and normalizing whitespace.
+        Simple text extraction that preserves line breaks for human-like reading.
+        """
+        # Remove HTML tags but preserve some structure
+        text = html
+
+        # Replace block elements with newlines for better text flow
+        block_elements = ["</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>", "</p>", "</div>", "</section>", "</article>", "</li>", "</br>", "<br/>", "<br>"]
+        for element in block_elements:
+            text = text.replace(element, "\n")
+
+        # Remove remaining HTML tags
+        text = re.sub(r"<[^>]+>", "", text)
+
+        # Decode HTML entities
+        text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&#39;", "'")
+
+        # Normalize whitespace but preserve line breaks
+        lines = []
+        for line in text.split("\n"):
+            # Clean up each line
+            cleaned = re.sub(r"\s+", " ", line.strip())
+            if cleaned:  # Only keep non-empty lines
+                lines.append(cleaned)
+
+        return "\n".join(lines)
+
+    def create_free_session(self, time_slot, day_of_week, day_num, month, original_line):
+        """
+        Create a free session dictionary from parsed components.
+        Returns None if the session cannot be properly parsed.
+        """
+        try:
+            # Parse the time slot (e.g., "12-2pm", "7-9am")
+            time_match = re.match(r"(\d{1,2})(?::(\d{2}))?(?:am|pm)?-(\d{1,2})(?::(\d{2}))?(am|pm)", time_slot.lower())
+            if not time_match:
+                self.log(f"Warning: Cannot parse time slot '{time_slot}' in: {original_line[:100]}")
+                return None
+
+            start_hour = int(time_match.group(1))
+            start_min = int(time_match.group(2) or 0)
+            end_hour = int(time_match.group(3))
+            end_min = int(time_match.group(4) or 0)
+            period = time_match.group(5)  # am or pm
+
+            # Adjust for PM times
+            if period == "pm" and start_hour != 12:
+                start_hour += 12
+                end_hour += 12
+            elif period == "am" and start_hour == 12:
+                start_hour = 0
+                if end_hour == 12:
+                    end_hour = 0
+
+            # Handle cases like "11pm-1am" (crosses midnight)
+            if end_hour < start_hour:
+                end_hour += 24
+
+            # Parse date components
+            day = int(re.sub(r"[^\d]", "", day_num))  # Remove "st", "nd", "rd", "th"
+
+            # Estimate year (current year or next year if date has passed)
+            now = datetime.now()
+            year = now.year
+
+            # Try to parse the month
+            month_names = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+            month_num = None
+            for i, month_name in enumerate(month_names, 1):
+                if month.lower().startswith(month_name[:3]):  # Match "sep", "sept", "september"
+                    month_num = i
+                    break
+
+            if not month_num:
+                self.log(f"Warning: Cannot parse month '{month}' in: {original_line[:100]}")
+                return None
+
+            # Create datetime objects
+            try:
+                start_time = datetime(year, month_num, day, start_hour, start_min)
+                end_time = datetime(year, month_num, day, end_hour % 24, end_min)
+
+                # If end time crosses midnight, adjust the date
+                if end_hour >= 24:
+                    end_time += timedelta(days=1)
+
+                # If the date is in the past, assume it's next year
+                if start_time < now:
+                    start_time = start_time.replace(year=year + 1)
+                    end_time = end_time.replace(year=year + 1)
+
+            except ValueError as e:
+                self.log(f"Warning: Cannot create datetime from {day}/{month_num}/{year} {start_hour}:{start_min}: {e}")
+                return None
+
+            # Format for PredBat (uses TIME_FORMAT from config.py)
+            session = {"start": start_time.strftime(TIME_FORMAT), "end": end_time.strftime(TIME_FORMAT), "rate": 0.0}  # Free electricity
+
+            return session
+
+        except Exception as e:
+            self.log(f"Error creating free session from '{time_slot}' '{day_of_week}' '{day_num}' '{month}': {e}")
+            return None
 
     def download_octopus_rates(self, url):
         """
@@ -1305,7 +1510,7 @@ class Octopus:
                 except (ValueError, TypeError):
                     start = None
                     end = None
-                    self.log("Warn: Unable to decode Octopus free session start/end time")
+                    self.log("Warn: Unable to decode Octopus free session start/end time {}".format(octopus_free_slot))
 
             if start and end:
                 start_minutes = minutes_to_time(start, self.midnight_utc)

@@ -349,7 +349,7 @@ class Execute:
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {} and target {}".format(self.soc_kw, discharge_soc))
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 100):
-                        inverter.adjust_force_export(False, discharge_start_time, discharge_end_time)
+                        inverter.adjust_force_export(inverter.inv_has_discharge_enable_time, discharge_start_time, discharge_end_time)
                     else:
                         self.log("Not setting export as we are not yet within the export window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
                         inverter.adjust_force_export(False)
@@ -378,6 +378,9 @@ class Execute:
                                     if resetDischarge:
                                         inverter.adjust_discharge_rate(0)
                                         resetDischarge = False
+                                    if self.set_reserve_enable:
+                                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                        resetReserve = False
                                 carHolding = True
                                 self.log("Disabling battery discharge while the car {} is charging".format(car_n))
                                 if "Hold for car" not in status:
@@ -391,11 +394,16 @@ class Execute:
             boostHolding = False
             if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Exporting", "Charging"]:
                 if inverter.inv_has_timed_pause:
-                    inverter.adjust_pause_mode(pause_discharge=True)
-                    resetPause = False
+                    if resetPause:
+                        inverter.adjust_pause_mode(pause_discharge=True)
+                        resetPause = False
                 else:
-                    inverter.adjust_discharge_rate(0)
-                    resetDischarge = False
+                    if resetDischarge:
+                        inverter.adjust_discharge_rate(0)
+                        resetDischarge = False
+                    if self.set_reserve_enable:
+                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                        resetReserve = False
                 boostHolding = True
                 self.log("Disabling battery discharge while iBoost is running")
                 if "Hold for iBoost" not in status:
@@ -724,11 +732,11 @@ class Execute:
                 self.reserve_current,
                 self.soc_max,
                 self.soc_kw,
-                self.charge_rate_now * 60,
-                self.discharge_rate_now * 60,
+                self.charge_rate_now * MINUTE_WATT,
+                self.discharge_rate_now * MINUTE_WATT,
                 self.battery_rate_min * MINUTE_WATT,
-                dp3(self.inverter_limit * 60),
-                dp3(self.export_limit * 60),
+                dp3(self.inverter_limit * MINUTE_WATT),
+                dp3(self.export_limit * MINUTE_WATT),
                 100 - int(self.battery_loss * 100),
                 100 - int(self.battery_loss_discharge * 100),
                 100 - int(self.inverter_loss * 100),

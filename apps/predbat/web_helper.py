@@ -3684,10 +3684,10 @@ setTimeout(function() {
 <a href='./plan'>Plan</a>
 <a href='./entity'>Entities</a>
 <a href='./charts'>Charts</a>
-<a href='./config'>Config"""
+<a href='./config'>Config</a>
+<a href='./apps'>Apps"""
         + config_warning
         + """</a>
-<a href='./apps'>Apps</a>
 <a href='./components'>Components</a>
 <a href='./apps_editor'>Editor</a>
 <a href='./log'>Log</a>
