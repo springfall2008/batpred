@@ -873,10 +873,11 @@ high battery charge levels when the car was charged previously (e.g. last week).
 
 *TIP:* Check the house load being reported by your inverter when your car is charging. If it doesn't include the car charging load then there is no need to follow these steps below (and if you do, you'll artificially deflate your house load).
 
-- **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from your historical house load
-so that Predbat's battery prediction plan is not distorted by previous car charging.
+- **switch.predbat_car_charging_hold** - A switch that when turned on (True) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. Default is off.
 
-- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the daily incrementing kWh data for the car charger.
+If you are getting erroneous house load predictions in your plan then check this setting and **car_charging_energy** are set correctly.
+
+- **car_charging_energy** - Set in `apps.yaml` to point to an entity which is the daily incrementing kWh data for the car charger.
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
 or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 Note that this must be configured to point to an 'energy today' sensor in kWh not an instantaneous power sensor (in kW) from the car charger.<BR><BR>
@@ -892,13 +893,10 @@ car_charging_energy can be set to a list of energy sensors, one per line if you 
     - sensor.mixergy_ID_energy
 ```
 
-- **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range of 0 to 1.0)
-to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW).
+- **input_number.predbat_car_charging_energy_scale** - Used to define a scaling factor (in the range of 0 to 1.0)
+to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW). Default 1.0, i.e. no scaling.
 
-If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure the following Home Assistant entity:
-
-- **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
-and **input_number.predbat_car_charging_rate** will be subtracted from the historical load data.
+If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure **input_number.predbat_car_charging_threshold** (see [Additional car charging configuration](car-charging.md#additional-car-charging-configurations)).
 
 ### Planned Car Charging
 

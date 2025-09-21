@@ -20,7 +20,7 @@ and through that, Predbat gets most of the information it needs.
     - **octopus_intelligent_slot** in `apps.yaml` is pre-configured with a regular expression to point to the Intelligent Slot sensor in the Octopus Energy integration.
     You should not need to change this, but it is worth checking the [Predbat logfile](output-data.md#predbat-logfile) to confirm that it has found your Octopus account details.<BR>
     If you are using the [Octopus Energy direct](energy-rates.md#octopus-energy-direct) method of Predbat directly connecting to your Octopus account then this configuration line is not required and should be commented out of `apps.yaml`.
-    - Set **switch.predbat_octopus_intelligent_charging** to True
+    - Set **switch.predbat_octopus_intelligent_charging** to On
     - You should set the car's current SoC sensor, **car_charging_soc** in `apps.yaml` to point to a Home Assistant sensor that specifies the car's current % charge level to have accurate results.
     This should normally be a sensor provided by your car charger.
     If you don't have this available for your charger then Predbat will assume the car's current charge level is 0%
@@ -31,11 +31,10 @@ and through that, Predbat gets most of the information it needs.
     Again, if you are using the Octopus Energy direct method for Predbat then these configuration lines are not required and should be commented out of `apps.yaml`.
     - You can use **car_charging_now** as a workaround to indicate your car is charging but the Intelligent API hasn't reported it
     - The switch **switch.predbat_octopus_intelligent_consider_full** (_expert mode_)
-    when turned on will cause Predbat to predict when your car battery is full and assume no further charging will occur.
+    (default is Off) when turned on will cause Predbat to predict when your car battery is full and assume no further charging will occur.
     This can be useful if Octopus does not know your car battery's state of charge but you have a sensor setup in Predbat (**car_charging_soc**) which does know the current charge level.
     Predbat will still assume all Octopus charging slots are low rates even if some are not used by your car.
-    The default for this option is False.
-    - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_)
+    - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) (default value is off)
     can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
     This will only work correctly if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in
     - Let the Octopus app control when your car charges.
@@ -48,7 +47,7 @@ and through that, Predbat gets most of the information it needs.
     - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml` to point to the appropriate sensors from your EV (see [Car charging config in apps.yaml](apps-yaml.md#car-charging-integration))
     - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned
     when the car is 'plugged in and ready to charge' is in the list of **car_charging_planned_response** values configured in apps.yaml
-    - If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** to True
+    - If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** to On
     to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars SoC in kWh.<BR>
     You will need to manually set this to the car's current charge level before charging, Predbat will increment it during
     charging sessions but will not reset it automatically.<BR>
@@ -108,8 +107,8 @@ NOTE: [Multiple cars](apps-yaml.md#multiple-electric-cars) can be planned with P
 
 ## Additional Car charging configurations
 
-If you have one charger and multiple cars configured in Predbat then set **car_charging_exclusive** in apps.yaml to True to indicate that only one
-car may charge at once (the first car reporting as plugged in will be considered as charging). If you set this to False then it is assumed each car
+If you have one charger and multiple cars configured in Predbat then set **car_charging_exclusive** in apps.yaml to `True` to indicate that only one
+car may charge at once (the first car reporting as plugged in will be considered as charging). If you set this to `False` then it is assumed each car
 can charge independently and hence two or more could charge at once
 
 ```yaml
@@ -121,14 +120,20 @@ can charge independently and hence two or more could charge at once
 See [Car charging filtering](apps-yaml.md#car-charging-filtering) and [Planned car charging](apps-yaml.md#planned-car-charging)
 in the [apps.yaml settings](apps-yaml.md) section of the documentation.
 
-- **switch.predbat_car_charging_from_battery** - When set to True the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
-When set to False home battery discharge will be prevented when your car charges, and all load from the car and home will be from the grid.
+- **switch.predbat_car_charging_from_battery** - When set to On the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
+When set to Off home battery discharge will be prevented when your car charges, and all load from the car and home will be from the grid.
 This is achieved by setting the battery discharge rate to 0 during car charging and to the maximum otherwise.
 The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan,
 e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
 
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.
+
+- **input_number.predbat_car_charging_energy_scale** - Used to define a scaling factor (in the range of 0 to 1.0)
+to multiply the **car_charging_energy** sensor data by if required (e.g. set to 0.001 to convert Watts to kW). Default 1.0, i.e. no scaling
+
+- **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
+and **input_number.predbat_car_charging_rate** will be subtracted from the historical load data.
 
 ## Example EV and charger setup
 

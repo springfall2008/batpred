@@ -305,13 +305,13 @@ Once Predbat is running successfully the recommended next step is to start Predb
 This enables you to get a feel for the Predbat plan and further [customise Predbat's settings](customisation.md) to meet your needs.
 
 Set **select.predbat_mode** to the correct [mode of operation](customisation.md#predbat-mode) for your system - usually 'Control charge' or 'Control charge & discharge'.
-Also, you should set **switch.predbat_set_read_only** to True to stop Predbat from making any changes to your inverter.
+Also, you should set **switch.predbat_set_read_only** to On to stop Predbat from making any changes to your inverter.
 
 You can see the planned solar and grid charging and discharging activity in the [Predbat Plan](predbat-plan-card.md).
 Another set of views can be seen in the detailed [Apex Charts showing Predbat's predictions](creating-charts.md).
 
 Once you are happy with the plan Predbat is producing, and are ready to let Predbat start controlling your inverter charging and discharging,
-set the switch **switch.predbat_set_read_only** to False and Predbat will start controlling your inverter.
+set the switch **switch.predbat_set_read_only** to Off and Predbat will start controlling your inverter.
 
 ## Updating Predbat
 
@@ -337,12 +337,12 @@ Click on the update and select Install:
 Predbat can now update itself, just select the version of Predbat you want to install from the **select.predbat_update** drop-down menu,
 the latest version will be at the top of the list. Predbat will update itself and automatically restart.
 
-Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on GitHub.
+Alternatively, if you turn On **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on GitHub.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
 
 Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
-or by enabling the **switch.predbat_auto_update** to auto-update Predbat.
+or by turning on the **switch.predbat_auto_update** to auto-update Predbat.
 
 ## Upgrading from AppDaemon to Predbat add-on
 
