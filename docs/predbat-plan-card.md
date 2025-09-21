@@ -96,7 +96,7 @@ discharging and force exported, or being held at the current level.<BR>
 Alongside the state is an arrow which points upwards if the battery SoC is increasing (i.e. charging), to the right if the battery SoC remains constant,
 or downwards if the battery SoC is decreasing (i.e. discharging).<BR>
 If Predbat's plan has been over-ridden and the [slot has been manually controlled](customisation.md#manual-control) to be a Charging slot, Discharging or Idle,
-then alongside the State and battery SoC arrow will be an upside down 'F' indicating it is a 'Forced' activity.<BR>
+then alongside the State and battery SoC arrow will be an upside down 'F' (&#8526;) indicating it is a 'Forced' activity.<BR>
 The slot will be coloured Green for Charging, Yellow for Discharging, Silver Grey for Freeze Charging, Dark Grey for Freeze Discharging, Pale Blue for Hold Charging or White for Idle.<BR>
 NB: The Predbat plan is shown in 30-minute time slots but Predbat actually plans battery activity in 5-minute segments within the 30-minute slot.
 If the Home Assistant control *switch.predbat_calculate_export_oncharge* is set to True,
@@ -104,7 +104,8 @@ then within a 30-minute slot (and depending on import and export rates), Predbat
 charging and discharging activity - if Predbat plans this, the state will show as both Charging and Exporting in the same slot.
 
 - **Limit %** - Alongside any battery activity (charging, discharging, etc) there will be a SoC limit. This limit is what the SoC is planned to be at the end of the 30-minute time slot.
-e.g. 'Charge&nearr; 70%' is charge to 70% SoC, and 'Exp&searr; 4%' is force exporting the battery to the 4% reserve level.
+e.g. 'Charge&nearr; 70%' is charge to 70% SoC, and 'Exp&searr; 4%' is force exporting the battery to the 4% reserve level.<BR>
+If Predbat is planning a slow charge or slow export then the limit will be preceded by a snail symbol (&#x1F40C;) and will be shown as 'limit.tens_of_percentage_rate_reduction'. e.g.: 16.3 means limit of 16% and charge/discharge at 70% of normal rate.
 
 - **PV kWh** - The predicted solar forecast for the half-hour slot, estimated from the [Solcast Forecast](apps-yaml.md#solcast-solar-forecast).<BR>
 If the PV forecast is above 0.2kWh for the slot it will be coloured Melon Red with a little sun symbol, above 0.1kWh it will be Yellow with a sun symbol,
