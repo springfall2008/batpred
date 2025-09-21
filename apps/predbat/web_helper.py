@@ -2290,7 +2290,7 @@ def get_logfile_js(filter_type):
 
             try {{
                 const response = await fetch(`./api/log?filter=${{currentFilter}}&since=${{lastLineNumber}}&max_lines=1024`);
-                
+
                 if (!response.ok) {{
                     throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
                 }}

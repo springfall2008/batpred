@@ -1,6 +1,4 @@
 # Custom Dictionary Words
-visibilitychange
-beforeunload
 activepower
 adata
 adbase
@@ -24,6 +22,7 @@ Batpred
 battemperature
 batteri
 batteryb
+beforeunload
 bierner
 calib
 cexxxx
@@ -282,6 +281,7 @@ useid
 userinterface
 varh
 venv
+visibilitychange
 Wallbox
 weblink
 welink
