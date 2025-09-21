@@ -78,7 +78,7 @@ exported if the battery is full. This is described as 'Eco' Mode for GivEnergy i
 The grid or solar covers any house load. If there is a shortfall of Solar power to meet house load, the excess house load is met from grid import,
 but if there is excess Solar power above the house load, the excess solar will be used to charge the battery,
 
-- **Hold charging** - A type of charge where the target SoC % is the same as the current SoC %, effectively the same as a charge freeze (but without being explicitly selected).
+- **Hold charging** - A type of charge where the target SoC % is the same or lower than the current SoC %. This is similar to charge freeze, but it is selected as a result of planning, and cannot be manually selected. 
 
 - **No Charge** - A charge where the target SoC % is lower than the current battery SoC level so there will be no charging unless the usage is unexpectedly high.
 
