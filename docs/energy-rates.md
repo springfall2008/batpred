@@ -19,8 +19,7 @@ At least one of these methods must be used to define your import and export rate
 
 ## Octopus Energy direct
 
-If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information
-is to connect Predbat directly to Octopus.
+If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information is to connect Predbat directly to Octopus.
 
 - This method will not work correctly if you have multiple import or export meters.
 - A single Octopus Intelligent GO car charger or car is supported.
@@ -37,7 +36,7 @@ Put these both into your apps.yaml and you are done.
   octopus_api_key: 'sk_live_yyyyyyyy'
 ```
 
-Free energy sessions:
+### Octopus Free energy sessions
 
 Predbat can obtain details of Free energy sessions directly from the Octopus Web Site.
 As Octopus do not publish an API for this information it has to be done by 'scraping' the website - there may be future issues with this if Octopus ever change the website format.
@@ -57,15 +56,14 @@ this brings greater configurability than the direct method.
 The Octopus Energy integration connects to your Octopus Energy account and retrieves the tariffs you are on, and the current tariff rates.
 If you change tariff within Octopus the integration will automatically retrieve the updated tariff information, and as tariff prices change, again they are automatically retrieved.
 
-The integration also provides support for Intelligent Octopus charging to support car charging.
+The integration also provides support for Intelligent Octopus charging to support (multiple) car charging.
 
 Follow the instructions provided in the Octopus Energy integration documentation to install and set up the integration.
 
 Once installed, you will need to configure the integration (go to Settings / Devices & Services / Integrations / Octopus Energy then click 'Configure')
 and provide the integration with your 'Octopus API key' (that you obtain from your Octopus account: Personal Details / API access).
 
-**CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following
-Octopus Energy events which are disabled by default when the integration is installed:
+**CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following Octopus Energy events which are disabled by default when the integration is installed:
 
 ```yaml
   event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
@@ -113,6 +111,10 @@ metric_octopus_gas is (as above) only required to be configured if you are using
 
 If you do not have an export rate or are not on the Octopus Go tariff, then the appropriate lines can be commented out in apps.yaml.
 
+NOTE: Predbat using the Octopus integration rates relies upon the day rate events being enabled (see above) and the events and the sensor found by metric_octopus_xxx in apps.yaml being similarly named.
+There have been occasions with some Octopus Integration installations where the event name is as above but the sensor name has a different prefix, e.g. sensor.electricity_METER_NUMBER_current_rate and not sensor.octopus_energy_electricity_METER_NUMBER_current_rate.
+If this is the case then the sensor must be renamed to the correct format so that Predbat can function correctly.
+
 ### Standing charge
 
 Predbat can also (optionally) include the daily standing charge in cost predictions.
@@ -122,6 +124,9 @@ The following configuration item in apps.yaml defaults to obtaining the standing
 
 You can manually change this to a standing charge in pounds, e.g. 0.50 is 50p, or delete this line from apps.yaml, or set it to zero
 if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
+
+Note that this configuration option to suppress the standing charge only applies if you are using the Octopus Integration from Predbat.
+If you are using the Octopus Energy direct method of Predbat directly connecting to Octopus then the standing charge will always be included in the plan and charts.
 
 ### Octopus Saving sessions
 
@@ -221,7 +226,7 @@ This integration allows you to automatically retrieve rates and apply them withi
 
 The integration processes hourly pricing data and converts it into 30-minute intervals, making it ideal for scheduling and optimizing energy usage.
 
-## Configuring Predbat to Use the Energidataservice Integration
+### Configuring Predbat to Use the Energidataservice Integration
 
 The following configuration items in apps.yaml are used to configure Predbat to use the Energidataservice integration. These items must be set explicitly to ensure that Predbat retrieves the correct import and export rates.
 
