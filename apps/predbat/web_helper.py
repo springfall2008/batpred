@@ -2230,7 +2230,7 @@ def get_logfile_js(filter_type):
         function addLogEntries(lines) {{
             const tbody = document.getElementById('logTableBody');
             if (!tbody) return 0;
-            
+
             const autoScroll = document.getElementById('autoScroll');
             const shouldAutoScroll = autoScroll ? autoScroll.checked : false;
             let newEntriesAdded = 0;
@@ -2241,23 +2241,23 @@ def get_logfile_js(filter_type):
                     const row = document.createElement('tr');
                     row.setAttribute('data-line', logLine.line_number);
                     row.className = 'new-log-entry';
-                    
+
                     let color = '#33cc33'; // Default green for info
                     if (logLine.type === 'error') {{
                         color = '#ff3333';
                     }} else if (logLine.type === 'warning') {{
                         color = '#ffA500';
                     }}
-                    
+
                     const timestamp = escapeHtml(logLine.timestamp);
                     const message = escapeHtml(logLine.message);
-                    
+
                     row.innerHTML = `<td>${{logLine.line_number}}</td><td nowrap><font color="${{color}}">${{timestamp}}</font> ${{message}}</td>`;
-                    
+
                     // Insert at the top of the table body
                     tbody.insertBefore(row, tbody.firstChild);
                     newEntriesAdded++;
-                    
+
                     lastLineNumber = Math.max(lastLineNumber, logLine.line_number);
                 }}
             }});
@@ -2294,9 +2294,9 @@ def get_logfile_js(filter_type):
                 if (!response.ok) {{
                     throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
                 }}
-                
+
                 const data = await response.json();
-                
+
                 if (data.status === 'success') {{
                     const newEntries = addLogEntries(data.lines);
                     if (newEntries > 0) {{
@@ -2319,17 +2319,17 @@ def get_logfile_js(filter_type):
         document.addEventListener('DOMContentLoaded', function() {{
             lastLineNumber = 0; // Start from 0 since we're loading all initial data
             updateStatus('Log viewer loaded - fetching initial data...');
-            
+
             // Load initial data immediately
             updateLog();
-            
+
             // Start periodic updates every 2 seconds
             updateInterval = setInterval(updateLog, 2000);
-            
+
             // Handle page visibility changes to pause/resume updates
             document.addEventListener('visibilitychange', function() {{
                 if (isPaused) return; // Don't auto-resume if manually paused
-                
+
                 if (document.hidden) {{
                     if (updateInterval) {{
                         clearInterval(updateInterval);
@@ -2354,6 +2354,7 @@ def get_logfile_js(filter_type):
         </script>
         """
     return text
+
 
 def get_editor_js():
     text = """

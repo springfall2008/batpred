@@ -934,80 +934,65 @@ var options = {
         try:
             logfile = "predbat.log"
             logdata = ""
-            
+
             if os.path.exists(logfile):
                 with open(logfile, "r") as f:
                     logdata = f.read()
-            
+
             # Get query parameters
             args = request.query
             filter_type = args.get("filter", "warnings")  # all, warnings, errors
             since_line = int(args.get("since", 0))  # Line number to start from
             max_lines = int(args.get("max_lines", 1024))  # Maximum lines to return
-            
+
             loglines = logdata.split("\n")
             total_lines = len(loglines)
-            
+
             # Process log lines with filtering
             result_lines = []
             count_lines = 0
             lineno = total_lines - 1
-            
+
             while count_lines < max_lines and lineno >= 0:
                 line = loglines[lineno]
                 line_lower = line.lower()
-                
+
                 # Skip empty lines
                 if not line.strip():
                     lineno -= 1
                     continue
-                
+
                 # Apply filtering
                 include_line = False
                 line_type = "info"
-                
+
                 if "error" in line_lower:
                     line_type = "error"
                     include_line = True
                 elif "warn" in line_lower:
                     line_type = "warning"
-                    include_line = (filter_type in ["all", "warnings"])
+                    include_line = filter_type in ["all", "warnings"]
                 else:
                     line_type = "info"
-                    include_line = (filter_type == "all")
-                
+                    include_line = filter_type == "all"
+
                 if include_line and (since_line == 0 or lineno > since_line):
                     start_line = line[0:27] if len(line) >= 27 else line
                     rest_line = line[27:] if len(line) >= 27 else ""
-                    
-                    result_lines.append({
-                        "line_number": lineno,
-                        "timestamp": start_line,
-                        "message": rest_line,
-                        "type": line_type,
-                        "full_line": line
-                    })
+
+                    result_lines.append({"line_number": lineno, "timestamp": start_line, "message": rest_line, "type": line_type, "full_line": line})
                     count_lines += 1
-                
+
                 lineno -= 1
-            
+
             # Reverse to get reverse chronological order (newest first)
             result_lines.reverse()
-            
-            return web.json_response({
-                "status": "success",
-                "total_lines": total_lines,
-                "returned_lines": len(result_lines),
-                "lines": result_lines,
-                "filter": filter_type
-            })
-            
+
+            return web.json_response({"status": "success", "total_lines": total_lines, "returned_lines": len(result_lines), "lines": result_lines, "filter": filter_type})
+
         except Exception as e:
             self.log(f"Error in html_api_get_log: {e}")
-            return web.json_response({
-                "status": "error",
-                "message": str(e)
-            }, status=500)
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
 
     async def html_api_post_state(self, request):
         """
