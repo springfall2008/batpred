@@ -2289,7 +2289,7 @@ def get_logfile_js(filter_type):
             isUpdating = true;
 
             try {{
-                const response = await fetch(`/api/log?filter=${{currentFilter}}&since=${{lastLineNumber}}&max_lines=1024`);
+                const response = await fetch(`./api/log?filter=${{currentFilter}}&since=${{lastLineNumber}}&max_lines=1024`);
                 
                 if (!response.ok) {{
                     throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
