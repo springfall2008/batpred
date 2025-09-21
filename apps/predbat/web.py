@@ -19,7 +19,7 @@ import json
 import shutil
 import html as html_module
 import time
-from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css
+from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css, get_logfile_js
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
@@ -141,6 +141,7 @@ class WebInterface:
         app.router.add_get("/api/ping", self.html_api_ping)
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
+        app.router.add_get("/api/log", self.html_api_get_log)
         app.router.add_post("/api/login", self.html_api_login)
 
         # Notify plugin system that web interface is ready
@@ -926,6 +927,73 @@ var options = {
         text += "</script>\n"
         return text
 
+    async def html_api_get_log(self, request):
+        """
+        JSON API to get log data with filtering
+        """
+        try:
+            logfile = "predbat.log"
+            logdata = ""
+
+            if os.path.exists(logfile):
+                with open(logfile, "r") as f:
+                    logdata = f.read()
+
+            # Get query parameters
+            args = request.query
+            filter_type = args.get("filter", "warnings")  # all, warnings, errors
+            since_line = int(args.get("since", 0))  # Line number to start from
+            max_lines = int(args.get("max_lines", 1024))  # Maximum lines to return
+
+            loglines = logdata.split("\n")
+            total_lines = len(loglines)
+
+            # Process log lines with filtering
+            result_lines = []
+            count_lines = 0
+            lineno = total_lines - 1
+
+            while count_lines < max_lines and lineno >= 0:
+                line = loglines[lineno]
+                line_lower = line.lower()
+
+                # Skip empty lines
+                if not line.strip():
+                    lineno -= 1
+                    continue
+
+                # Apply filtering
+                include_line = False
+                line_type = "info"
+
+                if "error" in line_lower:
+                    line_type = "error"
+                    include_line = True
+                elif "warn" in line_lower:
+                    line_type = "warning"
+                    include_line = filter_type in ["all", "warnings"]
+                else:
+                    line_type = "info"
+                    include_line = filter_type == "all"
+
+                if include_line and (since_line == 0 or lineno > since_line):
+                    start_line = line[0:27] if len(line) >= 27 else line
+                    rest_line = line[27:] if len(line) >= 27 else ""
+
+                    result_lines.append({"line_number": lineno, "timestamp": start_line, "message": rest_line, "type": line_type, "full_line": line})
+                    count_lines += 1
+
+                lineno -= 1
+
+            # Reverse to get reverse chronological order (newest first)
+            result_lines.reverse()
+
+            return web.json_response({"status": "success", "total_lines": total_lines, "returned_lines": len(result_lines), "lines": result_lines, "filter": filter_type})
+
+        except Exception as e:
+            self.log(f"Error in html_api_get_log: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
     async def html_api_post_state(self, request):
         """
         JSON API
@@ -1186,16 +1254,11 @@ var options = {
 
     async def html_log(self, request):
         """
-        Return the Predbat log as an HTML page
+        Return the Predbat log as an HTML page with dynamic updates
         """
-        logfile = "predbat.log"
-        logdata = ""
         self.default_page = "./log"
-        if os.path.exists(logfile):
-            with open(logfile, "r") as f:
-                logdata = f.read()
 
-        # Decode method get arguments
+        # Decode method get arguments to determine filter type
         args = request.query
         errors = False
         warnings = False
@@ -1212,8 +1275,8 @@ var options = {
             self.default_log = "warnings"
             warnings = True
 
-        loglines = logdata.split("\n")
-        text = self.get_header("Predbat Log", refresh=10)
+        # Remove refresh from header since we'll update dynamically
+        text = self.get_header("Predbat Log", refresh=0)
         text += """<body>"""
         text += get_log_css()
 
@@ -1221,14 +1284,17 @@ var options = {
             active_all = ""
             active_warnings = ""
             active_errors = "active"
+            filter_type = "errors"
         elif warnings:
             active_all = ""
             active_warnings = "active"
             active_errors = ""
+            filter_type = "warnings"
         else:
             active_all = "active"
             active_warnings = ""
             active_errors = ""
+            filter_type = "all"
 
         text += '<div class="log-menu">'
         text += "<h3>Logfile</h3> "
@@ -1236,35 +1302,21 @@ var options = {
         text += f'<a href="./log?warnings" class="{active_warnings}">Warnings</a>'
         text += f'<a href="./log?errors" class="{active_errors}">Errors</a>'
         text += '<a href="./debug_log">Download</a>'
+        text += '<label class="auto-scroll-toggle"><input type="checkbox" id="autoScroll"> Auto-scroll to new</label>'
+        text += '<button class="scroll-to-bottom" onclick="scrollToBottom()">Scroll to Bottom</button>'
+        text += '<button id="pauseResumeBtn" onclick="toggleUpdates()" style="margin-left: 10px; padding: 4px 8px;">Pause</button>'
         text += "</div>"
 
-        text += "<table width=100%>\n"
-
-        total_lines = len(loglines)
-        count_lines = 0
-        lineno = total_lines - 1
-        while count_lines < 1024 and lineno >= 0:
-            line = loglines[lineno]
-            line_lower = line.lower()
-            lineno -= 1
-
-            start_line = line[0:27]
-            rest_line = line[27:]
-
-            if "error" in line_lower:
-                text += "<tr><td>{}</td><td nowrap><font color=#ff3333>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-                count_lines += 1
-                continue
-            elif (not errors) and ("warn" in line_lower):
-                text += "<tr><td>{}</td><td nowrap><font color=#ffA500>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-                count_lines += 1
-                continue
-
-            if line and (not errors) and (not warnings):
-                text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-                count_lines += 1
-
+        text += '<div id="logStatus" class="log-status">Loading log data...</div>'
+        text += "<table width=100% id='logTable'>\n"
+        text += "<tbody id='logTableBody'>\n"
+        text += "<!-- Log entries will be loaded dynamically via JavaScript -->\n"
+        text += "</tbody>\n"
         text += "</table>"
+
+        # Add JavaScript for dynamic updates
+        text += get_logfile_js(filter_type)
+
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
