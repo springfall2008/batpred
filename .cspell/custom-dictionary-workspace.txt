@@ -80,6 +80,7 @@ Energidataservice
 energydataservice
 epod
 euids
+evcs
 evse
 exportlimit
 fdpwr

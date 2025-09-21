@@ -608,12 +608,13 @@ class GECloudDirect:
                 self.base.dashboard_item(entity_id, state="on" if state else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
-    async def async_automatic_config(self, devices):
+    async def async_automatic_config(self, devices, evc_devices=None):
         """
         Automatically configure predbat using GE Cloud auto-detected devices.
         'devices' is a dict with keys:
           - "ems": the EMS device serial
           - "battery": list of battery inverter serials (for battery-specific sensors)
+        'evc_devices' is a list of EV charger device dicts
         """
         if not devices or not devices["battery"]:
             self.log("GECloud: No battery devices found, cannot configure")
@@ -677,7 +678,75 @@ class GECloudDirect:
             self.base.args["load_power"] = ["sensor.predbat_gecloud_" + ems + "_consumption_power"] + [0 for _ in range(num_inverters - 1)]
             self.base.args["grid_power"] = ["sensor.predbat_gecloud_" + ems + "_grid_power"] + [0 for _ in range(num_inverters - 1)]
 
+        # Auto-configure EV chargers if any are detected
+        if evc_devices:
+            evc_serials = []
+            self.log(f"GECloud: Processing {len(evc_devices)} EV charger devices for auto-configuration")
+            for device_data in evc_devices:
+                uuid = device_data.get("uuid")
+                self.log(f"GECloud: Processing EV charger UUID: {uuid}")
+                if uuid:
+                    try:
+                        # Get full device details to extract serial number
+                        full_device = await self.async_get_evc_device(uuid)
+                        self.log(f"GECloud: Retrieved device details: {full_device}")
+                        serial = full_device.get("serial_number")
+                        self.log(f"GECloud: Extracted serial number: {serial}")
+                        if serial:
+                            evc_serials.append(serial)
+                    except Exception as e:
+                        self.log(f"GECloud: Error getting device details for {uuid}: {e}")
+                        # Fallback to UUID if serial fetch fails
+                        evc_serials.append(uuid)
+
+            if evc_serials:
+                # Store charger info for later use by Enode plugin
+                self.evc_chargers = evc_serials
+
+                # Get current car_charging_planned array or create empty list
+                current_planned = self.base.args.get("car_charging_planned", [])
+                if not isinstance(current_planned, list):
+                    current_planned = []
+
+                # Append EVC status sensors to car_charging_planned
+                for serial in evc_serials:
+                    evc_sensor = "sensor.predbat_gecloud_" + serial + "_evc_status"
+                    if evc_sensor not in current_planned:
+                        current_planned.append(evc_sensor)
+
+                self.base.args["car_charging_planned"] = current_planned
+
+                # Increment num_cars for each charger
+                # The Enode plugin will manage the actual car arrays and try to match vehicles to chargers
+                current_num_cars = self.base.args.get("num_cars", 0)
+                self.base.args["num_cars"] = current_num_cars + len(evc_serials)
+
+                self.log(f"GECloud: Found {len(evc_serials)} EV chargers, increased num_cars from {current_num_cars} to {self.base.args['num_cars']}")
+                self.log(f"GECloud: Updated car_charging_planned: {self.base.args['car_charging_planned']}")
+
         self.log("GECloud: Automatic configuration complete")
+
+    async def configure_car_arrays_for_evc(self, serial, entity_name):
+        """
+        Configure car arrays for a newly detected EV charger.
+        This handles cases where EVCs are detected after initial startup.
+        """
+        # Get current car_charging_planned array or create empty list
+        current_planned = self.base.args.get("car_charging_planned", [])
+        if not isinstance(current_planned, list):
+            current_planned = []
+
+        # Add EVC status sensor to car_charging_planned if not already there
+        if entity_name not in current_planned:
+            current_planned.append(entity_name)
+            self.base.args["car_charging_planned"] = current_planned
+
+            # Increment num_cars
+            current_num_cars = self.base.args.get("num_cars", 0)
+            self.base.args["num_cars"] = current_num_cars + 1
+
+            self.log(f"GECloud: Configured car arrays for EVC {serial}, added {entity_name} to car_charging_planned")
+            self.log(f"GECloud: Increased num_cars from {current_num_cars} to {self.base.args['num_cars']}")
 
     async def start(self):
         """
@@ -713,7 +782,7 @@ class GECloudDirect:
             self.pending_writes[device] = []
 
         if self.automatic:
-            await self.async_automatic_config(devices_dict)
+            await self.async_automatic_config(devices_dict, evc_devices_dict)
 
         seconds = 0
         while not self.stop_cloud and not self.base.fatal_error:
@@ -729,6 +798,22 @@ class GECloudDirect:
                     for uuid in evc_device_list:
                         self.evc_device[uuid] = await self.async_get_evc_device(uuid)
                         serial = self.evc_device[uuid].get("serial_number", "unknown")
+
+                        # Publish EV charger status as sensor entity
+                        evc_status = self.evc_device[uuid].get("status", "unknown")
+                        entity_name = f"sensor.predbat_gecloud_{serial}_evc_status"
+                        entity_name = entity_name.lower()
+                        self.base.dashboard_item(entity_name, state=evc_status, attributes={"friendly_name": "EV Charger Status", "icon": "mdi:ev-station", "device_class": "enum"}, app="gecloud")
+                        self.log(f"GE Cloud EVC {serial}: Published status sensor with value '{evc_status}'")
+
+                        # Configure car arrays when EV charger is first detected
+                        if uuid not in getattr(self, "configured_evcs", set()):
+                            await self.configure_car_arrays_for_evc(serial, entity_name)
+                            # Mark this EVC as configured
+                            if not hasattr(self, "configured_evcs"):
+                                self.configured_evcs = set()
+                            self.configured_evcs.add(uuid)
+
                         self.evc_data[uuid] = await self.async_get_evc_device_data(uuid)
                         self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid)
                         await self.publish_evc_data(serial, self.evc_data[uuid])
