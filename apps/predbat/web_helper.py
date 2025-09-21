@@ -1806,6 +1806,55 @@ body.dark-mode .log-menu a.active {
 }
 </style>
 """
+
+    # Add custom CSS for live updates
+    text += """
+        <style>
+        .log-status {
+            margin: 10px 0;
+            padding: 8px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        body.dark-mode .log-status {
+            background-color: #333;
+            color: #fff;
+        }
+        .new-log-entry {
+            animation: highlight 2s ease-out;
+        }
+        @keyframes highlight {
+            0% { background-color: #ffff99; }
+            100% { background-color: transparent; }
+        }
+        body.dark-mode .new-log-entry {
+            animation: highlight-dark 2s ease-out;
+        }
+        @keyframes highlight-dark {
+            0% { background-color: #555500; }
+            100% { background-color: transparent; }
+        }
+        .auto-scroll-toggle {
+            margin-left: 10px;
+            cursor: pointer;
+        }
+        .scroll-to-bottom {
+            margin-left: 10px;
+            padding: 4px 8px;
+            background: #007cba;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .scroll-to-bottom:hover {
+            background: #005a87;
+        }
+        </style>
+    """
+
     return text
 
 
@@ -2113,6 +2162,198 @@ body.dark-mode .revert-button:disabled {
 </style>"""
     return text
 
+
+def get_logfile_js(filter_type):
+    """
+    Return JavaScript for log file page
+    """
+    text = f"""
+        <script>
+        let currentFilter = '{filter_type}';
+        let lastLineNumber = 0;
+        let updateInterval;
+        let isUpdating = false;
+        let isPaused = false;
+
+        // Toggle pause/resume updates
+        function toggleUpdates() {{
+            const btn = document.getElementById('pauseResumeBtn');
+            if (isPaused) {{
+                // Resume
+                isPaused = false;
+                btn.textContent = 'Pause';
+                updateInterval = setInterval(updateLog, 2000);
+                updateLog(); // Immediate update
+                updateStatus('Updates resumed');
+            }} else {{
+                // Pause
+                isPaused = true;
+                btn.textContent = 'Resume';
+                if (updateInterval) {{
+                    clearInterval(updateInterval);
+                    updateInterval = null;
+                }}
+                updateStatus('Updates paused');
+            }}
+        }}
+
+        // Get the highest line number currently displayed
+        function getLastLineNumber() {{
+            const rows = document.querySelectorAll('#logTableBody tr[data-line]');
+            let maxLine = 0;
+            rows.forEach(row => {{
+                const lineNum = parseInt(row.getAttribute('data-line'));
+                if (lineNum > maxLine) {{
+                    maxLine = lineNum;
+                }}
+            }});
+            return maxLine;
+        }}
+
+        // Update log status
+        function updateStatus(message) {{
+            const statusDiv = document.getElementById('logStatus');
+            if (statusDiv) {{
+                const now = new Date().toLocaleTimeString();
+                statusDiv.textContent = `${{message}} (Last updated: ${{now}})`;
+            }}
+        }}
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {{
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+
+        // Add new log entries
+        function addLogEntries(lines) {{
+            const tbody = document.getElementById('logTableBody');
+            if (!tbody) return 0;
+            
+            const autoScroll = document.getElementById('autoScroll');
+            const shouldAutoScroll = autoScroll ? autoScroll.checked : false;
+            let newEntriesAdded = 0;
+
+            // Insert new entries at the top (newest first)
+            lines.forEach(logLine => {{
+                if (logLine.line_number > lastLineNumber) {{
+                    const row = document.createElement('tr');
+                    row.setAttribute('data-line', logLine.line_number);
+                    row.className = 'new-log-entry';
+                    
+                    let color = '#33cc33'; // Default green for info
+                    if (logLine.type === 'error') {{
+                        color = '#ff3333';
+                    }} else if (logLine.type === 'warning') {{
+                        color = '#ffA500';
+                    }}
+                    
+                    const timestamp = escapeHtml(logLine.timestamp);
+                    const message = escapeHtml(logLine.message);
+                    
+                    row.innerHTML = `<td>${{logLine.line_number}}</td><td nowrap><font color="${{color}}">${{timestamp}}</font> ${{message}}</td>`;
+                    
+                    // Insert at the top of the table body
+                    tbody.insertBefore(row, tbody.firstChild);
+                    newEntriesAdded++;
+                    
+                    lastLineNumber = Math.max(lastLineNumber, logLine.line_number);
+                }}
+            }});
+
+            // Auto-scroll to top for new entries (since newest are at top)
+            if (newEntriesAdded > 0 && shouldAutoScroll) {{
+                setTimeout(() => {{
+                    window.scrollTo({{
+                        top: 0,
+                        behavior: 'smooth'
+                    }});
+                }}, 100);
+            }}
+
+            return newEntriesAdded;
+        }}
+
+        // Scroll to bottom function
+        function scrollToBottom() {{
+            window.scrollTo({{
+                top: document.body.scrollHeight,
+                behavior: 'smooth'
+            }});
+        }}
+
+        // Fetch new log entries
+        async function updateLog() {{
+            if (isUpdating || isPaused) return;
+            isUpdating = true;
+
+            try {{
+                const response = await fetch(`/api/log?filter=${{currentFilter}}&since=${{lastLineNumber}}&max_lines=1024`);
+                
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                }}
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {{
+                    const newEntries = addLogEntries(data.lines);
+                    if (newEntries > 0) {{
+                        updateStatus(`${{newEntries}} new entries added`);
+                    }} else {{
+                        updateStatus('No new entries');
+                    }}
+                }} else {{
+                    updateStatus(`Error: ${{data.message || 'Unknown error'}}`);
+                }}
+            }} catch (error) {{
+                console.error('Error updating log:', error);
+                updateStatus(`Error fetching log data: ${{error.message}}`);
+            }} finally {{
+                isUpdating = false;
+            }}
+        }}
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {{
+            lastLineNumber = 0; // Start from 0 since we're loading all initial data
+            updateStatus('Log viewer loaded - fetching initial data...');
+            
+            // Load initial data immediately
+            updateLog();
+            
+            // Start periodic updates every 2 seconds
+            updateInterval = setInterval(updateLog, 2000);
+            
+            // Handle page visibility changes to pause/resume updates
+            document.addEventListener('visibilitychange', function() {{
+                if (isPaused) return; // Don't auto-resume if manually paused
+                
+                if (document.hidden) {{
+                    if (updateInterval) {{
+                        clearInterval(updateInterval);
+                        updateInterval = null;
+                    }}
+                }} else {{
+                    if (!updateInterval) {{
+                        updateInterval = setInterval(updateLog, 2000);
+                    }}
+                    updateLog(); // Immediate update when page becomes visible
+                }}
+            }});
+        }});
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', function() {{
+            if (updateInterval) {{
+                clearInterval(updateInterval);
+                updateInterval = null;
+            }}
+        }});
+        </script>
+        """
+    return text
 
 def get_editor_js():
     text = """
