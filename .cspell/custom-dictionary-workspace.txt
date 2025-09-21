@@ -1,4 +1,6 @@
 # Custom Dictionary Words
+visibilitychange
+beforeunload
 activepower
 adata
 adbase
