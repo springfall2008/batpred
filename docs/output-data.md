@@ -564,11 +564,20 @@ The following sensors give the forecast Solar data from Solcast.
 Predbat populates these sensors irrespective of whether you are using the [Predbat direct Solcast or Solcast integration method](install.md#solcast-install) to get your Solar forecast,
 but if you are using the Solcast integration then the Predbat sensors mirror the similarly named Solcast integration sensors so could be disabled if you so wish.
 
-- sensor.predbat_pv_today - Tracks the PV forecast in kWh for today, attributes give the remaining amount today and the half-hourly data
-- sensor.predbat_pv_tomorrow - Tracks the PV forecast in kWh for tomorrow, attributes give the remaining amount today and the half-hourly data
+- sensor.predbat_pv_today - Tracks the PV forecast in kWh for today, attributes give the total today, remaining amount today and the half-hourly data
+- sensor.predbat_pv_tomorrow - Tracks the PV forecast in kWh for tomorrow, attributes give the total today, remaining amount today and the half-hourly data
 - sensor.predbat_pv_d2 - Similar to the above, but tracking the PV forecast for the day after tomorrow
 - sensor.predbat_pv_d3 - PV forecast for two days after tomorrow
 - sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in Watts, attributes give the 10% and 90% power now forecast
+
+The solar sensor attributes include:
+
+- total - total PV forecast for the day
+- total10 - total PV 10% forecast for the day
+- total90 - total PV 90% forecast for the day
+- totalCL - total calibrated PV forecast for the day, this is the PV forecast adjusted by Predbat based on historical forecast vs generation data. The calibration should take account of shading or panel performance issues
+- remaining/remaining10/remaining90/remainingCL - forecast solar generation for the remainder of the day
+- detailedForecast - a half hourly breakdown of solar forecast for the day, with similar PV estimate, 10% estimate, 90% estimate and calibrated estimate values
 
 ## Dummy inverter sensors
 
