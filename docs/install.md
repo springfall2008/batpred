@@ -80,7 +80,7 @@ To access the entire HA directory structure, click the three horizontal bars to 
 
 **Recommended**
 
-The simplest way to install Predbat now is with the Predbat add-on.
+The simplest way to install Predbat now is with the Predbat add-on. The Predbat-Appdaemon add-on and Appdaemon install methods previously used for Predbat have been retired.
 
 Go to settings, add-ons, select Add-on Store, three dots on the top right, Repositories, then add the following repo
 '<https://github.com/springfall2008/predbat_addon>' to the list and click close. Now refresh the list and find Predbat, click on it and click 'install'.
@@ -97,7 +97,11 @@ You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on)
 
 The Predbat web interface will work through the Predbat add-on, you can click on the 'Web UI' button to open it once Predbat is running.
 
-If you wish to use Docker with Predbat it is recommended you read the Docker installation instructions inside the Predbat.
+## Docker Install
+
+As an alternative to the Predbat add-on, Predbat can be installed via Docker
+
+The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and a fork of the Predbat add-on with installation instructions and updates for Docker can be found at [https://github.com/nipar4/predbat_addon](https://github.com/nipar4/predbat_addon).
 
 ## Solcast Install
 
