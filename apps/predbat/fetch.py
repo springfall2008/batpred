@@ -1193,7 +1193,7 @@ class Fetch:
             if (car_n == 0) and self.car_charging_manual_soc:
                 self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh")
             else:
-                self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
+                self.car_charging_soc[car_n] = dp3((self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0)
         if self.num_cars:
             self.log("Cars: SoC kWh: {} Charge limit {} plan time {} battery size {}".format(self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
 
