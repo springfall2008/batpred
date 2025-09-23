@@ -943,7 +943,7 @@ low rate slot for the car/house (and might therefore start charging the battery)
 WARNING: Some cars will briefly start charging as soon as they are plugged in, which Predbat will detect and assume that this is a low rate slot even when it isn't.
 It is therefore recommended that you do NOT set car_charging_now unless you have problems with the Octopus Intelligent slots, and car_charging_now should be commented out in `apps.yaml`.
 
-**CAUTION:** Do not use car_charging_now with Predbat led charging or you will create an infinite loop. Do you use car_charging_now with Octopus intelligent
+**CAUTION:** Do not use car_charging_now with Predbat-led charging or you will create an infinite loop. Only use car_charging_now with Octopus Intelligent-led charging
 unless you can't make it work any other way as it will assume all car charging is at a low rate.
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging.

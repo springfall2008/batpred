@@ -218,7 +218,7 @@ See the Predbat mode setting above for basic calculation options
 **input_number.predbat_forecast_plan_hours** is the minimum length of the Predbat charge plan, and is the number of hours _after_ the first charge slot to include in the plan.
 The default of 24 hours is the recommended value (to match energy rate cycles). Note that the actual length of the Predbat plan will vary depending upon when the first charge slot is.
 
-**switch.predbat_calculate_export_oncharge** (_expert mode_) When turned On, calculated export slots will disable or move charge slots, allowing them to intermix in the plan. When off (the default) export slots will never be placed into charge slots.
+**switch.predbat_calculate_export_oncharge** (_expert mode_) When turned On, calculated export slots will disable or move charge slots, allowing them to intermix in the plan. When Off (the default) export slots will never be placed into charge slots.
 
 **switch.predbat_set_discharge_during_charge** - When turned On disables inverter discharge during charge slots, useful for multi-inverter setups to avoid cross-charging when batteries are out of balance. Default is Off.
 
@@ -234,15 +234,16 @@ NOTE: This feature is quite slow so may need a higher-performance machine so is 
 
 This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs in which you want to force export late.
 
-**switch.calculate_import_low_export** (_expert_mode_) When turned On (the default), import slots of the same value are sorted by export price.
+**switch.predbat_calculate_import_low_export** (_expert_mode_) When turned On (the default), import slots of the same value are sorted by export price.
 When turned Off they are sorted just by price and then time.
 
-By default with this option turned on, if there are multiple charge slots of the same price Predbat will try to charge when the export rates are the lowest thus leaving the higher export slots available.
+By default with this option turned On, if there are multiple charge slots of the same price Predbat will try to charge when the export rates are the lowest thus leaving the higher export slots available.
 
-**switch.calculate_export_high_import** (_expert_mode_) When turned On (the default) export slots of the same value are sorted by import price (to avoid the low import slots for export).
-When Off they are sorted just by price and then time.
+**switch.predbat_calculate_export_high_import** (_expert_mode_) When turned On (the default) export slots of the same value are sorted by import price (to avoid exporting in the low price import slots).
 
-By default with this option on the latest export slot of the same value will be picked, this is useful for fixed-price export tariffs where you want to export as late in the day as you can.
+When Off export slots are sorted just by decreasing export price and then time (so high value exports are planned first).
+
+By default with this option On the latest export slots of the same value will be picked, this is useful for fixed-price export tariffs where you want to export as late in the day as you can, thus preserving the battery for as long as possible.
 
 ## Battery margins and metrics options
 
@@ -601,7 +602,7 @@ If this selector is used in an automation you can set the time and rate together
 
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time slot expires (they do not repeat).
 
-_NOTE: once you select a time slot from any of the **select.predbat_manual_XX** selectors the selected time slot is immediately marked on the drop-down and you can then make another change.
+_NOTE_: once you select a time slot from any of the **select.predbat_manual_XX** selectors the selected time slot is immediately marked on the drop-down and you can then make another change.
 Predbat still has to update the plan which it will be doing so in the background,
 and this can take a few minutes to run (depending on the speed and power of the PC you are running Home Assistant on) so don't be surprised why the
 [Predbat plan](predbat-plan-card.md) doesn't change immediately - remember you can see the date/time the plan was last updated on the first row of the plan.

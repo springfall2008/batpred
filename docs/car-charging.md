@@ -37,7 +37,7 @@ If you don't set this Predbat will default to 100%.
 These retrieve details of the charge limit and when the car will finish charging from your Octopus app settings.
 Again, if you are using the Octopus Energy direct method for Predbat then these configuration lines are not required and should be commented out of `apps.yaml`.
 
-- You can use **car_charging_now** as a workaround to indicate your car is charging but the Intelligent API hasn't reported it
+- You can configure **car_charging_now** in `apps.yaml` to point a Home Assistant sensor that indicates that the car is currently charging as a workaround to indicate your car is charging, but the Intelligent API hasn't reported it.
 
 - The switch **switch.predbat_octopus_intelligent_consider_full** (_expert mode_)
 (default is Off) when turned on will cause Predbat to predict when your car battery is full and assume no further charging will occur.
@@ -82,7 +82,7 @@ NB2: If you have **car_charging_soc** set and working for your car SoC sensor in
 If you set this to zero, this feature is disabled, and all low-rate slots will be used.
 This may mean you need to use expert mode and change your low-rate threshold to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. Flux)
 
-- _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
+- _WARNING: Do not set **car_charging_now** in `apps.yaml` or you will create a circular dependency._
 
 - Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged; you will need to write a Home Assistant automation based on this sensor to control when your car charges.<BR>
 A sample automation to start/stop car charging using a Zappi car charger and the [MyEnergi Zappi integration](https://github.com/CJNE/ha-myenergi) is as follows,
