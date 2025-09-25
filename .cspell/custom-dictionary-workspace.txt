@@ -22,6 +22,7 @@ Batpred
 battemperature
 batteri
 batteryb
+beforeunload
 bierner
 calib
 cexxxx
@@ -281,6 +282,7 @@ useid
 userinterface
 varh
 venv
+visibilitychange
 Wallbox
 weblink
 welink
