@@ -16,7 +16,7 @@ from db_engine import DatabaseEngine, TIME_FORMAT_DB
 
 
 class DatabaseManager:
-    def __init__(self, base, db_days):
+    def __init__(self, db_enable, db_days, base):
         self.base = base
         self.log = base.log
         self.db_days = db_days
@@ -27,6 +27,7 @@ class DatabaseManager:
         self.sync_event = threading.Event()
         self.async_event = asyncio.Event()
         self.return_event = threading.Event()
+        self.api_started = False
 
     def bridge_event(self, loop):
         """
@@ -38,6 +39,24 @@ class DatabaseManager:
             self.sync_event.wait()
             self.sync_event.clear()  # Clear the event to allow the loop to continue
             loop.call_soon_threadsafe(self.async_event.set)
+
+    def is_alive(self):
+        """Check if the database manager is alive"""
+        return self.api_started
+
+    def wait_api_started(self):
+        """
+        Wait for the API to start
+        """
+        self.log("DBManager: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 240:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: DBManager: Failed to start")
+            return False
+        return True
 
     async def start(self):
         """
@@ -52,6 +71,7 @@ class DatabaseManager:
         threading.Thread(target=self.bridge_event, args=(loop,), daemon=True).start()
 
         self.log("db_manager: Started")
+        self.api_started = True
 
         while not self.stop_thread:
             if not self.db_queue:
@@ -87,6 +107,7 @@ class DatabaseManager:
 
         self.db_engine._close()
         self.log("db_manager: Stopped")
+        self.api_started = False
 
     def send_via_ipc(self, command, info, expect_response=False):
         """
@@ -114,14 +135,14 @@ class DatabaseManager:
                 return None
         return None
 
-    def stop(self):
+    async def stop(self):
         """
         Close the database connection
         """
         self.stop_thread = True
-        queue_id = self.queue_id
-        self.queue_id += 1
         self.send_via_ipc("stop", {}, expect_response=False)
+        self.api_started = False
+        self.log("db_manager: stop command sent")
 
     def get_state_db(self, entity_id):
         """

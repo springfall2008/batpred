@@ -17,9 +17,8 @@ import json
 import requests
 import traceback
 import threading
+import time
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
-
-from db_manager import DatabaseManager  # database functions have been refactored to DatabaseManager
 
 
 class RunThread(threading.Thread):
@@ -51,41 +50,55 @@ class HAInterface:
     Direct interface to Home Assistant
     """
 
-    def is_running(self):
-        if self.websocket_task:
-            if not self.websocket_task.is_alive():
-                return False
-            if not self.websocket_active:
-                return False
-        if self.db_manager_task:
-            if not self.db_manager_task.is_alive():
-                return False
+    def is_active(self):
+        return self.is_alive()
+
+    def is_alive(self):
+        if not self.api_started:
+            return False
+        if self.ha_key and not self.websocket_active:
+            return False
         return True
 
-    def __init__(self, base):
+    def wait_api_started(self):
+        """
+        Wait for the API to start
+        """
+        self.log("HAInterface: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 240:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: HAInterface: Failed to start")
+            return False
+        return True
+
+    def __init__(self, ha_url, ha_key, db_enable, db_mirror_ha, db_primary, base):
         """
         Initialize the interface to Home Assistant.
         """
-        self.ha_url = base.args.get("ha_url", "http://supervisor/core")
-        self.ha_key = base.args.get("ha_key", os.environ.get("SUPERVISOR_TOKEN", None))
-        self.db_enable = base.args.get("db_enable", False)
-        self.db_days = base.args.get("db_days", 30)
-        self.db_mirror_ha = base.args.get("db_mirror_ha", False)
-        self.db_primary = base.args.get("db_primary", False)
+        self.ha_url = ha_url
+        self.ha_key = ha_key
+        self.db_enable = db_enable
+        self.db_mirror_ha = db_mirror_ha
+        self.db_primary = db_primary
         self.db_manager = None
-        self.db_manager_task = None
         self.db_mirror_list = {}
         self.db = None
         self.db_cursor = None
         self.websocket_active = False
-        self.websocket_task = None
         self.api_errors = 0
         self.stop_thread = False
+        self.api_started = False
 
         self.base = base
         self.log = base.log
         self.state_data = {}
         self.slug = None
+
+        print("HA URL", self.ha_url)
+        print("HA KEY", self.ha_key)
 
         if not self.ha_key:
             if not (self.db_enable and self.db_primary):
@@ -93,9 +106,8 @@ class HAInterface:
                 raise ValueError
             else:
                 self.log("Info: Using SQL Lite database as primary data source, no HA interface available")
-        else:
-            self.log("Getting slug id from HA supervisor")
 
+        if self.ha_key:
             # Get the current addon info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
             res = self.api_call("/addons/self/info", core=False, silent=True)
             if res:
@@ -103,33 +115,32 @@ class HAInterface:
                 self.slug = res["data"]["slug"]
                 self.log("Info: Add-on slug is {}".format(self.slug))
 
-            self.log("Checking Predbat can talk to HA")
-
             check = self.api_call("/api/services")
             if not check:
                 self.log("Warn: Unable to connect directly to Home Assistant at {}, please check your configuration of ha_url/ha_key".format(self.ha_url))
                 self.ha_key = None
                 raise ValueError
-            else:
-                self.log("Info: Connected to Home Assistant at {}".format(self.ha_url))
-
-                self.log("Creating websocket")
-
-                self.websocket_task = self.base.create_task(self.socketLoop())
-                self.websocket_active = True
-                self.log("Info: Web Socket task started")
 
         if self.db_enable:
             # Open the SQL Lite database called predbat.db using the DatabaseManager
-            self.log("Info: Opening database")
-            self.db_manager = DatabaseManager(self.base, self.db_days)
-            self.db_manager_task = self.base.create_task(self.db_manager.start())
+            self.db_manager = self.base.components.get_component("db")
 
-    def stop(self):
+        # API Has started
+        self.base.ha_interface = self  # Set pointer back to ourselves as other components require this one
+        self.api_started = True
+
+    async def start(self):
+        if self.ha_key:
+            self.log("Info: Starting HA interface")
+            self.websocket_active = True
+            await self.socketLoop()
+        else:
+            while not self.stop_thread:
+                await asyncio.sleep(1)
+
+    async def stop(self):
         self.stop_thread = True
-        if self.db_manager:
-            self.log("Info: Stopping database manager")
-            self.db_manager.stop()
+        self.api_started = False
 
     def get_slug(self):
         """

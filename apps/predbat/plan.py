@@ -790,6 +790,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=self.metric_load_divergence,
+            load_adjust=self.manual_load_adjust,
         )
         load_minutes_step10 = self.step_data_history(
             self.load_minutes,
@@ -801,6 +802,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
+            load_adjust=self.manual_load_adjust,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
@@ -1067,8 +1069,8 @@ class Plan:
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
                 # Web history
-                if self.web_interface:
-                    self.web_interface.history_update()
+                if self.components.get_component("web_interface"):
+                    self.components.get_component("web_interface").history_update()
 
         # Destroy pool
         if self.pool:

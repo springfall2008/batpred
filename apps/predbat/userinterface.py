@@ -25,8 +25,7 @@ from config import (
 DEBUG_EXCLUDE_LIST = [
     "pool",
     "ha_interface",
-    "web_interface",
-    "web_interface_task",
+    "components",
     "prediction",
     "logfile",
     "predheat",
@@ -38,10 +37,6 @@ DEBUG_EXCLUDE_LIST = [
     "CONFIG_ITEMS",
     "config_index",
     "comparison",
-    "octopus_api_direct",
-    "octopus_api_direct_task",
-    "ge_cloud_direct",
-    "ge_cloud_direct_task",
     "plugin_system",
 ]
 
@@ -272,9 +267,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
-                if self.ge_cloud_direct:
-                    await self.ge_cloud_direct.select_event(entity_id, value)
+            await self.components.select_event(entity_id, value)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -327,9 +320,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
-                if self.ge_cloud_direct:
-                    await self.ge_cloud_direct.number_event(entity_id, value)
+            await self.components.number_event(entity_id, value)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -373,9 +364,7 @@ class UserInterface:
             entities = [entities]
 
         for entity_id in entities:
-            if "predbat_gecloud_" in entity_id:
-                if self.ge_cloud_direct:
-                    await self.ge_cloud_direct.switch_event(entity_id, service)
+            await self.components.switch_event(entity_id, service)
 
         for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
@@ -1159,9 +1148,14 @@ class UserInterface:
             if "_import" in item["name"]:
                 # Manual import rate
                 self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_import_value"))
-            else:
+            elif "_export" in item["name"]:
                 # Manual export rate
                 self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_export_value"))
+            elif "_load" in item["name"]:
+                # Manual load rate
+                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_load_value"))
+            else:
+                self.log("Warn: Manual rate sensor {} not recognised".format(config_item))
         else:
             self.manual_times(config_item, new_value=item_value)
 
@@ -1294,6 +1288,12 @@ class UserInterface:
                 start_time = datetime.strptime(rate_time, "%H:%M:%S")
             except (ValueError, TypeError):
                 start_time = None
+
+            try:
+                rate_value = float(rate_value)
+            except (ValueError, TypeError):
+                rate_value = default_rate
+
             if start_time:
                 minutes = start_time.hour * 60 + start_time.minute
                 if minutes < minutes_now:

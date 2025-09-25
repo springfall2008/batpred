@@ -2,6 +2,7 @@
 activepower
 adata
 adbase
+afci
 AIO
 AIO's
 aiohttp
@@ -18,8 +19,10 @@ autopep
 autoupdate
 Basepath
 Batpred
+battemperature
 batteri
 batteryb
+beforeunload
 bierner
 calib
 cexxxx
@@ -47,6 +50,7 @@ dasharray
 datain
 datap
 datapoints
+datas
 dayname
 daynumber
 daysymbol
@@ -67,6 +71,8 @@ elif
 emszzzz
 enctype
 endfor
+endhour
+endminute
 endt
 Energi
 Energidata
@@ -75,6 +81,9 @@ energydataservice
 epod
 euids
 evse
+exportlimit
+fdpwr
+fdsoc
 feedin
 fentry
 Fingerbot
@@ -86,11 +95,14 @@ foxess
 futurerate
 gecloud
 gekey
+generationpower
 geserial
 geseriale
 Ginlong
 GivEnergy
 givtcp
+gridconsumption
+gridconsumptionpower
 growatt
 HACS
 hadashboard
@@ -129,6 +141,7 @@ kvar
 kvarh
 kwhb
 linebreak
+loadspower
 localfolder
 lockstep
 logdata
@@ -137,8 +150,10 @@ luxpower
 markdownlint
 matplotlib
 maximise
+maxsoc
 mdlrc
 measurand
+measurands
 Meteo
 Meteoalarm
 meterpoint
@@ -146,6 +161,7 @@ metricb
 metricmid
 minb
 minmax
+minsocongrid
 minuteb
 Mixergy
 mkdocs
@@ -172,6 +188,7 @@ octo
 octoplus
 octopoints
 Ohme
+ohmepy
 onchange
 oncharge
 oninput
@@ -193,6 +210,7 @@ predbatt
 Predheat
 psum
 pvbat
+pvpower
 pwindow
 pylint
 pyproject
@@ -232,6 +250,8 @@ solisx
 sourcery
 Southwell
 springfall
+starthour
+startminute
 startt
 stdlib
 stepline
@@ -241,6 +261,7 @@ tabindex
 tasmota
 tdata
 tdiff
+temperation
 testname
 thirdparty
 timea
@@ -260,9 +281,11 @@ useid
 userinterface
 varh
 venv
+visibilitychange
 Wallbox
 weblink
 welink
+workmode
 writeonly
 xaxis
 xaxistooltip

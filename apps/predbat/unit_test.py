@@ -16,23 +16,38 @@ import glob
 from datetime import datetime, timedelta
 import argparse
 
-import requests
-import yaml
-import json
-import matplotlib.pyplot as plt
-import numpy as np
+try:
+    import requests
+except ImportError:
+    requests = None
+try:
+    import yaml
+except ImportError:
+    yaml = None
+try:
+    import json
+except ImportError:
+    json = None
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
 from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2
 from futurerate import FutureRate
-from config import MINUTE_WATT
+from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST
 from inverter import Inverter
 from compare import Compare
-from web import WebInterface
 from gecloud import GECloudDirect
 from octopus import OctopusAPI
+from components import Components
 
 # Import MagicMock
 from unittest.mock import MagicMock
@@ -876,6 +891,141 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
+
+    return failed
+
+
+def test_plugin_startup_order(my_predbat):
+    """
+    Test that plugins are initialized before the web server starts
+    This ensures plugin endpoints can be registered before the router freezes
+    """
+    print("*** Running test: Plugin startup order and endpoint registration")
+    failed = 0
+
+    # Mock the components and plugin system
+    from unittest.mock import MagicMock, patch, call
+
+    # Create a mock for tracking call order
+    call_order = []
+
+    # Mock the Components class
+    mock_components = MagicMock()
+    mock_components.initialize = MagicMock(side_effect=lambda: call_order.append("components.initialize"))
+    mock_components.start = MagicMock(side_effect=lambda: call_order.append("components.start"))
+
+    # Mock the PluginSystem class
+    mock_plugin_system = MagicMock()
+    mock_plugin_system.discover_plugins = MagicMock(side_effect=lambda: call_order.append("plugin.discover"))
+    mock_plugin_system.call_hooks = MagicMock(side_effect=lambda hook: call_order.append(f"plugin.hook.{hook}"))
+
+    # Test the initialization order
+    with patch("predbat.Components", return_value=mock_components):
+        with patch("predbat.PluginSystem", return_value=mock_plugin_system):
+            # Create a minimal predbat instance for testing
+            test_predbat = PredBat()
+            test_predbat.reset()
+            test_predbat.log = MagicMock()
+            test_predbat.reset = MagicMock()
+            test_predbat.auto_config = MagicMock()
+            test_predbat.load_user_config = MagicMock()
+            test_predbat.create_test_elements = MagicMock()
+            test_predbat.expose_config = MagicMock()
+            test_predbat.run_time_loop = MagicMock()
+            test_predbat.ha_interface = MagicMock()
+            test_predbat.prefix = "test"
+            test_predbat.had_errors = False
+            test_predbat.dashboard_index = []
+            test_predbat.dashboard_values = {}
+            test_predbat.args = {}
+
+            print("ha_interface = ", test_predbat.ha_interface)
+
+            # Clear the call order
+            call_order = []
+
+            # Run the initialization
+            try:
+                test_predbat.update_time()
+                test_predbat.initialize()
+            except Exception as e:
+                # Some exceptions are expected since we're mocking heavily
+                print(f"Exception: {e}")
+                return 1
+
+    # Verify the order
+    # Components should be initialized, then plugins discovered, then components started
+    components_init_index = -1
+    plugin_discover_index = -1
+    components_start_index = -1
+
+    for i, call in enumerate(call_order):
+        if call == "components.initialize":
+            components_init_index = i
+        elif call == "plugin.discover":
+            plugin_discover_index = i
+        elif call == "components.start":
+            components_start_index = i
+
+    if components_init_index == -1:
+        print("ERROR: Components.initialize was not called during initialization")
+        failed = 1
+    elif plugin_discover_index == -1:
+        print("ERROR: Plugin discovery was not called during initialization")
+        failed = 1
+    elif components_start_index == -1:
+        print("ERROR: Components.start was not called during initialization")
+        failed = 1
+    elif components_init_index >= plugin_discover_index:
+        print(f"ERROR: Components must be initialized (index {components_init_index}) before plugin discovery (index {plugin_discover_index})")
+        print(f"Call order was: {call_order}")
+        failed = 1
+    elif plugin_discover_index >= components_start_index:
+        print(f"ERROR: Plugin discovery (index {plugin_discover_index}) must happen before components.start (index {components_start_index})")
+        print(f"Call order was: {call_order}")
+        failed = 1
+    else:
+        print(f"OK: Correct startup order - Components.initialize ({components_init_index}) -> Plugin.discover ({plugin_discover_index}) -> Components.start ({components_start_index})")
+
+    # Now test that a plugin can register an endpoint
+    print("*** Testing plugin endpoint registration")
+
+    # Create a mock web component
+    mock_web = MagicMock()
+    mock_web.registered_endpoints = []
+    mock_web.register_endpoint = MagicMock(side_effect=lambda path, handler, method: mock_web.registered_endpoints.append({"path": path, "handler": handler, "method": method}))
+
+    # Create mock components that returns our web component
+    mock_components_with_web = MagicMock()
+    mock_components_with_web.get_component = MagicMock(return_value=mock_web)
+
+    # Create a test plugin that registers an endpoint
+    class TestPlugin:
+        def __init__(self, base):
+            self.base = base
+
+        def register_hooks(self, plugin_system):
+            # Register endpoint immediately like the metrics plugin now does
+            if hasattr(self.base, "components"):
+                web = self.base.components.get_component("web")
+                if web:
+                    web.register_endpoint("/test", lambda: "test", "GET")
+
+    # Test the plugin registration
+    test_base = MagicMock()
+    test_base.components = mock_components_with_web
+    test_plugin = TestPlugin(test_base)
+    test_plugin.register_hooks(None)
+
+    # Verify the endpoint was registered
+    if len(mock_web.registered_endpoints) == 0:
+        print("ERROR: Plugin failed to register endpoint")
+        failed = 1
+    elif mock_web.registered_endpoints[0]["path"] != "/test":
+        print(f"ERROR: Wrong endpoint path registered: {mock_web.registered_endpoints[0]['path']}")
+        failed = 1
+    else:
+        print(f"OK: Plugin successfully registered endpoint /test")
 
     return failed
 
@@ -1829,68 +1979,29 @@ def test_inverter_self_test(test_name, my_predbat):
     inv.sleep = dummy_sleep
     inv.self_test(my_predbat.minutes_now)
     rest = dummy_rest.get_commands()
-    expected = [
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
+    repeats = INVERTER_MAX_RETRY_REST  # configurable number of repeats
+    expected = []
+
+    # Define the command patterns
+    commands = [
         ["dummy/setChargeTarget", {"chargeToPercent": 100}],
         ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
         ["dummy/setChargeRate", {"chargeRate": 0}],
         ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
         ["dummy/setDischargeRate", {"dischargeRate": 0}],
         ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
         ["dummy/setBatteryReserve", {"reservePercent": 6}],
         ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
         ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
         ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
         ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
         ["dummy/setBatteryMode", {"mode": "Timed Export"}],
     ]
+
+    # Generate expected list with repeats
+    for command in commands:
+        for _ in range(repeats):
+            expected.append(command)
     if json.dumps(expected) != json.dumps(rest):
         print("ERROR: Self test should be {} got {}".format(expected, rest))
         failed = True
@@ -2302,8 +2413,8 @@ def run_inverter_tests():
         return failed
 
     failed |= test_call_adjust_export_immediate("export_immediate1", my_predbat, ha, inv, dummy_items, 100, repeat=True)
-    failed |= test_call_adjust_export_immediate("export_immediate3", my_predbat, ha, inv, dummy_items, 0, repeat=True)
-    failed |= test_call_adjust_export_immediate("export_immediate4", my_predbat, ha, inv, dummy_items, 50, charge_stop=True)
+    failed |= test_call_adjust_export_immediate("export_immediate3", my_predbat, ha, inv, dummy_items, 0, repeat=False, charge_stop=True)
+    failed |= test_call_adjust_export_immediate("export_immediate4", my_predbat, ha, inv, dummy_items, 50)
     failed |= test_call_adjust_export_immediate("export_immediate5", my_predbat, ha, inv, dummy_items, 49)
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, repeat=True)
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, discharge_start_time="00:00:00", discharge_end_time="09:00:00")
@@ -3088,7 +3199,7 @@ def run_execute_test(
         if assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze != True:
             print("ERROR: Inverter {} Immediate charge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_charge_soc_freeze))
             failed = True
-        assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 0
+        assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 100
         if not set_export_window:
             assert_soc_target_force_dis = -1
         if inverter.immediate_discharge_soc_target != assert_soc_target_force_dis:
@@ -3142,9 +3253,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
         # my_predbat.best_soc_keep = 1
-        my_predbat.set_charge_freeze = True
-        my_predbat.set_export_freeze = True
-        my_predbat.combine_export_slots = False
+        # my_predbat.set_charge_freeze = True
+        # my_predbat.set_export_freeze = True
+        # my_predbat.combine_export_slots = False
         # my_predbat.set_export_freeze = False
         # my_predbat.inverter_loss = 0.97
         # my_predbat.calculate_tweak_plan = False
@@ -3357,12 +3468,15 @@ def run_test_web_if(my_predbat):
     """
     failed = 0
     print("**** Running web interface test ****\n")
+    orig_ha_if = my_predbat.ha_interface
+    my_predbat.components = Components(my_predbat)
+    my_predbat.components.initialize()
+    my_predbat.components.start("ha_interface")
+    my_predbat.components.start("web")
     ha = my_predbat.ha_interface
-    my_predbat.web_interface = WebInterface(my_predbat)
-    my_predbat.web_interface_task = my_predbat.create_task(my_predbat.web_interface.start())
 
     # Fetch page from 127.0.0.1:5052
-    for page in ["/", "/dash", "/plan", "/config", "/apps", "/charts", "/compare", "/log"]:
+    for page in ["/", "/dash", "/plan", "/config", "/apps", "/charts", "/compare", "/log", "/config", "/entity"]:
         print("Fetch page {}".format(page))
         address = "http://127.0.0.1:5052" + page
         res = requests.get(address)
@@ -3388,7 +3502,12 @@ def run_test_web_if(my_predbat):
         print("ERROR: Compare tariffs not triggered - expected {} got {}".format("on", result))
         failed = 1
 
-    my_predbat.web_interface.abort = True
+    # Run stop as task as we need to await it
+    my_predbat.create_task(my_predbat.components.stop("ha_interface"))
+    my_predbat.create_task(my_predbat.components.stop("web"))
+    time.sleep(0.1)
+    my_predbat.components = Components(my_predbat)
+    my_predbat.ha_interface = orig_ha_if
     return failed
 
 
@@ -8792,6 +8911,9 @@ def main():
         failed |= run_perf_test(my_predbat)
         if args.perf_only:
             return failed
+
+    if not failed:
+        failed |= test_plugin_startup_order(my_predbat)
 
     if not failed:
         failed |= run_test_units(my_predbat)
