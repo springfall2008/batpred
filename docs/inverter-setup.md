@@ -546,7 +546,7 @@ The following additions are needed to facilitate integration with Predbat and ne
       - id: predbat_requested_mode_action
         alias: "Predbat Requested Mode Action"
         description: "Acts as a mapper for the input_select.predbat_requested_mode to the select.sigen_plant_remote_ems_control_mode"
-        mode: single
+        mode: restart
         triggers:
           - trigger: state
             entity_id:
@@ -561,12 +561,18 @@ The following additions are needed to facilitate integration with Predbat and ne
               option: >
                 {% if is_state('input_select.predbat_requested_mode', "Demand") %}Maximum Self Consumption
                 {% elif is_state('input_select.predbat_requested_mode', "Charging") %}Command Charging (PV First)
-                {% elif is_state('input_select.predbat_requested_mode', "Freeze Charging") %}Command Charging (PV First)
+                {% elif is_state('input_select.predbat_requested_mode', "Freeze Charging") %}Maximum Self Consumption
                 {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
-                {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Command Discharging (ESS First)
+                {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
                 {% endif %}
           - choose:
               # Set charging limit to 0 when requested mode is Freeze Charging
+              # Docs:
+              #  Freeze charging - The battery is charging but the current battery level (SoC) is frozen (held). Think of it
+              #  as a charge to the current battery level. The grid or solar covers any house load. If there is a shortfall of
+              #  Solar power to meet house load, the excess house load is met from grid import, but if there is excess Solar
+              #  power above the house load, the excess solar will be used to charge the battery
+              # In Sigenergy, this is effectively "self consumption" mode with discharging prohibited
               - conditions:
                   - condition: state
                     entity_id: input_select.predbat_requested_mode
@@ -574,10 +580,16 @@ The following additions are needed to facilitate integration with Predbat and ne
                 sequence:
                   - service: number.set_value
                     data_template:
-                      entity_id: number.sigen_plant_ess_max_charging_limit
+                      entity_id: number.sigen_plant_ess_max_discharging_limit
                       value: 0
 
-              # Set discharging limit to 0 when requested mode is Freeze Discharging
+              # Set charging limit to 0 when requested mode is Freeze Discharging
+              # Docs:
+              #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
+              #  but with charging disabled. The battery or solar covers the house load. As charging is disabled, if there is
+              #  excess solar generated, the current SoC level will be held and the excess solar will be exported. If there is
+              #  a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
+              # In Sigenergy, this is effectively "self consumption" mode with charging prohibited
               - conditions:
                   - condition: state
                     entity_id: input_select.predbat_requested_mode
@@ -585,7 +597,7 @@ The following additions are needed to facilitate integration with Predbat and ne
                 sequence:
                   - service: number.set_value
                     data_template:
-                      entity_id: number.sigen_plant_ess_max_discharging_limit
+                      entity_id: number.sigen_plant_ess_max_charging_limit
                       value: 0
 
               # If neither of the above conditions are met, set the limits to the input numbers
