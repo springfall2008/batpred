@@ -25,6 +25,14 @@ from .battery_calculations import (
     calc_percent_limit_new,
 )
 
+from .formatting import (
+    dp0,
+    dp1,
+    dp2,
+    dp3,
+    dp4,
+)
+
 __all__ = [
     "calculate_soc_percentage",
     "calculate_charge_from_percentage",
@@ -37,4 +45,9 @@ __all__ = [
     "clamp_soc_to_limits",
     "calculate_cycle_equivalent",
     "calc_percent_limit_new",
+    "dp0",
+    "dp1",
+    "dp2",
+    "dp3",
+    "dp4",
 ]
