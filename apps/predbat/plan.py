@@ -14,6 +14,9 @@ from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from config import PREDICT_STEP, TIME_FORMAT
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit
+
+# Import new battery calculation utilities
+from utils.battery_calculations import calculate_charge_from_percentage
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 
 """
@@ -766,7 +769,9 @@ class Plan:
                 self.export_window_best = copy.deepcopy(self.export_window)
 
             # Pre-fill best charge limit with the current charge limit
-            self.charge_limit_best = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window_best))]
+            # Using new battery calculation utility for better maintainability
+            charge_kwh = calculate_charge_from_percentage(self.current_charge_limit, self.soc_max)
+            self.charge_limit_best = [charge_kwh for i in range(len(self.charge_window_best))]
             self.charge_limit_percent_best = [self.current_charge_limit for i in range(len(self.charge_window_best))]
 
             # Pre-fill best export enable with Off
@@ -2028,7 +2033,8 @@ class Plan:
         for window_n in range(min(record_export_windows, len(export_window_best))):
             window = export_window_best[window_n]
             limit = export_limits_best[window_n]
-            limit_soc = self.soc_max * limit / 100.0
+            # Using new battery calculation utility for percentage to kWh conversion
+            limit_soc = calculate_charge_from_percentage(limit, self.soc_max)
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
