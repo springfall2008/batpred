@@ -619,7 +619,7 @@ class GECloudDirect:
         if not devices or not devices["battery"]:
             self.log("GECloud: No battery devices found, cannot configure")
             return
-        
+
         batteries = devices["battery"]
         num_inverters = len(batteries)
 
@@ -1095,38 +1095,38 @@ class GECloudDirect:
           "battery": list of serials (lowercase) for battery inverters (devices with non-empty batteries)
 
         {
-            'serial_number': 'xxxx', 'firmware_version': 904, 'type': 'GPRS', 'commission_date': '2025-09-23T00:00:00Z', 
-            'inverter': 
-                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:23Z', 'last_updated': '2025-09-26T18:28:23Z', 
-                 'commission_date': '2024-08-16T00:00:00Z', 
+            'serial_number': 'xxxx', 'firmware_version': 904, 'type': 'GPRS', 'commission_date': '2025-09-23T00:00:00Z',
+            'inverter':
+                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:23Z', 'last_updated': '2025-09-26T18:28:23Z',
+                 'commission_date': '2024-08-16T00:00:00Z',
                  'info': {
-                    'battery_type': 'LITHIUM', 
-                    'battery': {'nominal_capacity': 52, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85}, 
-                    'model': 'All-In-One', 'max_charge_rate': 6000, 'max_discharge_rate': 6000}, 
-                    'warranty': {'type': 'Standard', 'expiry_date': '2036-08-16T00:00:00Z'}, 
-                    'firmware_version': {'ARM': 616, 'DSP': 616}, 
+                    'battery_type': 'LITHIUM',
+                    'battery': {'nominal_capacity': 52, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85},
+                    'model': 'All-In-One', 'max_charge_rate': 6000, 'max_discharge_rate': 6000},
+                    'warranty': {'type': 'Standard', 'expiry_date': '2036-08-16T00:00:00Z'},
+                    'firmware_version': {'ARM': 616, 'DSP': 616},
                     'connections': {'batteries': [{'module_number': 1, 'serial': '6568', 'firmware_version': 12, 'capacity': {'full': 52, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}], 'meters': []}, 'flags': ['full-power-discharge-in-eco-mode']}, 'site_id': 61435}
         {
-            'serial_number': 'xxxx', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z', 
-            'inverter': 
+            'serial_number': 'xxxx', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z',
+            'inverter':
                 {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:22Z', 'last_updated': '2025-09-26T18:28:22Z', 'commission_date': '2024-05-24T00:00:00Z',
-                 'info': 
-                    {'battery_type': 'LITHIUM', 
-                     'battery': {'nominal_capacity': 52, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85}, 
-                     'model': 'All-In-One', 'max_charge_rate': 6000, 'max_discharge_rate': 6000}, 
-                     'warranty': {'type': 'Standard', 'expiry_date': '2036-05-29T13:25:55Z'}, 
-                     'firmware_version': {'ARM': 616, 'DSP': 616}, 
+                 'info':
+                    {'battery_type': 'LITHIUM',
+                     'battery': {'nominal_capacity': 52, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85},
+                     'model': 'All-In-One', 'max_charge_rate': 6000, 'max_discharge_rate': 6000},
+                     'warranty': {'type': 'Standard', 'expiry_date': '2036-05-29T13:25:55Z'},
+                     'firmware_version': {'ARM': 616, 'DSP': 616},
                      'connections': {'batteries': [{'module_number': 1, 'serial': '4316', 'firmware_version': 12, 'capacity': {'full': 49.7, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}], 'meters': []}, 'flags': ['full-power-discharge-in-eco-mode']}, 'site_id': 61435}
         {
-            'serial_number': 'xxxx', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z', 
-            'inverter': 
-                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:07Z', 'last_updated': '2025-09-26T18:28:22Z', 'commission_date': '2024-05-24T00:00:00Z', 
-                'info': 
-                    {'battery_type': 'LEAD_ACID', 
-                     'battery': {'nominal_capacity': 104, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85}, 
-                     'model': 'Gateway', 'max_charge_rate': 12000, 'max_discharge_rate': 12000}, 
-                     'warranty': {'type': 'Standard', 'expiry_date': '2036-05-29T13:25:55Z'}, 
-                     'firmware_version': {'ARM': 13, 'DSP': 0}, 
+            'serial_number': 'xxxx', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z',
+            'inverter':
+                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:07Z', 'last_updated': '2025-09-26T18:28:22Z', 'commission_date': '2024-05-24T00:00:00Z',
+                'info':
+                    {'battery_type': 'LEAD_ACID',
+                     'battery': {'nominal_capacity': 104, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85},
+                     'model': 'Gateway', 'max_charge_rate': 12000, 'max_discharge_rate': 12000},
+                     'warranty': {'type': 'Standard', 'expiry_date': '2036-05-29T13:25:55Z'},
+                     'firmware_version': {'ARM': 13, 'DSP': 0},
                      'connections': {'datalog': {'serial_number': 'WK2315G357', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z', 'site_id': 61435}, 'batteries': [{'module_number': 1, 'serial': '4316', 'firmware_version': 12, 'capacity': {'full': 49.7, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}, {'module_number': 1, 'serial': '6568', 'firmware_version': 12, 'capacity': {'full': 52, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}], 'meters': [{'address': 1, 'serial_number': 2075078, 'manufacturer_code': '3510960161', 'type_code': 33, 'hardware_version': 256, 'software_version': 517, 'baud_rate': 9600}, {'address': 2, 'serial_number': 2021106, 'manufacturer_code': '960823329', 'type_code': 33, 'hardware_version': 256, 'software_version': 517, 'baud_rate': 9600}]}, 'flags': ['full-power-discharge-in-eco-mode', 'is-controllable']}, 'site_id': 61435}
         """
 
@@ -1145,7 +1145,7 @@ class GECloudDirect:
                 serial = serial.lower()
                 if "plant ems" in model:
                     result["ems"] = serial
-                elif 'gateway' in model:
+                elif "gateway" in model:
                     result["gateway"] = serial
                 elif batteries:
                     result["battery"].append(serial)
@@ -1307,7 +1307,7 @@ class GECloud:
             datestr = time_value.strftime("%Y-%m-%d")
             url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}".format(geserial, datestr)
             while url:
-                if '?' in url:
+                if "?" in url:
                     url += "&pageSize=4096"
                 else:
                     url += "?pageSize=4096"
@@ -1338,7 +1338,7 @@ class GECloud:
                     new_data["export"] = dexport
                     new_data["pv"] = dpv
                     mdata.append(new_data)
-                #self.log("Info: GECloud downloaded {} data points".format(len(darray)))
+                # self.log("Info: GECloud downloaded {} data points".format(len(darray)))
                 if not darray:
                     url = None
                 else:
