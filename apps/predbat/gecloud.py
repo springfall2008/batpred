@@ -1095,9 +1095,9 @@ class GECloudDirect:
           "battery": list of serials (lowercase) for battery inverters (devices with non-empty batteries)
 
         {
-            'serial_number': 'WJ2432G070', 'firmware_version': 904, 'type': 'GPRS', 'commission_date': '2025-09-23T00:00:00Z', 
+            'serial_number': 'xxxx', 'firmware_version': 904, 'type': 'GPRS', 'commission_date': '2025-09-23T00:00:00Z', 
             'inverter': 
-                {'serial': 'CH2432G070', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:23Z', 'last_updated': '2025-09-26T18:28:23Z', 
+                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:23Z', 'last_updated': '2025-09-26T18:28:23Z', 
                  'commission_date': '2024-08-16T00:00:00Z', 
                  'info': {
                     'battery_type': 'LITHIUM', 
@@ -1107,9 +1107,9 @@ class GECloudDirect:
                     'firmware_version': {'ARM': 616, 'DSP': 616}, 
                     'connections': {'batteries': [{'module_number': 1, 'serial': '6568', 'firmware_version': 12, 'capacity': {'full': 52, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}], 'meters': []}, 'flags': ['full-power-discharge-in-eco-mode']}, 'site_id': 61435}
         {
-            'serial_number': 'WJ2335G421', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z', 
+            'serial_number': 'xxxx', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z', 
             'inverter': 
-                {'serial': 'CH2335G421', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:22Z', 'last_updated': '2025-09-26T18:28:22Z', 'commission_date': '2024-05-24T00:00:00Z',
+                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:22Z', 'last_updated': '2025-09-26T18:28:22Z', 'commission_date': '2024-05-24T00:00:00Z',
                  'info': 
                     {'battery_type': 'LITHIUM', 
                      'battery': {'nominal_capacity': 52, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85}, 
@@ -1118,9 +1118,9 @@ class GECloudDirect:
                      'firmware_version': {'ARM': 616, 'DSP': 616}, 
                      'connections': {'batteries': [{'module_number': 1, 'serial': '4316', 'firmware_version': 12, 'capacity': {'full': 49.7, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}], 'meters': []}, 'flags': ['full-power-discharge-in-eco-mode']}, 'site_id': 61435}
         {
-            'serial_number': 'WK2315G357', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z', 
+            'serial_number': 'xxxx', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z', 
             'inverter': 
-                {'serial': 'GW2315G357', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:07Z', 'last_updated': '2025-09-26T18:28:22Z', 'commission_date': '2024-05-24T00:00:00Z', 
+                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:07Z', 'last_updated': '2025-09-26T18:28:22Z', 'commission_date': '2024-05-24T00:00:00Z', 
                 'info': 
                     {'battery_type': 'LEAD_ACID', 
                      'battery': {'nominal_capacity': 104, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85}, 
