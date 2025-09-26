@@ -613,6 +613,7 @@ class GECloudDirect:
         Automatically configure predbat using GE Cloud auto-detected devices.
         'devices' is a dict with keys:
           - "ems": the EMS device serial
+          - "gateway": the gateway serial
           - "battery": list of battery inverter serials (for battery-specific sensors)
         """
         if not devices or not devices["battery"]:
@@ -621,6 +622,10 @@ class GECloudDirect:
 
         batteries = devices["battery"]
         num_inverters = len(batteries)
+
+        if devices["gateway"]:
+            num_inverters = 1
+            batteries = [devices["gateway"]]
 
         self.base.args["inverter_type"] = ["GEC" for _ in range(num_inverters)]
         self.base.args["num_inverters"] = num_inverters
@@ -702,6 +707,12 @@ class GECloudDirect:
             if ems_device not in device_list:
                 device_list.append(ems_device)
 
+        gateway_device = None
+        if devices_dict["gateway"]:
+            gateway_device = devices_dict["gateway"]
+            self.log("GECloud: Found Gateway device {}, using only this device".format(gateway_device))
+            device_list = [gateway_device]
+
         evc_device_list = []
         for device in evc_devices_dict:
             uuid = device.get("uuid", None)
@@ -734,7 +745,7 @@ class GECloudDirect:
                         await self.publish_evc_data(serial, self.evc_data[uuid])
                 if seconds % 300 == 0:
                     for device in device_list:
-                        if seconds == 0 or self.polling_mode or (device == ems_device):
+                        if seconds == 0 or self.polling_mode or (device == ems_device) or (device == gateway_device):
                             self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                             await self.publish_registers(device, self.settings[device])
 
@@ -1082,9 +1093,45 @@ class GECloudDirect:
         Returns a dict with:
           "ems": serial (lowercase) of the EMS device (model "Plant EMS") if found
           "battery": list of serials (lowercase) for battery inverters (devices with non-empty batteries)
+
+        {
+            'serial_number': 'xxxx', 'firmware_version': 904, 'type': 'GPRS', 'commission_date': '2025-09-23T00:00:00Z',
+            'inverter':
+                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:23Z', 'last_updated': '2025-09-26T18:28:23Z',
+                 'commission_date': '2024-08-16T00:00:00Z',
+                 'info': {
+                    'battery_type': 'LITHIUM',
+                    'battery': {'nominal_capacity': 52, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85},
+                    'model': 'All-In-One', 'max_charge_rate': 6000, 'max_discharge_rate': 6000},
+                    'warranty': {'type': 'Standard', 'expiry_date': '2036-08-16T00:00:00Z'},
+                    'firmware_version': {'ARM': 616, 'DSP': 616},
+                    'connections': {'batteries': [{'module_number': 1, 'serial': '6568', 'firmware_version': 12, 'capacity': {'full': 52, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}], 'meters': []}, 'flags': ['full-power-discharge-in-eco-mode']}, 'site_id': 61435}
+        {
+            'serial_number': 'xxxx', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z',
+            'inverter':
+                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:22Z', 'last_updated': '2025-09-26T18:28:22Z', 'commission_date': '2024-05-24T00:00:00Z',
+                 'info':
+                    {'battery_type': 'LITHIUM',
+                     'battery': {'nominal_capacity': 52, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85},
+                     'model': 'All-In-One', 'max_charge_rate': 6000, 'max_discharge_rate': 6000},
+                     'warranty': {'type': 'Standard', 'expiry_date': '2036-05-29T13:25:55Z'},
+                     'firmware_version': {'ARM': 616, 'DSP': 616},
+                     'connections': {'batteries': [{'module_number': 1, 'serial': '4316', 'firmware_version': 12, 'capacity': {'full': 49.7, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}], 'meters': []}, 'flags': ['full-power-discharge-in-eco-mode']}, 'site_id': 61435}
+        {
+            'serial_number': 'xxxx', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z',
+            'inverter':
+                {'serial': 'xxxx', 'status': 'NORMAL', 'last_online': '2025-09-26T18:28:07Z', 'last_updated': '2025-09-26T18:28:22Z', 'commission_date': '2024-05-24T00:00:00Z',
+                'info':
+                    {'battery_type': 'LEAD_ACID',
+                     'battery': {'nominal_capacity': 104, 'nominal_voltage': 307.2, 'depth_of_discharge': 0.85},
+                     'model': 'Gateway', 'max_charge_rate': 12000, 'max_discharge_rate': 12000},
+                     'warranty': {'type': 'Standard', 'expiry_date': '2036-05-29T13:25:55Z'},
+                     'firmware_version': {'ARM': 13, 'DSP': 0},
+                     'connections': {'datalog': {'serial_number': 'WK2315G357', 'firmware_version': 206, 'type': 'GPRS', 'commission_date': '2024-05-24T00:00:00Z', 'site_id': 61435}, 'batteries': [{'module_number': 1, 'serial': '4316', 'firmware_version': 12, 'capacity': {'full': 49.7, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}, {'module_number': 1, 'serial': '6568', 'firmware_version': 12, 'capacity': {'full': 52, 'design': 52}, 'cell_count': 96, 'has_usb': False, 'nominal_voltage': 307.2}], 'meters': [{'address': 1, 'serial_number': 2075078, 'manufacturer_code': '3510960161', 'type_code': 33, 'hardware_version': 256, 'software_version': 517, 'baud_rate': 9600}, {'address': 2, 'serial_number': 2021106, 'manufacturer_code': '960823329', 'type_code': 33, 'hardware_version': 256, 'software_version': 517, 'baud_rate': 9600}]}, 'flags': ['full-power-discharge-in-eco-mode', 'is-controllable']}, 'site_id': 61435}
         """
+
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICES)
-        result = {"ems": None, "battery": []}
+        result = {"gateway": None, "ems": None, "battery": []}
         if device_list is None:
             return result
 
@@ -1098,6 +1145,8 @@ class GECloudDirect:
                 serial = serial.lower()
                 if "plant ems" in model:
                     result["ems"] = serial
+                elif "gateway" in model:
+                    result["gateway"] = serial
                 elif batteries:
                     result["battery"].append(serial)
         return result
@@ -1256,8 +1305,12 @@ class GECloud:
             days_prev = self.max_days_previous - days_prev_count
             time_value = now_utc - timedelta(days=days_prev)
             datestr = time_value.strftime("%Y-%m-%d")
-            url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=4096".format(geserial, datestr)
+            url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}".format(geserial, datestr)
             while url:
+                if "?" in url:
+                    url += "&pageSize=4096"
+                else:
+                    url += "?pageSize=4096"
                 data = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 8 * 60)
                 darray = data.get("data", None)
                 if darray is None:
@@ -1285,7 +1338,11 @@ class GECloud:
                     new_data["export"] = dexport
                     new_data["pv"] = dpv
                     mdata.append(new_data)
-                url = data["links"].get("next", None)
+                # self.log("Info: GECloud downloaded {} data points".format(len(darray)))
+                if not darray:
+                    url = None
+                else:
+                    url = data["links"].get("next", None)
             days_prev_count += 1
 
         # Find how old the data is
