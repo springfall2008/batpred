@@ -81,7 +81,7 @@ class Energidataservice:
             start_time_str = entry.get(from_key)
             rate = entry.get(rate_key, 0) * scale
             if not use_cent:
-                # Keep behavior: convert DKK → øre (or cents) if use_cent is False 
+                # Keep behavior: convert DKK → øre (or cents) if use_cent is False
                 rate = rate * 100.0
 
             # Parse time robustly

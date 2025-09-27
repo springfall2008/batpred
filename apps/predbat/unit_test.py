@@ -4838,13 +4838,35 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(my_predbat, "no_discharge2", export_window_best=export_window_best, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0, assert_status="Hold exporting")
     if failed:
         return failed
-    failed |= run_execute_test(my_predbat, "discharge_upcoming1", export_window_best=export_window_best3, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0, assert_force_export=True, assert_discharge_start_time_minutes=my_predbat.minutes_now + 30, assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1)
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_upcoming1",
+        export_window_best=export_window_best3,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=0,
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now + 30,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
+    )
     if failed:
         return failed
     failed |= run_execute_test(my_predbat, "no_discharge3b", export_window_best=export_window_best6, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0)
     if failed:
         return failed
-    failed |= run_execute_test(my_predbat, "discharge_upcoming2", export_window_best=export_window_best4, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0, assert_force_export=True, assert_discharge_start_time_minutes=my_predbat.minutes_now + 15, assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1)
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_upcoming2",
+        export_window_best=export_window_best4,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=0,
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now + 15,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
+    )
     if failed:
         return failed
 
@@ -5227,8 +5249,18 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_export_window=True)
     failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10)
     failed |= run_execute_test(
-        my_predbat, "car2", 
-        car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=False, assert_discharge_rate=0, has_timed_pause=False, soc_kw=1, assert_immediate_soc_target=10, assert_reserve=11
+        my_predbat,
+        "car2",
+        car_slot=charge_window_best,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold for car",
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
+        has_timed_pause=False,
+        soc_kw=1,
+        assert_immediate_soc_target=10,
+        assert_reserve=11,
     )
     failed |= run_execute_test(
         my_predbat,
