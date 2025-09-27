@@ -520,6 +520,26 @@ class GECloudDirect:
                         self.base.dashboard_item(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}), app="gecloud")
                         self.base.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
 
+    async def enable_real_time_control(self, device, registers):
+        for key in registers:
+            reg_name = registers[key].get("name", None)
+            value = registers[key].get("value", None)
+            if "real-time control" in reg_name.lower():
+                if value:
+                    self.log("GECloud: Real-time control already enabled for {}".format(device))
+                    return True
+                else:
+                    self.log("GECloud: Enabling real-time control for {} as current value is {}".format(device, value))
+                result = await self.async_write_inverter_setting(device, key, True)
+                if result and ("value" in result):
+                    registers[key]["value"] = result["value"]
+                    await self.publish_registers(device, self.settings[device], select_key=key)
+                    return True
+                else:
+                    self.log("GECloud: Failed to enable real-time control for {}".format(device))
+                    return False
+        return False
+
     async def publish_registers(self, device, registers, select_key=None):
         """
         Publish the registers
@@ -531,7 +551,7 @@ class GECloudDirect:
             validation_rules = registers[key].get("validation_rules", None)
             validation = registers[key].get("validation", None)
             value = registers[key].get("value", None)
-            ha_name = reg_name.lower().replace(" ", "_").replace("%", "percent")
+            ha_name = reg_name.lower().replace(" ", "_").replace("%", "percent").replace("-", "_")
             attributes = {}
             attributes["friendly_name"] = reg_name
 
@@ -750,6 +770,8 @@ class GECloudDirect:
                         if seconds == 0 or self.polling_mode or (device == ems_device) or (device == gateway_device):
                             self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                             await self.publish_registers(device, self.settings[device])
+                            if seconds == 0:
+                                await self.enable_real_time_control(device, self.settings[device])
 
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
