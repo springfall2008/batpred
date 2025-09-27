@@ -1307,6 +1307,12 @@ var options = {
         text += '<button id="pauseResumeBtn" onclick="toggleUpdates()" style="margin-left: 10px; padding: 4px 8px;">Pause</button>'
         text += "</div>"
 
+        text += '<div class="log-search-container">'
+        text += '<input type="text" id="logSearchInput" class="log-search-input" placeholder="Search log entries..." oninput="filterLogEntries()" />'
+        text += '<button id="clearSearchBtn" class="clear-search-button" onclick="clearLogSearch()">Clear</button>'
+        text += '<div id="searchStatus" class="search-status"></div>'
+        text += "</div>"
+
         text += '<div id="logStatus" class="log-status">Loading log data...</div>'
         text += "<table width=100% id='logTable'>\n"
         text += "<tbody id='logTableBody'>\n"
