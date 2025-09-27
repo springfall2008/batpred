@@ -33,6 +33,13 @@ from .formatting import (
     dp4,
 )
 
+from .time_utils import (
+    time_string_to_stamp,
+    minutes_since_yesterday,
+    minutes_to_time,
+    str2time,
+)
+
 __all__ = [
     "calculate_soc_percentage",
     "calculate_charge_from_percentage",
@@ -50,4 +57,8 @@ __all__ = [
     "dp2",
     "dp3",
     "dp4",
+    "time_string_to_stamp",
+    "minutes_since_yesterday",
+    "minutes_to_time",
+    "str2time",
 ]
