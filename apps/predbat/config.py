@@ -84,6 +84,14 @@ CONFIG_ITEMS = [
         "restore": False,
     },
     {
+        "name": "history_cache_enable",
+        "friendly_name": "History Data Cache",
+        "type": "switch",
+        "default": False,
+        "restore": False,
+        "help": "Enable in-memory caching of Home Assistant history data to improve performance",
+    },
+    {
         "name": "pv_metric10_weight",
         "friendly_name": "Metric 10 Weight",
         "type": "input_number",
