@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Comparing Energy Tariffs - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Comparing Energy Tariffs";
+        var mkdocs_page_input_path = "compare.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Predbat automation API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Comparing Energy Tariffs</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#limitations">Limitations</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuring-the-tariffs-to-compare">Configuring the tariff's to compare</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#running-a-comparison">Running a comparison</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#comparison-sensors">Comparison sensors</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Viewing Predbat data</li>
+      <li class="breadcrumb-item active">Comparing Energy Tariffs</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="comparing-energy-tariffs">Comparing Energy Tariffs</h1>
+<p>While it is quite easy to go off and compare your historical usage against various energy tariffs with existing apps, it is much harder to perform a what-if analysis
+as the way you control your battery would be different depending on the tariff.</p>
+<p>For this reason, Predbat offers an energy rate comparison to allow you to know if you are on the best available tariff or when it might be time to switch.</p>
+<p>Once you have given Predbat a list of tariffs that you want to compare then it will update its predictions daily and keep a history of these over time.</p>
+<p>If you do decide to switch to Octopus Energy after using this feature please consider using my referral link so we can both save some money: <a href="https://share.octopus.energy/jolly-eel-176">https://share.octopus.energy/jolly-eel-176</a></p>
+<p>Its recommended to watch the <a href="https://youtu.be/qOG7nxHJKaE">YouTube video on Energy tariff comparison</a> as this explains the feature in more detail and what the different columns of the comparison mean.</p>
+<h2 id="limitations">Limitations</h2>
+<p>Keep in mind this is an approximation of costs for the following 24-hour period and the reality could be different. In particular, car charging costs are unlikely to reflect the true picture as it will only be planned after you plug in.
+Smart tariffs like Octopus Intelligent Go can give you extra cheap car slots, and Octopus Intelligent Flux where Octopus controls the charging/discharging, mean these tariffs cannot be predicted as accurately.
+When changing tariffs, you should use your judgment, the Predbat Compare data is only a helpful guide.</p>
+<h2 id="configuring-the-tariffs-to-compare">Configuring the tariff's to compare</h2>
+<p>First, you need to tell Predbat in apps.yaml which tariffs you want to compare, you should list all the tariffs you realistically might want to switch between, including your current tariff to act as a baseline.</p>
+<p>Below is a suggestion of various Octopus tariff combinations (valid Feb 2025) against region A.
+You will need to change <strong>dno_region</strong> to match your region code if you decide to use this template - see list of <a href="https://energy-stats.uk/dno-region-codes-explained/">Electricity region codes</a>.</p>
+<p>As well as Octopus rate URLs (rates_import_octopus_url/rates_export_octopus_url) you can use manual rates (rates_import/rates_export),
+Octopus integration rates (metric_octopus_import/metric_octopus_export) and Energi Data service rates (metric_energidataservice_import/metric_energidataservice_export).</p>
+<p>Each tariff must be given an ID which will be used to create a sensor to track predicted cost over time, the full name is used in the description of that sensor and on the web page.
+The ID can contain alphanumeric characters or underscores; do not use slashes, commas, spaces or other special characters in the ID or predbat will crash when running the compare!</p>
+<p>If you do not set an import or export rate for a particular tariff then your existing energy rates will be used.</p>
+<pre><code class="language-yaml">  # Tariff comparison feature
+  #
+  # Adjust this list to the tariffs you want to compare, include your current tariff also
+  # DNO region code (see https://energy-stats.uk/dno-region-codes-explained/)
+  dno_region: &quot;A&quot;
+  compare_list:
+    - id: 'current'
+      name: 'Current Tariff'
+    - id: 'cap_seg'
+      name: 'Price cap import/SEG export'
+      rates_import:
+        - rate: 24.86
+      rates_export:
+        - rate: 4.1
+    - id: 'eon_next_drive'
+      name: 'Eon Next Drive import/Fixed export&quot;'
+      rates_import:
+        - rate: 6.7
+          start: &quot;00:00:00&quot;
+          end: &quot;07:00:00&quot;
+        - rate: 24.86
+          start: &quot;07:00:00&quot;
+          end: &quot;24:00:00&quot;
+      rates_export:
+        - rate: 16.5
+    - id: 'igo_fixed'
+      name: 'Intelligent GO import/Fixed export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{dno_region}/standard-unit-rates/'
+    - id: 'igo_agile'
+      name: 'Intelligent GO import/Agile export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-{dno_region}/standard-unit-rates/'
+    - id: 'go_fixed'
+      name: 'GO import/Fixed export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/GO-VAR-BB-23-02-07/electricity-tariffs/E-1R-GO-VAR-BB-23-02-07-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{dno_region}/standard-unit-rates/'
+    - id: 'go_agile'
+      name: 'GO import/Agile export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/GO-VAR-BB-23-02-07/electricity-tariffs/E-1R-GO-VAR-BB-23-02-07-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-{dno_region}/standard-unit-rates/'
+    - id: 'agile_fixed'
+      name: 'Agile import/Fixed export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{dno_region}/standard-unit-rates/'
+    - id: 'agile_agile'
+      name: 'Agile import/Agile export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-{dno_region}/standard-unit-rates/'
+    - id: 'flux'
+      name: 'Flux import/Export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-{dno_region}/standard-unit-rates'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-{dno_region}/standard-unit-rates'
+    - id: 'cosy_fixed'
+      name: 'Cosy import/Fixed export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{dno_region}/standard-unit-rates'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{dno_region}/standard-unit-rates/'
+    - id: 'cosy_agile'
+      name: 'Cosy import/Agile export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{dno_region}/standard-unit-rates'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-{dno_region}/standard-unit-rates/'
+    - id: 'snug_fixed'
+      name: 'Snug import/Fixed export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/SNUG-24-11-07/electricity-tariffs/E-1R-SNUG-24-11-07-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-BB-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-BB-24-10-26-{dno_region}/standard-unit-rates/'
+    - id: 'iflux'
+      name: 'Intelligent Flux import/Export'
+      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-EXPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-EXPORT-23-07-14-{dno_region}/standard-unit-rates/'
+</code></pre>
+<h2 id="running-a-comparison">Running a comparison</h2>
+<p>By default, the comparison will be run at Midnight every night and saved for the entire day.</p>
+<p>You can view the comparison on the <a href="../web-interface/#compare-view">Predbat web interface</a> under the 'Compare' view.</p>
+<p>You can manually trigger a new comparison by hitting the 'Compare now' button, or by turning on <strong>switch.predbat_compare_active</strong>.</p>
+<p>When a compare is running <strong>switch.predbat_compare_active</strong> will be turned on, otherwise it will be off.</p>
+<p>Predbat will highlight which tariff may be the best cost-wise for the next 24-hour period based on the plan optimisation metrics you have defined.
+The metric includes the value of the contents of your battery and iBoost that has been diverted during this period.</p>
+<p>The predicted cost is also shown, but keep in mind ending the day with an empty battery may be cheaper today but cost more tomorrow.</p>
+<p><img alt="image" src="../images/web-interface-compare-view.png" /></p>
+<h2 id="comparison-sensors">Comparison sensors</h2>
+<p>For each tariff a new sensor is created in Home Assistant called <strong>predbat.compare_tariff_id</strong> where <strong>id</strong> is the ID name you entered above in apps.yaml. This sensor will track the cost as its main value and many details about the prediction in its attributes.</p>
+<p>You can create charts from these sensors to show how the different tariffs compare on a daily basis.</p>
+<p><img alt="image" src="https://github.com/user-attachments/assets/6d5c30f6-822f-4d9c-b4a6-701c0b676c61" /></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../creating-charts/" class="btn btn-neutral float-left" title="Creating the charts"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../todo-list/" class="btn btn-neutral float-right" title="To-do list">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../creating-charts/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../todo-list/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Predheat - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Predheat";
+        var mkdocs_page_input_path = "predheat.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Predbat automation API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Predheat</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#operation">Operation</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#installation-guide">Installation guide</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#openweather-install">Openweather install</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#apex-charts-install">Apex Charts install</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuration-guide">Configuration guide</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#weather-compensation">Weather Compensation</a>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Predheat</li>
+      <li class="breadcrumb-item active">Predheat</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="predheat">Predheat</h1>
+<p>Predheat attempts to model water-based central heating systems based on a boiler or a heat pump.</p>
+<p>Further details can be found in the <a href="https://youtu.be/_-KIQen67zI">Predheat YouTube video</a></p>
+<h2 id="operation">Operation</h2>
+<p>The app runs every 5 minutes and it will automatically update its prediction for the heating system for the next period, up to a maximum of 48 hours.</p>
+<p>The inputs are as follows</p>
+<ul>
+<li>An external temperature sensor, can be a real one or one created by an Internet service</li>
+<li>An internal temperature sensor, ideally from your home thermostat.</li>
+<li>The target temperature sensor, is what your home thermostat is set to.</li>
+<li>A heating energy sensor in kWh (not strictly required but needed to plot historical usage and calibrate)</li>
+<li>The flow temperature setting of your heating, can be static or a sensor</li>
+<li>Your current energy rates, either from the Octopus Energy plugin or hand-typed into the configuration</li>
+<li>Some data about your home that you have to figure out for yourself and calibrate</li>
+</ul>
+<p>The outputs are:</p>
+<ul>
+<li>Prediction of the internal house temperature going forward, including times when the heating will be active.</li>
+<li>Your predicted energy usage and costs. The energy usage, if electric, can also be connected to Predbat to help you project your home battery usage.</li>
+</ul>
+<p>Future versions will also offer Predbat to run in master mode, controlling your home's heating in the same way as a smart thermostat (e.g. Nest)</p>
+<h2 id="installation-guide">Installation guide</h2>
+<p>Predheat is now part of Predbat, you will need to configure it using apps.yaml and then enable it by turning on <strong>switch.predbat_predheat_enable</strong></p>
+<h3 id="openweather-install">Openweather install</h3>
+<p>See: <a href="https://www.home-assistant.io/integrations/openweathermap">https://www.home-assistant.io/integrations/openweathermap</a></p>
+<p>Create an OpenWeather account and then register for a "One Call by Call" subscription plan. This does need a credit/debit card but won't cost anything.
+You get 1000 API calls a day for free, so edit your limit in the account to 1000 to avoid ever being charged.</p>
+<p>Then add in the Home Assistant service and connect up your API key to obtain hourly weather data. Use the v3.0 API and ensure you have a 2024 version of Home Assistant.</p>
+<h3 id="apex-charts-install">Apex Charts install</h3>
+<p>Use HACS to install Apex Charts (Lovelace frontend add-on) - <a href="https://github.com/RomRider/apexcharts-card">https://github.com/RomRider/apexcharts-card</a></p>
+<p>There is a template for the Predheat charts in: <a href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predbat.yaml_template">https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predbat.yaml_template</a></p>
+<p>Create a new Apex chart for each chart in this template and copy the YAML code into the chart.</p>
+<h2 id="configuration-guide">Configuration guide</h2>
+<p>You need to edit apps.yaml to configure your system.</p>
+<p>Copy the following template into The Predbat apps.yaml and edit the settings: <a href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/predheat.yaml">predheat.yaml</a></p>
+<p>Set the mode (<strong>mode</strong>) to 'gas' or 'pump' depending on if you have a gas boiler or heat pump
+Set the external temperature sensor (<strong>external_temperature</strong>) either to a real sensor or create one from the open weather map by adding this sensor to your configuration.yaml file for HA:</p>
+<pre><code class="language-yaml">template:
+  - sensor:
+    - name: &quot;external_temperature&quot;
+      unit_of_measurement: 'c'
+      state_class: measurement
+      state: &gt;
+        {{ state_attr('weather.openweathermap', 'temperature') }}
+</code></pre>
+<p>Set <strong>internal_temperature</strong> to point to one or more internal temperature sensors, if you have a heating thermostat then ideally link it to this or to a sensor at least in a similar area of the house.</p>
+<p>The <strong>weather</strong> configuration points to the Open Weather Map sensor by default so should work as-is.</p>
+<p>Set the <strong>target_temperature</strong> to point to a sensor that indicates what your boiler thermostat is set to, or manually enter the temperature setting here.</p>
+<p>Set <strong>smart_thermostat</strong> to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.</p>
+<p>Set <strong>heating_energy</strong> To point to a sensor that indicates the energy consumed by your boiler/heat pump in kWh. If the sensor isn't accurate then use <strong>heating_energy_scaling</strong> to adjust it to the actual energy consumed.
+You can also comment this line out if you don't have a sensor, but no historical cost information will be produced.</p>
+<p>Now you need to make a list of all your radiators in the house, measure them and look up their BTU output at Delta 50 and their volume in Litres. The links below may be useful for various standard radiators:</p>
+<ul>
+<li><a href="https://www.bestheating.com/milano-kent-straight-chrome-heated-towel-rail-various-sizes-91119">https://www.bestheating.com/milano-kent-straight-chrome-heated-towel-rail-various-sizes-91119</a></li>
+<li><a href="https://www.bestheating.com/milano-compact-type-11-single-panel-radiator-multi-sizes-available-74174">https://www.bestheating.com/milano-compact-type-11-single-panel-radiator-multi-sizes-available-74174</a></li>
+<li><a href="https://www.bestheating.com/milano-compact-type-22-double-panel-radiator-multi-sizes-available-74176">https://www.bestheating.com/milano-compact-type-22-double-panel-radiator-multi-sizes-available-74176</a></li>
+<li><a href="https://www.bestheating.com/milano-compact-type-21-double-panel-plus-radiator-multi-sizes-available-74175">https://www.bestheating.com/milano-compact-type-21-double-panel-plus-radiator-multi-sizes-available-74175</a></li>
+</ul>
+<p>Add up all the BTUs and divide by 3.41 to gain the heat output in Watts and set that in <strong>heat_output</strong> configuration option.
+Add up all the litres of water, add in some extra for the piping and an expansion vessel if present (e.g. 5-10 litres) and set <strong>heat_volume</strong> accordingly.</p>
+<p>Set the <strong>heat_max_power</strong> and <strong>heat_min_power</strong> to the minimum and maximum power output of your boiler/heat pump in watts. This should be specified as the maximum output power
+and not the maximum input energy. E.g. a heat pump with a COP of 4 might output 7kW but could only consume 1.7kW.</p>
+<p>Set <strong>hysteresis</strong> To the amount of hysteresis in degrees applied by your thermostat when turning it on, the default is 0.5
+Set <strong>hysteresis_off</strong> To the amount of hysteresis in degrees applied by your thermostat when turning it off, the default is 0.1</p>
+<p>Set <strong>heating_cop</strong> to the nominal COP of your system. For a gas boiler use 1.0 (as the efficiency will be based on flow temperature) or for a heat pump set it to the best value which is likely around 4.0 (it will be scaled down for cold weather).</p>
+<p>Set <strong>flow_temp</strong> To the target flow temperature of your system, either via a sensor or as a fixed value. E.g. gas boilers are often set to say 60 or 70 degrees while heat pumps are much lower e.g. 30 or 40.</p>
+<p>Set <strong>flow_difference_target</strong> to be the difference in flow temperature (in vs out) where your heating system will run at full power if it is above. e.g.
+for gas boilers this maybe something around 40 while on a heat pump, it could be much lower e.g. 10.</p>
+<p>Set <strong>volume_temp</strong> If you have a sensor on your radiators which can confirm the water temperature, this must not be near the heat pump/boiler but instead as close to the
+interior temperature sensor as possible. If you do not have a sensor then instead PredHeat will calculate the next temperature and store it in <strong>next_volume_temp</strong> for use
+in the next calculation cycle.</p>
+<p>For energy rates, they will come from the Predbat configuration, ensure you have your electric or gas rates set correctly.</p>
+<p>Note you can also change the tables for <strong>gas_efficiency</strong>, <strong>heat_pump_efficiency</strong> and <strong>delta_correction</strong> in the Predheat configuration but the defaults should be fine to get going.</p>
+<p>Now comes the tricky part, we need to calculate the heat loss for your house:</p>
+<p>What will help here is historical temperature data, find a time period in the last few weeks when your heating was turned off (for a few hours beforehand) and the house is cooling down.
+Measure the number of degrees the house drops by in a given time period. Divide that figure (e.g. 1.5 degrees) by the time period e.g. (3 hours) and then again divide it by the
+average difference between the inside and outside temperature
+(e.g. 19 degrees inside, 9 degrees outside, so a temperature difference of 4 degrees) = 1.5 degrees / 3 hours / 10 degrees difference = 0.05. Set that figure to <strong>heat_loss_degrees</strong>.
+It may be best to compute this when it's cold out and if you have your heating turned off overnight.</p>
+<p><em>Note in future versions of Predheat I might make this calculation automatic.</em></p>
+<p>Next, we need to work out the number of watts of heat loss in the house, this can be done by looking at the energy consumed when the heating comes on. Pick a period of heating,
+ideally from the time the temperature starts increasing for a complete hour of increase, looking at the increase in temperature in degrees,
+add to that static heat loss which is  heat_loss_degrees <em>(internal temp - external temp)</em> 1 hour to get the total degrees accounted for.
+Now divide that by the external temperature difference again / (internal_temp - external_temp) and multiply the final figure by the energy your system consumed in Watts
+during that period (can be found either from your sensor or just by looking at your energy bill for the same 1 hour period).</p>
+<p>The final figure should be the number of watts your house loses per 1 degree of external temperature difference and be set to <strong>heat_loss_watts</strong></p>
+<p>Then you can set <strong>heat_gain_static</strong> to be the static heat output of other things in your house eg. computers and people. You can figure this out by looking at how many degrees of
+temperature difference your house can maintain without any heating and multiply up your heat loss watts figure by this.</p>
+<h3 id="weather-compensation">Weather Compensation</h3>
+<p>If your heat source makes use of weather compensation then add the following to the configuration to map out your heat curve. The example has a flow temp of 45C at -3C outside and 25C at 15C outside:</p>
+<pre><code class="language-yaml">  weather_compensation:
+    -20: 45.0
+    -3: 45.0
+    15: 25.0
+    20: 25.0
+</code></pre>
+<p>Predheat will fill in the gaps between the points provided.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../plugins/" class="btn btn-neutral float-left" title="🚀 Feature: Plugin System Implementation"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../plugins/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
