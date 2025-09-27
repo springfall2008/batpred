@@ -524,7 +524,7 @@ class GECloudDirect:
         for key in registers:
             reg_name = registers[key].get("name", None)
             value = registers[key].get("value", None)
-            if 'real-time control' in reg_name.lower():
+            if "real-time control" in reg_name.lower():
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
                     return True
@@ -551,7 +551,7 @@ class GECloudDirect:
             validation_rules = registers[key].get("validation_rules", None)
             validation = registers[key].get("validation", None)
             value = registers[key].get("value", None)
-            ha_name = reg_name.lower().replace(" ", "_").replace("%", "percent").replace('-', '_')
+            ha_name = reg_name.lower().replace(" ", "_").replace("%", "percent").replace("-", "_")
             attributes = {}
             attributes["friendly_name"] = reg_name
 

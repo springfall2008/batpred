@@ -2393,7 +2393,7 @@ def get_logfile_js(filter_type):
             const searchTerm = document.getElementById('logSearchInput').value.toLowerCase();
             const rows = document.querySelectorAll('#logTableBody tr[data-line]');
             const statusDiv = document.getElementById('searchStatus');
-            
+
             let visibleCount = 0;
             let totalCount = rows.length;
 
@@ -2415,17 +2415,17 @@ def get_logfile_js(filter_type):
             // Filter and highlight entries
             rows.forEach(row => {{
                 const rowText = row.textContent.toLowerCase();
-                
+
                 if (rowText.includes(searchTerm)) {{
                     row.classList.remove('log-entry-hidden');
                     visibleCount++;
-                    
+
                     // Highlight matching text
                     const cells = row.querySelectorAll('td');
                     cells.forEach(cell => {{
                         // First remove any existing highlights
                         cell.innerHTML = cell.innerHTML.replace(/<mark class="search-highlight">(.*?)<\\/mark>/gi, '$1');
-                        
+
                         // Then add new highlights
                         const regex = new RegExp(`(${{escapeRegExp(searchTerm)}})`, 'gi');
                         cell.innerHTML = cell.innerHTML.replace(regex, '<mark class="search-highlight">$1</mark>');
