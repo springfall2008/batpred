@@ -76,12 +76,11 @@ from components import Components
 from plan import Plan
 from fetch import Fetch
 from output import Output
-from userinterface import UserInterface
 from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Fetch, Plan, Output, UserInterface):
+class PredBat(hass.Hass, Fetch, Plan, Output):
     """
     The battery prediction class itself
     """
@@ -1193,6 +1192,136 @@ class PredBat(hass.Hass, Fetch, Plan, Output, UserInterface):
                 setattr(execute_methods, attr, getattr(self, attr))
 
         return execute_methods.balance_inverters()
+
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+        """
+        Bridge method: delegate to UserInterface or fallback to legacy implementation.
+        Core configuration access method used throughout the codebase.
+        """
+        # Try OO manager first
+        if hasattr(self, "config_manager") and self.config_manager:
+            return self.config_manager.get_arg(arg, default, indirect, combine, attribute, index, domain, can_override, required_unit)
+
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        # Bind required attributes for the legacy methods
+        ui_methods.log = self.log
+        ui_methods.args = getattr(self, "args", {})
+        ui_methods.config_index = getattr(self, "config_index", {})
+        ui_methods.dashboard_values = getattr(self, "dashboard_values", {})
+        ui_methods.inverters = getattr(self, "inverters", [])
+
+        # Bind required methods
+        if hasattr(self, "resolve_arg"):
+            ui_methods.resolve_arg = self.resolve_arg
+        if hasattr(self, "get_ha_config"):
+            ui_methods.get_ha_config = self.get_ha_config
+        if hasattr(self, "get_state_wrapper"):
+            ui_methods.get_state_wrapper = self.get_state_wrapper
+
+        return ui_methods.get_arg(arg, default, indirect, combine, attribute, index, domain, can_override, required_unit)
+
+    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None, quiet=False, required_unit=None):
+        """
+        Bridge method: delegate to UserInterface or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        # Bind required attributes
+        ui_methods.log = self.log
+        ui_methods.args = getattr(self, "args", {})
+        ui_methods.config_index = getattr(self, "config_index", {})
+        ui_methods.dashboard_values = getattr(self, "dashboard_values", {})
+        ui_methods.inverters = getattr(self, "inverters", [])
+
+        # Bind required methods
+        if hasattr(self, "get_ha_config"):
+            ui_methods.get_ha_config = self.get_ha_config
+        if hasattr(self, "get_state_wrapper"):
+            ui_methods.get_state_wrapper = self.get_state_wrapper
+
+        return ui_methods.resolve_arg(arg, value, default, indirect, combine, attribute, index, extra_args, quiet, required_unit)
+
+    def call_notify(self, message):
+        """
+        Bridge method: delegate to UserInterface or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        ui_methods.log = self.log
+        if hasattr(self, "call_service_wrapper"):
+            ui_methods.call_service_wrapper = self.call_service_wrapper
+
+        return ui_methods.call_notify(message)
+
+    async def select_event(self, entity_id, value):
+        """
+        Bridge method: delegate to components system or UserInterface fallback.
+        """
+        # Try components system first
+        if hasattr(self, "components") and self.components:
+            await self.components.select_event(entity_id, value)
+            return
+
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        ui_methods.log = self.log
+        # Bind required attributes and methods
+        for attr in ["args", "predbat_mode", "set_read_only", "car_charging_manual_soc", "car_charging_now", "update_time", "call_service_wrapper"]:
+            if hasattr(self, attr):
+                setattr(ui_methods, attr, getattr(self, attr))
+
+        await ui_methods.select_event(entity_id, value, {})
+
+    async def switch_event(self, entity_id, service):
+        """
+        Bridge method: delegate to components system or UserInterface fallback.
+        """
+        # Try components system first
+        if hasattr(self, "components") and self.components:
+            await self.components.switch_event(entity_id, service)
+            return
+
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        ui_methods.log = self.log
+        # Bind required attributes and methods
+        for attr in ["args", "call_service_wrapper"]:
+            if hasattr(self, attr):
+                setattr(ui_methods, attr, getattr(self, attr))
+
+        await ui_methods.switch_event(entity_id, {}, {})
+
+    async def number_event(self, entity_id, value):
+        """
+        Bridge method: delegate to components system or UserInterface fallback.
+        """
+        # Try components system first
+        if hasattr(self, "components") and self.components:
+            await self.components.number_event(entity_id, value)
+            return
+
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        ui_methods.log = self.log
+        # Bind required attributes and methods
+        for attr in ["args", "call_service_wrapper"]:
+            if hasattr(self, attr):
+                setattr(ui_methods, attr, getattr(self, attr))
+
+        await ui_methods.number_event(entity_id, {}, {})
 
     def validate_config(self):
         """
