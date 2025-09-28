@@ -2395,7 +2395,7 @@ def get_logfile_js(filter_type):
             const searchTerm = document.getElementById('logSearchInput').value.toLowerCase();
             const rows = document.querySelectorAll('#logTableBody tr[data-line]');
             const statusDiv = document.getElementById('searchStatus');
-            
+
             let visibleCount = 0;
             let totalCount = rows.length;
 
@@ -2414,14 +2414,14 @@ def get_logfile_js(filter_type):
             // Filter and highlight entries
             rows.forEach(row => {{
                 const rowText = row.textContent.toLowerCase();
-                
+
                 if (rowText.includes(searchTerm)) {{
                     row.classList.remove('log-entry-hidden');
                     visibleCount++;
-                    
+
                     // Clear existing highlights first
                     clearHighlights(row);
-                    
+
                     // Apply new highlights
                     highlightTextInElement(row, searchTerm);
                 }} else {{
@@ -2464,35 +2464,35 @@ def get_logfile_js(filter_type):
                 const text = textNode.textContent;
                 const lowerText = text.toLowerCase();
                 const lowerSearchTerm = searchTerm.toLowerCase();
-                
+
                 if (lowerText.includes(lowerSearchTerm)) {{
                     const parent = textNode.parentNode;
                     const fragment = document.createDocumentFragment();
-                    
+
                     let lastIndex = 0;
                     let index = lowerText.indexOf(lowerSearchTerm, 0);
-                    
+
                     while (index !== -1) {{
                         // Add text before the match
                         if (index > lastIndex) {{
                             fragment.appendChild(document.createTextNode(text.substring(lastIndex, index)));
                         }}
-                        
+
                         // Add highlighted match
                         const mark = document.createElement('mark');
                         mark.className = 'search-highlight';
                         mark.textContent = text.substring(index, index + searchTerm.length);
                         fragment.appendChild(mark);
-                        
+
                         lastIndex = index + searchTerm.length;
                         index = lowerText.indexOf(lowerSearchTerm, lastIndex);
                     }}
-                    
+
                     // Add remaining text
                     if (lastIndex < text.length) {{
                         fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
                     }}
-                    
+
                     parent.replaceChild(fragment, textNode);
                 }}
             }});

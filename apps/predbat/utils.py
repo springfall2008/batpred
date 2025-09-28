@@ -32,6 +32,7 @@ def in_iboost_slot(minute, iboost_plan):
                 break
     return load_amount
 
+
 def in_car_slot(minute, num_cars, car_charging_slots):
     """
     Is the given minute inside a car slot
@@ -52,6 +53,7 @@ def in_car_slot(minute, num_cars, car_charging_slots):
                     load_amount[car_n] = abs(kwh / slot_hours)
                     break
     return load_amount
+
 
 def time_string_to_stamp(time_string):
     """

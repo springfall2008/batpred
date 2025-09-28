@@ -1392,7 +1392,6 @@ class GECloud:
         self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
         self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
 
-
         self.log("GE GECloud load_last_period is {} kW".format(dp2(self.load_last_period)))
         # More up to date sensors for current values if set
         if "load_today" in self.args:
