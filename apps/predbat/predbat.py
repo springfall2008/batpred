@@ -74,12 +74,11 @@ from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
 from components import Components
 from plan import Plan
-from fetch import Fetch
 from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Fetch, Plan):
+class PredBat(hass.Hass, Plan):
     """
     The battery prediction class itself
     """
@@ -1459,6 +1458,110 @@ class PredBat(hass.Hass, Fetch, Plan):
                 setattr(output_methods, attr, getattr(self, attr))
 
         return output_methods.publish_car_plan()
+
+    def fetch_sensor_data(self):
+        """
+        Bridge method: delegate to FetchManager or fallback to legacy implementation.
+        Core data acquisition method that fetches all sensor data, rates, and forecasts.
+        """
+        # Try OO manager first
+        if hasattr(self, "fetch_manager") and self.fetch_manager:
+            return self.fetch_manager.fetch_sensor_data()
+
+        # Fallback: import and use the old mixin methods directly
+        from fetch import Fetch
+
+        fetch_methods = Fetch()
+        # Bind required attributes - Fetch needs extensive state access
+        fetch_methods.log = self.log
+        fetch_methods.record_status = self.record_status if hasattr(self, "record_status") else lambda *args, **kwargs: None
+
+        # Bind core configuration and state attributes
+        fetch_attrs = [
+            "get_arg",
+            "get_state_wrapper",
+            "get_history_wrapper",
+            "now_utc",
+            "midnight_utc",
+            "minutes_now",
+            "forecast_minutes",
+            "max_days_previous",
+            "days_previous",
+            "load_scaling",
+            "import_export_scaling",
+            "inverters",
+            "inverter_limit",
+            "rate_import",
+            "rate_export",
+            "rate_gas",
+            "car_charging_rate",
+            "car_charging_rate_max",
+            "car_charging_battery_size",
+            "car_charging_limit",
+            "car_charging_manual_soc",
+            "car_charging_plan_time",
+            "car_charging_plan_max_price",
+            "car_charging_plan_smart",
+            "car_charging_slots",
+            "car_charging_now",
+            "car_charging_energy",
+            "soc_max",
+            "soc_min",
+            "battery_loss",
+            "inverter_loss",
+            "inverter_hybrid",
+            "battery_rate_max_charge",
+            "battery_rate_max_discharge",
+            "battery_rate_max_charge_scaled",
+            "battery_rate_max_discharge_scaled",
+            "metric_cloud_enable",
+            "pv_forecast_minute_step",
+            "pv_forecast_minute10_step",
+            "load_minutes_step",
+            "load_minutes_step10",
+            "import_today",
+            "export_today",
+            "pv_today",
+            "load_minutes",
+            "load_minutes_now",
+            "iboost_enable",
+            "iboost_energy_today",
+            "iboost_gas",
+            "iboost_rate_threshold",
+            "iboost_rate_threshold_export",
+            "iboost_solar",
+            "iboost_charging",
+            "iboost_smart",
+            "iboost_on_export",
+            "iboost_prevent_discharge",
+            "iboost_max_power",
+            "iboost_min_power",
+            "iboost_today",
+            "dashboard_item",
+            "prefix",
+            "cost_today_sofar",
+            "import_today_now",
+            "export_today_now",
+            "pv_today_now",
+            "battery_power",
+            "grid_power",
+            "load_power",
+            "pv_power",
+            "battery_temperature_history",
+            "process_alerts",
+            "balance_inverters_enable",
+            "balance_inverters_charge",
+            "balance_inverters_discharge",
+            "balance_inverters_crosscharge",
+            "balance_inverters_threshold_charge",
+            "balance_inverters_threshold_discharge",
+        ]
+
+        for attr in fetch_attrs:
+            if hasattr(self, attr):
+                setattr(fetch_methods, attr, getattr(self, attr))
+
+        return fetch_methods.fetch_sensor_data()
 
     def validate_config(self):
         """
