@@ -267,6 +267,30 @@ def calc_percent_limit_list(charge_limit: List[float], soc_max: float) -> List[i
     return [min(int((float(charge_limit[i]) / soc_max * 100.0) + 0.5), 100) for i in range(len(charge_limit))]
 
 
+def calc_percent_limit(charge_limit: Union[float, List[float]], soc_max: float) -> Union[int, List[int]]:
+    """
+    Calculate a charge limit in percent.
+    Original function moved from utils.py for modular breakdown.
+
+    Args:
+        charge_limit: Charge limit(s) in kWh
+        soc_max: Maximum SOC capacity in kWh
+
+    Returns:
+        Percentage(s) as integer(s), rounded to nearest whole percent
+    """
+    if isinstance(charge_limit, list):
+        if soc_max <= 0:
+            return [0 for i in range(len(charge_limit))]
+        else:
+            return [min(int((float(charge_limit[i]) / soc_max * 100.0) + 0.5), 100) for i in range(len(charge_limit))]
+    else:
+        if soc_max <= 0:
+            return 0
+        else:
+            return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
+
+
 def calc_percent_limit_new(charge_limit: Union[float, List[float]], soc_max: float) -> Union[int, List[int]]:
     """
     Enhanced version of calc_percent_limit with better type hints and documentation.
