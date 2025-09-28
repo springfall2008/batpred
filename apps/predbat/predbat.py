@@ -73,12 +73,11 @@ from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
 from components import Components
-from plan import Plan
 from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Plan):
+class PredBat(hass.Hass):
     """
     The battery prediction class itself
     """
@@ -1562,6 +1561,94 @@ class PredBat(hass.Hass, Plan):
                 setattr(fetch_methods, attr, getattr(self, attr))
 
         return fetch_methods.fetch_sensor_data()
+
+    def find_price_levels(self, price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record, metric_keep):
+        """
+        Bridge method: delegate to PlanManager or fallback to legacy implementation.
+        Core optimization method that finds optimal price levels for charging/discharging.
+        """
+        # Try OO manager first
+        if hasattr(self, "plan_manager") and self.plan_manager:
+            return self.plan_manager.find_price_levels(price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record, metric_keep)
+
+        # Fallback: import and use the old mixin methods directly
+        from plan import Plan
+
+        plan_methods = Plan()
+        # Bind required attributes - Plan needs extensive state access for optimization
+        plan_methods.log = self.log
+        plan_methods.record_status = self.record_status if hasattr(self, "record_status") else lambda *args, **kwargs: None
+
+        # Bind all Plan dependencies
+        plan_attrs = [
+            "get_arg",
+            "minutes_now",
+            "midnight_utc",
+            "forecast_minutes",
+            "max_days_previous",
+            "prediction",
+            "pool",
+            "threads_enable",
+            "metric_min_improvement",
+            "metric_min_improvement_export",
+            "rate_import",
+            "rate_export",
+            "rate_gas",
+            "load_minutes",
+            "load_minutes_step",
+            "pv_forecast_minute_step",
+            "pv_forecast_minute10_step",
+            "load_minutes_step10",
+            "inverters",
+            "soc_max",
+            "soc_min",
+            "battery_loss",
+            "inverter_loss",
+            "inverter_hybrid",
+            "battery_rate_max_charge",
+            "battery_rate_max_discharge",
+            "battery_rate_max_charge_scaled",
+            "battery_rate_max_discharge_scaled",
+            "charge_rate_now",
+            "discharge_rate_now",
+            "currency_symbols",
+            "cost_today_sofar",
+            "import_today_now",
+            "export_today_now",
+            "car_charging_battery_size",
+            "car_charging_limit",
+            "car_charging_manual_soc",
+            "car_charging_rate",
+            "car_charging_rate_max",
+            "car_charging_slots",
+            "plan_debug",
+            "end_record",
+            "debug_enable",
+            "balance_inverters_enable",
+        ]
+
+        for attr in plan_attrs:
+            if hasattr(self, attr):
+                setattr(plan_methods, attr, getattr(self, attr))
+
+        return plan_methods.find_price_levels(price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record, metric_keep)
+
+    def optimise_charge_limit_price_threads(self, price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record):
+        """
+        Bridge method: delegate to PlanManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from plan import Plan
+
+        plan_methods = Plan()
+        plan_methods.log = self.log
+
+        # Bind required attributes for optimization
+        for attr in ["get_arg", "prediction", "pool", "threads_enable", "rate_import", "rate_export", "find_price_levels", "metric_min_improvement", "metric_min_improvement_export"]:
+            if hasattr(self, attr):
+                setattr(plan_methods, attr, getattr(self, attr))
+
+        return plan_methods.optimise_charge_limit_price_threads(price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record)
 
     def validate_config(self):
         """
