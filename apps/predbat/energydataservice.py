@@ -34,7 +34,6 @@ class Energidataservice:
         if data_all:
             # Sort to be safe
             data_all.sort(key=lambda e: self._parse_iso(e.get("hour")) or datetime.min)
-            print(data_all)
 
             # Add tariffs (HH:MM → H → HH → raw ISO)
             for entry in data_all:
@@ -53,7 +52,6 @@ class Energidataservice:
                 scale=1.0,
                 use_cent=use_cent,
             )
-            print(rate_data)
 
         return rate_data
 

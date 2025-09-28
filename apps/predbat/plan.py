@@ -12,8 +12,8 @@ import copy
 import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
-from config import PREDICT_STEP, TIME_FORMAT
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit
+from config import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
+from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 
 """
@@ -36,6 +36,43 @@ class DummyThread:
 
 
 class Plan:
+    def dynamic_load(self):
+        # Last period load analysis
+        self.load_last_status = "baseline"
+        if self.load_last_period > self.battery_rate_max_discharge * MINUTE_WATT / 1000:
+            self.load_last_status = "high"
+        elif (self.load_last_period < self.battery_rate_max_discharge * 0.9 * MINUTE_WATT / 1000) and (self.load_last_period < self.car_charging_threshold * 0.9):
+            # Check if the load is less than car charging threshold
+            self.load_last_status = "low"
+        else:
+            self.load_last_status = "baseline"
+
+        self.dynamic_load_baseline = {}
+        if self.metric_dynamic_load_adjust:
+            minutes_now = self.minutes_now
+            minutes_end_slot = int((self.minutes_now + 30) / 30) * 30
+            # When dynamic load is enabled we try can do two things
+            # 1. Increase the load prediction in the current 30 minute period to match the actual load (if its low)
+            # 2. If its low and car charging is predicted then cancel off that car slot
+            if self.load_last_status == "low":
+                for car_n in range(0, self.num_cars):
+                    for slot in self.car_charging_slots[car_n]:
+                        if (slot["start"] < minutes_now) and (slot["start"] < minutes_end_slot) and (slot["end"] > minutes_now):
+                            # If the slot is within the current 30 minute period
+                            self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n + 1, slot["start"], slot["end"]))
+                            slot["kwh"] = 0
+            if self.load_last_status == "high":
+                have_printed = False
+                for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):
+                    car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots))
+                    load_last_period = self.load_last_period / 60 * PREDICT_STEP
+                    load_last_period = max(load_last_period - car_load, 0)
+                    if load_last_period > 0:
+                        if not have_printed:
+                            self.log("Dynamic load adjust is setting load minimum {:.2f}kW at {}".format(load_last_period, self.time_abs_str(minute_absolute)))
+                            have_printed = True
+                        self.dynamic_load_baseline[minute_absolute] = load_last_period
+
     def find_price_levels(
         self,
         price_set,
@@ -791,6 +828,7 @@ class Plan:
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=self.metric_load_divergence,
             load_adjust=self.manual_load_adjust,
+            load_baseline=self.dynamic_load_baseline,
         )
         load_minutes_step10 = self.step_data_history(
             self.load_minutes,
@@ -803,6 +841,7 @@ class Plan:
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
             load_adjust=self.manual_load_adjust,
+            load_baseline=self.dynamic_load_baseline,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
@@ -3306,7 +3345,7 @@ class Plan:
                 self.dashboard_item(
                     self.prefix + ".export_energy_h0",
                     state=dp3(export_kwh_h0),
-                    attributes={"friendly_name": "Current export kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-export"},
+                    attributes={"friendly_name": "Current export", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-export"},
                 )
                 self.dashboard_item(
                     self.prefix + ".load_energy",
@@ -3323,7 +3362,12 @@ class Plan:
                 self.dashboard_item(
                     self.prefix + ".load_energy_h0",
                     state=dp3(load_kwh_h0),
-                    attributes={"friendly_name": "Current load kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
+                    attributes={"friendly_name": "Current load", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".load_energy_last_period",
+                    state=dp3(self.load_last_period),
+                    attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status": self.load_last_status},
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_energy",
@@ -3333,7 +3377,7 @@ class Plan:
                 self.dashboard_item(
                     self.prefix + ".pv_energy_h0",
                     state=dp3(pv_kwh_h0),
-                    attributes={"friendly_name": "Current PV kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
+                    attributes={"friendly_name": "Current PV", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
                 )
                 self.dashboard_item(
                     self.prefix + ".import_energy",

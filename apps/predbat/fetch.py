@@ -87,6 +87,7 @@ class Fetch:
         base_offset=None,
         flip=False,
         load_adjust={},
+        load_baseline={},
     ):
         """
         Create cached step data for historical array
@@ -131,6 +132,10 @@ class Fetch:
                 load_extra += load_adjust.get(minute_absolute, 0) * step / 30.0  # The kWh figure is for the 30 minute period in question so divide by 30 and times by step
             load_extra = max(load_extra, -value)  # Don't allow going to negative load values
             values[minute] = dp4((value + load_extra) * scaling_dynamic * scale_today * scale_fixed)
+
+            # Apply dynamic baseline
+            if minute_absolute in load_baseline:
+                values[minute] = max(values[minute], load_baseline[minute_absolute])
 
         # Simple divergence model keeps the same total but brings PV/Load up and down every 5 minutes
         if cloud_factor and cloud_factor > 0:
@@ -954,11 +959,13 @@ class Fetch:
                 self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
+                self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             else:
                 if self.load_forecast:
                     self.log("Using load forecast from load_forecast sensor")
                     self.load_minutes_now = self.load_forecast.get(0, 0)
                     self.load_minutes_age = 0
+                    self.load_last_period = 0
                 else:
                     self.log("Error: You have not set load_today or load_forecast, you will have no load data")
                     self.record_status(message="Error: load_today not set correctly", had_errors=True)
@@ -2063,6 +2070,7 @@ class Fetch:
         self.metric_future_rate_offset_export = self.get_arg("metric_future_rate_offset_export")
         self.metric_inday_adjust_damping = self.get_arg("metric_inday_adjust_damping")
         self.metric_pv_calibration_enable = self.get_arg("metric_pv_calibration_enable")
+        self.metric_dynamic_load_adjust = self.get_arg("metric_dynamic_load_adjust")
         self.rate_low_threshold = self.get_arg("rate_low_threshold")
         self.rate_high_threshold = self.get_arg("rate_high_threshold")
         self.inverter_soc_reset = self.get_arg("inverter_soc_reset")
