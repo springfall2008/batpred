@@ -58,15 +58,21 @@ class Plan:
             if self.load_last_status == "low":
                 for car_n in range(0, self.num_cars):
                     for slot in self.car_charging_slots[car_n]:
-                        if (slot["start"] < minutes_end_slot) and (slot["end"] > minutes_now):
+                        if (slot["start"] < minutes_now) and (slot["start"] < minutes_end_slot) and (slot["end"] > minutes_now):
                             # If the slot is within the current 30 minute period
+                            self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n + 1, slot["start"], slot["end"]))
                             slot["kwh"] = 0
             if self.load_last_status == "high":
+                have_printed = False
                 for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):
                     car_load = self.in_car_slot(minute_absolute)
                     load_last_period = self.load_last_period / 60 * PREDICT_STEP
                     load_last_period = max(load_last_period - car_load, 0)
-                    self.dynamic_load_baseline[minute_absolute] = load_last_period
+                    if load_last_period > 0:
+                        if not have_printed:
+                            self.log("Dynamic load adjust is setting load minimum {:.2f}kW at {}".format(load_last_period, self.time_abs_str(minute_absolute)))
+                            have_printed = True
+                        self.dynamic_load_baseline[minute_absolute] = load_last_period
 
     def find_price_levels(
         self,
