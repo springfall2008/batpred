@@ -1891,12 +1891,14 @@ body.dark-mode .search-status {
 }
 
 /* Highlight matching text */
-.search-highlight {
+mark.search-highlight {
     background-color: #ffeb3b;
     font-weight: bold;
+    padding: 0;
+    border-radius: 2px;
 }
 
-body.dark-mode .search-highlight {
+body.dark-mode mark.search-highlight {
     background-color: #ffa000;
     color: #000;
 }
@@ -2364,7 +2366,7 @@ def get_logfile_js(filter_type):
                 // Re-apply filter to include new entries
                 setTimeout(() => {{
                     filterLogEntries();
-                }}, 10);
+                }}, 50);
             }}
 
             // Auto-scroll to top for new entries (since newest are at top)
@@ -2393,7 +2395,7 @@ def get_logfile_js(filter_type):
             const searchTerm = document.getElementById('logSearchInput').value.toLowerCase();
             const rows = document.querySelectorAll('#logTableBody tr[data-line]');
             const statusDiv = document.getElementById('searchStatus');
-
+            
             let visibleCount = 0;
             let totalCount = rows.length;
 
@@ -2402,10 +2404,7 @@ def get_logfile_js(filter_type):
                 rows.forEach(row => {{
                     row.classList.remove('log-entry-hidden');
                     // Remove any existing highlights
-                    const cells = row.querySelectorAll('td');
-                    cells.forEach(cell => {{
-                        cell.innerHTML = cell.innerHTML.replace(/<mark class="search-highlight">(.*?)<\\/mark>/gi, '$1');
-                    }});
+                    clearHighlights(row);
                     visibleCount++;
                 }});
                 statusDiv.textContent = '';
@@ -2415,28 +2414,20 @@ def get_logfile_js(filter_type):
             // Filter and highlight entries
             rows.forEach(row => {{
                 const rowText = row.textContent.toLowerCase();
-
+                
                 if (rowText.includes(searchTerm)) {{
                     row.classList.remove('log-entry-hidden');
                     visibleCount++;
-
-                    // Highlight matching text
-                    const cells = row.querySelectorAll('td');
-                    cells.forEach(cell => {{
-                        // First remove any existing highlights
-                        cell.innerHTML = cell.innerHTML.replace(/<mark class="search-highlight">(.*?)<\\/mark>/gi, '$1');
-
-                        // Then add new highlights
-                        const regex = new RegExp(`(${{escapeRegExp(searchTerm)}})`, 'gi');
-                        cell.innerHTML = cell.innerHTML.replace(regex, '<mark class="search-highlight">$1</mark>');
-                    }});
+                    
+                    // Clear existing highlights first
+                    clearHighlights(row);
+                    
+                    // Apply new highlights
+                    highlightTextInElement(row, searchTerm);
                 }} else {{
                     row.classList.add('log-entry-hidden');
-                    // Remove highlights from hidden rows
-                    const cells = row.querySelectorAll('td');
-                    cells.forEach(cell => {{
-                        cell.innerHTML = cell.innerHTML.replace(/<mark class="search-highlight">(.*?)<\\/mark>/gi, '$1');
-                    }});
+                    // Clear highlights from hidden rows
+                    clearHighlights(row);
                 }}
             }});
 
@@ -2444,7 +2435,68 @@ def get_logfile_js(filter_type):
             statusDiv.textContent = `Showing ${{visibleCount}} of ${{totalCount}} entries`;
         }}
 
-        // Clear search function
+        // Clear all highlights in an element
+        function clearHighlights(element) {{
+            const highlightedElements = element.querySelectorAll('.search-highlight');
+            highlightedElements.forEach(highlighted => {{
+                const parent = highlighted.parentNode;
+                parent.replaceChild(document.createTextNode(highlighted.textContent), highlighted);
+                parent.normalize(); // Merge adjacent text nodes
+            }});
+        }}
+
+        // Highlight text in an element without corrupting HTML
+        function highlightTextInElement(element, searchTerm) {{
+            const walker = document.createTreeWalker(
+                element,
+                NodeFilter.SHOW_TEXT,
+                null,
+                false
+            );
+
+            const textNodes = [];
+            let node;
+            while (node = walker.nextNode()) {{
+                textNodes.push(node);
+            }}
+
+            textNodes.forEach(textNode => {{
+                const text = textNode.textContent;
+                const lowerText = text.toLowerCase();
+                const lowerSearchTerm = searchTerm.toLowerCase();
+                
+                if (lowerText.includes(lowerSearchTerm)) {{
+                    const parent = textNode.parentNode;
+                    const fragment = document.createDocumentFragment();
+                    
+                    let lastIndex = 0;
+                    let index = lowerText.indexOf(lowerSearchTerm, 0);
+                    
+                    while (index !== -1) {{
+                        // Add text before the match
+                        if (index > lastIndex) {{
+                            fragment.appendChild(document.createTextNode(text.substring(lastIndex, index)));
+                        }}
+                        
+                        // Add highlighted match
+                        const mark = document.createElement('mark');
+                        mark.className = 'search-highlight';
+                        mark.textContent = text.substring(index, index + searchTerm.length);
+                        fragment.appendChild(mark);
+                        
+                        lastIndex = index + searchTerm.length;
+                        index = lowerText.indexOf(lowerSearchTerm, lastIndex);
+                    }}
+                    
+                    // Add remaining text
+                    if (lastIndex < text.length) {{
+                        fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
+                    }}
+                    
+                    parent.replaceChild(fragment, textNode);
+                }}
+            }});
+        }}        // Clear search function
         function clearLogSearch() {{
             document.getElementById('logSearchInput').value = '';
             filterLogEntries();

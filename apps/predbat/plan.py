@@ -13,7 +13,7 @@ import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from config import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit
+from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 
 """
@@ -64,7 +64,7 @@ class Plan:
             if self.load_last_status == "high":
                 have_printed = False
                 for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):
-                    car_load = self.in_car_slot(minute_absolute)
+                    car_load = sum(in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots))
                     load_last_period = self.load_last_period / 60 * PREDICT_STEP
                     load_last_period = max(load_last_period - car_load, 0)
                     if load_last_period > 0:

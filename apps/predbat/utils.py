@@ -12,6 +12,47 @@ from datetime import datetime, timedelta
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS
 
 
+def in_iboost_slot(minute, iboost_plan):
+    """
+    Is the given minute inside a car slot
+    """
+    load_amount = 0
+
+    if iboost_plan:
+        for slot in iboost_plan:
+            start_minutes = slot["start"]
+            end_minutes = slot["end"]
+            kwh = slot["kwh"]
+            slot_minutes = end_minutes - start_minutes
+            slot_hours = slot_minutes / 60.0
+
+            # Return the load in that slot
+            if minute >= start_minutes and minute < end_minutes:
+                load_amount = abs(kwh / slot_hours)
+                break
+    return load_amount
+
+def in_car_slot(minute, num_cars, car_charging_slots):
+    """
+    Is the given minute inside a car slot
+    """
+    load_amount = [0 for car_n in range(num_cars)]
+
+    for car_n in range(num_cars):
+        if car_charging_slots[car_n]:
+            for slot in car_charging_slots[car_n]:
+                start_minutes = slot["start"]
+                end_minutes = slot["end"]
+                kwh = slot["kwh"]
+                slot_minutes = end_minutes - start_minutes
+                slot_hours = slot_minutes / 60.0
+
+                # Return the load in that slot
+                if minute >= start_minutes and minute < end_minutes:
+                    load_amount[car_n] = abs(kwh / slot_hours)
+                    break
+    return load_amount
+
 def time_string_to_stamp(time_string):
     """
     Convert a time string to a timestamp

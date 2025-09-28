@@ -6,7 +6,7 @@
 
 import requests
 from datetime import timedelta, datetime, timezone
-from utils import str2time, dp1
+from utils import str2time, dp1, dp2
 import asyncio
 import random
 import time
@@ -224,7 +224,7 @@ class GECloudDirect:
         """
         self.log("GECloud: Waiting for API to start")
         count = 0
-        while not self.api_started and count < 120:
+        while not self.api_started and count < 240:
             time.sleep(1)
             count += 1
         if not self.api_started:
@@ -1391,5 +1391,29 @@ class GECloud:
         self.import_today_now = self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0)
         self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
         self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
+
+
+        self.log("GE GECloud load_last_period is {} kW".format(dp2(self.load_last_period)))
+        # More up to date sensors for current values if set
+        if "load_today" in self.args:
+            load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling)
+            self.load_minutes_now = max(load_minutes.get(0, 0) - load_minutes.get(self.minutes_now, 0), 0)
+            self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
+            self.log("GE GECloud load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
+
+        if "import_today" in self.args:
+            import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
+            self.import_today_now = max(import_today.get(0, 0) - import_today.get(self.minutes_now, 0), 0)
+
+        # Load export today data
+        if "export_today" in self.args:
+            export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
+            self.export_today_now = max(export_today.get(0, 0) - export_today.get(self.minutes_now, 0), 0)
+
+        # PV today data
+        if "pv_today" in self.args:
+            pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
+            self.pv_today_now = max(pv_today.get(0, 0) - pv_today.get(self.minutes_now, 0), 0)
+
         self.log("Downloaded {} datapoints from GE going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
