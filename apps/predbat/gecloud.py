@@ -10,6 +10,7 @@ from utils import str2time, dp1
 import asyncio
 import random
 import time
+from config import PREDICT_STEP
 
 """
 GE Cloud data download
@@ -1332,9 +1333,9 @@ class GECloud:
             url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}".format(geserial, datestr)
             while url:
                 if "?" in url:
-                    url += "&pageSize=4096"
+                    url += "&pageSize=8000"
                 else:
-                    url += "?pageSize=4096"
+                    url += "?pageSize=8000"
                 data = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 8 * 60)
                 darray = data.get("data", None)
                 if darray is None:
@@ -1386,6 +1387,7 @@ class GECloud:
         self.pv_today = self.minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
         self.load_minutes_now = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0)
+        self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
         self.import_today_now = self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0)
         self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
         self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
