@@ -10,7 +10,7 @@
 
 from datetime import timedelta
 from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
-from utils import remove_intersecting_windows, calc_percent_limit
+from utils import remove_intersecting_windows
 
 
 # Only assign globals once to avoid re-creating them with processes are forked
@@ -766,7 +766,7 @@ class Prediction:
             if charge_window_active:
                 if not set_discharge_during_charge:
                     discharge_rate_now = battery_rate_min
-                elif set_charge_window and soc >= charge_limit_n and (abs(calc_percent_limit(soc, soc_max) - calc_percent_limit(charge_limit_n, soc_max)) <= 1.0):
+                elif set_charge_window and soc >= charge_limit_n and (abs(self.battery_manager.calc_percent_limit(soc, soc_max) - self.battery_manager.calc_percent_limit(charge_limit_n, soc_max)) <= 1.0):
                     discharge_rate_now = battery_rate_min
 
             # Current real charge rate - using OO battery manager

@@ -10,7 +10,7 @@
 
 from datetime import timedelta
 from config import MINUTE_WATT
-from utils import dp0, dp2, dp3, calc_percent_limit
+from utils import dp0, dp2, dp3
 from inverter import Inverter
 
 """
@@ -175,7 +175,7 @@ class Execute:
                         else:
                             # We can only hold charge if a) we have a way to hold the charge level on the reserve or with a pause feature
                             # and the current charge level is above the target for all inverters
-                            target_soc = calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
+                            target_soc = self.battery_manager.calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
                             if self.set_soc_enable and self.soc_percent >= target_soc:
                                 status = "Hold charging"
                                 self.log("Inverter {} Hold charging as soc {}% is above target {}% set_discharge_during_charge {}".format(inverter.id, self.soc_percent, target_soc, self.charge_limit_percent_best[0], self.set_discharge_during_charge))
@@ -471,18 +471,18 @@ class Execute:
                                 self.log("Resetting charging SOC as we are not charging and inverter_soc_reset is enabled")
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isExporting)
                             elif isCharging:
-                                target_soc = calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
+                                target_soc = self.battery_manager.calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
                                 self.log("Setting charging SOC to {} as per target".format(target_soc))
                                 self.adjust_battery_target_multi(inverter, target_soc, isCharging, isExporting)
                                 if self.charge_limit_best[0] == self.reserve:
-                                    inverter.adjust_charge_immediate(calc_percent_limit(max(inverter.soc_kw, inverter.reserve), inverter.soc_max), freeze=True)
+                                    inverter.adjust_charge_immediate(self.battery_manager.calc_percent_limit(max(inverter.soc_kw, inverter.reserve), inverter.soc_max), freeze=True)
                                 else:
                                     inverter.adjust_charge_immediate(target_soc)
                             elif not inverter.inv_has_target_soc:
                                 self.log("Setting charging SOC to 0 as we are not charging and inverter doesn't support target soc")
                                 self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
                             else:
-                                target_soc = calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
+                                target_soc = self.battery_manager.calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
                                 self.log("Setting charging SOC to {} as per target for when charge window starts".format(target_soc))
                                 self.adjust_battery_target_multi(inverter, target_soc, isCharging, isExporting)
                     else:
@@ -524,7 +524,7 @@ class Execute:
                         if self.charge_limit_best[0] == self.reserve:
                             inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
                         else:
-                            inverter.adjust_charge_immediate(calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), freeze=True)
+                            inverter.adjust_charge_immediate(self.battery_manager.calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), freeze=True)
 
             # Charging/Discharging off via service
             if not isCharging and self.set_charge_window:
@@ -560,7 +560,7 @@ class Execute:
         charge rates and battery capacities
         """
         target_kwh = dp2(self.soc_max * (soc / 100.0))
-        soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
+        soc_percent = self.battery_manager.calc_percent_limit(self.soc_kw, self.soc_max)
 
         if isFreezeCharge:
             new_soc_percent = soc
@@ -578,7 +578,7 @@ class Execute:
             add_kwh = target_kwh - self.soc_kw
             add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
             new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), inverter.reserve)
-            new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
+            new_soc_percent = self.battery_manager.calc_percent_limit(new_soc_kwh, inverter.soc_max)
             if not check:
                 self.log(
                     "Inverter {} adjust target soc for charge to {}% ({}kWh/{}kWh {}kWh) based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(
@@ -711,7 +711,7 @@ class Execute:
             self.load_power += inverter.load_power
             self.battery_power += inverter.battery_power
             self.grid_power += inverter.grid_power
-            self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
+            self.current_charge_limit = self.battery_manager.calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
             self.battery_temperature += inverter.battery_temperature
 
         # Work out battery temperature
@@ -720,11 +720,11 @@ class Execute:
         # Remove extra decimals
         self.soc_max = dp3(self.soc_max)
         self.soc_kw = dp3(self.soc_kw)
-        self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
+        self.soc_percent = self.battery_manager.calc_percent_limit(self.soc_kw, self.soc_max)
         self.reserve = dp3(self.reserve)
-        self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
+        self.reserve_percent = self.battery_manager.calc_percent_limit(self.reserve, self.soc_max)
         self.reserve_current = dp3(self.reserve_current)
-        self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
+        self.reserve_current_percent = self.battery_manager.calc_percent_limit(self.reserve_current, self.soc_max)
 
         self.log(
             "Found {} inverters totals: min reserve {} current reserve {} soc_max {} soc {} charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} export limit {} kW loss charge {} % loss discharge {} % inverter loss {} %".format(
@@ -746,7 +746,7 @@ class Execute:
 
         # Work out current charge limits and publish charge limit base
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]
-        self.charge_limit_percent = calc_percent_limit(self.charge_limit, self.soc_max)
+        self.charge_limit_percent = self.battery_manager.calc_percent_limit(self.charge_limit, self.soc_max)
         self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
 
         self.log("Base charge window {}".format(self.window_as_text(self.charge_window, self.charge_limit_percent)))

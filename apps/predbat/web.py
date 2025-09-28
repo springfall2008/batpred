@@ -21,7 +21,7 @@ import html as html_module
 import time
 from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css, get_logfile_js
 
-from utils import calc_percent_limit, str2time, dp0, dp2
+from utils import str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
 import urllib.parse
@@ -2438,7 +2438,7 @@ var options = {
         if not self.base.dashboard_index:
             return '<span class="mdi mdi-battery-sync"></span>'
 
-        percent = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
+        percent = self.base.battery_manager.calc_percent_limit(self.base.soc_kw, self.base.soc_max)
         percent_rounded_to_nearest_10 = round(float(percent) / 10) * 10
         if self.base.isCharging:
             if percent_rounded_to_nearest_10 == 0:

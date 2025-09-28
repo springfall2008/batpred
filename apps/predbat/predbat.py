@@ -652,6 +652,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.config_root_p = self.config_root
         self.log("Config root is {}".format(self.config_root))
 
+        # Update OO managers with initial configuration
+        self.update_battery_manager_config()
+
     def update_time(self, print=True):
         """
         Update the current time/date
@@ -1001,6 +1004,44 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         except (ValueError, TypeError):
             return False
         return True
+
+    def update_battery_manager_config(self):
+        """
+        Update battery manager configuration from current settings.
+        Call this whenever battery-related config values change.
+        """
+        if hasattr(self, "battery_manager") and hasattr(self, "battery_config"):
+            # Update config object with current values
+            self.battery_config.rate_max_charge = getattr(self, "battery_rate_max_charge", 5.0)
+            self.battery_config.rate_max_discharge = getattr(self, "battery_rate_max_discharge", 5.0)
+            self.battery_config.rate_min = getattr(self, "battery_rate_min", 0.0)
+            self.battery_config.efficiency = getattr(self, "battery_loss", 0.95)
+            self.battery_config.loss = getattr(self, "battery_loss", 0.95)
+            self.battery_config.rate_max_scaling = getattr(self, "battery_rate_max_scaling", 1.0)
+
+            # Update manager with new config
+            self.battery_manager.update_config(
+                rate_max_charge=self.battery_config.rate_max_charge,
+                rate_max_discharge=self.battery_config.rate_max_discharge,
+                rate_min=self.battery_config.rate_min,
+                efficiency=self.battery_config.efficiency,
+                loss=self.battery_config.loss,
+                rate_max_scaling=self.battery_config.rate_max_scaling,
+            )
+
+            self.log("Updated battery manager configuration: rate_max_charge={}, efficiency={}".format(self.battery_config.rate_max_charge, self.battery_config.efficiency))
+
+    def on_battery_config_change(self, config_name, new_value):
+        """
+        Observer pattern: called when battery configuration changes.
+        Updates the OO managers automatically.
+
+        Args:
+            config_name: Name of the config that changed (e.g. 'battery_rate_max_charge')
+            new_value: New value for the config
+        """
+        self.log("Battery config change detected: {} = {}".format(config_name, new_value))
+        self.update_battery_manager_config()
 
     def validate_config(self):
         """

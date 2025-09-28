@@ -14,7 +14,7 @@ import pytz
 import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
-from utils import calc_percent_limit, dp0, dp2, dp3, time_string_to_stamp
+from utils import dp0, dp2, dp3, time_string_to_stamp
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -561,7 +561,7 @@ class Inverter:
                         required_unit="%",
                     )
                     for entry in soc_kwh:
-                        soc_kwh[entry] = calc_percent_limit(soc_kwh[entry], self.soc_max)
+                        soc_kwh[entry] = self.base.battery_manager.calc_percent_limit(soc_kwh[entry], self.soc_max)
                 else:
                     soc_kwh = self.base.minute_data(
                         soc_kwh_data[0],
@@ -612,7 +612,7 @@ class Inverter:
 
                 soc_percent = {}
                 for minute in range(0, min_len):
-                    soc_percent[minute] = calc_percent_limit(soc_kwh.get(minute, 0), self.soc_max)
+                    soc_percent[minute] = self.base.battery_manager.calc_percent_limit(soc_kwh.get(minute, 0), self.soc_max)
 
                 if discharge:
                     search_range = range(5, 20, 1)
@@ -879,7 +879,7 @@ class Inverter:
         if self.soc_max <= 0.0:
             self.soc_percent = 0
         else:
-            self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
+            self.soc_percent = self.base.battery_manager.calc_percent_limit(self.soc_kw, self.soc_max)
 
         if self.rest_data and ("Power" in self.rest_data):
             pdetails = self.rest_data["Power"]

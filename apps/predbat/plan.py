@@ -13,7 +13,7 @@ import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from config import PREDICT_STEP, TIME_FORMAT
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit
+from utils import dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows
 
 # Import new battery calculation utilities
 from utils.battery_calculations import calculate_charge_from_percentage
@@ -235,7 +235,7 @@ class Plan:
             pred_table = []
             charge_freeze_options = [True, False] if self.set_charge_freeze else [False]
             export_freeze_options = [True, False] if self.set_export_freeze else [False]
-            min_freeze_percent = calc_percent_limit(self.best_soc_min, self.soc_max)
+            min_freeze_percent = self.battery_manager.calc_percent_limit(self.best_soc_min, self.soc_max)
             for max_charge_slots in [48, 32, 24, 16, 12, 8, 6, 4, 3, 2, 1]:
                 for max_export_slots in [48, 32, 24, 16, 12, 8, 6, 4, 3, 2, 1]:
                     for try_charge_freeze in charge_freeze_options:
@@ -522,8 +522,8 @@ class Plan:
                 if export_window_n >= 0:
                     break
 
-            soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
-            soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
+            soc_percent = self.battery_manager.calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
+            soc_percent_end = self.battery_manager.calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_percent_max = max(soc_percent, soc_percent_end)
             soc_percent_min = min(soc_percent, soc_percent_end)
 
@@ -922,7 +922,7 @@ class Plan:
                     False,
                     end_record=self.end_record,
                 )
-                self.log("Raw charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+                self.log("Raw charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
 
                 # Initial charge slot filter
                 if self.set_charge_window:
@@ -931,18 +931,18 @@ class Plan:
 
                 # Charge slot clipping
                 record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
-                self.log("Unclipped charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+                self.log("Unclipped charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
                 self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP)
 
                 if self.set_charge_window:
                     # Filter out the windows we disabled during clipping
-                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-                    self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
-                    self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+                    self.charge_limit_percent_best = self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)
+                    self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
                 else:
-                    self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
-                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+                    self.charge_limit_percent_best = self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)
+                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
 
             # Plan comparison
             if charge_window_best_prev is not None and not debug_mode:
@@ -1062,7 +1062,7 @@ class Plan:
 
             # Publish charge and export window best
             if publish:
-                self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+                self.charge_limit_percent_best = self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)
                 self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True, soc=self.predict_soc_best)
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
 
@@ -1337,7 +1337,7 @@ class Plan:
             # to try to avoid constant small changes to SoC target by forcing to keep the current % during a charge period
             # if changing it has little impact
             if not all_n and self.isCharging and (window_n == self.in_charge_window(charge_window, self.minutes_now)):
-                if calc_percent_limit(self.isCharging_Target, self.soc_max) == calc_percent_limit(try_soc, self.soc_max):
+                if self.battery_manager.calc_percent_limit(self.isCharging_Target, self.soc_max) == self.battery_manager.calc_percent_limit(try_soc, self.soc_max):
                     metric -= max(0.1, self.metric_min_improvement)
 
             if try_soc == best_soc_min_setting:
@@ -1508,7 +1508,7 @@ class Plan:
                     continue
 
                 # Never go below the minimum level
-                this_export_limit = max(calc_percent_limit(self.best_soc_min, self.soc_max), int(this_export_limit))
+                this_export_limit = max(self.battery_manager.calc_percent_limit(self.best_soc_min, self.soc_max), int(this_export_limit))
                 this_export_limit = this_export_limit + loop_limit - int(loop_limit)
                 try_options.append([start, this_export_limit])
 
@@ -1966,7 +1966,7 @@ class Plan:
         for window_n in range(min(record_charge_windows, len(charge_window_best))):
             window = charge_window_best[window_n]
             limit = charge_limit_best[window_n]
-            limit_percent = calc_percent_limit(limit, self.soc_max)
+            limit_percent = self.battery_manager.calc_percent_limit(limit, self.soc_max)
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
@@ -1990,7 +1990,7 @@ class Plan:
                             soc_max = max(soc_max, predict_soc[minute])
 
                     soc_m1 = predict_soc[predict_minute_end_m1]
-                    soc_min_percent = calc_percent_limit(soc_min, self.soc_max)
+                    soc_min_percent = self.battery_manager.calc_percent_limit(soc_min, self.soc_max)
 
                     if self.debug_enable:
                         self.log("Examine charge window {} from {} - {} (minute {}) limit {} - min soc {} max soc {} soc_m1 {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_min, soc_max, soc_m1))
@@ -2069,8 +2069,8 @@ class Plan:
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge_scaled)
-                        window["target"] = calc_percent_limit(target_soc, self.soc_max)
-                        export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max) + (limit - int(limit))
+                        window["target"] = self.battery_manager.calc_percent_limit(target_soc, self.soc_max)
+                        export_limits_best[window_n] = self.battery_manager.calc_percent_limit(limit_soc, self.soc_max) + (limit - int(limit))
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
                     elif soc_max < limit_soc:
@@ -2217,7 +2217,7 @@ class Plan:
                 end_record=self.end_record,
                 save="best",
             )
-            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+            self.charge_limit_percent_best = self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
             open(name + "_10.html", "w").write(self.html_plan)
@@ -2226,7 +2226,7 @@ class Plan:
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, save="best"
             )
 
-            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+            self.charge_limit_percent_best = self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
             open(name, "w").write(self.html_plan)
@@ -2678,7 +2678,7 @@ class Plan:
                                             dp2(best_cycle),
                                             dp0(best_carbon),
                                             dp2(best_import),
-                                            calc_percent_limit(self.charge_limit_best, self.soc_max),
+                                            self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max),
                                         )
                                     )
                     if typ in ["d", "df"]:
@@ -2813,7 +2813,7 @@ class Plan:
                         dp2(best_import),
                         dp2(best_keep),
                         self.time_abs_str(self.end_record + self.minutes_now),
-                        self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max), ignore_min=True),
+                        self.window_as_text(self.charge_window_best, self.battery_manager.calc_percent_limit(self.charge_limit_best, self.soc_max), ignore_min=True),
                     )
                 )
 
@@ -3222,7 +3222,7 @@ class Plan:
                         "icon": "mdi:battery",
                         "soc_now": dp3(self.soc_kw),
                         "soc_max": dp3(self.soc_max),
-                        "soc_now_percent": dp2(calc_percent_limit(self.soc_kw, self.soc_max)),
+                        "soc_now_percent": dp2(self.battery_manager.calc_percent_limit(self.soc_kw, self.soc_max)),
                     },
                 )
                 self.dashboard_item(
@@ -3465,7 +3465,7 @@ class Plan:
                         "icon": "mdi:battery",
                         "soc_now": dp3(self.soc_kw),
                         "soc_max": dp3(self.soc_max),
-                        "soc_now_percent": dp2(calc_percent_limit(self.soc_kw, self.soc_max)),
+                        "soc_now_percent": dp2(self.battery_manager.calc_percent_limit(self.soc_kw, self.soc_max)),
                     },
                 )
                 self.dashboard_item(

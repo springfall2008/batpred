@@ -11,7 +11,7 @@
 import math
 from datetime import datetime, timedelta
 from config import THIS_VERSION, TIME_FORMAT, PREDICT_STEP
-from utils import dp0, dp1, dp2, dp3, calc_percent_limit
+from utils import dp0, dp1, dp2, dp3
 from prediction import Prediction
 
 
@@ -715,7 +715,7 @@ class Output:
             else:
                 text = "force exporting to {}% for the next {}".format(target_export, self.duration_string(self.export_window_best[export_window_n]["end"] - minutes_now))
         elif charge_window_n >= 0:
-            target_charge = calc_percent_limit(self.charge_window_best[charge_window_n].get("target", self.charge_limit_best[charge_window_n]), self.soc_max)
+            target_charge = self.battery_manager.calc_percent_limit(self.charge_window_best[charge_window_n].get("target", self.charge_limit_best[charge_window_n]), self.soc_max)
             if self.charge_limit_best[charge_window_n] == self.reserve:
                 text = "freeze charging to {}% for the next {}".format(target_charge, self.duration_string(self.charge_window_best[charge_window_n]["end"] - minutes_now))
             else:
@@ -862,7 +862,7 @@ class Output:
             sentence += ".\n"
 
         # Step 2 - find the current state of charge
-        soc_percent = calc_percent_limit(self.predict_soc_best.get(0, 0.0), self.soc_max)
+        soc_percent = self.battery_manager.calc_percent_limit(self.predict_soc_best.get(0, 0.0), self.soc_max)
 
         # Find if the battery is charging, discharging or force exporting
         charge_window_n = self.in_charge_window(self.charge_window_best, self.minutes_now)
@@ -888,7 +888,7 @@ class Output:
         sentence += "- For the next {} there will be {}{}.\n".format(self.duration_string(pv_forecast_slots[0]["end"] - pv_forecast_slots[0]["start"]), pv_forecast_slots[0]["text"], solar_ramp)
 
         # Battery
-        soc_min_percent = calc_percent_limit(soc_min, self.soc_max)
+        soc_min_percent = self.battery_manager.calc_percent_limit(soc_min, self.soc_max)
         if soc_min_minute < self.forecast_minutes + self.minutes_now:
             if soc_min_percent <= self.reserve_percent:
                 if soc_min_minute <= self.minutes_now:
@@ -1070,23 +1070,23 @@ class Output:
                 extra_forecast_total += value
             xload_total += extra_forecast_total
 
-            soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
-            soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
-            soc_percent_end_window = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
+            soc_percent = self.battery_manager.calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
+            soc_percent_end = self.battery_manager.calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
+            soc_percent_end_window = self.battery_manager.calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_min = self.soc_max
             soc_max = 0
             for minute_check in range(minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
                 soc_min = min(self.predict_soc_best.get(minute_check, 0), soc_min)
                 soc_max = max(self.predict_soc_best.get(minute_check, 0), soc_max)
-            soc_percent_min = calc_percent_limit(soc_min, self.soc_max)
-            soc_percent_max = calc_percent_limit(soc_max, self.soc_max)
+            soc_percent_min = self.battery_manager.calc_percent_limit(soc_min, self.soc_max)
+            soc_percent_max = self.battery_manager.calc_percent_limit(soc_max, self.soc_max)
             soc_min_window = self.soc_max
             soc_max_window = 0
             for minute_check in range(minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
                 soc_min_window = min(self.predict_soc_best.get(minute_check, 0), soc_min_window)
                 soc_max_window = max(self.predict_soc_best.get(minute_check, 0), soc_max_window)
-            soc_percent_min_window = calc_percent_limit(soc_min_window, self.soc_max)
-            soc_percent_max_window = calc_percent_limit(soc_max_window, self.soc_max)
+            soc_percent_min_window = self.battery_manager.calc_percent_limit(soc_min_window, self.soc_max)
+            soc_percent_max_window = self.battery_manager.calc_percent_limit(soc_max_window, self.soc_max)
 
             soc_change = self.predict_soc_best.get(minute_relative_slot_end, 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
             metric_start = self.predict_metric_best.get(minute_relative_start, 0.0)
@@ -1179,7 +1179,7 @@ class Output:
                 if "target" in self.charge_window_best[charge_window_n]:
                     target = self.charge_window_best[charge_window_n]["target"]
 
-                limit_percent = calc_percent_limit(target, self.soc_max)
+                limit_percent = self.battery_manager.calc_percent_limit(target, self.soc_max)
                 if limit > 0.0:
                     if limit == self.reserve:
                         state = "FrzChrg&rarr;"
@@ -1199,7 +1199,7 @@ class Output:
                     show_limit = str(limit_percent)
                     had_state = True
                     if plan_debug:
-                        show_limit += " ({})".format(str(calc_percent_limit(limit, self.soc_max)))
+                        show_limit += " ({})".format(str(self.battery_manager.calc_percent_limit(limit, self.soc_max)))
             else:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]
