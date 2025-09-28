@@ -61,6 +61,7 @@ else:
 from config import (
     TIME_FORMAT,
     PREDICT_STEP,
+    MINUTE_WATT,
     RUN_EVERY,
     INVERTER_TEST,
     CONFIG_ROOTS,
@@ -369,6 +370,24 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.forecast_solar_failures_total = 0
         self.forecast_solar_last_success_timestamp = None
         self.currency_symbols = self.args.get("currency_symbols", "£p")
+
+        # Initialize OO managers with config from config.py
+        from utils.battery_manager import BatteryManager, BatteryConfig
+        from utils.window_manager import WindowManager
+        from utils.time_manager import TimeManager
+        from utils.formatting_manager import FormattingManager
+
+        # Create config objects with default values (will be updated later from actual config)
+        self.battery_config = BatteryConfig(
+            minute_watt=MINUTE_WATT,
+            predict_step=PREDICT_STEP,
+        )
+
+        # Initialize managers
+        self.battery_manager = BatteryManager(self.battery_config)
+        self.window_manager = WindowManager(min_window_duration=5)
+        self.time_manager = TimeManager()
+        self.formatting_manager = FormattingManager()
         self.pool = None
         self.watch_list = []
         self.restart_active = False

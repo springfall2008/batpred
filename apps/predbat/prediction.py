@@ -10,7 +10,7 @@
 
 from datetime import timedelta
 from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
-from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
+from utils import remove_intersecting_windows, calc_percent_limit
 
 
 # Only assign globals once to avoid re-creating them with processes are forked
@@ -769,11 +769,13 @@ class Prediction:
                 elif set_charge_window and soc >= charge_limit_n and (abs(calc_percent_limit(soc, soc_max) - calc_percent_limit(charge_limit_n, soc_max)) <= 1.0):
                     discharge_rate_now = battery_rate_min
 
-            # Current real charge rate
-            charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, soc_max, battery_rate_max_charge, self.battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_charge_curve) * self.battery_rate_max_scaling
+            # Current real charge rate - using OO battery manager
+            charge_rate_now_curve = (
+                self.battery_manager.get_charge_rate_curve(soc, charge_rate_now, soc_max, battery_rate_max_charge, self.battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_charge_curve) * self.battery_rate_max_scaling
+            )
             charge_rate_now_curve_step = charge_rate_now_curve * step
             discharge_rate_now_curve = (
-                get_discharge_rate_curve(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, self.battery_discharge_power_curve, battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
+                self.battery_manager.get_discharge_rate_curve(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, self.battery_discharge_power_curve, battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
                 * self.battery_rate_max_scaling_discharge
             )
             discharge_rate_now_curve_step = discharge_rate_now_curve * step
@@ -854,8 +856,8 @@ class Prediction:
                 four_hour_rule = False
             elif charge_window_active and soc < charge_limit_n:
                 # Charge enable
-                # Only tune charge rate on final plan not every simulation
-                charge_rate_now, charge_rate_now_curve = find_charge_rate(
+                # Only tune charge rate on final plan not every simulation - using OO battery manager
+                charge_rate_now, charge_rate_now_curve = self.battery_manager.find_charge_rate(
                     minute_absolute,
                     soc,
                     charge_window[charge_window_n],

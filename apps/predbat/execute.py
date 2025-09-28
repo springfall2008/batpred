@@ -10,7 +10,7 @@
 
 from datetime import timedelta
 from config import MINUTE_WATT
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
+from utils import dp0, dp2, dp3, calc_percent_limit
 from inverter import Inverter
 
 """
@@ -106,7 +106,8 @@ class Execute:
                         inv_target_soc = self.adjust_battery_target_multi(inverter, target_soc, True, False, check=True)
 
                         current_charge_rate = inverter.get_current_charge_rate()
-                        new_charge_rate, new_charge_rate_real = find_charge_rate(
+                        # Use OO battery manager for charge rate calculation
+                        new_charge_rate, new_charge_rate_real = self.battery_manager.find_charge_rate(
                             self.minutes_now,
                             inverter.soc_kw,
                             window,
