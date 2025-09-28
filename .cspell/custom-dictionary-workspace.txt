@@ -12,11 +12,13 @@ apexcharts
 appdaemon
 appkey
 argname
+attrs
 autodocstring
 autoflake
 automations
 autopep
 autoupdate
+backwards
 Basepath
 Batpred
 battemperature
@@ -55,6 +57,7 @@ dayname
 daynumber
 daysymbol
 dend
+derating
 devcontainer
 devcontainers
 dexport
@@ -141,6 +144,7 @@ kvar
 kvarh
 kwhb
 linebreak
+Liskov
 loadspower
 localfolder
 lockstep

@@ -10,7 +10,7 @@ This module contains functions for calculating actual battery charge/discharge
 rates based on SOC curves and temperature compensation.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict
 from .battery_calculations import calc_percent_limit
 
 
