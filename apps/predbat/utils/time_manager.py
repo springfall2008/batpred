@@ -14,7 +14,6 @@ from datetime import datetime, timedelta
 from typing import Optional, Union, List
 from dataclasses import dataclass
 from enum import Enum
-import re
 
 
 class TimeFormat(Enum):

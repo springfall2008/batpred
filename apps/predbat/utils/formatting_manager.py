@@ -10,10 +10,9 @@ This class handles all data formatting operations including decimal precision,
 unit conversions, and display formatting for battery system data.
 """
 
-from typing import Union, List, Dict, Any, Optional
+from typing import Union, List, Dict, Optional
 from dataclasses import dataclass
 from enum import Enum
-import math
 
 
 class Unit(Enum):
