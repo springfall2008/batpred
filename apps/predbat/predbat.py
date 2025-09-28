@@ -73,7 +73,6 @@ from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
 from components import Components
-from execute import Execute
 from plan import Plan
 from fetch import Fetch
 from output import Output
@@ -82,7 +81,7 @@ from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Fetch, Plan, Output, UserInterface):
     """
     The battery prediction class itself
     """
@@ -1094,6 +1093,106 @@ class PredBat(hass.Hass, Fetch, Plan, Execute, Output, UserInterface):
         self.alerts = getattr(alertfeed_methods, "alerts", [])
         self.alert_active_keep = getattr(alertfeed_methods, "alert_active_keep", {})
         self.alert_cache = getattr(alertfeed_methods, "alert_cache", {})
+
+    def execute_plan(self):
+        """
+        Bridge method: delegate to ExecuteManager or fallback to legacy implementation.
+        This maintains backward compatibility during the mixin-to-components transition.
+        """
+        # Try OO manager first
+        if hasattr(self, "execute_manager") and self.execute_manager:
+            return self.execute_manager.execute_plan()
+
+        # Fallback: import and use the old mixin methods directly
+        from execute import Execute
+
+        execute_methods = Execute()
+        # Bind required attributes for the legacy methods
+        execute_methods.log = self.log
+        execute_methods.alert_active_keep = getattr(self, "alert_active_keep", {})
+        execute_methods.minutes_now = getattr(self, "minutes_now", 0)
+        execute_methods.holiday_days_left = getattr(self, "holiday_days_left", 0)
+        execute_methods.inverter_needs_reset = getattr(self, "inverter_needs_reset", False)
+        execute_methods.inverters = getattr(self, "inverters", [])
+        execute_methods.count_inverter_writes = getattr(self, "count_inverter_writes", {})
+        execute_methods.set_read_only = getattr(self, "set_read_only", False)
+        execute_methods.predbat_mode = getattr(self, "predbat_mode", "Monitor")
+
+        # Bind other required attributes and methods
+        for attr in [
+            "plan_debug",
+            "plan_last_updated",
+            "car_charging_battery_size",
+            "car_charging_limit",
+            "plan_max_cost_minute",
+            "plan_execute_message",
+            "charge_limit_percent_best",
+            "charge_rate_now",
+            "discharge_rate_now",
+            "plan_max_price_minute",
+            "soc_min",
+            "inverter_limit",
+            "adjust_battery_target",
+            "adjust_force_discharge",
+            "adjust_charge_rate",
+            "adjust_discharge_rate",
+            "record_status",
+        ]:
+            if hasattr(self, attr):
+                setattr(execute_methods, attr, getattr(self, attr))
+
+        return execute_methods.execute_plan()
+
+    def fetch_inverter_data(self, create=True):
+        """
+        Bridge method: delegate to ExecuteManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from execute import Execute
+
+        execute_methods = Execute()
+        # Bind required attributes
+        execute_methods.log = self.log
+        execute_methods.inverters = getattr(self, "inverters", [])
+        execute_methods.inverter_limit = getattr(self, "inverter_limit", [])
+
+        # Bind other required attributes
+        for attr in [
+            "get_arg",
+            "now_utc",
+            "midnight_utc",
+            "minutes_now",
+            "forecast_plan_hours",
+            "balance_inverters_enable",
+            "balance_inverters_charge",
+            "balance_inverters_discharge",
+            "balance_inverters_crosscharge",
+            "balance_inverters_threshold_charge",
+            "balance_inverters_threshold_discharge",
+        ]:
+            if hasattr(self, attr):
+                setattr(execute_methods, attr, getattr(self, attr))
+
+        return execute_methods.fetch_inverter_data(create)
+
+    def balance_inverters(self):
+        """
+        Bridge method: delegate to ExecuteManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from execute import Execute
+
+        execute_methods = Execute()
+        # Bind required attributes
+        execute_methods.log = self.log
+        execute_methods.inverters = getattr(self, "inverters", [])
+
+        # Bind balance-related attributes
+        for attr in ["balance_inverters_enable", "balance_inverters_charge", "balance_inverters_discharge", "balance_inverters_crosscharge", "balance_inverters_threshold_charge", "balance_inverters_threshold_discharge"]:
+            if hasattr(self, attr):
+                setattr(execute_methods, attr, getattr(self, attr))
+
+        return execute_methods.balance_inverters()
 
     def validate_config(self):
         """
