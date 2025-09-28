@@ -61,6 +61,7 @@ else:
 from config import (
     TIME_FORMAT,
     PREDICT_STEP,
+    MINUTE_WATT,
     RUN_EVERY,
     INVERTER_TEST,
     CONFIG_ROOTS,
@@ -71,22 +72,12 @@ from config import (
 from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
-from octopus import Octopus
-from energydataservice import Energidataservice
-from solcast import Solcast
-from gecloud import GECloud
 from components import Components
-from execute import Execute
-from plan import Plan
-from fetch import Fetch
-from output import Output
-from userinterface import UserInterface
-from alertfeed import Alertfeed
 from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass):
     """
     The battery prediction class itself
     """
@@ -369,6 +360,26 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.forecast_solar_failures_total = 0
         self.forecast_solar_last_success_timestamp = None
         self.currency_symbols = self.args.get("currency_symbols", "£p")
+
+        # Initialize OO managers with config from config.py
+        from utils.battery_manager import BatteryManager, BatteryConfig
+        from utils.window_manager import WindowManager
+        from utils.time_manager import TimeManager
+        from utils.formatting_manager import FormattingManager
+        from utils.alert_manager import AlertManager
+
+        # Create config objects with default values (will be updated later from actual config)
+        self.battery_config = BatteryConfig(
+            minute_watt=MINUTE_WATT,
+            predict_step=PREDICT_STEP,
+        )
+
+        # Initialize managers
+        self.battery_manager = BatteryManager(self.battery_config)
+        self.window_manager = WindowManager(min_window_duration=5)
+        self.time_manager = TimeManager()
+        self.formatting_manager = FormattingManager()
+        self.alert_manager = AlertManager(self)
         self.pool = None
         self.watch_list = []
         self.restart_active = False
@@ -632,6 +643,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 break
         self.config_root_p = self.config_root
         self.log("Config root is {}".format(self.config_root))
+
+        # Update OO managers with initial configuration
+        self.update_battery_manager_config()
 
     def update_time(self, print=True):
         """
@@ -982,6 +996,659 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         except (ValueError, TypeError):
             return False
         return True
+
+    def update_battery_manager_config(self):
+        """
+        Update battery manager configuration from current settings.
+        Call this whenever battery-related config values change.
+        """
+        if hasattr(self, "battery_manager") and hasattr(self, "battery_config"):
+            # Update config object with current values
+            self.battery_config.rate_max_charge = getattr(self, "battery_rate_max_charge", 5.0)
+            self.battery_config.rate_max_discharge = getattr(self, "battery_rate_max_discharge", 5.0)
+            self.battery_config.rate_min = getattr(self, "battery_rate_min", 0.0)
+            self.battery_config.efficiency = getattr(self, "battery_loss", 0.95)
+            self.battery_config.loss = getattr(self, "battery_loss", 0.95)
+            self.battery_config.rate_max_scaling = getattr(self, "battery_rate_max_scaling", 1.0)
+
+            # Update manager with new config
+            self.battery_manager.update_config(
+                rate_max_charge=self.battery_config.rate_max_charge,
+                rate_max_discharge=self.battery_config.rate_max_discharge,
+                rate_min=self.battery_config.rate_min,
+                efficiency=self.battery_config.efficiency,
+                loss=self.battery_config.loss,
+                rate_max_scaling=self.battery_config.rate_max_scaling,
+            )
+
+            self.log("Updated battery manager configuration: rate_max_charge={}, efficiency={}".format(self.battery_config.rate_max_charge, self.battery_config.efficiency))
+
+    def on_battery_config_change(self, config_name, new_value):
+        """
+        Observer pattern: called when battery configuration changes.
+        Updates the OO managers automatically.
+
+        Args:
+            config_name: Name of the config that changed (e.g. 'battery_rate_max_charge')
+            new_value: New value for the config
+        """
+        self.log("Battery config change detected: {} = {}".format(config_name, new_value))
+        self.update_battery_manager_config()
+
+    # BRIDGE METHODS: Transition from old mixin inheritance to components system
+    def download_octopus_free(self, url):
+        """
+        Bridge method: delegate to components system or fallback to legacy implementation.
+        This maintains backward compatibility during the mixin-to-components transition.
+        """
+        # Try components system first
+        octopus_component = getattr(self.components, "get_component", lambda x: None)("octopus") if hasattr(self, "components") else None
+        if octopus_component and hasattr(octopus_component, "download_octopus_free"):
+            return octopus_component.download_octopus_free(url)
+
+        # Fallback: import and use the old mixin methods directly
+        from octopus import Octopus
+
+        octopus_methods = Octopus()
+        # Bind required attributes for the legacy methods
+        octopus_methods.log = self.log
+        octopus_methods.get_arg = self.get_arg if hasattr(self, "get_arg") else lambda x, **kwargs: None
+        return octopus_methods.download_octopus_free(url)
+
+    def process_alerts(self, testing=False):
+        """
+        Bridge method: delegate to AlertManager or fallback to legacy implementation.
+        This maintains backward compatibility during the mixin-to-components transition.
+        """
+        # Try OO manager first
+        if hasattr(self, "alert_manager") and self.alert_manager:
+            self.alert_manager.process_alerts(testing)
+            # Sync the results back to main object for backward compatibility
+            self.alerts = self.alert_manager.alerts
+            self.alert_active_keep = self.alert_manager.alert_active_keep
+            return
+
+        # Fallback: import and use the old mixin methods directly
+        from alertfeed import Alertfeed
+
+        alertfeed_methods = Alertfeed()
+        # Bind required attributes for the legacy methods
+        alertfeed_methods.log = self.log
+        alertfeed_methods.get_arg = self.get_arg if hasattr(self, "get_arg") else lambda x, **kwargs: None
+        alertfeed_methods.get_state_wrapper = self.get_state_wrapper if hasattr(self, "get_state_wrapper") else lambda x, **kwargs: None
+        alertfeed_methods.midnight_utc = self.midnight_utc if hasattr(self, "midnight_utc") else None
+        alertfeed_methods.minutes_now = self.minutes_now if hasattr(self, "minutes_now") else 0
+        alertfeed_methods.dashboard_item = self.dashboard_item if hasattr(self, "dashboard_item") else lambda *args, **kwargs: None
+        alertfeed_methods.prefix = self.prefix if hasattr(self, "prefix") else "predbat"
+        alertfeed_methods.record_status = self.record_status if hasattr(self, "record_status") else lambda *args, **kwargs: None
+        alertfeed_methods.alert_cache = getattr(self, "alert_cache", {})
+
+        alertfeed_methods.process_alerts(testing)
+
+        # Sync results back to main object
+        self.alerts = getattr(alertfeed_methods, "alerts", [])
+        self.alert_active_keep = getattr(alertfeed_methods, "alert_active_keep", {})
+        self.alert_cache = getattr(alertfeed_methods, "alert_cache", {})
+
+    def execute_plan(self):
+        """
+        Bridge method: delegate to ExecuteManager or fallback to legacy implementation.
+        This maintains backward compatibility during the mixin-to-components transition.
+        """
+        # Try OO manager first
+        if hasattr(self, "execute_manager") and self.execute_manager:
+            return self.execute_manager.execute_plan()
+
+        # Fallback: import and use the old mixin methods directly
+        from execute import Execute
+
+        execute_methods = Execute()
+        # Bind required attributes for the legacy methods
+        execute_methods.log = self.log
+        execute_methods.alert_active_keep = getattr(self, "alert_active_keep", {})
+        execute_methods.minutes_now = getattr(self, "minutes_now", 0)
+        execute_methods.holiday_days_left = getattr(self, "holiday_days_left", 0)
+        execute_methods.inverter_needs_reset = getattr(self, "inverter_needs_reset", False)
+        execute_methods.inverters = getattr(self, "inverters", [])
+        execute_methods.count_inverter_writes = getattr(self, "count_inverter_writes", {})
+        execute_methods.set_read_only = getattr(self, "set_read_only", False)
+        execute_methods.predbat_mode = getattr(self, "predbat_mode", "Monitor")
+
+        # Bind other required attributes and methods
+        for attr in [
+            "plan_debug",
+            "plan_last_updated",
+            "car_charging_battery_size",
+            "car_charging_limit",
+            "plan_max_cost_minute",
+            "plan_execute_message",
+            "charge_limit_percent_best",
+            "charge_rate_now",
+            "discharge_rate_now",
+            "plan_max_price_minute",
+            "soc_min",
+            "inverter_limit",
+            "adjust_battery_target",
+            "adjust_force_discharge",
+            "adjust_charge_rate",
+            "adjust_discharge_rate",
+            "record_status",
+        ]:
+            if hasattr(self, attr):
+                setattr(execute_methods, attr, getattr(self, attr))
+
+        return execute_methods.execute_plan()
+
+    def fetch_inverter_data(self, create=True):
+        """
+        Bridge method: delegate to ExecuteManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from execute import Execute
+
+        execute_methods = Execute()
+        # Bind required attributes
+        execute_methods.log = self.log
+        execute_methods.inverters = getattr(self, "inverters", [])
+        execute_methods.inverter_limit = getattr(self, "inverter_limit", [])
+
+        # Bind other required attributes
+        for attr in [
+            "get_arg",
+            "now_utc",
+            "midnight_utc",
+            "minutes_now",
+            "forecast_plan_hours",
+            "balance_inverters_enable",
+            "balance_inverters_charge",
+            "balance_inverters_discharge",
+            "balance_inverters_crosscharge",
+            "balance_inverters_threshold_charge",
+            "balance_inverters_threshold_discharge",
+        ]:
+            if hasattr(self, attr):
+                setattr(execute_methods, attr, getattr(self, attr))
+
+        return execute_methods.fetch_inverter_data(create)
+
+    def balance_inverters(self):
+        """
+        Bridge method: delegate to ExecuteManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from execute import Execute
+
+        execute_methods = Execute()
+        # Bind required attributes
+        execute_methods.log = self.log
+        execute_methods.inverters = getattr(self, "inverters", [])
+
+        # Bind balance-related attributes
+        for attr in ["balance_inverters_enable", "balance_inverters_charge", "balance_inverters_discharge", "balance_inverters_crosscharge", "balance_inverters_threshold_charge", "balance_inverters_threshold_discharge"]:
+            if hasattr(self, attr):
+                setattr(execute_methods, attr, getattr(self, attr))
+
+        return execute_methods.balance_inverters()
+
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+        """
+        Bridge method: delegate to UserInterface or fallback to legacy implementation.
+        Core configuration access method used throughout the codebase.
+        """
+        # Try OO manager first
+        if hasattr(self, "config_manager") and self.config_manager:
+            return self.config_manager.get_arg(arg, default, indirect, combine, attribute, index, domain, can_override, required_unit)
+
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        # Bind required attributes for the legacy methods
+        ui_methods.log = self.log
+        ui_methods.args = getattr(self, "args", {})
+        ui_methods.config_index = getattr(self, "config_index", {})
+        ui_methods.dashboard_values = getattr(self, "dashboard_values", {})
+        ui_methods.inverters = getattr(self, "inverters", [])
+
+        # Bind required methods
+        if hasattr(self, "resolve_arg"):
+            ui_methods.resolve_arg = self.resolve_arg
+        if hasattr(self, "get_ha_config"):
+            ui_methods.get_ha_config = self.get_ha_config
+        if hasattr(self, "get_state_wrapper"):
+            ui_methods.get_state_wrapper = self.get_state_wrapper
+
+        return ui_methods.get_arg(arg, default, indirect, combine, attribute, index, domain, can_override, required_unit)
+
+    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None, quiet=False, required_unit=None):
+        """
+        Bridge method: delegate to UserInterface or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        # Bind required attributes
+        ui_methods.log = self.log
+        ui_methods.args = getattr(self, "args", {})
+        ui_methods.config_index = getattr(self, "config_index", {})
+        ui_methods.dashboard_values = getattr(self, "dashboard_values", {})
+        ui_methods.inverters = getattr(self, "inverters", [])
+
+        # Bind required methods
+        if hasattr(self, "get_ha_config"):
+            ui_methods.get_ha_config = self.get_ha_config
+        if hasattr(self, "get_state_wrapper"):
+            ui_methods.get_state_wrapper = self.get_state_wrapper
+
+        return ui_methods.resolve_arg(arg, value, default, indirect, combine, attribute, index, extra_args, quiet, required_unit)
+
+    def call_notify(self, message):
+        """
+        Bridge method: delegate to UserInterface or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        ui_methods.log = self.log
+        if hasattr(self, "call_service_wrapper"):
+            ui_methods.call_service_wrapper = self.call_service_wrapper
+
+        return ui_methods.call_notify(message)
+
+    async def select_event(self, entity_id, value):
+        """
+        Bridge method: delegate to components system or UserInterface fallback.
+        """
+        # Try components system first
+        if hasattr(self, "components") and self.components:
+            await self.components.select_event(entity_id, value)
+            return
+
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        ui_methods.log = self.log
+        # Bind required attributes and methods
+        for attr in ["args", "predbat_mode", "set_read_only", "car_charging_manual_soc", "car_charging_now", "update_time", "call_service_wrapper"]:
+            if hasattr(self, attr):
+                setattr(ui_methods, attr, getattr(self, attr))
+
+        await ui_methods.select_event(entity_id, value, {})
+
+    async def switch_event(self, entity_id, service):
+        """
+        Bridge method: delegate to components system or UserInterface fallback.
+        """
+        # Try components system first
+        if hasattr(self, "components") and self.components:
+            await self.components.switch_event(entity_id, service)
+            return
+
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        ui_methods.log = self.log
+        # Bind required attributes and methods
+        for attr in ["args", "call_service_wrapper"]:
+            if hasattr(self, attr):
+                setattr(ui_methods, attr, getattr(self, attr))
+
+        await ui_methods.switch_event(entity_id, {}, {})
+
+    async def number_event(self, entity_id, value):
+        """
+        Bridge method: delegate to components system or UserInterface fallback.
+        """
+        # Try components system first
+        if hasattr(self, "components") and self.components:
+            await self.components.number_event(entity_id, value)
+            return
+
+        # Fallback: import and use the old mixin methods directly
+        from userinterface import UserInterface
+
+        ui_methods = UserInterface()
+        ui_methods.log = self.log
+        # Bind required attributes and methods
+        for attr in ["args", "call_service_wrapper"]:
+            if hasattr(self, attr):
+                setattr(ui_methods, attr, getattr(self, attr))
+
+        await ui_methods.number_event(entity_id, {}, {})
+
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record):
+        """
+        Bridge method: delegate to OutputManager or fallback to legacy implementation.
+        """
+        # Try OO manager first
+        if hasattr(self, "output_manager") and self.output_manager:
+            return self.output_manager.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record)
+
+        # Fallback: import and use the old mixin methods directly
+        from output import Output
+
+        output_methods = Output()
+        # Bind required attributes
+        output_methods.log = self.log
+
+        # Bind all the attributes that Output methods need
+        output_attrs = [
+            "dashboard_item",
+            "prefix",
+            "plan_valid",
+            "text_plan",
+            "html_plan",
+            "plan_last_updated",
+            "plan_last_updated_time",
+            "currency_symbols",
+            "charge_window_best",
+            "export_window_best",
+            "charge_limit_best",
+            "export_limits_best",
+            "charge_limit_percent_best",
+            "export_limit_percent_best",
+            "rate_import",
+            "rate_export",
+            "rate_gas",
+            "minutes_now",
+            "midnight_utc",
+            "forecast_minutes",
+            "plan_debug",
+            "record_status",
+            "car_charging_battery_size",
+            "car_charging_limit",
+            "car_charging_manual_soc",
+            "inverters",
+            "soc_max",
+            "predict_soc_best",
+            "predict_export_best",
+            "predict_import_best",
+            "predict_car_soc_best",
+            "cost_today_sofar",
+            "import_today_now",
+            "export_today_now",
+            "load_minutes_now",
+            "pv_today_now",
+            "battery_power",
+            "grid_power",
+            "load_power",
+            "pv_power",
+            "inverter_limit",
+            "iboost_enable",
+            "iboost_gas",
+            "iboost_rate_threshold",
+            "iboost_rate_threshold_export",
+            "iboost_solar",
+            "iboost_charging",
+            "iboost_smart",
+            "iboost_on_export",
+            "iboost_prevent_discharge",
+            "iboost_max_power",
+            "iboost_min_power",
+            "iboost_today",
+            "iboost_energy_today",
+            "metric_battery_temperature",
+            "metric_battery_power",
+            "metric_load_power",
+            "metric_pv_power",
+            "metric_grid_power",
+            "metric_inverter_power",
+            "get_arg",
+            "get_state_wrapper",
+        ]
+
+        for attr in output_attrs:
+            if hasattr(self, attr):
+                setattr(output_methods, attr, getattr(self, attr))
+
+        return output_methods.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record)
+
+    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc=None):
+        """
+        Bridge method: delegate to OutputManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from output import Output
+
+        output_methods = Output()
+        output_methods.log = self.log
+
+        # Bind required attributes
+        for attr in ["dashboard_item", "prefix", "currency_symbols", "minutes_now", "midnight_utc", "get_arg", "record_status"]:
+            if hasattr(self, attr):
+                setattr(output_methods, attr, getattr(self, attr))
+
+        return output_methods.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best, soc)
+
+    def publish_export_limit(self, export_window, export_limits, best=False):
+        """
+        Bridge method: delegate to OutputManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from output import Output
+
+        output_methods = Output()
+        output_methods.log = self.log
+
+        # Bind required attributes
+        for attr in ["dashboard_item", "prefix", "currency_symbols", "minutes_now", "midnight_utc", "get_arg", "record_status"]:
+            if hasattr(self, attr):
+                setattr(output_methods, attr, getattr(self, attr))
+
+        return output_methods.publish_export_limit(export_window, export_limits, best)
+
+    def publish_car_plan(self):
+        """
+        Bridge method: delegate to OutputManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from output import Output
+
+        output_methods = Output()
+        output_methods.log = self.log
+
+        # Bind required attributes for car plan publishing
+        for attr in ["dashboard_item", "prefix", "car_charging_slots", "minutes_now", "midnight_utc", "currency_symbols", "get_arg"]:
+            if hasattr(self, attr):
+                setattr(output_methods, attr, getattr(self, attr))
+
+        return output_methods.publish_car_plan()
+
+    def fetch_sensor_data(self):
+        """
+        Bridge method: delegate to FetchManager or fallback to legacy implementation.
+        Core data acquisition method that fetches all sensor data, rates, and forecasts.
+        """
+        # Try OO manager first
+        if hasattr(self, "fetch_manager") and self.fetch_manager:
+            return self.fetch_manager.fetch_sensor_data()
+
+        # Fallback: import and use the old mixin methods directly
+        from fetch import Fetch
+
+        fetch_methods = Fetch()
+        # Bind required attributes - Fetch needs extensive state access
+        fetch_methods.log = self.log
+        fetch_methods.record_status = self.record_status if hasattr(self, "record_status") else lambda *args, **kwargs: None
+
+        # Bind core configuration and state attributes
+        fetch_attrs = [
+            "get_arg",
+            "get_state_wrapper",
+            "get_history_wrapper",
+            "now_utc",
+            "midnight_utc",
+            "minutes_now",
+            "forecast_minutes",
+            "max_days_previous",
+            "days_previous",
+            "load_scaling",
+            "import_export_scaling",
+            "inverters",
+            "inverter_limit",
+            "rate_import",
+            "rate_export",
+            "rate_gas",
+            "car_charging_rate",
+            "car_charging_rate_max",
+            "car_charging_battery_size",
+            "car_charging_limit",
+            "car_charging_manual_soc",
+            "car_charging_plan_time",
+            "car_charging_plan_max_price",
+            "car_charging_plan_smart",
+            "car_charging_slots",
+            "car_charging_now",
+            "car_charging_energy",
+            "soc_max",
+            "soc_min",
+            "battery_loss",
+            "inverter_loss",
+            "inverter_hybrid",
+            "battery_rate_max_charge",
+            "battery_rate_max_discharge",
+            "battery_rate_max_charge_scaled",
+            "battery_rate_max_discharge_scaled",
+            "metric_cloud_enable",
+            "pv_forecast_minute_step",
+            "pv_forecast_minute10_step",
+            "load_minutes_step",
+            "load_minutes_step10",
+            "import_today",
+            "export_today",
+            "pv_today",
+            "load_minutes",
+            "load_minutes_now",
+            "iboost_enable",
+            "iboost_energy_today",
+            "iboost_gas",
+            "iboost_rate_threshold",
+            "iboost_rate_threshold_export",
+            "iboost_solar",
+            "iboost_charging",
+            "iboost_smart",
+            "iboost_on_export",
+            "iboost_prevent_discharge",
+            "iboost_max_power",
+            "iboost_min_power",
+            "iboost_today",
+            "dashboard_item",
+            "prefix",
+            "cost_today_sofar",
+            "import_today_now",
+            "export_today_now",
+            "pv_today_now",
+            "battery_power",
+            "grid_power",
+            "load_power",
+            "pv_power",
+            "battery_temperature_history",
+            "process_alerts",
+            "balance_inverters_enable",
+            "balance_inverters_charge",
+            "balance_inverters_discharge",
+            "balance_inverters_crosscharge",
+            "balance_inverters_threshold_charge",
+            "balance_inverters_threshold_discharge",
+        ]
+
+        for attr in fetch_attrs:
+            if hasattr(self, attr):
+                setattr(fetch_methods, attr, getattr(self, attr))
+
+        return fetch_methods.fetch_sensor_data()
+
+    def find_price_levels(self, price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record, metric_keep):
+        """
+        Bridge method: delegate to PlanManager or fallback to legacy implementation.
+        Core optimization method that finds optimal price levels for charging/discharging.
+        """
+        # Try OO manager first
+        if hasattr(self, "plan_manager") and self.plan_manager:
+            return self.plan_manager.find_price_levels(price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record, metric_keep)
+
+        # Fallback: import and use the old mixin methods directly
+        from plan import Plan
+
+        plan_methods = Plan()
+        # Bind required attributes - Plan needs extensive state access for optimization
+        plan_methods.log = self.log
+        plan_methods.record_status = self.record_status if hasattr(self, "record_status") else lambda *args, **kwargs: None
+
+        # Bind all Plan dependencies
+        plan_attrs = [
+            "get_arg",
+            "minutes_now",
+            "midnight_utc",
+            "forecast_minutes",
+            "max_days_previous",
+            "prediction",
+            "pool",
+            "threads_enable",
+            "metric_min_improvement",
+            "metric_min_improvement_export",
+            "rate_import",
+            "rate_export",
+            "rate_gas",
+            "load_minutes",
+            "load_minutes_step",
+            "pv_forecast_minute_step",
+            "pv_forecast_minute10_step",
+            "load_minutes_step10",
+            "inverters",
+            "soc_max",
+            "soc_min",
+            "battery_loss",
+            "inverter_loss",
+            "inverter_hybrid",
+            "battery_rate_max_charge",
+            "battery_rate_max_discharge",
+            "battery_rate_max_charge_scaled",
+            "battery_rate_max_discharge_scaled",
+            "charge_rate_now",
+            "discharge_rate_now",
+            "currency_symbols",
+            "cost_today_sofar",
+            "import_today_now",
+            "export_today_now",
+            "car_charging_battery_size",
+            "car_charging_limit",
+            "car_charging_manual_soc",
+            "car_charging_rate",
+            "car_charging_rate_max",
+            "car_charging_slots",
+            "plan_debug",
+            "end_record",
+            "debug_enable",
+            "balance_inverters_enable",
+        ]
+
+        for attr in plan_attrs:
+            if hasattr(self, attr):
+                setattr(plan_methods, attr, getattr(self, attr))
+
+        return plan_methods.find_price_levels(price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record, metric_keep)
+
+    def optimise_charge_limit_price_threads(self, price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record):
+        """
+        Bridge method: delegate to PlanManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from plan import Plan
+
+        plan_methods = Plan()
+        plan_methods.log = self.log
+
+        # Bind required attributes for optimization
+        for attr in ["get_arg", "prediction", "pool", "threads_enable", "rate_import", "rate_export", "find_price_levels", "metric_min_improvement", "metric_min_improvement_export"]:
+            if hasattr(self, attr):
+                setattr(plan_methods, attr, getattr(self, attr))
+
+        return plan_methods.optimise_charge_limit_price_threads(price_set, price_links, window_index, charge_limit, charge_window, export_window, export_limits, all_windows, all_limits, end_record)
 
     def validate_config(self):
         """
