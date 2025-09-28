@@ -40,9 +40,9 @@ except ImportError:
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2
+from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2, str2time, minutes_to_time, dp1
 from futurerate import FutureRate
-from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST
+from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST, TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from inverter import Inverter
 from compare import Compare
 from gecloud import GECloudDirect
@@ -8611,7 +8611,7 @@ def run_test_octopus_api(my_predbat, octopus_api, octopus_account):
     print("Test Octopus API")
     failed = False
 
-    octopus_api = OctopusAPI(octopus_api, octopus_account, my_predbat)
+    octopus_api = OctopusAPI(octopus_api, octopus_account, my_predbat, time_format=TIME_FORMAT, time_format_octopus=TIME_FORMAT_OCTOPUS, str2time_func=str2time, minutes_to_time_func=minutes_to_time, dp1_func=dp1, dp2_func=dp2)
     my_predbat.octopus_api_direct = octopus_api
     my_predbat.create_task(octopus_api.start())
     octopus_api.wait_api_started()

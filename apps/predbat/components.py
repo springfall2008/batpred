@@ -16,6 +16,8 @@ from web import WebInterface
 from ha import HAInterface
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from utils import str2time, minutes_to_time, dp1, dp2
+from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 import os
 
 COMPONENT_LIST = {
@@ -67,6 +69,30 @@ COMPONENT_LIST = {
             "account_id": {
                 "required": True,
                 "config": "octopus_api_account",
+            },
+            "time_format": {
+                "required": False,
+                "default": TIME_FORMAT,
+            },
+            "time_format_octopus": {
+                "required": False,
+                "default": TIME_FORMAT_OCTOPUS,
+            },
+            "str2time_func": {
+                "required": False,
+                "default": str2time,
+            },
+            "minutes_to_time_func": {
+                "required": False,
+                "default": minutes_to_time,
+            },
+            "dp1_func": {
+                "required": False,
+                "default": dp1,
+            },
+            "dp2_func": {
+                "required": False,
+                "default": dp2,
             },
         },
     },

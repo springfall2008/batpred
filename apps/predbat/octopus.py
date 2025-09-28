@@ -7,8 +7,9 @@
 import requests
 import re
 from datetime import datetime, timedelta, timezone
-from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2
+
+# self.time_format and self.time_format_OCTOPUS will be passed via constructor
+# str2time, minutes_to_time, dp1, dp2 will be passed via constructor
 import aiohttp
 import asyncio
 import json
@@ -16,8 +17,6 @@ import time
 import os
 import yaml
 import traceback
-from config import TIME_FORMAT
-import json
 import pytz
 
 user_agent_value = "predbat-octopus-energy"
@@ -285,13 +284,21 @@ class OctopusEnergyApiClient:
 
 
 class OctopusAPI:
-    def __init__(self, api_key, account_id, base):
+    def __init__(self, api_key, account_id, base, time_format=None, time_format_octopus=None, str2time_func=None, minutes_to_time_func=None, dp1_func=None, dp2_func=None):
         self.api_key = api_key
         self.base = base
         self.log = base.log
         self.api = OctopusEnergyApiClient(api_key, self.log)
         self.stop_api = False
         self.account_id = account_id
+
+        # Dependency injection for utility functions and constants
+        self.time_format = time_format or "%Y-%m-%dT%H:%M:%S%z"
+        self.time_format_octopus = time_format_octopus or "%Y-%m-%d %H:%M:%S%z"
+        self.str2time = str2time_func
+        self.minutes_to_time = minutes_to_time_func
+        self.dp1 = dp1_func
+        self.dp2 = dp2_func
         self.graphql_token = None
         self.graphql_expiration = None
         self.account_data = {}
@@ -765,7 +772,7 @@ class OctopusAPI:
                 time_now = self.midnight_utc + timedelta(minutes=minute)
                 rate_value = rates.get(minute, None)
                 if rate_value is not None:
-                    rates_stamp[time_now.strftime(TIME_FORMAT_OCTOPUS)] = rate_value
+                    rates_stamp[time_now.strftime(self.time_format_octopus)] = rate_value
             rate_now = rates.get(self.now_utc.minute + self.now_utc.hour * 60, None)
             standing_now = standing.get(self.now_utc.minute + self.now_utc.hour * 60, None)
 
@@ -1083,7 +1090,7 @@ class Octopus:
                 timestamp_end = timestamp_end.astimezone(self.local_tz)
                 timestamp_start = timestamp_start.replace(hour=int(time_from))
                 timestamp_end = timestamp_end.replace(hour=int(time_to))
-                free_sessions.append({"start": timestamp_start.strftime(TIME_FORMAT), "end": timestamp_end.strftime(TIME_FORMAT), "rate": 0.0})
+                free_sessions.append({"start": timestamp_start.strftime(self.time_format), "end": timestamp_end.strftime(self.time_format), "rate": 0.0})
             except (ValueError, TypeError) as e:
                 pass
 
@@ -1098,7 +1105,7 @@ class Octopus:
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
             if age.seconds < (30 * 60):
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+                self.log("Return cached octopus data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
                 return pdata
 
         try:
@@ -1143,7 +1150,7 @@ class Octopus:
                     start_local = start_time.astimezone(self.local_tz)
                     end_local = end_time.astimezone(self.local_tz)
 
-                    predbat_session = {"start": start_local.strftime(TIME_FORMAT), "end": end_local.strftime(TIME_FORMAT), "rate": 0.0}
+                    predbat_session = {"start": start_local.strftime(self.time_format), "end": end_local.strftime(self.time_format), "rate": 0.0}
                     free_sessions.append(predbat_session)
 
             return free_sessions
@@ -1233,7 +1240,7 @@ class Octopus:
             # Determine if the specified date is in or out of daylight savings time
             start_time = self.to_aware_tz(start_time)
             end_time = self.to_aware_tz(end_time)
-            return {"start": start_time.strftime(TIME_FORMAT), "end": end_time.strftime(TIME_FORMAT), "rate": 0.0}
+            return {"start": start_time.strftime(self.time_format), "end": end_time.strftime(self.time_format), "rate": 0.0}
 
         except Exception as e:
             self.log(f"Error in create_free_session_simple: {e}")
@@ -1336,8 +1343,8 @@ class Octopus:
                 self.log(f"Warning: Cannot create datetime from {day}/{month_num}/{year} {start_hour}:{start_min}: {e}")
                 return None
 
-            # Format for PredBat (uses TIME_FORMAT from config.py)
-            session = {"start": start_time.strftime(TIME_FORMAT), "end": end_time.strftime(TIME_FORMAT), "rate": 0.0}  # Free electricity
+            # Format for PredBat (uses self.time_format from config.py)
+            session = {"start": start_time.strftime(self.time_format), "end": end_time.strftime(self.time_format), "rate": 0.0}  # Free electricity
 
             return session
 
@@ -1360,7 +1367,7 @@ class Octopus:
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
             if age.seconds < (30 * 60):
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+                self.log("Return cached octopus data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
                 return pdata
 
         # Retry up to 3 minutes
@@ -1412,7 +1419,7 @@ class Octopus:
                     for rate in tariff_data:
                         valid_to = rate.get("valid_to", None)
                         if valid_to is None:
-                            rate["valid_to"] = (self.midnight_utc + timedelta(days=7)).strftime(TIME_FORMAT_OCTOPUS)
+                            rate["valid_to"] = (self.midnight_utc + timedelta(days=7)).strftime(self.time_format_OCTOPUS)
 
                 pdata = self.minute_data(tariff_data, self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
                 return pdata
@@ -1485,8 +1492,8 @@ class Octopus:
                 slot_start_date = self.midnight_utc + timedelta(minutes=minutes_start_slot)
                 slot_end_date = self.midnight_utc + timedelta(minutes=minutes_end_slot)
                 slot = {}
-                slot["start"] = slot_start_date.strftime(TIME_FORMAT)
-                slot["end"] = slot_end_date.strftime(TIME_FORMAT)
+                slot["start"] = slot_start_date.strftime(self.time_format)
+                slot["end"] = slot_end_date.strftime(self.time_format)
                 octopus_slots.append(slot)
                 self.log("Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
@@ -1505,16 +1512,16 @@ class Octopus:
 
             if start and end:
                 try:
-                    start = str2time(start)
-                    end = str2time(end)
+                    start = self.str2time(start)
+                    end = self.str2time(end)
                 except (ValueError, TypeError):
                     start = None
                     end = None
                     self.log("Warn: Unable to decode Octopus free session start/end time {}".format(octopus_free_slot))
 
             if start and end:
-                start_minutes = minutes_to_time(start, self.midnight_utc)
-                end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
+                start_minutes = self.minutes_to_time(start, self.midnight_utc)
+                end_minutes = min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
             if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
                 self.log("Setting Octopus free session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
@@ -1541,8 +1548,8 @@ class Octopus:
 
             if start and end:
                 try:
-                    start = str2time(start)
-                    end = str2time(end)
+                    start = self.str2time(start)
+                    end = self.str2time(end)
                 except (ValueError, TypeError):
                     start = None
                     end = None
@@ -1552,8 +1559,8 @@ class Octopus:
                 start_minutes = int(self.minutes_now / 30) * 30
                 end_minutes = start_minutes + 30
             elif start and end:
-                start_minutes = minutes_to_time(start, self.midnight_utc)
-                end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
+                start_minutes = self.minutes_to_time(start, self.midnight_utc)
+                end_minutes = min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
             if start_minutes < (self.forecast_minutes + self.minutes_now):
                 self.log("Setting Octopus saving session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
@@ -1573,17 +1580,17 @@ class Octopus:
         Decode IOG slot
         """
         if "start" in slot:
-            start = datetime.strptime(slot["start"], TIME_FORMAT)
-            end = datetime.strptime(slot["end"], TIME_FORMAT)
+            start = datetime.strptime(slot["start"], self.time_format)
+            end = datetime.strptime(slot["end"], self.time_format)
         else:
-            start = datetime.strptime(slot["startDtUtc"], TIME_FORMAT_OCTOPUS)
-            end = datetime.strptime(slot["endDtUtc"], TIME_FORMAT_OCTOPUS)
+            start = datetime.strptime(slot["startDtUtc"], self.time_format_OCTOPUS)
+            end = datetime.strptime(slot["endDtUtc"], self.time_format_OCTOPUS)
 
         source = slot.get("source", "")
         location = slot.get("location", "")
 
-        start_minutes = minutes_to_time(start, self.midnight_utc)
-        end_minutes = minutes_to_time(end, self.midnight_utc)
+        start_minutes = self.minutes_to_time(start, self.midnight_utc)
+        end_minutes = self.minutes_to_time(end, self.midnight_utc)
         org_minutes = end_minutes - start_minutes
 
         # Cap slot times into the forecast itself
@@ -1662,7 +1669,7 @@ class Octopus:
                 kwh_expected = kwh * self.car_charging_loss
                 if octopus_intelligent_consider_full:
                     kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
-                    kwh = dp2(kwh_expected / self.car_charging_loss)
+                    kwh = self.dp2(kwh_expected / self.car_charging_loss)
 
                 # Remove the remaining unused time
                 if octopus_intelligent_consider_full and kwh > 0 and (min(car_soc + kwh_expected, limit) >= limit):
@@ -1847,8 +1854,8 @@ class Octopus:
                         end = event.get("end", None)
                         code = event.get("code", None)
                         if start and end and code:
-                            start_time = str2time(start)  # reformat the saving session start & end time for improved readability
-                            end_time = str2time(end)
+                            start_time = self.str2time(start)  # reformat the saving session start & end time for improved readability
+                            end_time = self.str2time(end)
                             diff_time = start_time - self.now_utc
                             if abs(diff_time.days) <= 3:
                                 self.log("Octopus free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
@@ -1891,8 +1898,8 @@ class Octopus:
                     code = event.get("code", None)  # decode the available events structure for code, start/end time & rate
                     start = event.get("start", None)
                     end = event.get("end", None)
-                    start_time = str2time(start)  # reformat the saving session start & end time for improved readability
-                    end_time = str2time(end)
+                    start_time = self.str2time(start)  # reformat the saving session start & end time for improved readability
+                    end_time = self.str2time(end)
                     saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                     if code:  # Join the new Octopus saving event and send an alert
                         self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
@@ -1910,8 +1917,8 @@ class Octopus:
                     if start and end and saving_rate > 0:
                         # Save the saving slot?
                         try:
-                            start_time = str2time(start)
-                            end_time = str2time(end)
+                            start_time = self.str2time(start)
+                            end_time = self.str2time(end)
                             diff_time = start_time - self.now_utc
                             if abs(diff_time.days) <= 3:
                                 self.log("Joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state))
