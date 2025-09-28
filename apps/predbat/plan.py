@@ -37,13 +37,12 @@ class DummyThread:
 
 class Plan:
     def dynamic_load(self):
-
         # Last period load analysis
         self.load_last_status = "baseline"
         if self.load_last_period > self.battery_rate_max_discharge * MINUTE_WATT / 1000:
             self.load_last_status = "high"
         elif (self.load_last_period < self.battery_rate_max_discharge * 0.9 * MINUTE_WATT / 1000) and (self.load_last_period < self.car_charging_threshold * 0.9):
-            # Check if the load is less than car charging threshold
+            # Check if the load is less than car charging threshold
             self.load_last_status = "low"
         else:
             self.load_last_status = "baseline"
@@ -3362,7 +3361,7 @@ class Plan:
                 self.dashboard_item(
                     self.prefix + ".load_energy_last_period",
                     state=dp3(self.load_last_period),
-                    attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status" : self.load_last_status},
+                    attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status": self.load_last_status},
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_energy",
