@@ -72,22 +72,17 @@ from config import (
 from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
-from octopus import Octopus
-from energydataservice import Energidataservice
-from solcast import Solcast
-from gecloud import GECloud
 from components import Components
 from execute import Execute
 from plan import Plan
 from fetch import Fetch
 from output import Output
 from userinterface import UserInterface
-from alertfeed import Alertfeed
 from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
     """
@@ -376,6 +371,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         from utils.window_manager import WindowManager
         from utils.time_manager import TimeManager
         from utils.formatting_manager import FormattingManager
+        from utils.alert_manager import AlertManager
 
         # Create config objects with default values (will be updated later from actual config)
         self.battery_config = BatteryConfig(
@@ -388,6 +384,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.window_manager = WindowManager(min_window_duration=5)
         self.time_manager = TimeManager()
         self.formatting_manager = FormattingManager()
+        self.alert_manager = AlertManager(self)
         self.pool = None
         self.watch_list = []
         self.restart_active = False
@@ -1042,6 +1039,61 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         self.log("Battery config change detected: {} = {}".format(config_name, new_value))
         self.update_battery_manager_config()
+
+    # BRIDGE METHODS: Transition from old mixin inheritance to components system
+    def download_octopus_free(self, url):
+        """
+        Bridge method: delegate to components system or fallback to legacy implementation.
+        This maintains backward compatibility during the mixin-to-components transition.
+        """
+        # Try components system first
+        octopus_component = getattr(self.components, "get_component", lambda x: None)("octopus") if hasattr(self, "components") else None
+        if octopus_component and hasattr(octopus_component, "download_octopus_free"):
+            return octopus_component.download_octopus_free(url)
+
+        # Fallback: import and use the old mixin methods directly
+        from octopus import Octopus
+
+        octopus_methods = Octopus()
+        # Bind required attributes for the legacy methods
+        octopus_methods.log = self.log
+        octopus_methods.get_arg = self.get_arg if hasattr(self, "get_arg") else lambda x, **kwargs: None
+        return octopus_methods.download_octopus_free(url)
+
+    def process_alerts(self, testing=False):
+        """
+        Bridge method: delegate to AlertManager or fallback to legacy implementation.
+        This maintains backward compatibility during the mixin-to-components transition.
+        """
+        # Try OO manager first
+        if hasattr(self, "alert_manager") and self.alert_manager:
+            self.alert_manager.process_alerts(testing)
+            # Sync the results back to main object for backward compatibility
+            self.alerts = self.alert_manager.alerts
+            self.alert_active_keep = self.alert_manager.alert_active_keep
+            return
+
+        # Fallback: import and use the old mixin methods directly
+        from alertfeed import Alertfeed
+
+        alertfeed_methods = Alertfeed()
+        # Bind required attributes for the legacy methods
+        alertfeed_methods.log = self.log
+        alertfeed_methods.get_arg = self.get_arg if hasattr(self, "get_arg") else lambda x, **kwargs: None
+        alertfeed_methods.get_state_wrapper = self.get_state_wrapper if hasattr(self, "get_state_wrapper") else lambda x, **kwargs: None
+        alertfeed_methods.midnight_utc = self.midnight_utc if hasattr(self, "midnight_utc") else None
+        alertfeed_methods.minutes_now = self.minutes_now if hasattr(self, "minutes_now") else 0
+        alertfeed_methods.dashboard_item = self.dashboard_item if hasattr(self, "dashboard_item") else lambda *args, **kwargs: None
+        alertfeed_methods.prefix = self.prefix if hasattr(self, "prefix") else "predbat"
+        alertfeed_methods.record_status = self.record_status if hasattr(self, "record_status") else lambda *args, **kwargs: None
+        alertfeed_methods.alert_cache = getattr(self, "alert_cache", {})
+
+        alertfeed_methods.process_alerts(testing)
+
+        # Sync results back to main object
+        self.alerts = getattr(alertfeed_methods, "alerts", [])
+        self.alert_active_keep = getattr(alertfeed_methods, "alert_active_keep", {})
+        self.alert_cache = getattr(alertfeed_methods, "alert_cache", {})
 
     def validate_config(self):
         """
