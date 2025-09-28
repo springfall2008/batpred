@@ -75,12 +75,11 @@ from predheat import PredHeat
 from components import Components
 from plan import Plan
 from fetch import Fetch
-from output import Output
 from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Fetch, Plan, Output):
+class PredBat(hass.Hass, Fetch, Plan):
     """
     The battery prediction class itself
     """
@@ -1322,6 +1321,144 @@ class PredBat(hass.Hass, Fetch, Plan, Output):
                 setattr(ui_methods, attr, getattr(self, attr))
 
         await ui_methods.number_event(entity_id, {}, {})
+
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record):
+        """
+        Bridge method: delegate to OutputManager or fallback to legacy implementation.
+        """
+        # Try OO manager first
+        if hasattr(self, "output_manager") and self.output_manager:
+            return self.output_manager.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record)
+
+        # Fallback: import and use the old mixin methods directly
+        from output import Output
+
+        output_methods = Output()
+        # Bind required attributes
+        output_methods.log = self.log
+
+        # Bind all the attributes that Output methods need
+        output_attrs = [
+            "dashboard_item",
+            "prefix",
+            "plan_valid",
+            "text_plan",
+            "html_plan",
+            "plan_last_updated",
+            "plan_last_updated_time",
+            "currency_symbols",
+            "charge_window_best",
+            "export_window_best",
+            "charge_limit_best",
+            "export_limits_best",
+            "charge_limit_percent_best",
+            "export_limit_percent_best",
+            "rate_import",
+            "rate_export",
+            "rate_gas",
+            "minutes_now",
+            "midnight_utc",
+            "forecast_minutes",
+            "plan_debug",
+            "record_status",
+            "car_charging_battery_size",
+            "car_charging_limit",
+            "car_charging_manual_soc",
+            "inverters",
+            "soc_max",
+            "predict_soc_best",
+            "predict_export_best",
+            "predict_import_best",
+            "predict_car_soc_best",
+            "cost_today_sofar",
+            "import_today_now",
+            "export_today_now",
+            "load_minutes_now",
+            "pv_today_now",
+            "battery_power",
+            "grid_power",
+            "load_power",
+            "pv_power",
+            "inverter_limit",
+            "iboost_enable",
+            "iboost_gas",
+            "iboost_rate_threshold",
+            "iboost_rate_threshold_export",
+            "iboost_solar",
+            "iboost_charging",
+            "iboost_smart",
+            "iboost_on_export",
+            "iboost_prevent_discharge",
+            "iboost_max_power",
+            "iboost_min_power",
+            "iboost_today",
+            "iboost_energy_today",
+            "metric_battery_temperature",
+            "metric_battery_power",
+            "metric_load_power",
+            "metric_pv_power",
+            "metric_grid_power",
+            "metric_inverter_power",
+            "get_arg",
+            "get_state_wrapper",
+        ]
+
+        for attr in output_attrs:
+            if hasattr(self, attr):
+                setattr(output_methods, attr, getattr(self, attr))
+
+        return output_methods.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record)
+
+    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc=None):
+        """
+        Bridge method: delegate to OutputManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from output import Output
+
+        output_methods = Output()
+        output_methods.log = self.log
+
+        # Bind required attributes
+        for attr in ["dashboard_item", "prefix", "currency_symbols", "minutes_now", "midnight_utc", "get_arg", "record_status"]:
+            if hasattr(self, attr):
+                setattr(output_methods, attr, getattr(self, attr))
+
+        return output_methods.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best, soc)
+
+    def publish_export_limit(self, export_window, export_limits, best=False):
+        """
+        Bridge method: delegate to OutputManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from output import Output
+
+        output_methods = Output()
+        output_methods.log = self.log
+
+        # Bind required attributes
+        for attr in ["dashboard_item", "prefix", "currency_symbols", "minutes_now", "midnight_utc", "get_arg", "record_status"]:
+            if hasattr(self, attr):
+                setattr(output_methods, attr, getattr(self, attr))
+
+        return output_methods.publish_export_limit(export_window, export_limits, best)
+
+    def publish_car_plan(self):
+        """
+        Bridge method: delegate to OutputManager or fallback to legacy implementation.
+        """
+        # Fallback: import and use the old mixin methods directly
+        from output import Output
+
+        output_methods = Output()
+        output_methods.log = self.log
+
+        # Bind required attributes for car plan publishing
+        for attr in ["dashboard_item", "prefix", "car_charging_slots", "minutes_now", "midnight_utc", "currency_symbols", "get_arg"]:
+            if hasattr(self, attr):
+                setattr(output_methods, attr, getattr(self, attr))
+
+        return output_methods.publish_car_plan()
 
     def validate_config(self):
         """
