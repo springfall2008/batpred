@@ -772,7 +772,7 @@ class GECloudDirect:
                         if seconds == 0 or self.polling_mode or (device == ems_device) or (device == gateway_device):
                             self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                             await self.publish_registers(device, self.settings[device])
-                            
+
                     # Real time control disable?
                     if seconds == 0:
                         for device in device_list:

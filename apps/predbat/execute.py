@@ -365,7 +365,7 @@ class Execute:
                         window = self.car_charging_slots[car_n][0]
                         if self.car_charging_soc[car_n] >= self.car_charging_limit[car_n]:
                             self.log("Car {} is already charged, ignoring additional charging slot from {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
-                        elif self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window['kwh'] > 0:
+                        elif self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window["kwh"] > 0:
                             self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                             # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
                             # from draining the battery
