@@ -767,12 +767,16 @@ class GECloudDirect:
                         self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid)
                         await self.publish_evc_data(serial, self.evc_data[uuid])
                 if seconds % 300 == 0:
+                    # Get registers
                     for device in device_list:
                         if seconds == 0 or self.polling_mode or (device == ems_device) or (device == gateway_device):
                             self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                             await self.publish_registers(device, self.settings[device])
-                            if seconds == 0:
-                                await self.enable_real_time_control(device, self.settings[device])
+                            
+                    # Real time control disable?
+                    if seconds == 0:
+                        for device in device_list:
+                            await self.enable_real_time_control(device, self.settings[device])
 
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
@@ -847,7 +851,7 @@ class GECloudDirect:
                 break
             await asyncio.sleep(1 * (retry + 1))
         if data is None:
-            self.log("Warn: GECloud: Failed to read inverter setting id {}".format(setting_id))
+            self.log("Warn: GECloud: Device {} Failed to read inverter setting id {}".format(serial, setting_id))
         return data
 
     async def async_write_inverter_setting(self, serial, setting_id, value):

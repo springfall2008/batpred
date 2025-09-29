@@ -52,15 +52,16 @@ class Plan:
             minutes_now = self.minutes_now
             minutes_end_slot = int((self.minutes_now + 30) / 30) * 30
             # When dynamic load is enabled we try can do two things
-            # 1. Increase the load prediction in the current 30 minute period to match the actual load (if its low)
-            # 2. If its low and car charging is predicted then cancel off that car slot
-            if self.load_last_status == "low":
+            # 1. Increase the load prediction in the current 30 minute period to match the actual load (if the load is higher than expected)
+            # 2. If the load is low and car charging is predicted then cancel off that car slot
+            # Note never do this just after midnight due to the load sensor reset
+            if self.load_last_status == "low" and self.minutes_now > 5:
                 for car_n in range(0, self.num_cars):
                     for slot in self.car_charging_slots[car_n]:
                         if (slot["start"] < minutes_now) and (slot["start"] < minutes_end_slot) and (slot["end"] > minutes_now):
                             # If the slot is within the current 30 minute period
                             self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n + 1, slot["start"], slot["end"]))
-                            slot["kwh"] = 0
+                            self.car_charging_slots[car_n]["kwh"] = 0
             if self.load_last_status == "high":
                 have_printed = False
                 for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):

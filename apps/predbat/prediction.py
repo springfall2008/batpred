@@ -635,8 +635,6 @@ class Prediction:
                 discharge_rate_now = battery_rate_max_discharge
 
             # Simulate car charging
-            car_freeze = False
-
             if car_enable:
                 car_load = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
 
@@ -651,9 +649,6 @@ class Prediction:
                         # Model not allowing the car to charge from the battery
                         if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
                             discharge_rate_now = battery_rate_min  # 0
-                            car_freeze = True
-            else:
-                car_load = 0
 
             # Iboost
             iboost_rate_okay = True
