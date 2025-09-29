@@ -12,12 +12,13 @@
 from gecloud import GECloudDirect
 from ohme import OhmeAPI
 from octopus import OctopusAPI
+from solcast import Solcast
 from web import WebInterface
 from ha import HAInterface
 from db_manager import DatabaseManager
 from fox import FoxAPI
-from utils import str2time, minutes_to_time, dp1, dp2
-from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
+from utils import str2time, minutes_to_time, dp1, dp2, dp4
+from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS, TIME_FORMAT_SOLCAST, TIME_FORMAT_FORECAST_SOLAR
 import os
 
 COMPONENT_LIST = {
@@ -93,6 +94,37 @@ COMPONENT_LIST = {
             "dp2_func": {
                 "required": False,
                 "default": dp2,
+            },
+        },
+    },
+    "solcast": {
+        "class": Solcast,
+        "name": "Solcast Solar Forecast",
+        "event_filter": "predbat_solcast_",
+        "args": {
+            "time_format": {
+                "required": False,
+                "default": TIME_FORMAT,
+            },
+            "time_format_solcast": {
+                "required": False,
+                "default": TIME_FORMAT_SOLCAST,
+            },
+            "time_format_forecast_solar": {
+                "required": False,
+                "default": TIME_FORMAT_FORECAST_SOLAR,
+            },
+            "dp1_func": {
+                "required": False,
+                "default": dp1,
+            },
+            "dp2_func": {
+                "required": False,
+                "default": dp2,
+            },
+            "dp4_func": {
+                "required": False,
+                "default": dp4,
             },
         },
     },
