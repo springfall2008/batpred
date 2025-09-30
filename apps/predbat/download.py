@@ -100,9 +100,9 @@ def predbat_update_move(version, backup_path_or_files):
                 if dest_dir and dest_dir != this_path and not os.path.exists(dest_dir):
                     os.makedirs(dest_dir)
 
-                # Move the file
+                # Move the file (use os.replace for cross-platform overwrite behavior)
                 if os.path.exists(source):
-                    os.rename(source, dest)
+                    os.replace(source, dest)
                     print("Moved {} to {}".format(source, dest))
                 else:
                     print("Warning: Source file {} not found".format(source))
