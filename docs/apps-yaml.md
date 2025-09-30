@@ -280,23 +280,26 @@ The number of inverters you have. If you increase this above 1 you must provide 
 
 ### inverter_type
 
-inverter_type defaults to 'GE' (GivEnergy) if not set in apps.yaml, or should be set to one of the inverter types that are already pre-programmed into Predbat:
+inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should be set to one of the inverter types that are already pre-programmed into Predbat:
 
-  GE: GivEnergy
-  GEC: GivEnergy Cloud
+  FoxCloud: Fox Cloud integration
+  FoxESS: FoxESS via modbus
+  GE: GivEnergy via GivTCP
+  GEC: GivEnergy Cloud integration
   GEE: GivEnergy EMC
   GS: Ginlong Solis
+  HU: Huawei Solar
+  SA: Solar Assistant
   SE: SolarEdge
-  SX4: Solax Gen4 (Modbus Power Control)
   SF: Sofar HYD
   SFMB: Sofar HYD with solarman modbus
-  HU: Huawei Solar
+  SIG: SigEnergy Sigenstor
   SK: Sunsynk
-  SA: Solar Assistant
-
+  SX4: Solax Gen4 (Modbus Power Control)
+  
 If you have multiple inverters, then set inverter_type to a list of the inverter types.
 
-If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in apps.yaml then inverter_type must be set to the same code as has been used in the custom inverter definition.
+If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in `apps.yaml` then inverter_type **must** be set to the same code as has been used in the custom inverter definition.
 
 ### geserial
 
@@ -498,21 +501,26 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 #### Charge/Discharge rate
 
 - **charge_rate** - Battery charge rate entity in watts
-- **discharge_rate** - Battery discharge max rate entity in watts
+- **discharge_rate** - Battery discharge rate entity in watts
 
 or
 
 - **charge_rate_percent** - Battery charge rate entity in percent of maximum rate (0-100)
 - **discharge_rate_percent** - Battery discharge max rate entity in percent of maximum rate (0-100)
 
+or
+
+- **timed_charge_current** - Battery charge rate entity in amps
+- **timed_discharge_current** - Battery discharge rate entity in amps
+
 #### Battery Information
 
-- **battery_voltage** - Current battery voltage (only needed for inverters controlled via amps)
+- **battery_voltage** - Nominal maximum battery voltage (not current battery voltage) - only needed for inverters controlled via Amps and used internally by Predbat to convert Watts to Amps to control the inverter.
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh
-- **battery_min_soc** - When set limits the target SOC% setting for charge and discharge to a minimum percentage value
-- **reserve** - sensor name for the reserve setting in %
-- **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set)
+- **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
+- **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
+- **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
 
 #### Power Data
 
@@ -566,15 +574,23 @@ or
 
 - **charge_start_time** - Battery charge start time entity - can be a HA select entity in format HH:MM or HH:MM:SS or a HA time entity.
 - **charge_end_time** - Battery charge end time entity - can be a HA select entity in format HH:MM or HH:MM:SS or a HA time entity.
+- **discharge_start_time** - Battery discharge start time, same format as charge_start_time.
+- **discharge_end_time** - Battery discharge end time, same format as charge_end_time.
+- **charge_start_hour**, **charge_start_minute** - Battery charge start time for inverters with separate hour and minute control entities.
+- **charge_end_hour**, **charge_end_minute** - Ditto for battery charge end time.
+- **discharge_start_hour**,  **discharge_start_minute** - Ditto for battery discharge start time
+- **discharge_end_hour** and **discharge_end_minute** - Ditto for battery discharge end time
+- **charge_time** - Battery charge time entity for inverters that require a charge time expressed as a range in the format "*start hour*:*start minute*-*end hour*:*end minute*".
+- **discharge_time** = Ditto battery discharge time expressed as a time range.
 - **charge_limit** - Entity name for used to set the SOC target for the battery in percentage (AC charge target)
-- **scheduled_charge_enable** - Scheduled charge enable config
-- **scheduled_discharge_enable** - Scheduled discharge enable config
-- **discharge_start_time** - scheduled discharge slot_1 start time
-- **discharge_end_time** - scheduled discharge slot_1 end time
+- **scheduled_charge_enable** - Switch to enable/disable battery charge according to the charge start/end times defined above.
+- **scheduled_discharge_enable** - Switch to enable/disable battery discharge according to the discharge start/end times defined above.
 - **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
-- **pause_mode** - Givenergy pause mode register (if present)
+- **pause_mode** - GivEnergy pause mode register (if present)
 - **pause_start_time** - scheduled pause start time (only if supported by your inverter)
 - **pause_end_time** - scheduled pause start time (only if supported by your inverter)
+- **idle_start_time** - start time for idle (Eco) mode - for GivEnergy EMS
+- **idle_end_time** - end time for idle (Eco) mode - for GivEnergy EMS
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
@@ -627,9 +643,9 @@ Example service is below:
     entity_id: "switch.sunsynk_inverter_use_timer"
 ```
 
-See [Service API](https://springfall2008.github.io/batpred/inverter-setup/#service-api) for details.
+See [Service API](inverter-setup.md#has_service_api) for details.
 
-Note that **device_id** will be passed to the service automatically, it can be set in apps.yaml.
+Note that **device_id** will be passed to the service automatically, or it can be set in `apps.yaml`.
 
 ### MQTT API
 

@@ -193,6 +193,7 @@ Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>)
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
 Make sure that the configuration option 'Enable forecast half-hourly detail attributes' is turned on as predbat requires the half-hourly detailed solar forecast to populate the predbat plan.
+By default the Solcast integration only provides hourly forecasts and Predbat will take each hourly PV forecast and treat it as a half-hour value - doubling your solar generation forecast!
 
 Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities created by the Solcast integration in Home Assistant.
 
