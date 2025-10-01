@@ -771,7 +771,7 @@ The script will need to be customised for your mobile details.
 alias: Predbat error monitor
 description: Alert when Predbat has raised an exception
 trace:
-  stored_traces: 20
+  stored_traces: 50
 triggers:
   - trigger: template
     alias: Predbat status contains 'Error' for 10 minutes
