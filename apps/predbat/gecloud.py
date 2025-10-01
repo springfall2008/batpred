@@ -679,72 +679,103 @@ class GECloudDirect:
 
         self.log("GECloud: Automatic configuration complete")
 
+    async def run_discovery(self):
+        """
+        Run device discovery and configuration (extracted from start() loop)
+        """
+        self.devices_dict = await self.async_get_devices()
+        self.evc_devices_dict = await self.async_get_evc_devices()
+
+        # Build a list of devices to poll:
+        # Use all battery inverter serials and also add the EMS device if it's distinct.
+        self.device_list = self.devices_dict["battery"][:]
+
+        self.ems_device = None
+        if self.devices_dict["ems"]:
+            self.ems_device = self.devices_dict["ems"]
+            self.polling_mode = False
+            self.log("GECloud: Found EMS device {} and disabled polling on inverters".format(self.ems_device))
+            if self.ems_device not in self.device_list:
+                self.device_list.append(self.ems_device)
+
+        self.evc_device_list = []
+        for device in self.evc_devices_dict:
+            uuid = device.get("uuid", None)
+            device_name = device.get("alias", None)
+            self.evc_device_list.append(uuid)
+
+        self.log("GECloud: Starting up, found devices {} evc_devices {}".format(self.device_list, self.evc_device_list))
+        for device in self.device_list:
+            self.pending_writes[device] = []
+
+        if self.automatic:
+            await self.async_automatic_config(self.devices_dict)
+
+    async def run_data_fetch_iteration(self):
+        """
+        Run one iteration of data fetching (60-second interval tasks from start() loop)
+        """
+        for device in self.device_list:
+            self.status[device] = await self.async_get_inverter_status(device)
+            await self.publish_status(device, self.status[device])
+            self.meter[device] = await self.async_get_inverter_meter(device)
+            await self.publish_meter(device, self.meter[device])
+            self.info[device] = await self.async_get_device_info(device)
+            await self.publish_info(device, self.info[device])
+
+    async def run_evc_data_fetch_iteration(self):
+        """
+        Run one iteration of EVC data fetching (60-second interval tasks from start() loop)
+        """
+        for uuid in self.evc_device_list:
+            self.evc_device[uuid] = await self.async_get_evc_device(uuid)
+            serial = self.evc_device[uuid].get("serial_number", "unknown")
+            self.evc_data[uuid] = await self.async_get_evc_device_data(uuid)
+            self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid)
+            await self.publish_evc_data(serial, self.evc_data[uuid])
+
+    async def run_settings_fetch_iteration(self):
+        """
+        Run one iteration of settings fetching (300-second interval tasks from start() loop)
+        """
+        for device in self.device_list:
+            if self.polling_mode or (device == self.ems_device):
+                self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
+                await self.publish_registers(device, self.settings[device])
+
+        # Clear pending writes
+        for device in self.device_list:
+            if device in self.pending_writes:
+                self.pending_writes[device] = []
+
     async def start(self):
         """
-        Start the client
+        Start the client (continuous loop version for OS compatibility)
         """
         self.stop_cloud = False
         self.api_started = False
         self.polling_mode = True
-        # Get devices using the modified auto-detection (returns dict)
-        devices_dict = await self.async_get_devices()
-        evc_devices_dict = await self.async_get_evc_devices()
 
-        # Build a list of devices to poll:
-        # Use all battery inverter serials and also add the EMS device if it's distinct.
-        device_list = devices_dict["battery"][:]
-
-        ems_device = None
-        if devices_dict["ems"]:
-            ems_device = devices_dict["ems"]
-            self.polling_mode = False
-            self.log("GECloud: Found EMS device {} and disabled polling on inverters".format(ems_device))
-            if ems_device not in device_list:
-                device_list.append(ems_device)
-
-        evc_device_list = []
-        for device in evc_devices_dict:
-            uuid = device.get("uuid", None)
-            device_name = device.get("alias", None)
-            evc_device_list.append(uuid)
-
-        self.log("GECloud: Starting up, found devices {} evc_devices {}".format(device_list, evc_device_list))
-        for device in device_list:
-            self.pending_writes[device] = []
-
-        if self.automatic:
-            await self.async_automatic_config(devices_dict)
+        # Run initial discovery
+        await self.run_discovery()
 
         seconds = 0
         while not self.stop_cloud and not self.base.fatal_error:
             try:
                 if seconds % 60 == 0:
-                    for device in device_list:
-                        self.status[device] = await self.async_get_inverter_status(device)
-                        await self.publish_status(device, self.status[device])
-                        self.meter[device] = await self.async_get_inverter_meter(device)
-                        await self.publish_meter(device, self.meter[device])
-                        self.info[device] = await self.async_get_device_info(device)
-                        await self.publish_info(device, self.info[device])
-                    for uuid in evc_device_list:
-                        self.evc_device[uuid] = await self.async_get_evc_device(uuid)
-                        serial = self.evc_device[uuid].get("serial_number", "unknown")
-                        self.evc_data[uuid] = await self.async_get_evc_device_data(uuid)
-                        self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid)
-                        await self.publish_evc_data(serial, self.evc_data[uuid])
+                    await self.run_data_fetch_iteration()
+                    await self.run_evc_data_fetch_iteration()
                 if seconds % 300 == 0:
-                    for device in device_list:
-                        if seconds == 0 or self.polling_mode or (device == ems_device):
-                            self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
+                    if seconds == 0:
+                        # For first run, include settings fetch
+                        for device in self.device_list:
+                            self.settings[device] = await self.async_get_inverter_settings(device, first=True, previous=self.settings.get(device, {}))
                             await self.publish_registers(device, self.settings[device])
+                    else:
+                        await self.run_settings_fetch_iteration()
 
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
-
-            # Clear pending writes
-            for device in device_list:
-                if device in self.pending_writes:
-                    self.pending_writes[device] = []
 
             if not self.api_started:
                 print("GECloud API Started")
@@ -1116,6 +1147,7 @@ class GECloudDirect:
         return meter
 
     async def async_get_inverter_data_retry(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):
+        self.log("DEBUG: GECloud: async_get_inverter_data_retry '{}','{}','{}','{}','{}','{}','{}','{}','{}','{}','{}' ".format(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time, end_time, command, measurands))
         """
         Retry API call
         """

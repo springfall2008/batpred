@@ -78,9 +78,48 @@ class FoxAPI:
         """
         return self.api_started and self.device_list
 
+    async def run_discovery(self):
+        """
+        Run device discovery and configuration (extracted from start() loop)
+        """
+        await self.get_device_list()
+        self.log("Fox API: Found {} devices".format(len(self.device_list)))
+
+        for device in self.device_list:
+            sn = device.get("deviceSN", None)
+            if sn:
+                await self.get_device_detail(sn)
+                await self.get_device_settings(sn)
+                await self.get_schedule_settings_ha(sn)
+                await self.get_battery_charging_time(sn)
+                await self.get_scheduler(sn)
+                await self.compute_schedule(sn)
+
+        if self.automatic:
+            await self.automatic_config()
+
+    async def run_history_fetch_iteration(self):
+        """
+        Run one iteration of history data fetching (10-minute interval tasks from start() loop)
+        """
+        for device in self.device_list:
+            sn = device.get("deviceSN", None)
+            if sn:
+                await self.get_device_history(sn)
+
+    async def run_realtime_data_fetch_iteration(self):
+        """
+        Run one iteration of real-time data fetching (5-minute interval tasks from start() loop)
+        """
+        for device in self.device_list:
+            sn = device.get("deviceSN", None)
+            if sn:
+                await self.get_real_time_data(sn)
+        await self.publish_data()
+
     async def start(self):
         """
-        Main run loop
+        Main run loop (continuous loop version for OS compatibility)
         """
 
         first = True
@@ -88,34 +127,13 @@ class FoxAPI:
         while not self.stop_api:
             try:
                 if first or (count_seconds % (30 * 60) == 0):
-                    await self.get_device_list()
-                    if first:
-                        self.log("Fox API: Found {} devices".format(len(self.device_list)))
-                    for device in self.device_list:
-                        sn = device.get("deviceSN", None)
-                        if sn:
-                            await self.get_device_detail(sn)
-                            await self.get_device_settings(sn)
-                            await self.get_schedule_settings_ha(sn)
-                            await self.get_battery_charging_time(sn)
-                            await self.get_scheduler(sn)
-                            await self.compute_schedule(sn)
-
-                if first and self.automatic:
-                    await self.automatic_config()
+                    await self.run_discovery()
 
                 if first or (count_seconds % (10 * 60)) == 0:
-                    for device in self.device_list:
-                        sn = device.get("deviceSN", None)
-                        if sn:
-                            await self.get_device_history(sn)
+                    await self.run_history_fetch_iteration()
 
                 if first or (count_seconds % (5 * 60)) == 0:
-                    for device in self.device_list:
-                        sn = device.get("deviceSN", None)
-                        if sn:
-                            await self.get_real_time_data(sn)
-                    await self.publish_data()
+                    await self.run_realtime_data_fetch_iteration()
 
                 if not self.api_started:
                     print("Fox API: Started")
