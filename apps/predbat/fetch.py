@@ -1348,7 +1348,7 @@ class Fetch:
             self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes)
 
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
-        self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
+        self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast_from_entities()
 
         # Apply modal filter to historical data
         if self.load_minutes and not self.load_forecast_only:
@@ -2297,3 +2297,70 @@ class Fetch:
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
+
+    def fetch_pv_forecast_from_entities(self):
+        """
+        Fetch PV forecast data from configured entities following component architecture
+        """
+        pv_forecast_minute = {}
+        pv_forecast_minute10 = {}
+        found_data = False
+
+        # Read from configured entities - this is the proper way
+        forecast_config_keys = ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]
+
+        for config_key in forecast_config_keys:
+            configured_entity = self.get_arg(config_key, None)
+            if configured_entity:
+                # Try with forecast attribute first (newer format)
+                data = self.get_state_wrapper(entity_id=configured_entity, attribute="forecast")
+                if not data:
+                    # Try with detailedForecast attribute for older Solcast HA integrations
+                    data = self.get_state_wrapper(entity_id=configured_entity, attribute="detailedForecast")
+
+                if data:
+                    found_data = True
+                    self.log("Found PV forecast data in configured entity {} for {}".format(configured_entity, config_key))
+                    self._process_forecast_data_to_minutes(data, pv_forecast_minute, pv_forecast_minute10)
+
+        if not found_data:
+            self.log("Warn: No PV forecast data found in configured entities. Check pv_forecast_today, pv_forecast_tomorrow etc. in apps.yaml")
+
+        return pv_forecast_minute, pv_forecast_minute10
+
+    def _process_forecast_data_to_minutes(self, forecast_data, pv_forecast_minute, pv_forecast_minute10):
+        """
+        Process forecast data from entity into minute-level dictionaries
+        """
+        if not forecast_data:
+            return
+
+        for entry in forecast_data:
+            if "period_start" not in entry:
+                continue
+
+            try:
+                # Parse period start time
+                period_start_str = entry.get("period_start", "")
+                if isinstance(period_start_str, str):
+                    period_start = str2time(period_start_str)
+                else:
+                    continue
+
+                # Calculate minutes from midnight UTC
+                minutes = int((period_start - self.midnight_utc).total_seconds() / 60)
+
+                # Get estimates
+                pv_estimate = entry.get("pv_estimate", 0)
+                pv_estimate10 = entry.get("pv_estimate10", pv_estimate * 0.1)  # Default to 10% if not present
+
+                # Spread 30-minute forecast over individual minutes
+                for minute_offset in range(30):
+                    minute = minutes + minute_offset
+                    if minute >= 0:  # Only positive minutes
+                        pv_forecast_minute[minute] = pv_forecast_minute.get(minute, 0) + pv_estimate / 30
+                        pv_forecast_minute10[minute] = pv_forecast_minute10.get(minute, 0) + pv_estimate10 / 30
+
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Error processing forecast entry {}: {}".format(entry, e))
+                continue
