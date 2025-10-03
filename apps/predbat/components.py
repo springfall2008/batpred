@@ -12,6 +12,7 @@
 from gecloud import GECloudDirect
 from ohme import OhmeAPI
 from octopus import OctopusAPI
+from solcast import Solcast
 from web import WebInterface
 from ha import HAInterface
 from db_manager import DatabaseManager
@@ -102,6 +103,35 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": False,
                 "config": "fox_automatic",
+            },
+        },
+    },
+    "solcast": {
+        "class": Solcast,
+        "name": "Solar Forecast (Solcast/Forecast.solar)",
+        "event_filter": "predbat_solcast_",
+        "args": {
+            "solcast_host": {
+                "required": False,
+                "config": "solcast_host",
+            },
+            "solcast_api_key": {
+                "required": False,
+                "config": "solcast_api_key",
+            },
+            "solcast_sites": {
+                "required": False,
+                "config": "solcast_sites",
+                "default": [],
+            },
+            "solcast_poll_hours": {
+                "required": False,
+                "config": "solcast_poll_hours",
+                "default": 8,
+            },
+            "forecast_solar": {
+                "required": False,
+                "config": "forecast_solar",
             },
         },
     },
