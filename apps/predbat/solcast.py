@@ -24,8 +24,7 @@ Solcast class deals with fetching solar predictions, processing the data and pub
 
 
 class Solcast:
-    def __init__(self, solcast_host=None, solcast_api_key=None, solcast_sites=None, 
-                 solcast_poll_hours=None, forecast_solar=None, automatic=False, base=None):
+    def __init__(self, solcast_host=None, solcast_api_key=None, solcast_sites=None, solcast_poll_hours=None, forecast_solar=None, automatic=False, base=None):
         """
         Initialize Solar Forecast component (supports both Solcast and Forecast.solar)
         """
@@ -33,7 +32,7 @@ class Solcast:
         self.log = base.log if base else print
         self.args = base.args if base else {}
         self.automatic = automatic
-        
+
         # Set configuration from component args
         if solcast_host:
             self.args["solcast_host"] = solcast_host
@@ -45,106 +44,106 @@ class Solcast:
             self.args["solcast_poll_hours"] = solcast_poll_hours
         if forecast_solar:
             self.args["forecast_solar"] = forecast_solar
-            
+
         # Component state
         self.api_started = False
         self.stop_forecast = False
-        
+
         # Forecast data storage
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
-        
+
         # Solcast API metrics
-        if hasattr(base, 'solcast_requests_total'):
+        if hasattr(base, "solcast_requests_total"):
             self.solcast_requests_total = base.solcast_requests_total
             self.solcast_failures_total = base.solcast_failures_total
         else:
             self.solcast_requests_total = 0
             self.solcast_failures_total = 0
-    
+
     def wait_api_started(self):
         """
         Return if the API has started
         """
         return self.api_started
-    
+
     def is_alive(self):
         """
         Check if the component is alive
         """
         return self.api_started
-    
+
     async def start(self):
         """
         Start the Solar Forecast component (only if Solcast or Forecast.solar is configured)
         """
         self.api_started = False
         self.stop_forecast = False
-        
+
         # Only start if we have Solcast or Forecast.solar configured
         has_solcast = "solcast_host" in self.args and self.args.get("solcast_api_key")
         has_forecast_solar = "forecast_solar" in self.args
-        
+
         if not has_solcast and not has_forecast_solar:
             self.log("Solar Forecast Component: No Solcast or Forecast.solar configured, component will not start")
             self.log("Solar Forecast Component: fetch.py will use existing HA sensors if configured")
             self.api_started = True  # Mark as started but inactive
             return
-        
+
         import asyncio
-        
+
         if has_solcast:
             self.log("Solar Forecast Component: Starting with Solcast API")
         elif has_forecast_solar:
             self.log("Solar Forecast Component: Starting with Forecast.solar API")
-        
+
         seconds = 0
-        while not self.stop_forecast and not (self.base and hasattr(self.base, 'fatal_error') and self.base.fatal_error):
+        while not self.stop_forecast and not (self.base and hasattr(self.base, "fatal_error") and self.base.fatal_error):
             try:
                 # Fetch forecast every 30 minutes (1800 seconds)
                 if seconds % 1800 == 0:
                     await self.fetch_and_publish_forecast()
-                    
+
             except Exception as e:
                 self.log(f"Error: Solar Forecast Component: Exception in main loop {e}")
-            
+
             if not self.api_started:
                 self.log("Solar Forecast Component Started")
                 self.api_started = True
-                
+
             await asyncio.sleep(60)  # Check every minute
             seconds += 60
-    
+
     async def stop(self):
         """
         Stop the component
         """
         self.stop_forecast = True
-        
+
     async def fetch_and_publish_forecast(self):
         """
-        Fetch PV forecast from Solcast or Forecast.solar API and publish to sensors 
+        Fetch PV forecast from Solcast or Forecast.solar API and publish to sensors
         in the same format that fetch.py expects from Home Assistant's Solcast integration.
         This component only runs if solcast_host or forecast_solar is configured.
         """
         try:
             # Fetch forecast using existing method which handles both Solcast and Forecast.solar
             pv_forecast_minute, pv_forecast_minute10 = self.fetch_pv_forecast()
-            
+
             if pv_forecast_minute:
                 self.pv_forecast_minute = pv_forecast_minute
                 self.pv_forecast_minute10 = pv_forecast_minute10
-                
+
                 # Publish forecast to sensors that fetch.py expects
                 # These sensors mimic what Home Assistant's Solcast integration provides
-                if self.base and hasattr(self.base, 'dashboard_item'):
+                if self.base and hasattr(self.base, "dashboard_item"):
                     from datetime import datetime, timedelta
                     from utils import dp2
-                    
+
                     # Create forecast data in the format expected by fetch_pv_datapoints
                     # Group by day and create the detailedForecast attribute
                     days_forecast = [{}, {}, {}, {}]  # Today, tomorrow, d3, d4
-                    
+
                     for minute, kwh_value in pv_forecast_minute.items():
                         # Determine which day this minute belongs to
                         day_offset = int(minute / (24 * 60))
@@ -152,19 +151,14 @@ class Solcast:
                             if minute not in days_forecast[day_offset]:
                                 days_forecast[day_offset][minute] = 0
                             days_forecast[day_offset][minute] += kwh_value
-                    
+
                     # Create sensors for each day in the format fetch_pv_datapoints expects
-                    sensor_names = [
-                        "sensor.predbat_pv_forecast_forecast_today",
-                        "sensor.predbat_pv_forecast_forecast_tomorrow", 
-                        "sensor.predbat_pv_forecast_forecast_day_3",
-                        "sensor.predbat_pv_forecast_forecast_day_4"
-                    ]
-                    
+                    sensor_names = ["sensor.predbat_pv_forecast_forecast_today", "sensor.predbat_pv_forecast_forecast_tomorrow", "sensor.predbat_pv_forecast_forecast_day_3", "sensor.predbat_pv_forecast_forecast_day_4"]
+
                     for day_idx, sensor_name in enumerate(sensor_names):
                         forecast_list = []
                         total_kwh = 0
-                        
+
                         # Convert minute data to 30-minute slots with period_start and pv_estimate
                         day_minutes = days_forecast[day_idx]
                         for minute in sorted(day_minutes.keys()):
@@ -174,14 +168,9 @@ class Solcast:
                                 if slot_total > 0:
                                     # Create timestamp for this slot
                                     slot_time = self.midnight_utc + timedelta(minutes=minute)
-                                    forecast_list.append({
-                                        "period_start": slot_time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                                        "pv_estimate": slot_total,
-                                        "pv_estimate10": slot_total * 0.9 if pv_forecast_minute10 else slot_total,
-                                        "pv_estimate90": slot_total * 1.1
-                                    })
+                                    forecast_list.append({"period_start": slot_time.strftime("%Y-%m-%dT%H:%M:%S%z"), "pv_estimate": slot_total, "pv_estimate10": slot_total * 0.9 if pv_forecast_minute10 else slot_total, "pv_estimate90": slot_total * 1.1})
                                     total_kwh += slot_total
-                        
+
                         # Publish the sensor with the correct format
                         self.base.dashboard_item(
                             sensor_name,
@@ -192,16 +181,16 @@ class Solcast:
                                 "friendly_name": f"PV Forecast Day {day_idx}",
                                 "detailedForecast": forecast_list,
                                 "forecast": forecast_list,  # Some versions use 'forecast' instead
-                                "solcast_component": True
+                                "solcast_component": True,
                             },
-                            app="solcast"
+                            app="solcast",
                         )
-                    
+
                     self.log(f"Solcast Component: Published forecast data to 4 daily sensors")
                     return True
-            
+
             return False
-            
+
         except Exception as e:
             self.log(f"Solcast Component: Error fetching forecast: {e}")
             return False
