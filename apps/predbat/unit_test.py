@@ -4954,7 +4954,7 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
-    
+
     failed |= run_execute_test(
         my_predbat,
         "no_discharge_car_demand1",
@@ -4968,7 +4968,7 @@ def run_execute_tests(my_predbat):
         car_charging_from_battery=False,
     )
     if failed:
-        return failed    
+        return failed
 
     failed |= run_execute_test(
         my_predbat,
@@ -5264,7 +5264,9 @@ def run_execute_tests(my_predbat):
         has_timed_pause=False,
     )
     failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_export_window=True)
-    failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best_slot, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10)
+    failed |= run_execute_test(
+        my_predbat, "car", car_slot=charge_window_best_slot, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10
+    )
     failed |= run_execute_test(
         my_predbat,
         "car2",
