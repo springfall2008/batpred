@@ -652,7 +652,7 @@ class Fetch:
             if to_key:
                 to_value = item[to_key]
                 if not to_value:
-                    to_time = now + timedelta(minutes=24 * 60 * self.forecast_days)
+                    to_time = now + timedelta(minutes=24 * 60 * days)
                 else:
                     to_time = str2time(item[to_key])
             else:
