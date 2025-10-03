@@ -217,7 +217,7 @@ class GECloudDirect:
         self.requests_total = 0
         self.failures_total = 0
         self.last_success_timestamp = None
-        
+
         # Historical data tracking for incremental fetching
         self.last_historical_fetch_time = None
         self.historical_data_last_timestamp = None
@@ -782,7 +782,7 @@ class GECloudDirect:
                     if seconds == 0:
                         for device in device_list:
                             await self.enable_real_time_control(device, self.settings[device])
-                
+
                 # Fetch historical data every 30 minutes (1800 seconds)
                 if seconds % 1800 == 0:
                     await self.fetch_and_publish_historical_data()
@@ -809,21 +809,22 @@ class GECloudDirect:
         if not self.api_key:
             self.log("GECloud: No API key configured for historical data")
             return False
-            
+
         try:
             from datetime import datetime, timezone
+
             now_utc = datetime.now(timezone.utc)
-            
+
             # Get the first device serial (assuming single inverter for historical data)
             devices_dict = await self.async_get_devices()
             device_list = devices_dict["battery"]
             if not device_list:
                 self.log("GECloud: No devices found for historical data")
                 return False
-                
+
             geserial = device_list[0]  # Use first device
             headers = {"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json", "Accept": "application/json"}
-            
+
             # Determine how much data to fetch based on last fetch time
             if self.last_historical_fetch_time is None:
                 # First time - fetch 7 days of data
@@ -834,7 +835,7 @@ class GECloudDirect:
                 time_diff = now_utc - self.last_historical_fetch_time
                 days_since_last = time_diff.days
                 hours_since_last = time_diff.seconds / 3600
-                
+
                 if days_since_last == 0 and hours_since_last < 2:
                     # Less than 2 hours since last fetch - skip this fetch
                     self.log("GECloud: Skipping historical fetch - only {} hours since last fetch".format(round(hours_since_last, 1)))
@@ -851,26 +852,27 @@ class GECloudDirect:
                     # More than 2 days - get up to 7 days but warn about gap
                     max_days_previous = min(days_since_last + 1, 7)
                     self.log("GECloud: Large gap since last fetch ({} days) - getting {} days of data".format(days_since_last, max_days_previous))
-            
+
             mdata = []
             days_prev_count = 0
             latest_timestamp = None
-            
+
             while days_prev_count <= max_days_previous:
                 days_prev = max_days_previous - days_prev_count
                 time_value = now_utc - timedelta(days=days_prev)
                 datestr = time_value.strftime("%Y-%m-%d")
                 url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}".format(geserial, datestr)
-                
+
                 while url:
                     if "?" in url:
                         url += "&pageSize=8000"
                     else:
                         url += "?pageSize=8000"
-                        
+
                     # Simple HTTP request (not using the cached version for simplicity)
                     try:
                         import requests
+
                         response = requests.get(url, headers=headers, timeout=30)
                         if response.status_code != 200:
                             self.log("GECloud: Historical data request failed: {}".format(response.status_code))
@@ -879,7 +881,7 @@ class GECloudDirect:
                     except Exception as e:
                         self.log("GECloud: Historical data request error: {}".format(e))
                         break
-                        
+
                     darray = data.get("data", None)
                     if darray is None:
                         if days_prev == 0:
@@ -889,45 +891,40 @@ class GECloudDirect:
                         else:
                             self.log("GECloud: Error downloading historical data for {}".format(datestr))
                             break
-                            
+
                     for item in darray:
                         timestamp = item["time"]
-                        
+
                         # Skip data we already have (if doing incremental fetch)
                         if self.historical_data_last_timestamp is not None:
                             from utils import str2time
+
                             try:
                                 item_time = str2time(timestamp)
                                 if item_time <= self.historical_data_last_timestamp:
                                     continue  # Skip older data we already have
                             except (ValueError, TypeError):
                                 pass  # If we can't parse timestamp, include the data
-                        
+
                         consumption = item["total"]["consumption"]
                         dimport = item["total"]["grid"]["import"]
                         dexport = item["total"]["grid"]["export"]
                         dpv = item["total"]["solar"]
-                        
-                        new_data = {
-                            "last_updated": timestamp,
-                            "consumption": consumption,
-                            "import": dimport,
-                            "export": dexport,
-                            "pv": dpv
-                        }
+
+                        new_data = {"last_updated": timestamp, "consumption": consumption, "import": dimport, "export": dexport, "pv": dpv}
                         mdata.append(new_data)
-                        
+
                         # Track the latest timestamp
                         if latest_timestamp is None or timestamp > latest_timestamp:
                             latest_timestamp = timestamp
-                        
+
                     if not darray:
                         url = None
                     else:
                         url = data["links"].get("next", None)
-                        
+
                 days_prev_count += 1
-                
+
             if not mdata:
                 if self.last_historical_fetch_time is None:
                     self.log("GECloud: No historical data retrieved on initial fetch")
@@ -935,94 +932,67 @@ class GECloudDirect:
                 else:
                     self.log("GECloud: No new historical data since last fetch")
                     return True
-                
+
             # Process and publish data to sensors
             # Create sensor data arrays compatible with minute_data_load
             load_data = []
             import_data = []
             export_data = []
             pv_data = []
-            
+
             for item in mdata:
                 timestamp = item["last_updated"]
                 load_data.append({"last_updated": timestamp, "state": item["consumption"]})
                 import_data.append({"last_updated": timestamp, "state": item["import"]})
                 export_data.append({"last_updated": timestamp, "state": item["export"]})
                 pv_data.append({"last_updated": timestamp, "state": item["pv"]})
-            
+
             # Publish as sensor entities using the naming convention that automatic config expects
             # Use the first device serial for the sensor names to match automatic config
             entity_prefix = "sensor.predbat_gecloud_" + geserial
-            
+
             self.base.dashboard_item(
                 entity_prefix + "_consumption_today",
                 state=load_data,
-                attributes={
-                    "unit_of_measurement": "kWh",
-                    "device_class": "energy",
-                    "friendly_name": "Consumption Today (GE Cloud Historical)",
-                    "ge_cloud_historical": True,
-                    "last_fetch": now_utc.isoformat(),
-                    "data_points": len(mdata)
-                },
-                app="gecloud"
+                attributes={"unit_of_measurement": "kWh", "device_class": "energy", "friendly_name": "Consumption Today (GE Cloud Historical)", "ge_cloud_historical": True, "last_fetch": now_utc.isoformat(), "data_points": len(mdata)},
+                app="gecloud",
             )
-            
+
             self.base.dashboard_item(
-                entity_prefix + "_grid_import_today", 
+                entity_prefix + "_grid_import_today",
                 state=import_data,
-                attributes={
-                    "unit_of_measurement": "kWh",
-                    "device_class": "energy", 
-                    "friendly_name": "Grid Import Today (GE Cloud Historical)",
-                    "ge_cloud_historical": True,
-                    "last_fetch": now_utc.isoformat(),
-                    "data_points": len(mdata)
-                },
-                app="gecloud"
+                attributes={"unit_of_measurement": "kWh", "device_class": "energy", "friendly_name": "Grid Import Today (GE Cloud Historical)", "ge_cloud_historical": True, "last_fetch": now_utc.isoformat(), "data_points": len(mdata)},
+                app="gecloud",
             )
-            
+
             self.base.dashboard_item(
                 entity_prefix + "_grid_export_today",
-                state=export_data, 
-                attributes={
-                    "unit_of_measurement": "kWh",
-                    "device_class": "energy",
-                    "friendly_name": "Grid Export Today (GE Cloud Historical)", 
-                    "ge_cloud_historical": True,
-                    "last_fetch": now_utc.isoformat(),
-                    "data_points": len(mdata)
-                },
-                app="gecloud"
+                state=export_data,
+                attributes={"unit_of_measurement": "kWh", "device_class": "energy", "friendly_name": "Grid Export Today (GE Cloud Historical)", "ge_cloud_historical": True, "last_fetch": now_utc.isoformat(), "data_points": len(mdata)},
+                app="gecloud",
             )
-            
+
             self.base.dashboard_item(
                 entity_prefix + "_solar_today",
                 state=pv_data,
-                attributes={
-                    "unit_of_measurement": "kWh", 
-                    "device_class": "energy",
-                    "friendly_name": "Solar Today (GE Cloud Historical)",
-                    "ge_cloud_historical": True,
-                    "last_fetch": now_utc.isoformat(),
-                    "data_points": len(mdata)
-                },
-                app="gecloud"
+                attributes={"unit_of_measurement": "kWh", "device_class": "energy", "friendly_name": "Solar Today (GE Cloud Historical)", "ge_cloud_historical": True, "last_fetch": now_utc.isoformat(), "data_points": len(mdata)},
+                app="gecloud",
             )
-            
+
             # Update state tracking for next incremental fetch
             self.last_historical_fetch_time = now_utc
             if latest_timestamp:
                 try:
                     from utils import str2time
+
                     self.historical_data_last_timestamp = str2time(latest_timestamp)
                 except (ValueError, TypeError):
                     self.log("GECloud: Could not parse latest timestamp: {}".format(latest_timestamp))
-            
+
             fetch_type = "Initial" if self.last_historical_fetch_time == now_utc and self.historical_data_last_timestamp is None else "Incremental"
             self.log("GECloud: {} fetch completed - {} historical data points published to sensors".format(fetch_type, len(mdata)))
             return True
-            
+
         except Exception as e:
             self.log("GECloud: Error fetching historical data: {}".format(e))
             return False
