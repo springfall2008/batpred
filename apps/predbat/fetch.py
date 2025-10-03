@@ -950,47 +950,44 @@ class Fetch:
         # Fetch extra load forecast
         self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc)
 
-        # Load previous load data
-        if self.get_arg("ge_cloud_data", False):
-            self.download_ge_data(self.now_utc)
+        # Load previous load data - now always uses sensor-based approach
+        # GE Cloud component will populate sensors if enabled
+        if "load_today" in self.args:
+            self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling)
+            self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
+            self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
+            self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
         else:
-            # Load data
-            if "load_today" in self.args:
-                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling)
-                self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
-                self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
-                self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
+            if self.load_forecast:
+                self.log("Using load forecast from load_forecast sensor")
+                self.load_minutes_now = self.load_forecast.get(0, 0)
+                self.load_minutes_age = 0
+                self.load_last_period = 0
             else:
-                if self.load_forecast:
-                    self.log("Using load forecast from load_forecast sensor")
-                    self.load_minutes_now = self.load_forecast.get(0, 0)
-                    self.load_minutes_age = 0
-                    self.load_last_period = 0
-                else:
-                    self.log("Error: You have not set load_today or load_forecast, you will have no load data")
-                    self.record_status(message="Error: load_today not set correctly", had_errors=True)
-                    raise ValueError
+                self.log("Error: You have not set load_today or load_forecast, you will have no load data")
+                self.record_status(message="Error: load_today not set correctly", had_errors=True)
+                raise ValueError
 
-            # Load import today data
-            if "import_today" in self.args:
-                self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
-            else:
-                self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
+        # Load import today data
+        if "import_today" in self.args:
+            self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
+            self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
+        else:
+            self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
-            # Load export today data
-            if "export_today" in self.args:
-                self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
-            else:
-                self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
+        # Load export today data
+        if "export_today" in self.args:
+            self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
+            self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
+        else:
+            self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
-            # PV today data
-            if "pv_today" in self.args:
-                self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-                self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
-            else:
-                self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous pv data")
+        # PV today data
+        if "pv_today" in self.args:
+            self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
+            self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
+        else:
+            self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous pv data")
 
         # Battery temperature
         if "battery_temperature_history" in self.args:
