@@ -754,8 +754,8 @@ class WebInterface:
 
             if entity_id:
                 # Determine entity type from entity_id domain
-                domain = entity_id.split('.')[0] if '.' in entity_id else ""
-                
+                domain = entity_id.split(".")[0] if "." in entity_id else ""
+
                 # Convert value based on entity type
                 if domain in ["switch", "input_boolean"]:
                     # For toggle switches, check if value is 'on' or 'off'
@@ -768,14 +768,14 @@ class WebInterface:
                 elif domain in ["select", "input_select"]:
                     # Keep as string for select entities
                     pass
-                
+
                 # Set the entity state
                 await self.base.ha_interface.set_state_external(entity_id, new_value, attributes=attributes)
                 self.log(f"Entity {entity_id} updated to {new_value} via web interface")
-            
+
         except Exception as e:
             self.log(f"Error updating entity value: {e}")
-        
+
         # Redirect back to entity page with same parameters
         redirect_url = f"./entity?entity_id={entity_id}&days={days}"
         raise web.HTTPFound(redirect_url)
@@ -785,11 +785,11 @@ class WebInterface:
         Determine if an entity is writable and return its control type
         Returns: (is_writable, control_type, options)
         """
-        if not entity_id or '.' not in entity_id:
+        if not entity_id or "." not in entity_id:
             return False, None, None
-            
-        domain = entity_id.split('.')[0]
-        
+
+        domain = entity_id.split(".")[0]
+
         # Check if it's a writable entity type
         if domain in ["switch", "input_boolean"]:
             return True, "toggle", None
@@ -798,7 +798,7 @@ class WebInterface:
         elif domain in ["select", "input_select"]:
             options = self.base.get_state_wrapper(entity_id=entity_id, attribute="options", default=[])
             return True, "select", options
-        
+
         return False, None, None
 
     def get_entity_control_html(self, entity_id, days):
@@ -808,14 +808,14 @@ class WebInterface:
         current_value = self.base.get_state_wrapper(entity_id=entity_id)
 
         is_writable, control_type, options = self.is_entity_writable(entity_id)
-        
+
         if not is_writable:
             return ""
-        
+
         html = '<div class="entity-edit-container" style="margin-top: 15px; padding: 15px; border: 1px solid var(--border-color, #ddd); border-radius: 5px; background-color: var(--background-secondary, #f9f9f9);">'
-        
+
         # Add CSS for dark mode support
-        html += '''
+        html += """
         <style>
         .entity-edit-container {
             --border-color: #ddd;
@@ -824,7 +824,7 @@ class WebInterface:
             --text-secondary: #666;
             --input-background: #fff;
         }
-        
+
         body.dark-mode .entity-edit-container {
             --border-color: #555;
             --background-secondary: #2d2d2d;
@@ -833,48 +833,48 @@ class WebInterface:
             --input-background: #3d3d3d;
             color: var(--text-color);
         }
-        
+
         body.dark-mode .entity-edit-container input[type="number"],
         body.dark-mode .entity-edit-container select {
             background-color: var(--input-background) !important;
             border-color: var(--border-color) !important;
             color: var(--text-color) !important;
         }
-        
+
         body.dark-mode .entity-edit-container span {
             color: var(--text-color) !important;
         }
         </style>
-        '''
+        """
         html += f'<form method="post" action="./entity" style="display: flex; align-items: center; gap: 10px;">'
         html += f'<input type="hidden" name="entity_id" value="{entity_id}">'
         html += f'<input type="hidden" name="days" value="{days}">'
-        
+
         if control_type == "toggle":
             is_active = str(current_value).lower() in ["true", "on", "1"]
             toggle_class = "toggle-switch active" if is_active else "toggle-switch"
-            
+
             html += f'<div style="display: flex; align-items: center; gap: 10px;">'
             html += f'<button class="{toggle_class}" type="button" onclick="toggleEntitySwitch(this, \'{entity_id}\', {days})"></button>'
-            html += f'<span>Enable/Disable</span>'
-            html += f'</div>'
-            
+            html += f"<span>Enable/Disable</span>"
+            html += f"</div>"
+
             # Add JavaScript for toggle functionality
-            html += f'''
+            html += f"""
             <script>
             function toggleEntitySwitch(button, entityId, days) {{
                 // Toggle the visual state
                 button.classList.toggle('active');
-                
+
                 // Determine the new value
                 const newValue = button.classList.contains('active') ? 'on' : 'off';
-                
+
                 // Create form data
                 const formData = new FormData();
                 formData.append('entity_id', entityId);
                 formData.append('days', days);
                 formData.append('value', newValue);
-                
+
                 // Submit the form
                 fetch('./entity', {{
                     method: 'POST',
@@ -890,8 +890,8 @@ class WebInterface:
                 }});
             }}
             </script>
-            '''
-            
+            """
+
         elif control_type == "number":
             min_val = self.base.get_state_wrapper(entity_id=entity_id, attribute="min", default=None)
             max_val = self.base.get_state_wrapper(entity_id=entity_id, attribute="max", default=None)
@@ -899,7 +899,7 @@ class WebInterface:
             unit = self.base.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
 
             unit_display = f" {unit}" if unit else ""
-                    
+
             html += f'<input type="number" name="value" value="{current_value}" '
             if min_val is not None and max_val is not None and step is not None:
                 html += f'min="{min_val}" max="{max_val}" step="{step}" '
@@ -907,18 +907,18 @@ class WebInterface:
             if unit_display:
                 html += f'<span style="margin-left: 5px; color: var(--text-secondary, #666);">{unit}</span>'
             html += '<button type="submit" style="padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update</button>'
-            
+
         elif control_type == "select" and options:
             html += f'<select name="value" style="padding: 8px; border-radius: 4px; border: 1px solid var(--border-color, #ccc); min-width: 150px; background-color: var(--input-background, #fff); color: var(--text-color, #333);">'
             for option in options:
                 selected = "selected" if str(option) == str(current_value) else ""
                 html += f'<option value="{option}" {selected}>{option}</option>'
-            html += '</select>'
+            html += "</select>"
             html += '<button type="submit" style="padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update</button>'
-            
-        html += '</form>'
-        html += '</div>'
-        
+
+        html += "</form>"
+        html += "</div>"
+
         return html
 
     def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):

@@ -495,7 +495,7 @@ class HAInterface:
                     return
 
         # Call back to Predbat handled entities
-        domain = entity_id.split('.')[0] if '.' in entity_id else ""
+        domain = entity_id.split(".")[0] if "." in entity_id else ""
         service_data = {"domain": domain}
         if domain in ["switch", "input_boolean"]:
             # For toggle switches, check if value is 'on' or 'off'
