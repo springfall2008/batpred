@@ -57,11 +57,12 @@ class Plan:
             # Note never do this just after midnight due to the load sensor reset
             if self.load_last_status == "low" and self.minutes_now > 5:
                 for car_n in range(0, self.num_cars):
-                    for slot in self.car_charging_slots[car_n]:
+                    for slot_n in range(0, len(self.car_charging_slots[car_n])):
+                        slot = self.car_charging_slots[car_n][slot_n]
                         if (slot["start"] < minutes_now) and (slot["start"] < minutes_end_slot) and (slot["end"] > minutes_now):
                             # If the slot is within the current 30 minute period
                             self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n + 1, slot["start"], slot["end"]))
-                            self.car_charging_slots[car_n]["kwh"] = 0
+                            self.car_charging_slots[car_n][slot_n]["kwh"] = 0
             if self.load_last_status == "high":
                 have_printed = False
                 for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):

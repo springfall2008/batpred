@@ -3516,6 +3516,8 @@ def run_execute_tests(my_predbat):
     reset_inverter(my_predbat)
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
+    charge_window_best_slot = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 7.5}]
+    charge_window_best_no_slot = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 0}]
     charge_window_best_soon = [{"start": my_predbat.minutes_now + 5, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best2 = [{"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best3 = [{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now, "average": 1}, {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
@@ -4879,7 +4881,7 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         soc_kw=0,
         assert_status="Hold exporting, Hold for car",
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_pause_discharge=True,
         assert_discharge_rate=1000,
     )
@@ -4895,7 +4897,7 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         soc_kw=0,
         assert_status="Hold exporting, Hold for car",
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_pause_discharge=False,
         assert_discharge_rate=0,
         assert_reserve=1,
@@ -4931,7 +4933,7 @@ def run_execute_tests(my_predbat):
         soc_kw=100,
         assert_status="Hold for car",
         assert_pause_discharge=True,
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_immediate_soc_target=100,
         car_charging_from_battery=False,
     )
@@ -4946,12 +4948,27 @@ def run_execute_tests(my_predbat):
         soc_kw=100,
         assert_status="Demand",
         assert_pause_discharge=False,
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         car_charging_from_battery=False,
         car_soc=100,
     )
     if failed:
         return failed
+    
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_car_demand1",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Demand",
+        assert_pause_discharge=False,
+        car_slot=charge_window_best_no_slot,
+        assert_immediate_soc_target=100,
+        car_charging_from_battery=False,
+    )
+    if failed:
+        return failed    
 
     failed |= run_execute_test(
         my_predbat,
@@ -5247,11 +5264,11 @@ def run_execute_tests(my_predbat):
         has_timed_pause=False,
     )
     failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_export_window=True)
-    failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10)
+    failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best_slot, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10)
     failed |= run_execute_test(
         my_predbat,
         "car2",
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         set_charge_window=True,
         set_export_window=True,
         assert_status="Hold for car",
@@ -5268,7 +5285,7 @@ def run_execute_tests(my_predbat):
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best,
         soc_kw=0,
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_charge_time_enable=True,
         set_charge_window=True,
         set_export_window=True,
@@ -5284,7 +5301,7 @@ def run_execute_tests(my_predbat):
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
         soc_kw=10,
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_charge_time_enable=True,
         set_charge_window=True,
         set_export_window=True,
@@ -5298,7 +5315,7 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "car_discharge",
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         export_window_best=export_window_best,
         export_limits_best=export_limits_best,
         assert_force_export=True,
