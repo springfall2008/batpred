@@ -532,6 +532,7 @@ class Fetch:
         prev_last_updated_time=None,
         last_state=0,
         attributes=False,
+        max_increment=MAX_INCREMENT,
     ):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -540,8 +541,8 @@ class Fetch:
         mdata = {}
         adata = {}
         newest_state = 0
+        prev_state = 0
         newest_age = 999999
-        max_increment = MAX_INCREMENT
 
         # Bounds on the data we store
         minute_min = -days * 24 * 60
@@ -680,6 +681,7 @@ class Fetch:
 
             if minutes < newest_age:
                 newest_age = minutes
+                prev_state = newest_state
                 newest_state = state
 
             # Power to Energy
@@ -749,6 +751,21 @@ class Fetch:
 
         # If we only have a start time then fill the gaps with the last values
         if not to_key:
+            # Fill from last sample until now with interpolation if enabled
+            if clean_increment and backwards:
+                last_sample_minute = 0
+                for minute in range(60 * 24 * days):
+                    if minute in mdata:
+                        last_sample_minute = minute
+                        break
+                last_sample_value = mdata[last_sample_minute]
+                last_but_one_minute_sample = mdata[last_sample_minute + 1] if (last_sample_minute + 1) in mdata else last_sample_value
+                step = last_sample_value - last_but_one_minute_sample
+                if last_sample_minute < 10 * 60 and last_sample_minute > 0:
+                    for minute in range(last_sample_minute):
+                        if minute not in mdata:
+                            mdata[minute] = dp4(newest_state + step * (last_sample_minute - minute))
+
             # Fill from last sample until now
             for minute in range(60 * 24 * days):
                 if backwards:

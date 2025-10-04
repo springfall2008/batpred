@@ -725,31 +725,75 @@ class Execute:
         self.reserve_current = dp3(self.reserve_current)
         self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
 
-        self.log(
-            "Found {} inverters totals: min reserve {} current reserve {} soc_max {} soc {} charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} export limit {} kW loss charge {} % loss discharge {} % inverter loss {} %".format(
-                len(self.inverters),
-                self.reserve,
-                self.reserve_current,
-                self.soc_max,
-                self.soc_kw,
-                self.charge_rate_now * MINUTE_WATT,
-                self.discharge_rate_now * MINUTE_WATT,
-                self.battery_rate_min * MINUTE_WATT,
-                dp3(self.inverter_limit * MINUTE_WATT),
-                dp3(self.export_limit * MINUTE_WATT),
-                100 - int(self.battery_loss * 100),
-                100 - int(self.battery_loss_discharge * 100),
-                100 - int(self.inverter_loss * 100),
+        if self.debug_enable:
+            self.log(
+                "Found {} inverters totals: min reserve {} current reserve {} soc_max {} soc {} charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} export limit {} kW loss charge {} % loss discharge {} % inverter loss {} %".format(
+                    len(self.inverters),
+                    self.reserve,
+                    self.reserve_current,
+                    self.soc_max,
+                    self.soc_kw,
+                    self.charge_rate_now * MINUTE_WATT,
+                    self.discharge_rate_now * MINUTE_WATT,
+                    self.battery_rate_min * MINUTE_WATT,
+                    dp3(self.inverter_limit * MINUTE_WATT),
+                    dp3(self.export_limit * MINUTE_WATT),
+                    100 - int(self.battery_loss * 100),
+                    100 - int(self.battery_loss_discharge * 100),
+                    100 - int(self.inverter_loss * 100),
+                )
             )
-        )
 
         # Work out current charge limits and publish charge limit base
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]
         self.charge_limit_percent = calc_percent_limit(self.charge_limit, self.soc_max)
         self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
+        self.publish_inverter_data()
 
-        self.log("Base charge window {}".format(self.window_as_text(self.charge_window, self.charge_limit_percent)))
-        self.log("Base export window {}".format(self.window_as_text(self.export_window, self.export_limits)))
+    def publish_inverter_data(self):
+        """
+        Publish inverter data to dashboard
+        """
+        self.dashboard_item(
+            self.prefix + ".pv_power",
+            state=dp3(self.pv_power / 1000.0),
+            attributes={
+                "friendly_name": "Predicted PV Power",
+                "state_class": "measurement",
+                "unit_of_measurement": "kW",
+                "icon": "mdi:battery",
+            },
+        )
+        self.dashboard_item(
+            self.prefix + ".grid_power",
+            state=dp3(self.grid_power / 1000.0),
+            attributes={
+                "friendly_name": "Predicted Grid Power",
+                "state_class": "measurement",
+                "unit_of_measurement": "kW",
+                "icon": "mdi:battery",
+            },
+        )
+        self.dashboard_item(
+            self.prefix + ".load_power",
+            state=dp3(self.load_power / 1000.0),
+            attributes={
+                "friendly_name": "Predicted Load Power",
+                "state_class": "measurement",
+                "unit_of_measurement": "kW",
+                "icon": "mdi:battery",
+            },
+        )
+        self.dashboard_item(
+            self.prefix + ".battery_power",
+            state=dp3(self.battery_power / 1000.0),
+            attributes={
+                "friendly_name": "Predicted Battery Power",
+                "state_class": "measurement",
+                "unit_of_measurement": "kW",
+                "icon": "mdi:battery",
+            },
+        )
 
     def balance_inverters(self):
         """
