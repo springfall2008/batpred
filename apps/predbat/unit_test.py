@@ -372,12 +372,12 @@ def run_nordpool_test(my_predbat):
     my_predbat.args["futurerate_adjust_export"] = True
     failed = False
 
-    fixed = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/")
+    fixed = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/OUTGOING-SEG-EO-FIX-12M-24-04-05/electricity-tariffs/E-1R-OUTGOING-SEG-EO-FIX-12M-24-04-05-A/standard-unit-rates/")
     if max(fixed.values()) <= 0:
         print("ERROR: Fixed rates can not be zero")
         failed = True
     if min(fixed.values()) != max(fixed.values()):
-        print("ERROR: Fixed rates can can change")
+        print("ERROR: Fixed rates can not change")
         failed = True
     if len(fixed) > 5 * 24 * 60:
         print("ERROR: Fixed rates too long got {}".format(len(fixed)))
@@ -8910,8 +8910,6 @@ def test_minute_data(my_predbat):
         for key in sorted(result.keys()):
             print("  {}: {}".format(key, result[key]))
         failed = True
-
-    failed = True
 
     # Test 4.1: Smoothing clean increment
     print("Test 4.1: Smoothing clean increment")
