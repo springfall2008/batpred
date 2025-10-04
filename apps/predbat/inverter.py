@@ -389,7 +389,7 @@ class Inverter:
             tdiff = dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
                 self.base.log("Invertor time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
-            if abs(tdiff) >= 10:
+            if abs(tdiff) >= 30:
                 self.base.log(
                     "Warn: Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
                         self.inverter_time, now_utc, tdiff
@@ -1457,8 +1457,7 @@ class Inverter:
                 self.base.call_service_wrapper(service, entity_id=entity_id)
 
             self.sleep(self.inv_write_and_poll_sleep)
-            current_state = self.base.get_state_wrapper(entity_id=entity_id, refresh=True)
-            self.log("Switch {} is now {}".format(entity_id, current_state))
+            current_state = self.base.get_state_wrapper(entity_id=entity_id, refresh=domain != "sensor")
             if isinstance(current_state, str):
                 current_state = current_state.lower() in ["on", "enable", "true"]
 
@@ -1503,7 +1502,7 @@ class Inverter:
                 return True
 
             self.sleep(self.inv_write_and_poll_sleep)
-            current_state = self.base.get_state_wrapper(entity_id, refresh=True, required_unit=required_unit)
+            current_state = self.base.get_state_wrapper(entity_id, refresh=domain != "sensor", required_unit=required_unit)
             if isinstance(new_value, str):
                 matched = current_state == new_value
             else:
