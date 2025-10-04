@@ -783,7 +783,7 @@ class Execute:
                 "unit_of_measurement": "kW",
                 "icon": "mdi:battery",
             },
-        )        
+        )
         self.dashboard_item(
             self.prefix + ".battery_power",
             state=dp3(self.battery_power / 1000.0),
@@ -794,7 +794,6 @@ class Execute:
                 "icon": "mdi:battery",
             },
         )
-
 
     def balance_inverters(self):
         """

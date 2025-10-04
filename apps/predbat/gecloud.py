@@ -156,7 +156,7 @@ TIMEOUT = 240
 RETRIES = 10
 RETRY_FACTOR = 1
 MAX_THREADS = 2
-MAX_START_TIME = 10*60
+MAX_START_TIME = 10 * 60
 
 attribute_table = {
     "time": {"friendly_name": "Time", "icon": "mdi:clock", "unit_of_measurement": "Time", "state_class": "timestamp"},
@@ -696,7 +696,7 @@ class GECloudDirect:
 
         if "givtcp_rest" in self.base.args:
             del self.base.args["givtcp_rest"]
-    
+
         # Use the first battery serial for the ge_cloud_serial (for status)
         self.base.args["ge_cloud_serial"] = devices["battery"][0]
 
@@ -1255,7 +1255,7 @@ class GECloudDirect:
             self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
             self.failures_total += 1
             return None
-                
+
         try:
             data = response.json()
         except requests.exceptions.JSONDecodeError:
