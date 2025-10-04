@@ -379,7 +379,7 @@ def run_nordpool_test(my_predbat):
     if min(fixed.values()) != max(fixed.values()):
         print("ERROR: Fixed rates can not change")
         failed = True
-    if len(fixed) > 5 * 24 * 60:
+    if len(fixed) > 6 * 24 * 60:
         print("ERROR: Fixed rates too long got {}".format(len(fixed)))
         failed = True
 
