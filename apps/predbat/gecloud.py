@@ -191,12 +191,14 @@ BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(0, 24 * 60, 1)]
 OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M") + ":00") for minute in range(0, 24 * 60, 1)]
 
+
 def regname_to_ha(name):
     """
     Convert register name to HA style
     """
     name = name.lower().replace(" ", "_").replace("%", "percent").replace("-", "_")
     return name
+
 
 class GECloudDirect:
     def __init__(self, api_key, automatic, base):
