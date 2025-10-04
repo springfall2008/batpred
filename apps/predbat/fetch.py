@@ -751,7 +751,7 @@ class Fetch:
 
         # If we only have a start time then fill the gaps with the last values
         if not to_key:
-            # Fill from last sample until now with interolation if enabled
+            # Fill from last sample until now with interpolation if enabled
             if clean_increment and backwards:
                 last_sample_minute = 0
                 for minute in range(60 * 24 * days):
