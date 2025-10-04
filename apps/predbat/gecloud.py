@@ -682,7 +682,6 @@ class GECloudDirect:
                     has_pause_battery = True
 
         self.log("GECloud: Auto-config detected features - charge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(has_charge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc))
-        print("GECloud: Auto-config detected features - charge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(has_charge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc))
 
         self.base.args["inverter_type"] = ["GEC" for _ in range(num_inverters)]
         self.base.args["num_inverters"] = num_inverters
