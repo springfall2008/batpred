@@ -191,6 +191,12 @@ BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(0, 24 * 60, 1)]
 OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M") + ":00") for minute in range(0, 24 * 60, 1)]
 
+def regname_to_ha(name):
+    """
+    Convert register name to HA style
+    """
+    name = name.lower().replace(" ", "_").replace("%", "percent").replace("-", "_")
+    return name
 
 class GECloudDirect:
     def __init__(self, api_key, automatic, base):
@@ -527,9 +533,10 @@ class GECloudDirect:
 
     async def enable_real_time_control(self, device, registers):
         for key in registers:
-            reg_name = registers[key].get("name", None)
+            reg_name = registers[key].get("name", "")
             value = registers[key].get("value", None)
-            if "real-time control" in reg_name.lower():
+            ha_name = regname_to_ha(reg_name)
+            if "real_time_control" in ha_name:
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
                     return True
@@ -556,7 +563,7 @@ class GECloudDirect:
             validation_rules = registers[key].get("validation_rules", None)
             validation = registers[key].get("validation", None)
             value = registers[key].get("value", None)
-            ha_name = reg_name.lower().replace(" ", "_").replace("%", "percent").replace("-", "_")
+            ha_name = regname_to_ha(reg_name)
             attributes = {}
             attributes["friendly_name"] = reg_name
 
@@ -653,6 +660,28 @@ class GECloudDirect:
             num_inverters = 1
             batteries = [devices["gateway"]]
 
+        # Do we have a charge power percentage setting?
+        has_charge_power_percent = False
+        has_pause_start_time = False
+        has_discharge_target_soc = False
+        has_pause_battery = False
+        for device in batteries:
+            registers = self.settings.get(device, {})
+            for key in registers:
+                reg_name = registers[key].get("name", "")
+                ha_name = regname_to_ha(reg_name)
+                if "inverter_charge_power_percentage" in ha_name:
+                    has_charge_power_percent = True
+                if "pause_battery_start_time" in ha_name:
+                    has_pause_start_time = True
+                if "dc_discharge_1_lower_soc_percent_limit" in ha_name:
+                    has_discharge_target_soc = True
+                if "pause_battery" in ha_name:
+                    has_pause_battery = True
+
+        self.log("GECloud: Auto-config detected features - charge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(has_charge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc))
+        print("GECloud: Auto-config detected features - charge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(has_charge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc))
+
         self.base.args["inverter_type"] = ["GEC" for _ in range(num_inverters)]
         self.base.args["num_inverters"] = num_inverters
         self.base.args["load_today"] = ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in batteries]
@@ -675,24 +704,36 @@ class GECloudDirect:
         self.base.args["charge_limit"] = ["number.predbat_gecloud_" + device + "_ac_charge_upper_percent_limit" for device in batteries]
         self.base.args["discharge_start_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_start_time" for device in batteries]
         self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in batteries]
-        self.base.args["discharge_target_soc"] = ["number.predbat_gecloud_" + device + "_dc_discharge_1_lower_soc_percent_limit" for device in batteries]
         self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries]
         self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries]
-        self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
-        self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries]
-        self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries]
 
-        # Do we have a charge power percentage setting?
-        for device in batteries:
-            registers = self.settings.get(device, {})
-            for key in registers:
-                reg_name = registers[key].get("name", None)
-                value = registers[key].get("value", None)
-                if "inverter_charge_power_percentage" in reg_name.lower():
-                    self.log("GECloud: Found charge power percentage setting for {}, using this".format(device))
-                    self.base.args["charge_rate_percent"] = ["number.predbat_gecloud_" + device + "_inverter_charge_power_percentage" for device in batteries]
-                    self.base.args["discharge_rate_percent"] = ["number.predbat_gecloud_" + device + "_inverter_discharge_power_percentage" for device in batteries]
-                    break
+        if has_pause_battery:
+            self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
+            if has_pause_start_time:
+                self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries]
+                self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries]
+        else:
+            if "pause_mode" in self.base.args:
+                del self.base.args["pause_mode"]
+            if "pause_start_time" in self.base.args:
+                del self.base.args["pause_start_time"]
+            if "pause_end_time" in self.base.args:
+                del self.base.args["pause_end_time"]
+
+        if has_discharge_target_soc:
+            self.base.args["discharge_target_soc"] = ["number.predbat_gecloud_" + device + "_dc_discharge_1_lower_soc_percent_limit" for device in batteries]
+        else:
+            if "discharge_target_soc" in self.base.args:
+                del self.base.args["discharge_target_soc"]
+
+        if has_charge_power_percent:
+            self.base.args["charge_rate_percent"] = ["number.predbat_gecloud_" + device + "_inverter_charge_power_percentage" for device in batteries]
+            self.base.args["discharge_rate_percent"] = ["number.predbat_gecloud_" + device + "_inverter_discharge_power_percentage" for device in batteries]
+        else:
+            if "charge_rate_percent" in self.base.args:
+                del self.base.args["charge_rate_percent"]
+            if "discharge_rate_percent" in self.base.args:
+                del self.base.args["discharge_rate_percent"]
 
         if "givtcp_rest" in self.base.args:
             del self.base.args["givtcp_rest"]
