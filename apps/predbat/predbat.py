@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.25.4"
+THIS_VERSION = "v8.25.5"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py"]
@@ -667,6 +667,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         """
         Update the prediction state, everything is called from here right now
         """
+        recompute = False
         status_extra = ""
         self.had_errors = False
         self.dashboard_index = []
@@ -686,10 +687,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.fetch_config_options()
         self.fetch_sensor_data()
         self.fetch_inverter_data()
-        self.dynamic_load()
+        if self.dynamic_load():
+            self.log("Dynamic load adjustment changed, will recompute the plan")
+            recompute = True
 
-        recompute = False
-        if not scheduled or not self.plan_valid:
+        if not scheduled or not self.plan_valid or recompute:
             self.log("Will recompute the plan as it is invalid")
             recompute = True
         else:
