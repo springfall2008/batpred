@@ -201,21 +201,32 @@ In apps.yaml configure the following lines:
 - **rates_import_octopus_url** to point to the appropriate import tariff URL on the Octopus website
 - **rates_export_octopus_url** to point to the export tariff URL
 
-e.g.
+e.g. (for DNO region A)
 
 ```yaml
   rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
-  rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-FLEX-BB-23-02-08/electricity-tariffs/E-1R-AGILE-FLEX-BB-23-02-08-A/standard-unit-rates"
+  rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates"
 
-  rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-A/standard-unit-rates"
-  rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"
-  rates_export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/"
+  rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-A/standard-unit-rates"
+  rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
 ```
 
 If you configure the rates_import_octopus_url then Predbat will use this instead of metric_octopus or rates_import.
 Similarly, rates_export_octopus_url takes precedence over metric_octopus_export or rates_export.
 
-Configuring the Octopus rates URL is an expert feature and for most users, the Octopus Energy integration is a simpler solution.
+A full list of available Octopus products is at <https://api.octopus.energy/v1/products/>.
+
+If you view this page, search for the tariff by name, then copy the URL it shows into a new tab.
+
+E.g. <https://api.octopus.energy/v1/products/GO-FIX-12M-25-08-29/>
+
+Look through that page to find the right URL for usage charges in your DNO area
+
+<https://api.octopus.energy/v1/products/GO-FIX-12M-25-08-29/electricity-tariffs/E-1R-GO-FIX-12M-25-08-29-A/standard-unit-rates>
+
+(For area A)
+
+Configuring the Octopus rates URL is an expert feature as Octopus change the available products from time to time, so for most users, the Octopus Energy integration is a simpler solution.
 
 ## Energidataservice Integration
 
