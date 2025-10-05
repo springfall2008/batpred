@@ -758,13 +758,14 @@ class Fetch:
                     if minute in mdata:
                         last_sample_minute = minute
                         break
-                last_sample_value = mdata[last_sample_minute]
-                last_but_one_minute_sample = mdata[last_sample_minute + 1] if (last_sample_minute + 1) in mdata else last_sample_value
-                step = last_sample_value - last_but_one_minute_sample
-                if last_sample_minute < 10 * 60 and last_sample_minute > 0:
-                    for minute in range(last_sample_minute):
-                        if minute not in mdata:
-                            mdata[minute] = dp4(newest_state + step * (last_sample_minute - minute))
+                if last_sample_minute > 0:
+                    last_sample_value = mdata[last_sample_minute]
+                    last_but_one_minute_sample = mdata[last_sample_minute + 1] if (last_sample_minute + 1) in mdata else last_sample_value
+                    step = last_sample_value - last_but_one_minute_sample
+                    if last_sample_minute < 10 * 60 and last_sample_minute > 0:
+                        for minute in range(last_sample_minute):
+                            if minute not in mdata:
+                                mdata[minute] = dp4(newest_state + step * (last_sample_minute - minute))
 
             # Fill from last sample until now
             for minute in range(60 * 24 * days):
