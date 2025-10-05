@@ -2647,6 +2647,12 @@ var options = {
         if add_days < 0:
             add_days += 7
         override_time += timedelta(days=add_days)
+
+        # Ensure minutes are either 0 or 30
+        if override_time.minute >= 30:
+            override_time = override_time.replace(minute=30)
+        else:
+            override_time = override_time.replace(minute=0)
         return override_time
 
     async def html_rate_override(self, request):

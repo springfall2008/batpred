@@ -1071,6 +1071,7 @@ class FoxAPI:
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
                 minSocOnGrid = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
 
+                """
                 start_minutes = start_hour * 60 + start_minute
                 end_minutes = end_hour * 60 + end_minute
                 minutes_now = datetime.now().hour * 60 + datetime.now().minute
@@ -1079,6 +1080,7 @@ class FoxAPI:
                     start_minutes = minutes_now + 1
                     start_hour = start_minutes // 60
                     start_minute = start_minutes % 60
+                """
 
                 if direction == "charge":
                     new_schedule.append(
@@ -1144,7 +1146,7 @@ class FoxAPI:
         self.base.args["load_power"] = [f"sensor.predbat_fox_{device}_loadspower" for device in batteries]
         self.base.args["soc_percent"] = [f"sensor.predbat_fox_{device}_soc" for device in batteries]
         self.base.args["soc_max"] = [f"sensor.predbat_fox_{device}_battery_capacity" for device in batteries]
-        self.base.args["reserve"] = [f"sensor.predbat_fox_{device}_battery_minsocongrid" for device in batteries]
+        self.base.args["reserve"] = [f"number.predbat_fox_{device}_setting_minsocongrid" for device in batteries]
         self.base.args["battery_min_soc"] = [f"sensor.predbat_fox_{device}_battery_reserve_min" for device in batteries]
         self.base.args["charge_start_time"] = [f"select.predbat_fox_{device}_battery_schedule_charge_start_time" for device in batteries]
         self.base.args["charge_end_time"] = [f"select.predbat_fox_{device}_battery_schedule_charge_end_time" for device in batteries]
