@@ -37,6 +37,11 @@ class DummyThread:
 
 class Plan:
     def dynamic_load(self):
+        """
+        Adjust load prediction based on current load
+        Return True if load status has changed and hence we need to re-plan
+        """
+        prev_last_load_status = self.load_last_status
         # Last period load analysis
         self.load_last_status = "baseline"
         if self.load_last_period > self.battery_rate_max_discharge * MINUTE_WATT / 1000:
@@ -74,6 +79,9 @@ class Plan:
                             self.log("Dynamic load adjust is setting load minimum {:.2f}kW at {}".format(load_last_period, self.time_abs_str(minute_absolute)))
                             have_printed = True
                         self.dynamic_load_baseline[minute_absolute] = load_last_period
+            if prev_last_load_status != self.load_last_status:
+                return True
+        return False
 
     def find_price_levels(
         self,

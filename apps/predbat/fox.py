@@ -26,6 +26,7 @@ OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:
 FOX_DOMAIN = "https://www.foxesscloud.com"
 FOX_LANG = "en"
 TIMEOUT = 60
+FOX_RETRIES = 10
 FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
 OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 
@@ -130,7 +131,6 @@ class FoxAPI:
             await asyncio.sleep(1)
             count_seconds += 1
 
-        await self.client.close()
         print("Fox API: Stopped")
 
     async def stop(self):
@@ -737,7 +737,7 @@ class FoxAPI:
         Retry wrapper
         """
         retries = 0
-        while retries < 5:
+        while retries < FOX_RETRIES:
             result = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
                 return result
@@ -780,7 +780,7 @@ class FoxAPI:
             msg = data.get("msg", "")
             if errno != 0:
                 self.failures_total += 1
-                if errno == 40400:
+                if errno in [40400, 41200, 41203, 41935]:
                     # Rate limiting so wait up to 10 seconds
                     self.log("Fox: Rate limiting detected, waiting...")
                     await asyncio.sleep(random.random() * 10 + 1)
