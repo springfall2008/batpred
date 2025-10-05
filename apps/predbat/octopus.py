@@ -37,6 +37,7 @@ OCTOPUS_DAY_RATE_START_MINUTE = 30
 OCTOPUS_DAY_RATE_END_HOUR = 0
 OCTOPUS_DAY_RATE_END_MINUTE = 30
 
+
 def is_active(now_utc, activeFrom, activeTo):
     if not activeFrom:
         return False
@@ -699,16 +700,16 @@ class OctopusAPI:
         current_night_rate = None
         for rate in result_day:
             valid_from_stamp = rate.get("valid_from", "")
-            # Convert from string to datetime
+            # Convert from string to datetime
             valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
             if valid_from_stamp <= self.now_utc:
-                current_day_rate = rate.get('value_inc_vat', None)
+                current_day_rate = rate.get("value_inc_vat", None)
         for rate in result_night:
             valid_from_stamp = rate.get("valid_from", "")
-            # Convert from string to datetime
+            # Convert from string to datetime
             valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
             if valid_from_stamp <= self.now_utc:
-                current_night_rate = rate.get('value_inc_vat', None)
+                current_night_rate = rate.get("value_inc_vat", None)
         self.log("Info: Current day rate {} night rate {}".format(current_day_rate, current_night_rate))
         if current_day_rate is not None and current_night_rate is not None:
             # Now create a combined list of rates, start from 2 days back and go forward 3 days with the day and night rates
@@ -724,9 +725,9 @@ class OctopusAPI:
                 night_start_time += timedelta(days=1)
                 night_end_time += timedelta(days=1)
                 day_start_time += timedelta(days=1)
-                day_end_time += timedelta(days=1)  
+                day_end_time += timedelta(days=1)
         return mdata
-          
+
     async def async_download_octopus_url(self, url):
         """
         Download octopus rates directly from a URL
@@ -748,10 +749,10 @@ class OctopusAPI:
                 self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
                 return {}
-            
+
             if r.status_code == 400:
                 detail = data.get("detail", "")
-                if 'This tariff has day and night rates' in detail:
+                if "This tariff has day and night rates" in detail:
                     self.log("Info: Octopus tariff has day and night rates, fetching both")
                     mdata = await self.async_get_day_night_rates(url)
                     if mdata:
@@ -824,7 +825,7 @@ class OctopusAPI:
                 tariff_type = "gas"
             else:
                 tariff_type = "electricity"
-            tariffs[tariff]["data"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/")            
+            tariffs[tariff]["data"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/")
             tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
             entity_id = "sensor.predbat_octopus_" + self.account_id.replace("-", "_") + "_" + tariff

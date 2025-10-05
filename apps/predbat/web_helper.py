@@ -44,7 +44,8 @@ def get_entity_control_css():
     }
     </style>
     """
-    return html    
+    return html
+
 
 def get_entity_toggle_js():
     """
@@ -80,8 +81,9 @@ def get_entity_toggle_js():
         }});
     }}
     </script>
-    """ 
+    """
     return html
+
 
 def get_apps_js(all_states_json):
     text = (

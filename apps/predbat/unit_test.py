@@ -9140,16 +9140,17 @@ def test_download_octopus_url_wrapper(my_predbat):
     """
     return asyncio.run(test_download_octopus_url(my_predbat))
 
+
 async def test_download_octopus_url(my_predbat):
     """
     Test the download_octopus_url function
     """
     print("**** Running download_octopus_url tests ****")
     failed = False
-    
+
     # Test URL for VAR-22-11-01 tariff
     test_url = "https://api.octopus.energy/v1/products/VAR-22-11-01/electricity-tariffs/E-2R-VAR-22-11-01-A/standard-unit-rates/"
-    
+
     # Test the download function
     api = OctopusAPI("", "", my_predbat)
     api.now_utc = my_predbat.now_utc
