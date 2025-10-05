@@ -61,7 +61,7 @@ If you do not set an import or export rate for a particular tariff then your exi
       rates_export:
         - rate: 4.1
     - id: 'eon_next_drive'
-      name: 'Eon Next Drive import/Fixed export"'
+      name: 'Eon Next Drive import/Fixed export'
       rates_import:
         - rate: 6.7
           start: "00:00:00"
