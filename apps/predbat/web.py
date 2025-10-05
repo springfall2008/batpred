@@ -1477,6 +1477,7 @@ var options = {
             elif pitem.startswith("input_number"):
                 new_value = float(new_value)
 
+            self.log("Web interface setting {} to {}".format(pitem, new_value))
             await self.base.ha_interface.set_state_external(pitem, new_value)
 
         raise web.HTTPFound("./config")
@@ -2205,17 +2206,21 @@ var options = {
                     text += f"</form></td>\n"
                 elif itemtype == "input_number":
                     input_number_with_save = input_number.replace('onchange="javascript: this.form.submit();"', 'onchange="saveFilterValue(); this.form.submit();"')
-                    text += "<td>{}</td>\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
+                    text += '<td><form style="display: inline;" method="post" action="./config">'
+                    text += "{}\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
+                    text += f"</form></td>\n"
                 elif itemtype == "select":
                     options = item.get("options", [])
                     if value not in options:
                         options.append(value)
-                    text += '<td><select name="{}" id="{}" onchange="saveFilterValue(); this.form.submit();">'.format(useid, useid)
+                    text += f'<td><form style="display: inline;" method="post" action="./config">'
+                    text += '<select name="{}" id="{}" onchange="saveFilterValue(); this.form.submit();">'.format(useid, useid)
                     for option in options:
                         selected = option == value
                         option_label = option if option else "None"
                         text += '<option value="{}" label="{}" {}>{}</option>'.format(option, option_label, "selected" if selected else "", option)
-                    text += "</select></td>\n"
+                    text += "</select>\n"
+                    text += f"</form></td>\n"
                 else:
                     text += "<td>{}</td>\n".format(value)
 
@@ -2642,6 +2647,12 @@ var options = {
         if add_days < 0:
             add_days += 7
         override_time += timedelta(days=add_days)
+
+        # Ensure minutes are either 0 or 30
+        if override_time.minute >= 30:
+            override_time = override_time.replace(minute=30)
+        else:
+            override_time = override_time.replace(minute=0)
         return override_time
 
     async def html_rate_override(self, request):

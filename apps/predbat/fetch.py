@@ -262,10 +262,10 @@ class Fetch:
             use_days = max(min(days, self.load_minutes_age), 1)
             num_gaps = 0
             full_days = 24 * 60 * (use_days - 1)
-            for minute in range(0, 24 * 60, PREDICT_STEP):
+            for minute in range(0, 24 * 60):
                 minute_previous = 24 * 60 - minute + full_days
                 if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
-                    num_gaps += PREDICT_STEP
+                    num_gaps += 1
 
             # If we have some gaps
             if num_gaps > 0:
@@ -280,14 +280,17 @@ class Fetch:
 
                 # Do the filling
                 per_minute_increment = average_day / (24 * 60)
-                for minute in range(0, 24 * 60, PREDICT_STEP):
+                for minute in range(0, 24 * 60):
                     minute_previous = 24 * 60 - minute + full_days
                     if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
-                        for offset in range(minute_previous, 0, -1):
+                        total_to_add = 0
+                        for offset in range(minute_previous + gap_size, -1, -1):
                             if offset in data:
-                                data[offset] += per_minute_increment * PREDICT_STEP
+                                data[offset] += total_to_add
                             else:
-                                data[offset] = per_minute_increment * PREDICT_STEP
+                                data[offset] = total_to_add
+                            if offset > minute_previous:
+                                total_to_add += per_minute_increment
 
     def get_historical_base(self, data, minute, base_minutes):
         """
