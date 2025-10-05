@@ -68,7 +68,7 @@ If you do not set an import or export rate for a particular tariff then your exi
           end: "07:00:00"
         - rate: 24.86
           start: "07:00:00"
-          end: "24:00:00"
+          end: "00:00:00"
       rates_export:
         - rate: 16.5
     - id: 'igo_fixed'
