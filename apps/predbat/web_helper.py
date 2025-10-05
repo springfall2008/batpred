@@ -2333,6 +2333,10 @@ def get_logfile_js(filter_type):
             const shouldAutoScroll = autoScroll ? autoScroll.checked : false;
             let newEntriesAdded = 0;
 
+            // Get current search filter to apply immediately
+            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase();
+            const hasSearchFilter = searchTerm.trim() !== '';
+
             // Insert new entries at the top (newest first)
             lines.forEach(logLine => {{
                 if (logLine.line_number > lastLineNumber) {{
@@ -2352,6 +2356,18 @@ def get_logfile_js(filter_type):
 
                     row.innerHTML = `<td>${{logLine.line_number}}</td><td nowrap><font color="${{color}}">${{timestamp}}</font> ${{message}}</td>`;
 
+                    // Apply search filter immediately if one is active
+                    if (hasSearchFilter) {{
+                        const rowText = row.textContent.toLowerCase();
+                        if (rowText.includes(searchTerm)) {{
+                            // Entry matches filter - highlight and show it
+                            highlightTextInElement(row, searchTerm);
+                        }} else {{
+                            // Entry doesn't match filter - hide it immediately
+                            row.classList.add('log-entry-hidden');
+                        }}
+                    }}
+
                     // Insert at the top of the table body
                     tbody.insertBefore(row, tbody.firstChild);
                     newEntriesAdded++;
@@ -2360,13 +2376,13 @@ def get_logfile_js(filter_type):
                 }}
             }});
 
-            // Apply current search filter to new entries
-            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase();
-            if (searchTerm.trim() !== '') {{
-                // Re-apply filter to include new entries
-                setTimeout(() => {{
-                    filterLogEntries();
-                }}, 50);
+            // Update search status if we have a filter active
+            if (hasSearchFilter && newEntriesAdded > 0) {{
+                const rows = document.querySelectorAll('#logTableBody tr[data-line]');
+                const statusDiv = document.getElementById('searchStatus');
+                const visibleCount = Array.from(rows).filter(row => !row.classList.contains('log-entry-hidden')).length;
+                const totalCount = rows.length;
+                statusDiv.textContent = `Showing ${{visibleCount}} of ${{totalCount}} entries`;
             }}
 
             // Auto-scroll to top for new entries (since newest are at top)
