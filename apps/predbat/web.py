@@ -19,7 +19,7 @@ import json
 import shutil
 import html as html_module
 import time
-from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css, get_logfile_js
+from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css, get_logfile_js, get_entity_toggle_js, get_entity_control_css
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
@@ -815,37 +815,8 @@ class WebInterface:
         html = '<div class="entity-edit-container" style="margin-top: 15px; padding: 15px; border: 1px solid var(--border-color, #ddd); border-radius: 5px; background-color: var(--background-secondary, #f9f9f9);">'
 
         # Add CSS for dark mode support
-        html += """
-        <style>
-        .entity-edit-container {
-            --border-color: #ddd;
-            --background-secondary: #f9f9f9;
-            --text-color: #333;
-            --text-secondary: #666;
-            --input-background: #fff;
-        }
+        html += get_entity_control_css()
 
-        body.dark-mode .entity-edit-container {
-            --border-color: #555;
-            --background-secondary: #2d2d2d;
-            --text-color: #e0e0e0;
-            --text-secondary: #bbb;
-            --input-background: #3d3d3d;
-            color: var(--text-color);
-        }
-
-        body.dark-mode .entity-edit-container input[type="number"],
-        body.dark-mode .entity-edit-container select {
-            background-color: var(--input-background) !important;
-            border-color: var(--border-color) !important;
-            color: var(--text-color) !important;
-        }
-
-        body.dark-mode .entity-edit-container span {
-            color: var(--text-color) !important;
-        }
-        </style>
-        """
         html += f'<form method="post" action="./entity" style="display: flex; align-items: center; gap: 10px;">'
         html += f'<input type="hidden" name="entity_id" value="{entity_id}">'
         html += f'<input type="hidden" name="days" value="{days}">'
@@ -860,37 +831,7 @@ class WebInterface:
             html += f"</div>"
 
             # Add JavaScript for toggle functionality
-            html += f"""
-            <script>
-            function toggleEntitySwitch(button, entityId, days) {{
-                // Toggle the visual state
-                button.classList.toggle('active');
-
-                // Determine the new value
-                const newValue = button.classList.contains('active') ? 'on' : 'off';
-
-                // Create form data
-                const formData = new FormData();
-                formData.append('entity_id', entityId);
-                formData.append('days', days);
-                formData.append('value', newValue);
-
-                // Submit the form
-                fetch('./entity', {{
-                    method: 'POST',
-                    body: formData
-                }}).then(response => {{
-                    if (response.redirected) {{
-                        window.location.href = response.url;
-                    }}
-                }}).catch(error => {{
-                    console.error('Error:', error);
-                    // Revert the toggle on error
-                    button.classList.toggle('active');
-                }});
-            }}
-            </script>
-            """
+            html += get_entity_toggle_js()
 
         elif control_type == "number":
             min_val = self.base.get_state_wrapper(entity_id=entity_id, attribute="min", default=None)
@@ -1118,11 +1059,15 @@ var options = {
         """
         try:
             logfile = "predbat.log"
+            logfile_1 = "predbat.1.log"
             logdata = ""
 
             if os.path.exists(logfile):
                 with open(logfile, "r") as f:
                     logdata = f.read()
+            if os.path.exists(logfile_1):
+                with open(logfile_1, "r") as f:
+                    logdata = f.read() + "\n" + logdata
 
             # Get query parameters
             args = request.query
