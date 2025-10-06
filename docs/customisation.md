@@ -385,6 +385,10 @@ When disabled the SoC target % will not be changed after a charge slot.
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
 When enabled, balance inverters try to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
+If you do use Predbat's balance inverter function then be aware that Predbat will start repeatedly and rapidly updating your inverter settings to keep the inverters in balance with each other.
+This can be a problem with inverters that have a [limited life-span flash memory](caution.md#flash-memory).
+If available, you are strongly recommended to turn on "real time registers" using `switch.givtcp_xxxx_real_time_control` for GivEnergy inverters controlled via GivTCP, or an equivalent function for your inverter.
+
 The `apps.yaml` contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
 
 Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It is Off by default. When turned on a number of other balance controls and configurations are made available:
