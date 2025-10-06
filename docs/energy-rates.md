@@ -218,11 +218,11 @@ A full list of available Octopus products is at <https://api.octopus.energy/v1/p
 
 If you view this page, search for the tariff by name, then copy the URL it shows into a new tab.
 
-E.g. <https://api.octopus.energy/v1/products/GO-FIX-12M-25-08-29/>
+E.g. <https://api.octopus.energy/v1/products/GO-VAR-22-10-14/>
 
 Look through that page to find the right URL for usage charges in your DNO area
 
-<https://api.octopus.energy/v1/products/GO-FIX-12M-25-08-29/electricity-tariffs/E-1R-GO-FIX-12M-25-08-29-A/standard-unit-rates>
+<https://api.octopus.energy/v1/products/GO-VAR-22-10-14//electricity-tariffs/E-1R-GO-VAR-22-10-14-A/standard-unit-rates>
 
 (For area A)
 
