@@ -341,7 +341,7 @@ Predbat outputs the following 'best' entities from the forecast (for the forecas
 The 'best' plan in Predbat parlance is simply Predbat's lowest cost predicted plan:
 
 - predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed) with attributes of the prediction in 5-minute slots.
-- predbat.battery_power_best - Sensor gives the current battery power in watts, atributes give the future prediction of battery power in 5-minute slots
+- predbat.battery_power_best - Sensor gives the current battery power in watts, attributes give the future prediction of battery power in 5-minute slots
 - predbat.best_battery_hours_left - Predicted total number of hours of battery capacity left under the best plan
 - predbat.best_charge_end - Predicted end time of the next forced battery charging under the best plan
 - predbat.best_charge_limit - Predicted best battery charge limit for the next charge in percent with attributes of all future battery charging times & limits
