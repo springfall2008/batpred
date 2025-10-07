@@ -22,14 +22,14 @@ At least one of these methods must be used to define your import and export rate
 If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information is to connect Predbat directly to Octopus.
 
 - This method will not work correctly if you have multiple import or export meters.
-- A single Octopus Intelligent GO car charger or car is supported.
-- Saving sessions are also supported, including auto-enroll.
+- A single Octopus Intelligent GO car charger or car is supported and Predbat will plan your battery charging based on iGo sessions.
+- Saving sessions are also supported, including Predbat auto-enrolling you to them (note you must be joined to the Octopus Octopoints scheme beforehand).
 
-You should first log into your Octopus account and go to the [Accounts](https://octopus.energy/dashboard/new/accounts/) section and copy your account number e.g. A-1234567.
+You should first log into your Octopus account and go to the [Accounts](https://octopus.energy/dashboard/new/accounts/) section and copy your Octopus account number e.g. `A-1234567`.
 
-Then go to the [API Access page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access) where you can copy your API key e.g. sk_live_1as12355...
+Then go to the [API Access page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access), click 'regenerate API key' and copy your API key e.g. `sk_live_1as12355...`
 
-Put these both into your apps.yaml and you are done.
+Put these both into your `apps.yaml` and you are done.
 
 ```yaml
   octopus_api_account: 'XXXXXXXX'
@@ -132,8 +132,10 @@ If you are using the Octopus Energy direct method of Predbat directly connecting
 
 Predbat can automatically join you to Octopus saving sessions and plan battery activity for the saving session period to maximise your income.
 
-For Predbat to automatically manage Octopus saving sessions the following additional configuration item in apps.yaml is used.
-Like the electricity rates, this is set in the apps.yaml template to a regular expression that should auto-discover the Octopus Energy integration.
+Note: **You must have signed up to the Octopus Octoplus scheme to benefit from these events**
+
+For Predbat to automatically manage Octopus saving sessions the following additional configuration item in `apps.yaml` is used.
+Like the electricity rates, this is set in the `apps.yaml` template to a regular expression that should auto-discover the Octopus Energy integration.
 
 - **octopus_saving_session** - Indicates if a saving session is active, should point to the sensor binary_sensor.octopus_energy_ACCOUNT_ID_octoplus_saving_sessions.
 
@@ -158,7 +160,7 @@ or 'Control charge & discharge' for Predbat to be able to manage the battery for
 If you do not have an export tariff then forced export will not apply and Predbat will just ensure you have enough battery charge to see you through the saving session period.
 
 If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
-simply delete or comment out the **octopus_saving_session** entry in apps.yaml.
+simply delete or comment out the **octopus_saving_session** entry in `apps.yaml`.
 
 ### Octopus free (power up) events
 
@@ -166,7 +168,7 @@ Predbat can automatically detect Octopus free events and adjust your battery pla
 
 For Predbat to automatically manage Octopus free sessions the following additional configuration item in apps.yaml is used.
 
-Note: **You must have signed up to Octoplus and eligible to benefit from these events**
+Note: **You must have signed up to the Octopus Octoplus scheme and eligible to benefit from these events**
 
 Like the electricity rates, this is set in the apps.yaml template to a regular expression that should auto-discover the Octopus Energy integration.
 
@@ -193,8 +195,7 @@ not work in future if Octopus ever change the website format. If you enable this
 
 ## Octopus Rates URL
 
-If you do not wish to use the Octopus Energy integration and are an Octopus Energy customer then you can configure Predbat to get the electricity rates
-directly online from the Octopus website.
+As an alternative to the Octopus Direct or Octopus Energy integration methods, for Octopus Energy customers,  you can configure Predbat to get the electricity rates directly online from the Octopus website.
 
 In apps.yaml configure the following lines:
 
@@ -226,7 +227,7 @@ Look through that page to find the right URL for usage charges in your DNO area
 
 (For area A)
 
-Configuring the Octopus rates URL is an expert feature as Octopus change the available products from time to time, so for most users, the Octopus Energy integration is a simpler solution.
+Configuring the Octopus rates URL is an expert feature as Octopus change the available products from time to time, so for most users, the Octopus Direct or Octopus Energy integration are simpler solutions.
 
 ## Energidataservice Integration
 
