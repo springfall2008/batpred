@@ -3249,13 +3249,13 @@ def get_plan_css():
         background-color: #7e2e1f !important;
     }
     
-    /* Manual Freeze Charge */
+    /* Manual Freeze Charge (improved visibility) */
     .override-freeze-charge {
         position: relative;
-        background-color: #EEEEEE !important; /* Light gray */
+        background-color: #C0C0C0 !important; /* Medium gray for light mode */
     }
     body.dark-mode .override-freeze-charge {
-        background-color: #666666 !important;
+        background-color: #888888 !important; /* Lighter gray for dark mode */
     }
     
     /* Manual Freeze Export */
