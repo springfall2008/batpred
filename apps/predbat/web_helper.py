@@ -3119,14 +3119,62 @@ def get_plan_css():
         background-color: #444 !important;
     }
 
-    /* Override cell styling */
+    /* ============================
+   Override cell styling
+   ============================ */
+
+    /* Generic fallback */
     .override-active {
         position: relative;
-        background-color: #FFC0CB !important; /* Light pink for light mode */
+        background-color: #FFC0CB !important; /* Light pink */
     }
-
     body.dark-mode .override-active {
-        background-color: #93264c !important; /* Darker pink for dark mode */
+        background-color: #93264c !important; /* Dark pink */
+    }
+    
+    /* Manual Charge */
+    .override-charge {
+        position: relative;
+        background-color: #3AEE85 !important; /* Green (same as charging) */
+    }
+    body.dark-mode .override-charge {
+        background-color: #247e59 !important;
+    }
+    
+    /* Manual Export */
+    .override-export {
+        position: relative;
+        background-color: #FFFF00 !important; /* Bright yellow */
+    }
+    body.dark-mode .override-export {
+        background-color: #999900 !important;
+    }
+    
+    /* Manual Demand */
+    .override-demand {
+        position: relative;
+        background-color: #F18261 !important; /* Red-orange (high demand) */
+    }
+    body.dark-mode .override-demand {
+        background-color: #7e2e1f !important;
+    }
+    
+    /* Manual Freeze Charge */
+    .override-freeze-charge {
+        position: relative;
+        background-color: #EEEEEE !important; /* Light gray */
+    }
+    body.dark-mode .override-freeze-charge {
+        background-color: #666666 !important;
+    }
+    
+    /* Manual Freeze Export */
+    .override-freeze-export {
+        position: relative;
+        background-color: #AAAAAA !important; /* Darker gray */
+    }
+    body.dark-mode .override-freeze-export {
+        background-color: #444444 !important;
     }
 
     /* Rate input field styles */
