@@ -281,6 +281,15 @@ predbat.status additionally has the following attributes that are automatically 
 - **Version** - version of Predbat that's running
 - **Error** - binary value true or false depending upon whether Predbat is in an error status or nor
 
+## Sensor data
+
+Predbat outputs the values it read from your inverters as totals, this gives the current power flow:
+
+- predbat.load_power - The current house load in Watts
+- predbat.battery_power - The current power of your battery (charging or discharging) in Watts
+- predbat.pv_power - The current power of your PV system in Watts
+- predbat.grid_power - The current grid power flow (import or export) in Watts
+
 ## Baseline data
 
 Predbat outputs the following sensors to predict what your battery is expected to do *over the forecast_hours duration of the plan* with no changes made by Predbat.
@@ -293,7 +302,6 @@ so will be much larger than sensor.solcast_pv_forecast_today which is today's So
 
 - predbat.battery_cycle - Predicted baseline battery cycle in kWh (total kWh processed) with attributes of the prediction every 5 minutes to the end of the plan
 - predbat.battery_hours_left - The number of hours left until your home battery is predicted to run out under the baseline plan (stops at the maximum prediction time)
-- predbat.battery_power - The sensor is always zero; attributes contain the predicted remaining battery power under the baseline plan, in 5-minute slots, for charting
 - predbat.car_soc - The expected charge level of your car at the end of the baseline plan. Can also be charted
 - predbat.charge_end - Predicted end time of the next forced battery charging under the baseline plan
 - predbat.charge_limit - Predicted baseline battery charge limit for the next charge in percent with attributes of all future battery charging times & limits
@@ -301,19 +309,16 @@ so will be much larger than sensor.solcast_pv_forecast_today which is today's So
 - predbat.charge_start - Predicted start time of the next forced battery charging under the baseline plan
 - predbat.duration - The duration of the prediction maximum in hours
 - predbat.export_energy - Total kWh of predicted exports under the baseline plan with attributes of the predicted export kWh and their time slots
-- predbat.grid_power - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export)
 in kW per 5-minute slots to the end of the baseline plan for charting
 - predbat.import_energy - Total kWh of predicted imports under baseline plan with attributes of the predicted import kWh and their time slots
 - predbat.import_energy_battery - Total kWh of predicted import energy used to charge the home battery under the baseline plan
 - predbat.import_energy_house - Predicted import energy used by the home under the baseline plan that is not provided by your home battery
 (e.g. due to a flat battery or load above the maximum discharge rate)
 - predbat.load_energy - Total kWh of predicted house load under the baseline plan with attributes of the predicted load kWh in 5-minute slots to the end of the plan
-- predbat.load_power - Total kW of predicted house load power to the end of the baseline plan,
 with attributes of the average instantaneous house load power in kW in 5-minute slots to the end of the plan
 - predbat.metric - Total predicted cost for the baseline plan, taking account of predicted solar generation, house load, import and export rates.
 Attributes contain data for charting the cost prediction in 5-minute slots to the end of the plan
 - predbat.pv_energy - Predicted PV energy in kWh under the baseline plan with attributes of the predicted PV generation in kWh with time slots
-- predbat.pv_power - Predicted PV power now with attributes that contain the predicted PV power in kW per 5-minute slots to the end of the baseline plan for charting
 - predbat.soc_kw - Predicted state of charge (in kWh) at the end of the baseline plan prediction, not very useful in itself,
 but the attributes hold prediction data in 5-minute intervals which can be charted with Apex Charts (or similar)
 - predbat.soc_min_kwh - Predicted lowest battery SoC value in kWh under the baseline plan with attribute of the date/time that that lowest SoC occurs at
@@ -335,8 +340,8 @@ with attributes of the predicted SoC in 5-minute time slots to the end of the pl
 Predbat outputs the following 'best' entities from the forecast (for the forecast_hours duration) based on the lowest cost consumption plan.
 The 'best' plan in Predbat parlance is simply Predbat's lowest cost predicted plan:
 
-- predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed) with attributes of the prediction every 5 minutes to the end of the plan
-- predbat.battery_power_best - Predicted remaining battery power in kW with attributes of the future prediction in 5-minute slots
+- predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed) with attributes of the prediction in 5-minute slots.
+- predbat.battery_power_best - Sensor gives the current battery power in watts, atributes give the future prediction of battery power in 5-minute slots
 - predbat.best_battery_hours_left - Predicted total number of hours of battery capacity left under the best plan
 - predbat.best_charge_end - Predicted end time of the next forced battery charging under the best plan
 - predbat.best_charge_limit - Predicted best battery charge limit for the next charge in percent with attributes of all future battery charging times & limits
@@ -359,12 +364,12 @@ Attributes contain data for charting the cost prediction in 5-minute slots to th
 - predbat.best_soc_min_kwh - Predicted lowest battery SoC value in kWh under the best plan with attribute of the date/time that that lowest SoC occurs at
 - predbat.car_soc_best - See [Car data](#car-data) below
 - predbat.carbon_best - See [Carbon data](#carbon-data) below
-- predbat.grid_power_best - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export),
+- predbat.grid_power_best - The sensor gives the current grid power in Watts, attributes contain future prediction of battery power in 5 minute slots.
 in kW per 5 minute slots to the end of the best plan for charting
 - predbat.iboost_best - See [iBoost data](#iboost-solar-diverter-data) below
-- predbat.load_power_best - Total kW of predicted house load power to the end of the best plan,
+- predbat.load_power_best - Gives the current grid power in W, attributes contain the predicted house load over time.
 with attributes of the average instantaneous house load power in kW in 5-minute slots to the end of the plan
-- predbat.pv_power_best - The sensor is always zero; attributes contain the predicted PV power in kW per 5-minute slots to the end of the best plan for charting
+- predbat.pv_power_best - Gives the current PV power in Watts, attributes contain the predicted PV power in kW per 5-minute slots to the end of the best plan for charting
 - predbat.soc_kw_best - Predicted final state of charge (in kWh) with attributes of the predicted SoC in 5-minute time slots to the end of the best plan, for charting
 - predbat.soc_kw_best_h1 - Single data point for the predicted state of charge in 1 hour (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours (useful for calibration charts, predicted vs actual)
