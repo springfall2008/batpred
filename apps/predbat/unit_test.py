@@ -9211,7 +9211,7 @@ def test_previous_days_modal_filter(my_predbat):
     for minute in range(0, 12 * 60):  # 12 hours worth
         running_total += step_increment
         test_data[24 * 60 - minute - 1] = dp4(running_total)  # Backwards indexing as used in function
-    for minute in range(12 *60, 24 * 60):  # remainder hours worth
+    for minute in range(12 * 60, 24 * 60):  # remainder hours worth
         test_data[24 * 60 - minute - 1] = dp4(running_total)  # Backwards indexing as used in function
 
     # Leave second half empty to test gap filling
