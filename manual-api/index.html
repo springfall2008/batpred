@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Predbat automation API - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Predbat automation API";
+        var mkdocs_page_input_path = "manual-api.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Predbat automation API</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#data-retention">Data retention</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#supported-command-formats">Supported command formats</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#supported-overrides">Supported overrides</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#example-solution-to-over-ride-predicted-house-load">Example solution to over-ride predicted house load</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">Predbat automation API</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="predbat-automation-api">Predbat automation API</h1>
+<p><strong>CAUTION</strong> This is an expert feature only, you can break Predbat if you set the wrong things here.</p>
+<p>While for most people Predbat will do what you want without any adjustments there are some special cases where users wish to write some more complex
+automations which override Predbat settings</p>
+<p>For settings inside Home Assistant e.g. switch.predbat_<em>, select.predbat_</em> and input_number.predbat_* you can already use an automation to change these values</p>
+<p>For settings in apps.yaml it's very difficult or impossible to update them via an automation.</p>
+<p>For this reason, there is a selector called <strong>select.predbat_manual_api</strong> which works a bit like the manual override ones but this can have new values added using the select API in Home Assistant.
+The only function the selector itself serves is to store override commands, you can clear from the selector but you have to set them using a service call.</p>
+<p>Certain settings from apps.yaml may be overridden using this method.</p>
+<p>Each override is in a string format and works a bit like a web URL, setting the command and the values.</p>
+<h2 id="data-retention">Data retention</h2>
+<p>The data for overrides is kept inside the Home Assistant selector itself and so will survive a reboot. There is likely a limit to the size of this data so be sure to remove
+old overrides when you are done with them. Keep in mind it's easy to lose all of the overrides with the 'off' option so do not keep important data here only use it for short-term
+automations.</p>
+<h2 id="supported-command-formats">Supported command formats</h2>
+<p>The supported formats are:</p>
+<pre><code class="language-text">off
+&lt;command&gt;=&lt;value&gt;
+&lt;command&gt;(index)=&lt;value&gt;
+&lt;command&gt;?&lt;name&gt;=&lt;value&gt;
+&lt;command&gt;(index)?&lt;name&gt;=&lt;value&gt;
+&lt;command&gt;?&lt;name&gt;=&lt;value&gt;&amp;&lt;name2&gt;=&lt;value2&gt;
+&lt;command&gt;(index)?&lt;name&gt;=&lt;value&gt;&amp;&lt;name2&gt;=&lt;value2&gt;
+</code></pre>
+<p>Commands are disabled again by putting them in square brackets e.g:</p>
+<pre><code class="language-text">[&lt;command&gt;?&lt;name&gt;=&lt;value&gt;&amp;&lt;name2&gt;=&lt;value2&gt;]
+````
+
+Below is an example of setting a rate override, you can clear all overrides by calling 'off' or this specific one only by calling the same thing again but in square brackets []
+
+For the rates you can use **rates_export_override** or **rates_import_override** with all the same options as [apps.yaml](energy-rates.md#manually-over-riding-energy-rates) but in a URL type format:
+
+```text
+rates_export_override?start=17:00:00&amp;end=19:00:00&amp;rate=0
+</code></pre>
+<p>See below for an [example of using the API to over-ride predicted house load]</p>
+<p>If you override a single value item in a list with something like:</p>
+<pre><code class="language-text">inverter_limit(0)=4000
+</code></pre>
+<p>To disable this override again:</p>
+<pre><code class="language-text">[inverter_limit(0)=4000]
+</code></pre>
+<p>If you omit the index then all entries in the list will be overridden.</p>
+<p>To disable all overrides</p>
+<pre><code class="language-text">off
+</code></pre>
+<h3 id="supported-overrides">Supported overrides</h3>
+<p>The following settings can be overridden with this method:</p>
+<ul>
+<li>rates_export_override</li>
+<li>rates_import_override</li>
+<li>inverter_limit</li>
+<li>export_limit</li>
+<li>days_previous</li>
+<li>days_previous_weight</li>
+<li>inverter_battery_rate_min</li>
+<li>inverter_reserve_max</li>
+<li>battery_rate_max</li>
+<li>car_charging_soc</li>
+<li>car_charging_limit</li>
+<li>car_charging_battery_size</li>
+<li>battery_scaling</li>
+<li>forecast_hours</li>
+<li>import_export_scaling</li>
+<li>inverter_limit_charge</li>
+<li>inverter_limit_discharge</li>
+</ul>
+<h2 id="example-solution-to-over-ride-predicted-house-load">Example solution to over-ride predicted house load</h2>
+<p>One common feedback is there is no mechanism in Predbat to alter the predicted house load, for example ignoring the effects of extra washing load in the past, or to take account of planned extra load such as cooking a big Sunday dinner.</p>
+<p>The Predbat manual API provides a mechanism to meet this need by setting an export (or import) rates override.</p>
+<ol>
+<li>Control variables</li>
+</ol>
+<p>Create a date/time helper called predbat_override_date of type date, another called predbat_override_start_time of type time, and a third called predbat_override_end_time also of type time.</p>
+<p>Create an input number helper called predbat_override_load_percent. I made it an input field and with a maximum value of 5.</p>
+<p>These will hold the date, start time, end time and load adjustment percentage.</p>
+<ol start="2">
+<li>Create an automation script to send the event details to Predbat:</li>
+</ol>
+<pre><code class="language-yaml">alias: Send Load Adjustment details to Predbat manual API
+sequence:
+  - action: select.select_option
+    data:
+      option: &gt;-
+        rates_export_override?date={{
+        states('input_datetime.predbat_override_date')| as_timestamp |
+        timestamp_custom('%Y-%m-%d') }}&amp;start={{
+        states('input_datetime.predbat_override_start_time')
+        }}&amp;end={{
+        states('input_datetime.predbat_override_end_time')
+        }}&amp;load_scaling={{
+        states('input_number.predbat_override_load_percent')|float }}
+    target:
+      entity_id: select.predbat_manual_api
+mode: single
+description: &quot;&quot;
+</code></pre>
+<p>The script collects the above input variables, and sends these to Predbat as an export rate override.</p>
+<ol start="3">
+<li>Dashboard:</li>
+</ol>
+<p>On an existing Home Assistant dashboard, or on a new one, create a control of type 'entities' and paste the following in:</p>
+<pre><code class="language-yaml">type: entities
+entities:
+  - entity: input_datetime.predbat_override_session_date
+  - entity: input_datetime.predbat_override_start_time
+  - entity: input_datetime.predbat_override_end_time
+  - entity: input_number.predbat_override_load_percent
+  - type: button
+    name: Send Load Adjustment details to Predbat
+    icon: mdi:script-text-play-outline
+    action_name: Execute
+    tap_action:
+      action: perform-action
+      perform_action: script.send_load_adjustment_details_to_predbat_manual_api
+</code></pre>
+<p>You simply enter the date, start time, end time and load percentage adjustment (e.g. 0.5=50%), then click the 'Execute' button.
+The load adjustment details will be sent to the Predbat manual API and you will see the load change and a small +/- symbol against the export rate in the Predbat plan.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../devices/" class="btn btn-neutral float-left" title="Support 3rd party devices/integrations"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../output-data/" class="btn btn-neutral float-right" title="Output data">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../devices/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../output-data/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
