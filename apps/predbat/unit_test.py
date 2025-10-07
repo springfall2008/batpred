@@ -8924,6 +8924,7 @@ def test_minute_data(my_predbat):
         smoothing=True,
         clean_increment=True,
         max_increment=0,
+        interpolate=True,
     )
     points = [0, 5, 34, 35, 65]
     expected_points = [dp4(30.0 + 5 * (10 / 30)), 30.0, dp4(20.0 + 10 / 30), 20.0, 10.0]
@@ -9209,7 +9210,9 @@ def test_previous_days_modal_filter(my_predbat):
     # Fill first half of day with proper incremental data
     for minute in range(0, 12 * 60):  # 12 hours worth
         running_total += step_increment
-        test_data[24 * 60 - minute] = running_total  # Backwards indexing as used in function
+        test_data[24 * 60 - minute - 1] = dp4(running_total)  # Backwards indexing as used in function
+    for minute in range(12 *60, 24 * 60):  # remainder hours worth
+        test_data[24 * 60 - minute - 1] = dp4(running_total)  # Backwards indexing as used in function
 
     # Leave second half empty to test gap filling
 
@@ -9228,8 +9231,10 @@ def test_previous_days_modal_filter(my_predbat):
 
     # Should now have approximately 24 kWh total (1 kWh per hour for 24 hours)
     expected_final_total = 24.0
-    if abs(final_data_sum - expected_final_total) > 2.0:  # Allow 2 kWh tolerance
+    if abs(final_data_sum - expected_final_total) > 1.0:  # Allow 1 kWh tolerance
         print("ERROR: Expected final total around {} kWh, got {} kWh".format(expected_final_total, final_data_sum))
+        for minute in range(0, 24 * 60, 15):
+            print("  Minute {}: {}".format(minute, test_data.get(minute, 0)))
         failed = True
     else:
         print("Gap filling successful: filled from {} kWh to {} kWh".format(dp2(initial_data_sum), dp2(final_data_sum)))
@@ -9273,6 +9278,7 @@ def test_previous_days_modal_filter(my_predbat):
 
     # Call the function - should remove day 1 (lowest consumption)
     my_predbat.previous_days_modal_filter(test_data)
+    print(my_predbat.days_previous)
 
     # Check that one day was removed
     final_days_count = len(my_predbat.days_previous)
