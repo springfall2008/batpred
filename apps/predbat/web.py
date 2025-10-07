@@ -1248,7 +1248,7 @@ var options = {
                 override_class = "override-demand"
             elif minutes_from_midnight in manual_freeze_charge_times:
                 in_override = True
-                cell_bg_color = "#EEEEEE"  # Matches freeze charging grey
+                cell_bg_color = "#C0C0C0"  # Matches freeze charging grey
                 override_class = "override-freeze-charge"
             elif minutes_from_midnight in manual_freeze_export_times:
                 in_override = True
