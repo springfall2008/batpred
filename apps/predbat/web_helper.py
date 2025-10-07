@@ -3221,7 +3221,7 @@ def get_plan_css():
     body.dark-mode .override-active {
         background-color: #93264c !important; /* Dark pink */
     }
-    
+
     /* Manual Charge */
     .override-charge {
         position: relative;
@@ -3230,7 +3230,7 @@ def get_plan_css():
     body.dark-mode .override-charge {
         background-color: #247e59 !important;
     }
-    
+
     /* Manual Export */
     .override-export {
         position: relative;
@@ -3239,7 +3239,7 @@ def get_plan_css():
     body.dark-mode .override-export {
         background-color: #999900 !important;
     }
-    
+
     /* Manual Demand */
     .override-demand {
         position: relative;
@@ -3248,7 +3248,7 @@ def get_plan_css():
     body.dark-mode .override-demand {
         background-color: #7e2e1f !important;
     }
-    
+
     /* Manual Freeze Charge (improved visibility) */
     .override-freeze-charge {
         position: relative;
@@ -3257,7 +3257,7 @@ def get_plan_css():
     body.dark-mode .override-freeze-charge {
         background-color: #888888 !important; /* Lighter gray for dark mode */
     }
-    
+
     /* Manual Freeze Export */
     .override-freeze-export {
         position: relative;
