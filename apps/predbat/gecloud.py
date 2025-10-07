@@ -153,8 +153,10 @@ EVC_SELECT_VALUE_KEY = {
 EVC_BLACKLIST_COMMANDS = ["installation-mode", "perform-factory-reset", "rename-id-tag", "delete-id-tags", "change-randomised-delay-duration"]
 
 TIMEOUT = 240
-RETRIES = 5
+RETRIES = 10
+RETRY_FACTOR = 1
 MAX_THREADS = 2
+MAX_START_TIME = 10 * 60
 
 attribute_table = {
     "time": {"friendly_name": "Time", "icon": "mdi:clock", "unit_of_measurement": "Time", "state_class": "timestamp"},
@@ -188,6 +190,14 @@ attribute_table = {
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(0, 24 * 60, 1)]
 OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M") + ":00") for minute in range(0, 24 * 60, 1)]
+
+
+def regname_to_ha(name):
+    """
+    Convert register name to HA style
+    """
+    name = name.lower().replace(" ", "_").replace("%", "percent").replace("-", "_")
+    return name
 
 
 class GECloudDirect:
@@ -224,7 +234,7 @@ class GECloudDirect:
         """
         self.log("GECloud: Waiting for API to start")
         count = 0
-        while not self.api_started and count < 240:
+        while not self.api_started and count < MAX_START_TIME:
             time.sleep(1)
             count += 1
         if not self.api_started:
@@ -372,6 +382,7 @@ class GECloudDirect:
             attributes = {}
             if key == "info":
                 info = device_info[key]
+                last_updated = device_info.get("last_updated", None)
                 cap = info.get("battery", {}).get("nominal_capacity", None)
                 volt = info.get("battery", {}).get("nominal_voltage", None)
                 dod = info.get("battery", {}).get("depth_of_discharge", None)
@@ -389,6 +400,7 @@ class GECloudDirect:
                 self.base.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
                 self.base.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
                 self.base.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("_battery_dod", {}), app="gecloud")
+                self.base.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
 
     async def publish_evc_data(self, serial, evc_data):
         """
@@ -523,9 +535,10 @@ class GECloudDirect:
 
     async def enable_real_time_control(self, device, registers):
         for key in registers:
-            reg_name = registers[key].get("name", None)
+            reg_name = registers[key].get("name", "")
             value = registers[key].get("value", None)
-            if "real-time control" in reg_name.lower():
+            ha_name = regname_to_ha(reg_name)
+            if "real_time_control" in ha_name:
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
                     return True
@@ -552,7 +565,7 @@ class GECloudDirect:
             validation_rules = registers[key].get("validation_rules", None)
             validation = registers[key].get("validation", None)
             value = registers[key].get("value", None)
-            ha_name = reg_name.lower().replace(" ", "_").replace("%", "percent").replace("-", "_")
+            ha_name = regname_to_ha(reg_name)
             attributes = {}
             attributes["friendly_name"] = reg_name
 
@@ -642,11 +655,33 @@ class GECloudDirect:
             return
 
         batteries = devices["battery"]
+        batteries_real = devices["battery"]
         num_inverters = len(batteries)
 
         if devices["gateway"]:
             num_inverters = 1
             batteries = [devices["gateway"]]
+
+        # Do we have a charge power percentage setting?
+        has_charge_power_percent = False
+        has_pause_start_time = False
+        has_discharge_target_soc = False
+        has_pause_battery = False
+        for device in batteries:
+            registers = self.settings.get(device, {})
+            for key in registers:
+                reg_name = registers[key].get("name", "")
+                ha_name = regname_to_ha(reg_name)
+                if "inverter_charge_power_percentage" in ha_name:
+                    has_charge_power_percent = True
+                if "pause_battery_start_time" in ha_name:
+                    has_pause_start_time = True
+                if "dc_discharge_1_lower_soc_percent_limit" in ha_name:
+                    has_discharge_target_soc = True
+                if "pause_battery" in ha_name:
+                    has_pause_battery = True
+
+        self.log("GECloud: Auto-config detected features - charge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(has_charge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc))
 
         self.base.args["inverter_type"] = ["GEC" for _ in range(num_inverters)]
         self.base.args["num_inverters"] = num_inverters
@@ -672,9 +707,35 @@ class GECloudDirect:
         self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in batteries]
         self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries]
         self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries]
-        self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
-        self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries]
-        self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries]
+
+        if has_pause_battery:
+            self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
+            if has_pause_start_time:
+                self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries]
+                self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries]
+        else:
+            if "pause_mode" in self.base.args:
+                del self.base.args["pause_mode"]
+            if "pause_start_time" in self.base.args:
+                del self.base.args["pause_start_time"]
+            if "pause_end_time" in self.base.args:
+                del self.base.args["pause_end_time"]
+
+        if has_discharge_target_soc:
+            self.base.args["discharge_target_soc"] = ["number.predbat_gecloud_" + device + "_dc_discharge_1_lower_soc_percent_limit" for device in batteries]
+        else:
+            if "discharge_target_soc" in self.base.args:
+                del self.base.args["discharge_target_soc"]
+
+        if has_charge_power_percent:
+            self.base.args["charge_rate_percent"] = ["number.predbat_gecloud_" + device + "_inverter_charge_power_percentage" for device in batteries]
+            self.base.args["discharge_rate_percent"] = ["number.predbat_gecloud_" + device + "_inverter_discharge_power_percentage" for device in batteries]
+        else:
+            if "charge_rate_percent" in self.base.args:
+                del self.base.args["charge_rate_percent"]
+            if "discharge_rate_percent" in self.base.args:
+                del self.base.args["discharge_rate_percent"]
+
         if "givtcp_rest" in self.base.args:
             del self.base.args["givtcp_rest"]
 
@@ -683,7 +744,7 @@ class GECloudDirect:
 
         # reconfigure for EMS
         if devices["ems"]:
-            self.log("GECloud: EMS detected")
+            self.log("GECloud: EMS detected, using this for control")
             ems = devices["ems"]
             self.base.args["inverter_type"] = ["GEE" for _ in range(num_inverters)]
             self.base.args["ge_cloud_serial"] = ems
@@ -746,9 +807,6 @@ class GECloudDirect:
         for device in device_list:
             self.pending_writes[device] = []
 
-        if self.automatic:
-            await self.async_automatic_config(devices_dict)
-
         seconds = 0
         while not self.stop_cloud and not self.base.fatal_error:
             try:
@@ -773,8 +831,10 @@ class GECloudDirect:
                             self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                             await self.publish_registers(device, self.settings[device])
 
-                    # Real time control disable?
+                    # One shot tasks
                     if seconds == 0:
+                        if self.automatic:
+                            await self.async_automatic_config(devices_dict)
                         for device in device_list:
                             await self.enable_real_time_control(device, self.settings[device])
 
@@ -812,7 +872,7 @@ class GECloudDirect:
                     data = None
             if data:
                 break
-            await asyncio.sleep(1 * (retry + 1))
+            await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:
             self.log("Error: GECloud: Failed to send EVC command {} params {}".format(command, params))
         return data
@@ -834,7 +894,7 @@ class GECloudDirect:
         if serial in self.pending_writes:
             for pending in self.pending_writes[serial]:
                 if pending["setting_id"] == setting_id:
-                    return {"value": pending["value"]}
+                    return {"value": pending["value"], "context": "predbat"}
 
         for retry in range(RETRIES):
             data = await self.async_get_inverter_data(GE_API_INVERTER_READ_SETTING, serial, setting_id, post=True)
@@ -846,12 +906,12 @@ class GECloudDirect:
             elif data and data_value in [-1, -2, -5, -6]:
                 data = None
                 # Inverter timeout, try to spread requests out
-                await asyncio.sleep(random.random() * 2)
+                await asyncio.sleep(random.random() * (3 + retry))
             if data:
                 break
-            await asyncio.sleep(1 * (retry + 1))
+            await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:
-            self.log("Warn: GECloud: Device {} Failed to read inverter setting id {}".format(serial, setting_id))
+            self.log("Warn: GECloud: Device {} Failed to read inverter setting id {} got {}".format(serial, setting_id, data))
         return data
 
     async def async_write_inverter_setting(self, serial, setting_id, value):
@@ -864,7 +924,7 @@ class GECloudDirect:
                 serial,
                 setting_id,
                 post=True,
-                datain={"value": str(value), "context": "homeassistant"},
+                datain={"value": str(value), "context": "predbat"},
             )
             if data and "success" in data:
                 if not data["success"]:
@@ -872,7 +932,7 @@ class GECloudDirect:
             if data:
                 self.pending_writes[serial].append({"setting_id": setting_id, "value": value})
                 break
-            await asyncio.sleep(1 * (retry + 1))
+            await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:
             self.log("Warn: GECloud: Failed to write setting id {} value {}".format(setting_id, value))
         return data
@@ -1168,6 +1228,7 @@ class GECloudDirect:
             self.log("GECloud: Found device {}".format(device))
             inverter = device.get("inverter", {})
             serial = inverter.get("serial", None)
+            last_updated = inverter.get("last_updated", None)
             model = inverter.get("info", {}).get("model", "").lower()
             batteries = inverter.get("connections", {}).get("batteries", [])
             if serial:
@@ -1201,7 +1262,7 @@ class GECloudDirect:
             data = await self.async_get_inverter_data(endpoint, serial, setting_id, post, datain, uuid, meter_ids, start_time=start_time, end_time=end_time, command=command, measurands=measurands)
             if data is not None:
                 break
-            await asyncio.sleep(1 * (retry + 1))
+            await asyncio.sleep(RETRY_FACTOR * (retry + 1))
         if data is None:
             self.log("Warn: GECloud: Failed to get data from {}".format(endpoint))
         return data
@@ -1385,7 +1446,7 @@ class GECloud:
 
         age = now_utc - last_updated_time
         self.load_minutes_age = age.days
-        self.load_minutes = self.minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True)
+        self.load_minutes = self.minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)
         self.import_today = self.minute_data(mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.export_today = self.minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today = self.minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
@@ -1396,10 +1457,9 @@ class GECloud:
         self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
         self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
 
-        self.log("GE GECloud load_last_period is {} kW".format(dp2(self.load_last_period)))
         # More up to date sensors for current values if set
         if "load_today" in self.args:
-            load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling)
+            load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
             self.load_minutes_now = max(load_minutes.get(0, 0) - load_minutes.get(self.minutes_now, 0), 0)
             self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             self.log("GE GECloud load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))

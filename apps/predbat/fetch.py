@@ -233,37 +233,44 @@ class Fetch:
         min_sum = 99999999
         min_sum_day = 0
 
+        days_list = self.days_previous.copy()
+        # Sort days list in numerical order with highest number day first
+        days_list.sort(reverse=True)
+
         idx = 0
-        for days in self.days_previous:
+        for days in days_list:
             use_days = max(min(days, self.load_minutes_age), 1)
             sum_day = 0
             full_days = 24 * 60 * (use_days - 1)
             for minute in range(0, 24 * 60, PREDICT_STEP):
-                minute_previous = 24 * 60 - minute + full_days
+                minute_previous = 24 * 60 - minute + full_days - 1
                 load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(data, minute_previous, historical=False, step=PREDICT_STEP)
                 sum_day += load_yesterday
             sum_days.append(dp2(sum_day))
             sum_days_id[days] = sum_day
             if sum_day < min_sum:
                 min_sum_day = days
-                min_sum_day_idx = idx
                 min_sum = dp2(sum_day)
             idx += 1
 
-        self.log("Historical data totals for days {} are {} - min {}".format(self.days_previous, sum_days, min_sum))
+        self.log("Historical data totals for days {} are {} - min {}".format(days_list, sum_days, min_sum))
         if self.load_filter_modal and total_points >= 3 and (min_sum_day > 0):
-            self.log("Model filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(self.days_previous)))
+            self.log("Model filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(days_list)))
+            min_sum_day_idx = days_list.index(min_sum_day)
+            del days_list[min_sum_day_idx]
+            # Remove day 'min_sum_day' from self.days_previous
+            min_sum_day_idx = self.days_previous.index(min_sum_day)
             del self.days_previous[min_sum_day_idx]
             del self.days_previous_weight[min_sum_day_idx]
 
         # Gap filling
         gap_size = max(self.get_arg("load_filter_threshold", 30), 5)
-        for days in self.days_previous:
+        for days in days_list:
             use_days = max(min(days, self.load_minutes_age), 1)
             num_gaps = 0
             full_days = 24 * 60 * (use_days - 1)
             for minute in range(0, 24 * 60, PREDICT_STEP):
-                minute_previous = 24 * 60 - minute + full_days
+                minute_previous = 24 * 60 - minute + full_days - 1
                 if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
                     num_gaps += PREDICT_STEP
 
@@ -281,13 +288,16 @@ class Fetch:
                 # Do the filling
                 per_minute_increment = average_day / (24 * 60)
                 for minute in range(0, 24 * 60, PREDICT_STEP):
-                    minute_previous = 24 * 60 - minute + full_days
+                    minute_previous = 24 * 60 - minute + full_days - 1
                     if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
-                        for offset in range(minute_previous, 0, -1):
+                        total_to_add = 0
+                        for offset in range(minute_previous + gap_size, -1, -1):
                             if offset in data:
-                                data[offset] += per_minute_increment * PREDICT_STEP
+                                data[offset] = dp4(data[offset] + total_to_add)
                             else:
-                                data[offset] = per_minute_increment * PREDICT_STEP
+                                data[offset] = dp4(total_to_add)
+                            if offset > minute_previous:
+                                total_to_add += per_minute_increment
 
     def get_historical_base(self, data, minute, base_minutes):
         """
@@ -382,7 +392,7 @@ class Fetch:
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, load_scaling=1.0, required_unit=None, interpolate=False):
         """
         Download one or more entities for load data
         """
@@ -421,6 +431,7 @@ class Fetch:
                     clean_increment=True,
                     accumulate=load_minutes,
                     required_unit=required_unit,
+                    interpolate=interpolate,
                 )
             else:
                 self.log("Error: Unable to fetch history for {}".format(entity_id))
@@ -532,6 +543,8 @@ class Fetch:
         prev_last_updated_time=None,
         last_state=0,
         attributes=False,
+        max_increment=MAX_INCREMENT,
+        interpolate=False,
     ):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -540,8 +553,8 @@ class Fetch:
         mdata = {}
         adata = {}
         newest_state = 0
+        prev_state = 0
         newest_age = 999999
-        max_increment = MAX_INCREMENT
 
         # Bounds on the data we store
         minute_min = -days * 24 * 60
@@ -652,7 +665,7 @@ class Fetch:
             if to_key:
                 to_value = item[to_key]
                 if not to_value:
-                    to_time = now + timedelta(minutes=24 * 60 * self.forecast_days)
+                    to_time = now + timedelta(minutes=24 * 60 * days)
                 else:
                     to_time = str2time(item[to_key])
             else:
@@ -680,6 +693,7 @@ class Fetch:
 
             if minutes < newest_age:
                 newest_age = minutes
+                prev_state = newest_state
                 newest_state = state
 
             # Power to Energy
@@ -749,6 +763,22 @@ class Fetch:
 
         # If we only have a start time then fill the gaps with the last values
         if not to_key:
+            # Fill from last sample until now with interpolation if enabled
+            if interpolate and clean_increment and backwards:
+                last_sample_minute = 0
+                for minute in range(60 * 24 * days):
+                    if minute in mdata:
+                        last_sample_minute = minute
+                        break
+                if last_sample_minute > 0:
+                    last_sample_value = mdata[last_sample_minute]
+                    last_but_one_minute_sample = mdata[last_sample_minute + 1] if (last_sample_minute + 1) in mdata else last_sample_value
+                    step = last_sample_value - last_but_one_minute_sample
+                    if last_sample_minute < 10 * 60 and last_sample_minute > 0:
+                        for minute in range(last_sample_minute):
+                            if minute not in mdata:
+                                mdata[minute] = dp4(newest_state + step * (last_sample_minute - minute))
+
             # Fill from last sample until now
             for minute in range(60 * 24 * days):
                 if backwards:
@@ -956,7 +986,7 @@ class Fetch:
         else:
             # Load data
             if "load_today" in self.args:
-                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling)
+                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP

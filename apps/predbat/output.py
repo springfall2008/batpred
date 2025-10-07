@@ -46,7 +46,7 @@ class Output:
                 )
             else:
                 window = self.car_charging_slots[car_n][0]
-                if self.minutes_now >= window["start"] and self.minutes_now < window["end"]:
+                if self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window["kwh"] > 0:
                     slot = True
                 else:
                     slot = False

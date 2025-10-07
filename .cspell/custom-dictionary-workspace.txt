@@ -219,6 +219,7 @@ pytz
 rarr
 recp
 Redownload
+regname
 remotecontrol
 resetmidnight
 resultid

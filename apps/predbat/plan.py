@@ -37,6 +37,11 @@ class DummyThread:
 
 class Plan:
     def dynamic_load(self):
+        """
+        Adjust load prediction based on current load
+        Return True if load status has changed and hence we need to re-plan
+        """
+        prev_last_load_status = self.load_last_status
         # Last period load analysis
         self.load_last_status = "baseline"
         if self.load_last_period > self.battery_rate_max_discharge * MINUTE_WATT / 1000:
@@ -57,11 +62,12 @@ class Plan:
             # Note never do this just after midnight due to the load sensor reset
             if self.load_last_status == "low" and self.minutes_now > 5:
                 for car_n in range(0, self.num_cars):
-                    for slot in self.car_charging_slots[car_n]:
+                    for slot_n in range(0, len(self.car_charging_slots[car_n])):
+                        slot = self.car_charging_slots[car_n][slot_n]
                         if (slot["start"] < minutes_now) and (slot["start"] < minutes_end_slot) and (slot["end"] > minutes_now):
                             # If the slot is within the current 30 minute period
                             self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n + 1, slot["start"], slot["end"]))
-                            self.car_charging_slots[car_n]["kwh"] = 0
+                            self.car_charging_slots[car_n][slot_n]["kwh"] = 0
             if self.load_last_status == "high":
                 have_printed = False
                 for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):
@@ -73,6 +79,9 @@ class Plan:
                             self.log("Dynamic load adjust is setting load minimum {:.2f}kW at {}".format(load_last_period, self.time_abs_str(minute_absolute)))
                             have_printed = True
                         self.dynamic_load_baseline[minute_absolute] = load_last_period
+            if prev_last_load_status != self.load_last_status:
+                return True
+        return False
 
     def find_price_levels(
         self,
@@ -1109,8 +1118,8 @@ class Plan:
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
                 # Web history
-                if self.components.get_component("web_interface"):
-                    self.components.get_component("web_interface").history_update()
+                if self.components.get_component("web"):
+                    self.components.get_component("web").history_update()
 
         # Destroy pool
         if self.pool:
@@ -3260,18 +3269,6 @@ class Plan:
                     },
                 )
                 self.dashboard_item(
-                    self.prefix + ".battery_power",
-                    state=dp3(self.battery_power / 1000.0),
-                    attributes={
-                        "results": self.filtered_times(predict_battery_power),
-                        "today": self.filtered_today(predict_battery_power),
-                        "friendly_name": "Predicted Battery Power",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kW",
-                        "icon": "mdi:battery",
-                    },
-                )
-                self.dashboard_item(
                     self.prefix + ".battery_cycle",
                     state=dp3(final_battery_cycle),
                     attributes={
@@ -3280,42 +3277,6 @@ class Plan:
                         "friendly_name": "Predicted Battery Cycle",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
-                        "icon": "mdi:battery",
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".pv_power",
-                    state=dp3(self.pv_power / 1000.0),
-                    attributes={
-                        "results": self.filtered_times(predict_pv_power),
-                        "today": self.filtered_today(predict_pv_power),
-                        "friendly_name": "Predicted PV Power",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kW",
-                        "icon": "mdi:battery",
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".grid_power",
-                    state=dp3(self.grid_power / 1000.0),
-                    attributes={
-                        "results": self.filtered_times(predict_grid_power),
-                        "today": self.filtered_today(predict_grid_power),
-                        "friendly_name": "Predicted Grid Power",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kW",
-                        "icon": "mdi:battery",
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".load_power",
-                    state=dp3(self.load_power / 1000.0),
-                    attributes={
-                        "results": self.filtered_times(predict_load_power),
-                        "today": self.filtered_today(predict_load_power),
-                        "friendly_name": "Predicted Load Power",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kW",
                         "icon": "mdi:battery",
                     },
                 )
