@@ -19,6 +19,7 @@ import traceback
 import threading
 import time
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
+from history_cache import HistoryCache
 
 
 class RunThread(threading.Thread):
@@ -97,6 +98,8 @@ class HAInterface:
         self.state_data = {}
         self.slug = None
 
+        # Initialize history cache
+        self.history_cache = HistoryCache()
         print("HA URL", self.ha_url)
         print("HA KEY", self.ha_key)
 
@@ -128,6 +131,10 @@ class HAInterface:
         # API Has started
         self.base.ha_interface = self  # Set pointer back to ourselves as other components require this one
         self.api_started = True
+
+    def configure_history_cache(self, enabled: bool):
+        """Configure the history cache"""
+        self.history_cache.configure(enabled)
 
     async def start(self):
         if self.ha_key:
@@ -442,6 +449,9 @@ class HAInterface:
         Get the history for a sensor from Home Assistant.
 
         :param sensor: The sensor to get the history for.
+        :param now: The current time.
+        :param days: The number of days to look back.
+        :param force_db: Whether to force using the database.
         :return: The history for the sensor.
         """
         if not sensor:
@@ -454,8 +464,14 @@ class HAInterface:
 
         start = now - timedelta(days=days)
         end = now
-        res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
-        return res
+
+        def fetch_data(start, end):
+            self.log(f"Requesting history for {sensor} from Home Assistant from {start} to {end}")
+            res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
+            return res[0] if res and isinstance(res, list) and len(res) > 0 else []
+
+        result = self.history_cache.get_or_fetch(sensor, start, end, fetch_data)
+        return [result] if result else []
 
     async def set_state_external(self, entity_id, state, attributes={}):
         """
