@@ -98,6 +98,8 @@ longer periods of fixed rates but can limit the planning ability in some cases.
 The number of threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading
 if you don't have multiple CPUs available or set it to 'auto' (the default) to use one thread per CPU. It is recommended you don't set this to an odd number of threads.
 
+Requesting history data from Home Assistant can be slow. You can enable **switch.predbat_history_cache_enable** to enable a cache for this data. On first run, the cache will be populated with the history data. Subsequent runs will evict older data and request only new data from Home Assistant, updating the cache. The cache is not persisted to disk; a restart of predbat will cause it to be fully re-populated on the next run.
+
 ## Battery loss options
 
 **input_number.predbat_battery_loss** is an assumed percentage figure for energy lost when charging the battery, the default 0.05 is 5%.
