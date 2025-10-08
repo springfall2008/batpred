@@ -23,7 +23,7 @@ If your electricity supplier is Octopus Energy then the simplest way to provide 
 
 - This method will not work correctly if you have multiple import or export meters.
 - A single Octopus Intelligent GO car charger or car is supported and Predbat will plan your battery charging based on iGo sessions.
-- Saving sessions are also supported, including Predbat auto-enrolling you to them (note you must be joined to the Octopus Octopoints scheme beforehand).
+- Saving sessions are also supported, including Predbat auto-enrolling you to them (note you must be joined to both the Octopus Octopoints and then the Saving Sessions schemes beforehand).
 
 You should first log into your Octopus account and go to the [Accounts](https://octopus.energy/dashboard/new/accounts/) section and copy your Octopus account number e.g. `A-1234567`.
 
@@ -132,7 +132,7 @@ If you are using the Octopus Energy direct method of Predbat directly connecting
 
 Predbat can automatically join you to Octopus saving sessions and plan battery activity for the saving session period to maximise your income.
 
-Note: **You must have signed up to the Octopus Octoplus scheme to benefit from these events**
+Note: **You must have signed up to both the Octopus Octoplus and then the Saving Session schemes to benefit from these events**
 
 For Predbat to automatically manage Octopus saving sessions the following additional configuration item in `apps.yaml` is used.
 Like the electricity rates, this is set in the `apps.yaml` template to a regular expression that should auto-discover the Octopus Energy integration.
