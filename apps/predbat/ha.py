@@ -481,7 +481,6 @@ class HAInterface:
         new_state = {"entity_id": entity_id, "state": state, "attributes": attributes}
         old_value = self.get_state(entity_id)
         old_state = self.state_data.get(entity_id.lower(), None)
-        found = False
 
         # See if the modified entity is in the CONFIG_ITEMS list
         for item in self.base.CONFIG_ITEMS:
@@ -511,13 +510,31 @@ class HAInterface:
                     await self.base.trigger_callback(service_data)
                     return
 
-        if not found:
-            # If its not found then its a sensor and we can set the state directly
-            self.set_state(entity_id, state, attributes)
+        # Call back to Predbat handled entities
+        domain = entity_id.split(".")[0] if "." in entity_id else ""
+        service_data = {"domain": domain}
+        if domain in ["switch", "input_boolean"]:
+            # For toggle switches, check if value is 'on' or 'off'
+            service_data["service"] = "turn_on" if new_value else "turn_off"
+            service_data["service_data"] = {"entity_id": entity_id}
+        elif domain in ["number", "input_number"]:
+            service_data["service"] = "set_value"
+            service_data["service_data"] = {"entity_id": entity_id, "value": new_value}
+        elif domain in ["select", "input_select"]:
+            service_data["service"] = "select_option"
+            service_data["service_data"] = {"entity_id": entity_id, "option": new_value}
+        else:
+            service_data = None
+        if service_data:
+            await self.base.trigger_callback(service_data)
+            return
 
-            # Only trigger on value change or you get too many updates
-            if (old_value is None) or (new_value != old_value):
-                await self.trigger_watch_list(entity_id, attributes, old_state, new_state)
+        # If its not found then its a sensor and we can set the state directly
+        self.set_state(entity_id, state, attributes)
+
+        # Only trigger on value change or you get too many updates
+        if (old_value is None) or (new_value != old_value):
+            await self.base.trigger_watch_list(entity_id, attributes, old_state, new_state)
 
     def set_state(self, entity_id, state, attributes={}):
         """

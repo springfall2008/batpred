@@ -19,7 +19,7 @@ import json
 import shutil
 import html as html_module
 import time
-from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css, get_logfile_js
+from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css, get_logfile_js, get_entity_toggle_js, get_entity_control_css
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
@@ -122,6 +122,7 @@ class WebInterface:
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_get("/entity", self.html_entity)
+        app.router.add_post("/entity", self.html_entity_post)
         app.router.add_post("/config", self.html_config_post)
         app.router.add_get("/dash", self.html_dash)
         app.router.add_post("/dash", self.html_dash_post)
@@ -694,6 +695,10 @@ class WebInterface:
             else:
                 text += config_text
 
+            control_html = self.get_entity_control_html(entity, days)
+            if control_html:
+                text += control_html
+
             text += "<h2>History Chart</h2>\n"
             text += '<div id="chart"></div>'
             now_str = self.base.now_utc.strftime(TIME_FORMAT)
@@ -735,6 +740,127 @@ class WebInterface:
         # Return web response
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_entity_post(self, request):
+        """
+        Handle POST request for entity value updates
+        """
+        try:
+            postdata = await request.post()
+            entity_id = postdata.get("entity_id", "")
+            new_value = postdata.get("value", "")
+            days = postdata.get("days", "7")
+            attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
+
+            if entity_id:
+                # Determine entity type from entity_id domain
+                domain = entity_id.split(".")[0] if "." in entity_id else ""
+
+                # Convert value based on entity type
+                if domain in ["switch", "input_boolean"]:
+                    # For toggle switches, check if value is 'on' or 'off'
+                    new_value = new_value.lower() == "on"
+                elif domain in ["number", "input_number"]:
+                    try:
+                        new_value = float(new_value) if new_value else 0.0
+                    except ValueError:
+                        new_value = 0.0
+                elif domain in ["select", "input_select"]:
+                    # Keep as string for select entities
+                    pass
+
+                # Set the entity state
+                await self.base.ha_interface.set_state_external(entity_id, new_value, attributes=attributes)
+                self.log(f"Entity {entity_id} updated to {new_value} via web interface")
+
+        except Exception as e:
+            self.log(f"Error updating entity value: {e}")
+
+        # Redirect back to entity page with same parameters
+        redirect_url = f"./entity?entity_id={entity_id}&days={days}"
+        raise web.HTTPFound(redirect_url)
+
+    def is_entity_writable(self, entity_id):
+        """
+        Determine if an entity is writable and return its control type
+        Returns: (is_writable, control_type, options)
+        """
+        if not entity_id or "." not in entity_id:
+            return False, None, None
+
+        domain = entity_id.split(".")[0]
+
+        # Check if it's a writable entity type
+        if domain in ["switch", "input_boolean"]:
+            return True, "toggle", None
+        elif domain in ["number", "input_number"]:
+            return True, "number", None
+        elif domain in ["select", "input_select"]:
+            options = self.base.get_state_wrapper(entity_id=entity_id, attribute="options", default=[])
+            return True, "select", options
+
+        return False, None, None
+
+    def get_entity_control_html(self, entity_id, days):
+        """
+        Generate HTML control for writable entities
+        """
+        current_value = self.base.get_state_wrapper(entity_id=entity_id)
+
+        is_writable, control_type, options = self.is_entity_writable(entity_id)
+
+        if not is_writable:
+            return ""
+
+        html = '<div class="entity-edit-container" style="margin-top: 15px; padding: 15px; border: 1px solid var(--border-color, #ddd); border-radius: 5px; background-color: var(--background-secondary, #f9f9f9);">'
+
+        # Add CSS for dark mode support
+        html += get_entity_control_css()
+
+        html += f'<form method="post" action="./entity" style="display: flex; align-items: center; gap: 10px;">'
+        html += f'<input type="hidden" name="entity_id" value="{entity_id}">'
+        html += f'<input type="hidden" name="days" value="{days}">'
+
+        if control_type == "toggle":
+            is_active = str(current_value).lower() in ["true", "on", "1"]
+            toggle_class = "toggle-switch active" if is_active else "toggle-switch"
+
+            html += f'<div style="display: flex; align-items: center; gap: 10px;">'
+            html += f'<button class="{toggle_class}" type="button" onclick="toggleEntitySwitch(this, \'{entity_id}\', {days})"></button>'
+            html += f"<span>Enable/Disable</span>"
+            html += f"</div>"
+
+            # Add JavaScript for toggle functionality
+            html += get_entity_toggle_js()
+
+        elif control_type == "number":
+            min_val = self.base.get_state_wrapper(entity_id=entity_id, attribute="min", default=None)
+            max_val = self.base.get_state_wrapper(entity_id=entity_id, attribute="max", default=None)
+            step = self.base.get_state_wrapper(entity_id=entity_id, attribute="step", default=1)
+            unit = self.base.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
+
+            unit_display = f" {unit}" if unit else ""
+
+            html += f'<input type="number" name="value" value="{current_value}" '
+            if min_val is not None and max_val is not None and step is not None:
+                html += f'min="{min_val}" max="{max_val}" step="{step}" '
+            html += f'style="padding: 8px; border-radius: 4px; border: 1px solid var(--border-color, #ccc); width: 120px; background-color: var(--input-background, #fff); color: var(--text-color, #333);" '
+            if unit_display:
+                html += f'<span style="margin-left: 5px; color: var(--text-secondary, #666);">{unit}</span>'
+            html += '<button type="submit" style="padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update</button>'
+
+        elif control_type == "select" and options:
+            html += f'<select name="value" style="padding: 8px; border-radius: 4px; border: 1px solid var(--border-color, #ccc); min-width: 150px; background-color: var(--input-background, #fff); color: var(--text-color, #333);">'
+            for option in options:
+                selected = "selected" if str(option) == str(current_value) else ""
+                html += f'<option value="{option}" {selected}>{option}</option>'
+            html += "</select>"
+            html += '<button type="submit" style="padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update</button>'
+
+        html += "</form>"
+        html += "</div>"
+
+        return html
 
     def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
         results = {}
@@ -933,11 +1059,15 @@ var options = {
         """
         try:
             logfile = "predbat.log"
+            logfile_1 = "predbat.1.log"
             logdata = ""
 
             if os.path.exists(logfile):
                 with open(logfile, "r") as f:
                     logdata = f.read()
+            if os.path.exists(logfile_1):
+                with open(logfile_1, "r") as f:
+                    logdata = f.read() + "\n" + logdata
 
             # Get query parameters
             args = request.query
@@ -1307,6 +1437,12 @@ var options = {
         text += '<button id="pauseResumeBtn" onclick="toggleUpdates()" style="margin-left: 10px; padding: 4px 8px;">Pause</button>'
         text += "</div>"
 
+        text += '<div class="log-search-container">'
+        text += '<input type="text" id="logSearchInput" class="log-search-input" placeholder="Search log entries..." oninput="filterLogEntries()" />'
+        text += '<button id="clearSearchBtn" class="clear-search-button" onclick="clearLogSearch()">Clear</button>'
+        text += '<div id="searchStatus" class="search-status"></div>'
+        text += "</div>"
+
         text += '<div id="logStatus" class="log-status">Loading log data...</div>'
         text += "<table width=100% id='logTable'>\n"
         text += "<tbody id='logTableBody'>\n"
@@ -1341,6 +1477,7 @@ var options = {
             elif pitem.startswith("input_number"):
                 new_value = float(new_value)
 
+            self.log("Web interface setting {} to {}".format(pitem, new_value))
             await self.base.ha_interface.set_state_external(pitem, new_value)
 
         raise web.HTTPFound("./config")
@@ -2069,17 +2206,21 @@ var options = {
                     text += f"</form></td>\n"
                 elif itemtype == "input_number":
                     input_number_with_save = input_number.replace('onchange="javascript: this.form.submit();"', 'onchange="saveFilterValue(); this.form.submit();"')
-                    text += "<td>{}</td>\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
+                    text += '<td><form style="display: inline;" method="post" action="./config">'
+                    text += "{}\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
+                    text += f"</form></td>\n"
                 elif itemtype == "select":
                     options = item.get("options", [])
                     if value not in options:
                         options.append(value)
-                    text += '<td><select name="{}" id="{}" onchange="saveFilterValue(); this.form.submit();">'.format(useid, useid)
+                    text += f'<td><form style="display: inline;" method="post" action="./config">'
+                    text += '<select name="{}" id="{}" onchange="saveFilterValue(); this.form.submit();">'.format(useid, useid)
                     for option in options:
                         selected = option == value
                         option_label = option if option else "None"
                         text += '<option value="{}" label="{}" {}>{}</option>'.format(option, option_label, "selected" if selected else "", option)
-                    text += "</select></td>\n"
+                    text += "</select>\n"
+                    text += f"</form></td>\n"
                 else:
                     text += "<td>{}</td>\n".format(value)
 
@@ -2506,6 +2647,12 @@ var options = {
         if add_days < 0:
             add_days += 7
         override_time += timedelta(days=add_days)
+
+        # Ensure minutes are either 0 or 30
+        if override_time.minute >= 30:
+            override_time = override_time.replace(minute=30)
+        else:
+            override_time = override_time.replace(minute=0)
         return override_time
 
     async def html_rate_override(self, request):

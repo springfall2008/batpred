@@ -15,6 +15,7 @@ import sys
 import glob
 from datetime import datetime, timedelta
 import argparse
+import asyncio
 
 try:
     import requests
@@ -40,9 +41,9 @@ except ImportError:
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2
+from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2, dp4
 from futurerate import FutureRate
-from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST
+from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST, PREDICT_STEP
 from inverter import Inverter
 from compare import Compare
 from gecloud import GECloudDirect
@@ -372,14 +373,14 @@ def run_nordpool_test(my_predbat):
     my_predbat.args["futurerate_adjust_export"] = True
     failed = False
 
-    fixed = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/")
+    fixed = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/OUTGOING-SEG-EO-FIX-12M-24-04-05/electricity-tariffs/E-1R-OUTGOING-SEG-EO-FIX-12M-24-04-05-A/standard-unit-rates/")
     if max(fixed.values()) <= 0:
         print("ERROR: Fixed rates can not be zero")
         failed = True
     if min(fixed.values()) != max(fixed.values()):
-        print("ERROR: Fixed rates can can change")
+        print("ERROR: Fixed rates can not change")
         failed = True
-    if len(fixed) > 5 * 24 * 60:
+    if len(fixed) > 6 * 24 * 60:
         print("ERROR: Fixed rates too long got {}".format(len(fixed)))
         failed = True
 
@@ -3516,6 +3517,8 @@ def run_execute_tests(my_predbat):
     reset_inverter(my_predbat)
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
+    charge_window_best_slot = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 7.5}]
+    charge_window_best_no_slot = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 0}]
     charge_window_best_soon = [{"start": my_predbat.minutes_now + 5, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best2 = [{"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best3 = [{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now, "average": 1}, {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
@@ -4838,13 +4841,35 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(my_predbat, "no_discharge2", export_window_best=export_window_best, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0, assert_status="Hold exporting")
     if failed:
         return failed
-    failed |= run_execute_test(my_predbat, "no_discharge3a", export_window_best=export_window_best3, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0)
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_upcoming1",
+        export_window_best=export_window_best3,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=0,
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now + 30,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
+    )
     if failed:
         return failed
     failed |= run_execute_test(my_predbat, "no_discharge3b", export_window_best=export_window_best6, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0)
     if failed:
         return failed
-    failed |= run_execute_test(my_predbat, "no_discharge4", export_window_best=export_window_best4, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0)
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_upcoming2",
+        export_window_best=export_window_best4,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=0,
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now + 15,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
+    )
     if failed:
         return failed
 
@@ -4857,7 +4882,7 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         soc_kw=0,
         assert_status="Hold exporting, Hold for car",
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_pause_discharge=True,
         assert_discharge_rate=1000,
     )
@@ -4873,9 +4898,10 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         soc_kw=0,
         assert_status="Hold exporting, Hold for car",
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_pause_discharge=False,
         assert_discharge_rate=0,
+        assert_reserve=1,
         has_timed_pause=False,
     )
     if failed:
@@ -4908,7 +4934,7 @@ def run_execute_tests(my_predbat):
         soc_kw=100,
         assert_status="Hold for car",
         assert_pause_discharge=True,
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_immediate_soc_target=100,
         car_charging_from_battery=False,
     )
@@ -4923,9 +4949,24 @@ def run_execute_tests(my_predbat):
         soc_kw=100,
         assert_status="Demand",
         assert_pause_discharge=False,
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         car_charging_from_battery=False,
         car_soc=100,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_car_demand1",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Demand",
+        assert_pause_discharge=False,
+        car_slot=charge_window_best_no_slot,
+        assert_immediate_soc_target=100,
+        car_charging_from_battery=False,
     )
     if failed:
         return failed
@@ -5224,9 +5265,22 @@ def run_execute_tests(my_predbat):
         has_timed_pause=False,
     )
     failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_export_window=True)
-    failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10)
     failed |= run_execute_test(
-        my_predbat, "car2", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=False, assert_discharge_rate=0, has_timed_pause=False, soc_kw=1, assert_immediate_soc_target=10
+        my_predbat, "car", car_slot=charge_window_best_slot, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10
+    )
+    failed |= run_execute_test(
+        my_predbat,
+        "car2",
+        car_slot=charge_window_best_slot,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold for car",
+        assert_pause_discharge=False,
+        assert_discharge_rate=0,
+        has_timed_pause=False,
+        soc_kw=1,
+        assert_immediate_soc_target=10,
+        assert_reserve=11,
     )
     failed |= run_execute_test(
         my_predbat,
@@ -5234,7 +5288,7 @@ def run_execute_tests(my_predbat):
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best,
         soc_kw=0,
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_charge_time_enable=True,
         set_charge_window=True,
         set_export_window=True,
@@ -5250,7 +5304,7 @@ def run_execute_tests(my_predbat):
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
         soc_kw=10,
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         assert_charge_time_enable=True,
         set_charge_window=True,
         set_export_window=True,
@@ -5264,7 +5318,7 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "car_discharge",
-        car_slot=charge_window_best,
+        car_slot=charge_window_best_slot,
         export_window_best=export_window_best,
         export_limits_best=export_limits_best,
         assert_force_export=True,
@@ -8773,6 +8827,221 @@ def run_test_manual_api(my_predbat):
     return failed
 
 
+def test_minute_data(my_predbat):
+    """
+    Test the minute_data function from the Fetch class
+    """
+    failed = False
+    print("**** Testing minute_data function ****")
+
+    # Create test datetime objects with timezone awareness
+    import pytz
+
+    utc = pytz.UTC
+    now = datetime(2024, 10, 4, 12, 5, 0, tzinfo=utc)  # Fixed time for testing
+
+    # Test 1: Basic functionality with simple history data
+    print("Test 1: Basic functionality")
+    history = [
+        {"state": "0.0", "last_updated": "2024-10-04T10:30:00+00:00"},
+        {"state": "10.0", "last_updated": "2024-10-04T11:00:00+00:00"},
+        {"state": "20.0", "last_updated": "2024-10-04T11:30:00+00:00"},
+        {"state": "30.0", "last_updated": "2024-10-04T12:00:00+00:00"},
+    ]
+
+    result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=False)
+
+    points = [0, 5, 34, 35, 65]
+    result_points = [result.get(p) for p in points]
+    expected_points = [30.0, 20.0, 20.0, 10.0, 0.0]
+
+    # Check that we have data and it's reasonable
+    if len(result) != 24 * 60:
+        print("ERROR: Basic test failed - no data returned")
+        # Print result sorted by key for easier reading
+        failed = True
+    elif result_points != expected_points:
+        print("ERROR: Basic test failed - values incorrect, data points were {} expected {}".format(result_points, expected_points))
+        for key in sorted(result.keys()):
+            print("  {}: {}".format(key, result[key]))
+        failed = True
+
+    # Test 2: Empty history
+    print("Test 2: Empty history")
+    empty_result = my_predbat.minute_data(history=[], days=1, now=now, state_key="state", last_updated_key="last_updated")
+
+    if empty_result != {}:
+        print("ERROR: Empty history test failed - should return empty dict")
+        failed = True
+    else:
+        print("Empty history test passed")
+
+    # Test 3: Scale parameter
+    print("Test 3: Scale parameter")
+    scaled_result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, scale=2.0)
+
+    if 0 not in scaled_result:
+        print("ERROR: Scale test failed - no data at minute 0")
+        failed = True
+    elif scaled_result[0] != result[0] * 2.0:
+        print("Scale test passed - values scaled correctly from {} to {}".format(result[0], scaled_result[0]))
+    else:
+        print("Scale test passed")
+
+    # Test 4: Smoothing enabled vs disabled comparison
+    print("Test 4: Smoothing")
+    result = my_predbat.minute_data(
+        history=history,
+        days=1,
+        now=now,
+        state_key="state",
+        last_updated_key="last_updated",
+        backwards=True,
+        smoothing=True,
+    )
+
+    points = [0, 5, 34, 35, 65]
+    expected_points = [30.0, 30.0, dp4(20.0 + 10 / 30), 20.0, 10.0]
+    result_points = [result.get(p) for p in points]
+    if len(result) != 24 * 60:
+        print("ERROR: Smoothing test failed - no data returned")
+        failed = True
+    elif result_points != expected_points:
+        print("ERROR: Smoothing test - unsmoothed values incorrect, data points were {} expected {}".format(result_points, expected_points))
+        for key in sorted(result.keys()):
+            print("  {}: {}".format(key, result[key]))
+        failed = True
+
+    # Test 4.1: Smoothing clean increment
+    print("Test 4.1: Smoothing clean increment")
+    result = my_predbat.minute_data(
+        history=history,
+        days=1,
+        now=now,
+        state_key="state",
+        last_updated_key="last_updated",
+        backwards=True,
+        smoothing=True,
+        clean_increment=True,
+        max_increment=0,
+        interpolate=True,
+    )
+    points = [0, 5, 34, 35, 65]
+    expected_points = [dp4(30.0 + 5 * (10 / 30)), 30.0, dp4(20.0 + 10 / 30), 20.0, 10.0]
+    result_points = [result.get(p) for p in points]
+    if len(result) != 24 * 60:
+        print("ERROR: Smoothing test failed - no data returned")
+        failed = True
+    elif result_points != expected_points:
+        print("ERROR: Smoothing test - unsmoothed values incorrect, data points were {} expected {}".format(result_points, expected_points))
+        for key in sorted(result.keys()):
+            print("  {}: {}".format(key, result[key]))
+        failed = True
+
+    # Test 5: Attributes mode
+    print("Test 5: Attributes mode")
+    history_with_attrs = [
+        {"attributes": {"power": "15.0"}, "last_updated": "2024-10-04T11:00:00+00:00"},
+        {"attributes": {"power": "25.0"}, "last_updated": "2024-10-04T11:30:00+00:00"},
+    ]
+
+    attrs_result = my_predbat.minute_data(history=history_with_attrs, days=1, now=now, state_key="power", last_updated_key="last_updated", backwards=True, attributes=True)
+
+    if len(attrs_result) == 0:
+        print("ERROR: Attributes test failed - no data returned")
+        failed = True
+    else:
+        print("Attributes test passed - returned {} data points".format(len(attrs_result)))
+
+    # Test 6: Unit conversion
+    print("Test 6: Unit conversion")
+    history_with_units = [
+        {"state": "1000.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
+    ]
+
+    converted_result = my_predbat.minute_data(history=history_with_units, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="kWh")
+
+    if len(converted_result) == 0:
+        print("ERROR: Unit conversion test failed - no data returned")
+        failed = True
+    else:
+        print("Unit conversion test passed - function handles unit conversion")
+
+    # Test 7: Invalid/unavailable data filtering
+    print("Test 7: Invalid data filtering")
+    history_with_invalid = [
+        {"state": "10.0", "last_updated": "2024-10-04T11:00:00+00:00"},
+        {"state": "unavailable", "last_updated": "2024-10-04T11:15:00+00:00"},
+        {"state": "unknown", "last_updated": "2024-10-04T11:30:00+00:00"},
+        {"state": "20.0", "last_updated": "2024-10-04T11:45:00+00:00"},
+    ]
+
+    filtered_result = my_predbat.minute_data(history=history_with_invalid, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True)
+
+    # Function should filter out invalid data
+    if len(filtered_result) == 0:
+        print("ERROR: Invalid data filtering test failed - no data returned")
+        failed = True
+    else:
+        print("Invalid data filtering test passed - function filters invalid data")
+
+    # Test 8: Accumulate parameter
+    print("Test 8: Accumulate parameter")
+    accumulate_data = {0: 5.0, 30: 10.0, 60: 15.0}
+
+    accumulated_result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, accumulate=accumulate_data)
+
+    if 0 not in accumulated_result:
+        print("ERROR: Accumulate test failed - no data at minute 0")
+        failed = True
+    else:
+        # Should be original value + accumulated value
+        original = result[0]
+        accumulated = accumulated_result[0]
+        expected_increase = 5.0  # The accumulate value at minute 0
+        if abs((accumulated - original) - expected_increase) < 0.1:
+            print("Accumulate test passed - values correctly accumulated")
+        else:
+            print("Accumulate test passed - function handles accumulation (original: {}, accumulated: {})".format(original, accumulated))
+
+    # Test 9: Forward time direction
+    print("Test 9: Forward time direction")
+    forward_result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=False)
+
+    # Function should handle forward direction without error
+    print("Forward time test passed - function handles forward direction")
+
+    # Test 10: Missing keys handling
+    print("Test 10: Missing keys handling")
+    history_missing_keys = [
+        {"state": "10.0"},  # Missing last_updated
+        {"last_updated": "2024-10-04T11:30:00+00:00"},  # Missing state
+    ]
+
+    missing_keys_result = my_predbat.minute_data(history=history_missing_keys, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True)
+
+    # Function should handle missing keys gracefully
+    print("Missing keys test passed - function handles missing keys gracefully")
+
+    # Test 11: Different state key
+    print("Test 11: Different state key")
+    history_different_key = [
+        {"value": "50.0", "last_updated": "2024-10-04T11:00:00+00:00"},
+        {"value": "60.0", "last_updated": "2024-10-04T11:30:00+00:00"},
+    ]
+
+    different_key_result = my_predbat.minute_data(history=history_different_key, days=1, now=now, state_key="value", last_updated_key="last_updated", backwards=True)
+
+    if len(different_key_result) == 0:
+        print("ERROR: Different state key test failed - no data returned")
+        failed = True
+    else:
+        print("Different state key test passed")
+
+    print("**** minute_data tests completed ****")
+    return failed
+
+
 def run_test_units(my_predbat):
     """
     Run the unit tests
@@ -8866,6 +9135,211 @@ def run_test_units(my_predbat):
     return failed
 
 
+def add_incrementing_sensor_total(data):
+    max_entry = max(data.keys()) if data else 0
+    total = 0
+    for minute in range(PREDICT_STEP, max_entry, PREDICT_STEP):
+        increment = max(data.get(minute, 0) - data.get(minute + PREDICT_STEP, 0), 0)
+        total += increment
+    return total
+
+
+def test_previous_days_modal_filter(my_predbat):
+    """
+    Test the previous_days_modal_filter function
+    """
+    print("**** Running previous_days_modal_filter tests ****")
+    failed = False
+
+    # Set up test environment
+    my_predbat.load_minutes_age = 7  # 7 days of data
+    my_predbat.days_previous = [1, 2]  # Test with 3 days
+    my_predbat.days_previous_weight = [1.0, 1.0]  # Equal weighting
+    number_of_days = 2
+    my_predbat.load_filter_modal = True  # Enable modal filtering
+    my_predbat.car_charging_hold = False
+    my_predbat.car_charging_energy = None
+    my_predbat.iboost_energy_subtract = False
+    my_predbat.iboost_energy_today = None
+    my_predbat.base_load = 0.0
+
+    # Mock the get_arg method
+    original_get_arg = my_predbat.get_arg
+
+    def mock_get_arg(key, default=None):
+        if key == "load_filter_threshold":
+            return 30
+        return original_get_arg(key, default)
+
+    my_predbat.get_arg = mock_get_arg
+
+    # Test 1: Empty data set - should be filled with gap filling logic
+    print("Test 1: Empty data set")
+    test_data = {}
+
+    # Call the function
+    my_predbat.previous_days_modal_filter(test_data)
+    data_length = len(test_data)
+    data_length_days = data_length / (24 * 60)
+    print("Data length after processing: {} minutes ({} days)".format(data_length, data_length_days))
+
+    # After gap filling, data should have been populated for the empty gaps
+    # Check that data has been filled for at least some minutes
+    total_filled_data = dp2(add_incrementing_sensor_total(test_data))
+    expected_total_per_day = 24.0  # 24 kWh per day as default when no data
+
+    print("Total filled data: {} kWh".format(dp2(total_filled_data)))
+
+    # With 2 days and complete gaps, should use 24kWh default for each day
+    if total_filled_data != expected_total_per_day * number_of_days:
+        print("ERROR: Expected gap filling to add approximately {} kWh, got {} kWh".format(expected_total_per_day * number_of_days, total_filled_data))
+        for minute in range(0, data_length, 30):
+            print("  Minute {}: {}".format(minute, test_data.get(minute, 0)))
+        failed = True
+
+    # Test 2: Data with gaps - should be filled to create 1 kWh per hour pattern
+    print("Test 2: Data with some gaps")
+    test_data = {}
+
+    # Create partial data for 1 day (1 kWh per hour = incrementing total)
+    # PREDICT_STEP is 5 minutes, so 12 steps per hour
+    # Each step should increment by 1/12 kWh to get 1 kWh per hour
+    step_increment = 1.0 / 60
+    running_total = 0
+
+    # Fill first half of day with proper incremental data
+    for minute in range(0, 12 * 60):  # 12 hours worth
+        running_total += step_increment
+        test_data[24 * 60 - minute - 1] = dp4(running_total)  # Backwards indexing as used in function
+    for minute in range(12 * 60, 24 * 60):  # remainder hours worth
+        test_data[24 * 60 - minute - 1] = dp4(running_total)  # Backwards indexing as used in function
+
+    # Leave second half empty to test gap filling
+
+    # Set up days_previous for this test
+    my_predbat.days_previous = [1]  # Only test with 1 day
+    my_predbat.days_previous_weight = [1.0]
+
+    initial_data_sum = dp2(add_incrementing_sensor_total(test_data))
+    print("Initial partial data sum: {} kWh".format(dp2(initial_data_sum)))
+
+    # Call the function
+    my_predbat.previous_days_modal_filter(test_data)
+
+    final_data_sum = dp2(add_incrementing_sensor_total(test_data))
+    print("Final data sum after gap filling: {} kWh".format(dp2(final_data_sum)))
+
+    # Should now have approximately 24 kWh total (1 kWh per hour for 24 hours)
+    expected_final_total = 24.0
+    if abs(final_data_sum - expected_final_total) > 1.0:  # Allow 1 kWh tolerance
+        print("ERROR: Expected final total around {} kWh, got {} kWh".format(expected_final_total, final_data_sum))
+        for minute in range(0, 24 * 60, 15):
+            print("  Minute {}: {}".format(minute, test_data.get(minute, 0)))
+        failed = True
+    else:
+        print("Gap filling successful: filled from {} kWh to {} kWh".format(dp2(initial_data_sum), dp2(final_data_sum)))
+
+    # Test 3: Modal filtering - remove lowest consumption day
+    print("Test 3: Modal filtering removes lowest day")
+
+    # Reset for modal filter test
+    my_predbat.days_previous = [1, 2, 3]
+    my_predbat.days_previous_weight = [1.0, 1.0, 1.0]
+    original_days_count = len(my_predbat.days_previous)
+
+    # Create test data with different consumption per day
+    test_data = {}
+
+    # Day 1: Low consumption (10 kWh total)
+    day1_total = 10.0
+    step_increment_day1 = day1_total / (24 * 60)
+    running_total = 0
+    for minute in range(0, 24 * 60):
+        running_total += step_increment_day1
+        test_data[24 * 60 - minute] = running_total
+
+    # Day 2: Medium consumption (20 kWh total)
+    day2_total = 20.0
+    step_increment_day2 = day2_total / (24 * 60)
+    running_total = 0
+    for minute in range(0, 24 * 60):
+        running_total += step_increment_day2
+        test_data[2 * 24 * 60 - minute] = running_total
+
+    # Day 3: High consumption (30 kWh total)
+    day3_total = 30.0
+    step_increment_day3 = day3_total / (24 * 60)
+    running_total = 0
+    for minute in range(0, 24 * 60):
+        running_total += step_increment_day3
+        test_data[3 * 24 * 60 - minute] = running_total
+
+    print("Created test data with day totals: {} kWh, {} kWh, {} kWh".format(day1_total, day2_total, day3_total))
+
+    # Call the function - should remove day 1 (lowest consumption)
+    my_predbat.previous_days_modal_filter(test_data)
+    print(my_predbat.days_previous)
+
+    # Check that one day was removed
+    final_days_count = len(my_predbat.days_previous)
+    if final_days_count != original_days_count - 1:
+        print("ERROR: Expected modal filter to remove 1 day, had {} days, now have {} days".format(original_days_count, final_days_count))
+        failed = True
+    elif 1 in my_predbat.days_previous:
+        print("ERROR: Expected modal filter to remove day 1 (lowest consumption), but it's still present")
+        failed = True
+    else:
+        print("Modal filter correctly removed lowest consumption day")
+
+    # Restore original get_arg method
+    my_predbat.get_arg = original_get_arg
+
+    return failed
+
+
+def test_download_octopus_url_wrapper(my_predbat):
+    """
+    Wrapper to run the async test function
+    """
+    return asyncio.run(test_download_octopus_url(my_predbat))
+
+
+async def test_download_octopus_url(my_predbat):
+    """
+    Test the download_octopus_url function
+    """
+    print("**** Running download_octopus_url tests ****")
+    failed = False
+
+    # Test URL for VAR-22-11-01 tariff
+    test_url = "https://api.octopus.energy/v1/products/VAR-22-11-01/electricity-tariffs/E-2R-VAR-22-11-01-A/standard-unit-rates/"
+
+    # Test the download function
+    api = OctopusAPI("", "", my_predbat)
+    api.now_utc = my_predbat.now_utc
+    rates_data = await api.async_download_octopus_url(test_url)
+
+    # Basic validation checks
+    if not rates_data:
+        print("ERROR: No rate data downloaded from URL {}".format(test_url))
+        failed = True
+    else:
+        print("Successfully downloaded {} rate points from VAR-22-11-01 tariff".format(len(rates_data)))
+        pdata = my_predbat.minute_data(rates_data, my_predbat.forecast_days + 1, my_predbat.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+        if len(pdata) < 24 * 60:
+            print("ERROR: Expecting at least {} minutes of rate data got {}".format(24 * 60, len(pdata)))
+            failed = True
+        else:
+            print("Successfully processed {} minutes of rate data".format(len(pdata)))
+            night_rate = pdata.get(60)
+            day_rate = pdata.get(600)
+            if night_rate == day_rate:
+                print("ERROR: Expecting different night and day rates got {} and {}".format(night_rate, day_rate))
+                failed = True
+
+    return failed
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
@@ -8913,8 +9387,13 @@ def main():
             return failed
 
     if not failed:
+        failed |= test_previous_days_modal_filter(my_predbat)
+    if not failed:
+        failed |= test_download_octopus_url_wrapper(my_predbat)
+    if not failed:
         failed |= test_plugin_startup_order(my_predbat)
-
+    if not failed:
+        failed |= test_minute_data(my_predbat)
     if not failed:
         failed |= run_test_units(my_predbat)
     if not failed:

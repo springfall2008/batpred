@@ -48,6 +48,7 @@ darkred
 darray
 dasharray
 datain
+datalog
 datap
 datapoints
 datas
@@ -219,6 +220,7 @@ pytz
 rarr
 recp
 Redownload
+regname
 remotecontrol
 resetmidnight
 resultid

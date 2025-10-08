@@ -64,6 +64,17 @@ class Energidataservice:
         max_minute = forecast_days * 24 * 60
         interval_minutes = 15  # new feed granularity
 
+        # Find gap between two entries in minutes
+        if len(data) < 2:
+            pass
+        else:
+            t0 = self._parse_iso(data[0].get(from_key))
+            t1 = self._parse_iso(data[1].get(from_key))
+            if t0 and t1:
+                interval_minutes = int((t1 - t0).total_seconds() / 60)
+                if interval_minutes <= 15 or interval_minutes > 60:
+                    interval_minutes = 15
+
         for entry in data:
             start_time_str = entry.get(from_key)
             rate = entry.get(rate_key, 0) * scale

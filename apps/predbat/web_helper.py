@@ -11,6 +11,80 @@
 # Helper functions for web pages
 
 
+def get_entity_control_css():
+    # Add CSS for dark mode support
+    html = """
+    <style>
+    .entity-edit-container {
+        --border-color: #ddd;
+        --background-secondary: #f9f9f9;
+        --text-color: #333;
+        --text-secondary: #666;
+        --input-background: #fff;
+    }
+
+    body.dark-mode .entity-edit-container {
+        --border-color: #555;
+        --background-secondary: #2d2d2d;
+        --text-color: #e0e0e0;
+        --text-secondary: #bbb;
+        --input-background: #3d3d3d;
+        color: var(--text-color);
+    }
+
+    body.dark-mode .entity-edit-container input[type="number"],
+    body.dark-mode .entity-edit-container select {
+        background-color: var(--input-background) !important;
+        border-color: var(--border-color) !important;
+        color: var(--text-color) !important;
+    }
+
+    body.dark-mode .entity-edit-container span {
+        color: var(--text-color) !important;
+    }
+    </style>
+    """
+    return html
+
+
+def get_entity_toggle_js():
+    """
+    JavaScript for entity toggle buttons
+    """
+    html = f"""
+    <script>
+    function toggleEntitySwitch(button, entityId, days) {{
+        // Toggle the visual state
+        button.classList.toggle('active');
+
+        // Determine the new value
+        const newValue = button.classList.contains('active') ? 'on' : 'off';
+
+        // Create form data
+        const formData = new FormData();
+        formData.append('entity_id', entityId);
+        formData.append('days', days);
+        formData.append('value', newValue);
+
+        // Submit the form
+        fetch('./entity', {{
+            method: 'POST',
+            body: formData
+        }}).then(response => {{
+            if (response.redirected) {{
+                window.location.href = response.url;
+            }}
+        }}).catch(error => {{
+            console.error('Error:', error);
+            // Revert the toggle on error
+            button.classList.toggle('active');
+        }});
+    }}
+    </script>
+    """
+    return html
+
+
 def get_apps_js(all_states_json):
     text = (
         f"""
@@ -1804,6 +1878,104 @@ body.dark-mode .log-menu a.active {
     background-color: #4CAF50;
     color: white;
 }
+
+/* Log search container styles */
+.log-search-container {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    padding: 8px;
+    background-color: #f8f9fa;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    gap: 8px;
+}
+
+.log-search-input {
+    flex-grow: 1;
+    padding: 6px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+    min-width: 200px;
+}
+
+.log-search-input:focus {
+    outline: none;
+    border-color: #4CAF50;
+    box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+}
+
+.clear-search-button {
+    padding: 6px 12px;
+    background-color: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+.clear-search-button:hover {
+    background-color: #5a6268;
+}
+
+.search-status {
+    font-size: 12px;
+    color: #6c757d;
+    white-space: nowrap;
+}
+
+/* Dark mode search styles */
+body.dark-mode .log-search-container {
+    background-color: #2d3748;
+    border-color: #4a5568;
+}
+
+body.dark-mode .log-search-input {
+    background-color: #4a5568;
+    border-color: #718096;
+    color: #fff;
+}
+
+body.dark-mode .log-search-input:focus {
+    border-color: #4CAF50;
+}
+
+body.dark-mode .log-search-input::placeholder {
+    color: #a0aec0;
+}
+
+body.dark-mode .clear-search-button {
+    background-color: #4a5568;
+}
+
+body.dark-mode .clear-search-button:hover {
+    background-color: #2d3748;
+}
+
+body.dark-mode .search-status {
+    color: #a0aec0;
+}
+
+/* Hide filtered log entries */
+.log-entry-hidden {
+    display: none !important;
+}
+
+/* Highlight matching text */
+mark.search-highlight {
+    background-color: #ffeb3b;
+    font-weight: bold;
+    padding: 0;
+    border-radius: 2px;
+}
+
+body.dark-mode mark.search-highlight {
+    background-color: #ffa000;
+    color: #000;
+}
 </style>
 """
 
@@ -2235,6 +2407,10 @@ def get_logfile_js(filter_type):
             const shouldAutoScroll = autoScroll ? autoScroll.checked : false;
             let newEntriesAdded = 0;
 
+            // Get current search filter to apply immediately
+            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase();
+            const hasSearchFilter = searchTerm.trim() !== '';
+
             // Insert new entries at the top (newest first)
             lines.forEach(logLine => {{
                 if (logLine.line_number > lastLineNumber) {{
@@ -2254,6 +2430,18 @@ def get_logfile_js(filter_type):
 
                     row.innerHTML = `<td>${{logLine.line_number}}</td><td nowrap><font color="${{color}}">${{timestamp}}</font> ${{message}}</td>`;
 
+                    // Apply search filter immediately if one is active
+                    if (hasSearchFilter) {{
+                        const rowText = row.textContent.toLowerCase();
+                        if (rowText.includes(searchTerm)) {{
+                            // Entry matches filter - highlight and show it
+                            highlightTextInElement(row, searchTerm);
+                        }} else {{
+                            // Entry doesn't match filter - hide it immediately
+                            row.classList.add('log-entry-hidden');
+                        }}
+                    }}
+
                     // Insert at the top of the table body
                     tbody.insertBefore(row, tbody.firstChild);
                     newEntriesAdded++;
@@ -2261,6 +2449,15 @@ def get_logfile_js(filter_type):
                     lastLineNumber = Math.max(lastLineNumber, logLine.line_number);
                 }}
             }});
+
+            // Update search status if we have a filter active
+            if (hasSearchFilter && newEntriesAdded > 0) {{
+                const rows = document.querySelectorAll('#logTableBody tr[data-line]');
+                const statusDiv = document.getElementById('searchStatus');
+                const visibleCount = Array.from(rows).filter(row => !row.classList.contains('log-entry-hidden')).length;
+                const totalCount = rows.length;
+                statusDiv.textContent = `Showing ${{visibleCount}} of ${{totalCount}} entries`;
+            }}
 
             // Auto-scroll to top for new entries (since newest are at top)
             if (newEntriesAdded > 0 && shouldAutoScroll) {{
@@ -2281,6 +2478,123 @@ def get_logfile_js(filter_type):
                 top: document.body.scrollHeight,
                 behavior: 'smooth'
             }});
+        }}
+
+        // Search functionality
+        function filterLogEntries() {{
+            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase();
+            const rows = document.querySelectorAll('#logTableBody tr[data-line]');
+            const statusDiv = document.getElementById('searchStatus');
+
+            let visibleCount = 0;
+            let totalCount = rows.length;
+
+            // If search is empty, show all entries
+            if (searchTerm.trim() === '') {{
+                rows.forEach(row => {{
+                    row.classList.remove('log-entry-hidden');
+                    // Remove any existing highlights
+                    clearHighlights(row);
+                    visibleCount++;
+                }});
+                statusDiv.textContent = '';
+                return;
+            }}
+
+            // Filter and highlight entries
+            rows.forEach(row => {{
+                const rowText = row.textContent.toLowerCase();
+
+                if (rowText.includes(searchTerm)) {{
+                    row.classList.remove('log-entry-hidden');
+                    visibleCount++;
+
+                    // Clear existing highlights first
+                    clearHighlights(row);
+
+                    // Apply new highlights
+                    highlightTextInElement(row, searchTerm);
+                }} else {{
+                    row.classList.add('log-entry-hidden');
+                    // Clear highlights from hidden rows
+                    clearHighlights(row);
+                }}
+            }});
+
+            // Update status
+            statusDiv.textContent = `Showing ${{visibleCount}} of ${{totalCount}} entries`;
+        }}
+
+        // Clear all highlights in an element
+        function clearHighlights(element) {{
+            const highlightedElements = element.querySelectorAll('.search-highlight');
+            highlightedElements.forEach(highlighted => {{
+                const parent = highlighted.parentNode;
+                parent.replaceChild(document.createTextNode(highlighted.textContent), highlighted);
+                parent.normalize(); // Merge adjacent text nodes
+            }});
+        }}
+
+        // Highlight text in an element without corrupting HTML
+        function highlightTextInElement(element, searchTerm) {{
+            const walker = document.createTreeWalker(
+                element,
+                NodeFilter.SHOW_TEXT,
+                null,
+                false
+            );
+
+            const textNodes = [];
+            let node;
+            while (node = walker.nextNode()) {{
+                textNodes.push(node);
+            }}
+
+            textNodes.forEach(textNode => {{
+                const text = textNode.textContent;
+                const lowerText = text.toLowerCase();
+                const lowerSearchTerm = searchTerm.toLowerCase();
+
+                if (lowerText.includes(lowerSearchTerm)) {{
+                    const parent = textNode.parentNode;
+                    const fragment = document.createDocumentFragment();
+
+                    let lastIndex = 0;
+                    let index = lowerText.indexOf(lowerSearchTerm, 0);
+
+                    while (index !== -1) {{
+                        // Add text before the match
+                        if (index > lastIndex) {{
+                            fragment.appendChild(document.createTextNode(text.substring(lastIndex, index)));
+                        }}
+
+                        // Add highlighted match
+                        const mark = document.createElement('mark');
+                        mark.className = 'search-highlight';
+                        mark.textContent = text.substring(index, index + searchTerm.length);
+                        fragment.appendChild(mark);
+
+                        lastIndex = index + searchTerm.length;
+                        index = lowerText.indexOf(lowerSearchTerm, lastIndex);
+                    }}
+
+                    // Add remaining text
+                    if (lastIndex < text.length) {{
+                        fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
+                    }}
+
+                    parent.replaceChild(fragment, textNode);
+                }}
+            }});
+        }}        // Clear search function
+        function clearLogSearch() {{
+            document.getElementById('logSearchInput').value = '';
+            filterLogEntries();
+        }}
+
+        // Escape special regex characters
+        function escapeRegExp(string) {{
+            return string.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
         }}
 
         // Fetch new log entries

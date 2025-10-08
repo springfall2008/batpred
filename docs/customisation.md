@@ -144,6 +144,12 @@ impact the real calculated costs and is only used for plan selection. Values of 
 
 ## Scaling and weight options
 
+**switch.predbat_metric_dynamic_load_adjust** is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
+If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current 30-minute period, this preventing
+and type of forced export in the plan.
+If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this 30-minute period
+thus allowing the plan to include potential export.
+
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example, a value of 0.95 would be 95% and indicate charging at 5% slower than reported. For GE inverters the charge rate reports the max
 AC rate and thus needs to be reduced by inverter losses.

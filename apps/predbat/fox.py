@@ -26,6 +26,7 @@ OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:
 FOX_DOMAIN = "https://www.foxesscloud.com"
 FOX_LANG = "en"
 TIMEOUT = 60
+FOX_RETRIES = 10
 FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
 OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 
@@ -130,7 +131,6 @@ class FoxAPI:
             await asyncio.sleep(1)
             count_seconds += 1
 
-        await self.client.close()
         print("Fox API: Stopped")
 
     async def stop(self):
@@ -737,7 +737,7 @@ class FoxAPI:
         Retry wrapper
         """
         retries = 0
-        while retries < 5:
+        while retries < FOX_RETRIES:
             result = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
                 return result
@@ -780,7 +780,7 @@ class FoxAPI:
             msg = data.get("msg", "")
             if errno != 0:
                 self.failures_total += 1
-                if errno == 40400:
+                if errno in [40400, 41200, 41203, 41935]:
                     # Rate limiting so wait up to 10 seconds
                     self.log("Fox: Rate limiting detected, waiting...")
                     await asyncio.sleep(random.random() * 10 + 1)
@@ -1071,6 +1071,7 @@ class FoxAPI:
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
                 minSocOnGrid = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
 
+                """
                 start_minutes = start_hour * 60 + start_minute
                 end_minutes = end_hour * 60 + end_minute
                 minutes_now = datetime.now().hour * 60 + datetime.now().minute
@@ -1079,6 +1080,7 @@ class FoxAPI:
                     start_minutes = minutes_now + 1
                     start_hour = start_minutes // 60
                     start_minute = start_minutes % 60
+                """
 
                 if direction == "charge":
                     new_schedule.append(
@@ -1144,7 +1146,7 @@ class FoxAPI:
         self.base.args["load_power"] = [f"sensor.predbat_fox_{device}_loadspower" for device in batteries]
         self.base.args["soc_percent"] = [f"sensor.predbat_fox_{device}_soc" for device in batteries]
         self.base.args["soc_max"] = [f"sensor.predbat_fox_{device}_battery_capacity" for device in batteries]
-        self.base.args["reserve"] = [f"sensor.predbat_fox_{device}_battery_minsocongrid" for device in batteries]
+        self.base.args["reserve"] = [f"number.predbat_fox_{device}_setting_minsocongrid" for device in batteries]
         self.base.args["battery_min_soc"] = [f"sensor.predbat_fox_{device}_battery_reserve_min" for device in batteries]
         self.base.args["charge_start_time"] = [f"select.predbat_fox_{device}_battery_schedule_charge_start_time" for device in batteries]
         self.base.args["charge_end_time"] = [f"select.predbat_fox_{device}_battery_schedule_charge_end_time" for device in batteries]
