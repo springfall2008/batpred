@@ -10,15 +10,17 @@
 #
 # Helper functions for web pages
 
+
 def get_entity_js(entity):
-    text = """
+    text = (
+        """
         <script>
         // Entity data structure
         let allEntities = [];
         let filteredEntities = [];
         let selectedIndex = -1;
         let isDropdownVisible = false;
-        
+
         // Initialize entity data
 
         document.addEventListener('DOMContentLoaded', function() {
@@ -33,9 +35,11 @@ def get_entity_js(entity):
                     throw new Error('Failed to load entities');
                 }
                 allEntities = await response.json();
-                                
+
                 // Set initial value if entity is selected
-                const currentEntity = '""" + (entity.replace("'", "\\'").replace('"', '\\"') if entity else "") + """';
+                const currentEntity = '"""
+        + (entity.replace("'", "\\'").replace('"', '\\"') if entity else "")
+        + """';
                 if (currentEntity) {
                     const entityInput = document.getElementById('entitySearchInput');
                     const selectedEntity = allEntities.find(e => e.id === currentEntity);
@@ -43,7 +47,7 @@ def get_entity_js(entity):
                         entityInput.value = selectedEntity.id;
                     }
                 }
-                
+
                 // Set up event listeners after data is loaded
                 setupEventListeners();
             } catch (error) {
@@ -56,14 +60,14 @@ def get_entity_js(entity):
         function setupEventListeners() {
             const entityInput = document.getElementById('entitySearchInput');
             const clearButton = document.getElementById('clearEntitySearch');
-            
+
             if (entityInput) {
                 entityInput.addEventListener('input', filterEntityOptions);
                 entityInput.addEventListener('keydown', handleEntityKeyDown);
                 entityInput.addEventListener('focus', showAllEntities);
                 entityInput.addEventListener('click', showAllEntities);
             }
-            
+
             if (clearButton) {
                 clearButton.addEventListener('click', function() {
                     entityInput.value = '';
@@ -72,7 +76,7 @@ def get_entity_js(entity):
                     entityInput.focus();
                 });
             }
-            
+
             // Set up click outside handler
             document.addEventListener('click', function(event) {
                 const container = document.querySelector('.entity-search-container');
@@ -81,26 +85,26 @@ def get_entity_js(entity):
                 }
             });
         }
-        
+
         function filterEntityOptions() {
             const input = document.getElementById('entitySearchInput');
             const dropdown = document.getElementById('entityDropdown');
             const searchTerm = input.value.toLowerCase();
-            
+
             // Show all entities if no search term, or filter based on search term
             if (searchTerm.length === 0) {
                 filteredEntities = [...allEntities]; // Show all entities
             } else {
                 // Filter entities
-                filteredEntities = allEntities.filter(entity => 
-                    entity.name.toLowerCase().includes(searchTerm) || 
+                filteredEntities = allEntities.filter(entity =>
+                    entity.name.toLowerCase().includes(searchTerm) ||
                     entity.id.toLowerCase().includes(searchTerm)
                 );
             }
-            
+
             renderEntityDropdown();
         }
-        
+
         function showAllEntities() {
             const input = document.getElementById('entitySearchInput');
             // If input is empty or contains a selection, show all entities
@@ -109,10 +113,10 @@ def get_entity_js(entity):
                 renderEntityDropdown();
             }
         }
-        
+
         function renderEntityDropdown() {
             const dropdown = document.getElementById('entityDropdown');
-            
+
             // Group filtered entities
             const groups = {};
             filteredEntities.forEach(entity => {
@@ -121,15 +125,15 @@ def get_entity_js(entity):
                 }
                 groups[entity.group].push(entity);
             });
-            
+
             // Detect if we're in dark mode by checking body class or computed styles
-            const isDarkMode = document.body.classList.contains('dark-mode') || 
+            const isDarkMode = document.body.classList.contains('dark-mode') ||
                               getComputedStyle(document.body).backgroundColor.includes('rgb(51, 51, 51)') ||
                               getComputedStyle(document.body).color.includes('rgb(255, 255, 255)');
-            
+
             // Render dropdown
             let html = '';
-            
+
             Object.keys(groups).forEach(groupName => {
                 html += '<div class="entity-group-header">' + groupName + '</div>';
                 groups[groupName].forEach((entity, index) => {
@@ -142,46 +146,46 @@ def get_entity_js(entity):
                     html += '</div>';
                 });
             });
-            
+
             if (html === '' || filteredEntities.length === 0) {
                 const textColor = isDarkMode ? '#ffffff' : '#333333';
                 html = '<div class="entity-option" style="color: ' + textColor + ' !important;">No entities found</div>';
             }
-            
+
             dropdown.innerHTML = html;
             dropdown.style.display = 'block';
             isDropdownVisible = true;
             selectedIndex = -1;
         }
-        
+
         function selectEntity(entityId) {
             const entity = allEntities.find(e => e.id === entityId);
             if (entity) {
                 const input = document.getElementById('entitySearchInput');
                 const hiddenInput = document.getElementById('selectedEntityId');
-                
+
                 input.value = entity.id;
                 hiddenInput.value = entity.id;
-                
+
                 hideEntityDropdown();
-                
+
                 // Submit the form
                 document.getElementById('entitySelectForm').submit();
             }
         }
-        
+
         function hideEntityDropdown() {
             const dropdown = document.getElementById('entityDropdown');
             dropdown.style.display = 'none';
             isDropdownVisible = false;
             selectedIndex = -1;
         }
-        
+
         function handleEntityKeyDown(event) {
             if (!isDropdownVisible) return;
-            
+
             const options = document.querySelectorAll('.entity-option[data-index]');
-            
+
             if (event.key === 'ArrowDown') {
                 event.preventDefault();
                 selectedIndex = Math.min(selectedIndex + 1, options.length - 1);
@@ -204,19 +208,21 @@ def get_entity_js(entity):
                 hideEntityDropdown();
             }
         }
-        
+
         function updateSelection(options) {
             options.forEach((option, index) => {
                 option.classList.toggle('selected', index === selectedIndex);
             });
-            
+
             if (selectedIndex >= 0 && options[selectedIndex]) {
                 options[selectedIndex].scrollIntoView({ block: 'nearest' });
             }
         }
         </script>
     """
+    )
     return text
+
 
 def get_entity_css():
     html = """
@@ -325,6 +331,7 @@ def get_entity_css():
         </style>
 """
     return html
+
 
 def get_entity_control_css():
     # Add CSS for dark mode support
