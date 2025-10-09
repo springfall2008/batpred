@@ -637,10 +637,7 @@ class WebInterface:
     async def html_api_get_entities(self, request):
         """
         API endpoint to get entity list as JSON
-        """
-        import json
-        from aiohttp import web
-        
+        """        
         try:
             entity_list = self.get_entity_list_data()
             return web.json_response(entity_list)
