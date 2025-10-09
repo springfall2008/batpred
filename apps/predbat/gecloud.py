@@ -658,7 +658,8 @@ class GECloudDirect:
         batteries_real = devices["battery"]
         num_inverters = len(batteries)
 
-        if devices["gateway"]:
+        if not devices["ems"] and devices["gateway"] and len(batteries) > 1:
+            # Only use gateway as main control if we have multiple batteries
             num_inverters = 1
             batteries = [devices["gateway"]]
 
@@ -792,9 +793,9 @@ class GECloudDirect:
                 device_list.append(ems_device)
 
         gateway_device = None
-        if devices_dict["gateway"]:
+        if not ems_device and devices_dict["gateway"] and len(device_list) > 1:
             gateway_device = devices_dict["gateway"]
-            self.log("GECloud: Found Gateway device {}, using only this device".format(gateway_device))
+            self.log("GECloud: Found Gateway device {} and multiple batteries, using only this device".format(gateway_device))
             device_list = [gateway_device]
 
         evc_device_list = []
