@@ -1272,10 +1272,26 @@ var options = {
             in_override = False
             cell_bg_color = "#FFFFFF"
             override_class = ""
-            if minutes_from_midnight in manual_all_times:
+            if minutes_from_midnight in manual_charge_times:
                 in_override = True
-                cell_bg_color = "#FFC0CB"  # Pink background for cells with active overrides
-                override_class = "override-active"
+                cell_bg_color = "#3AEE85"  # Matches auto charging green
+                override_class = "override-charge"
+            elif minutes_from_midnight in manual_export_times:
+                in_override = True
+                cell_bg_color = "#FFFF00"  # Matches export yellow
+                override_class = "override-export"
+            elif minutes_from_midnight in manual_demand_times:
+                in_override = True
+                cell_bg_color = "#F18261"  # Matches high-cost demand red
+                override_class = "override-demand"
+            elif minutes_from_midnight in manual_freeze_charge_times:
+                in_override = True
+                cell_bg_color = "#C0C0C0"  # Matches freeze charging grey
+                override_class = "override-freeze-charge"
+            elif minutes_from_midnight in manual_freeze_export_times:
+                in_override = True
+                cell_bg_color = "#AAAAAA"  # Matches freeze exporting dark grey
+                override_class = "override-freeze-export"
 
             # Create clickable cell and dropdown HTML
             button_html = f"""<td bgcolor={cell_bg_color} onclick="toggleForceDropdown('{dropdown_id}')" class="clickable-time-cell {override_class}">
