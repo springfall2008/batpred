@@ -787,7 +787,7 @@ class Fetch:
                         last_sample_minute = minute
                         break
                 last_but_one_sample_minute = last_sample_minute
-                for minute in range(last_sample_minute + 1, 60):
+                for minute in range(last_sample_minute + 5, 60):
                     if minute in mdata and (mdata[minute] != mdata[last_sample_minute]):
                         last_but_one_sample_minute = minute
                         break
