@@ -9138,7 +9138,7 @@ def run_test_units(my_predbat):
 def add_incrementing_sensor_total(data):
     max_entry = max(data.keys()) if data else 0
     total = 0
-    for minute in range(PREDICT_STEP, max_entry, PREDICT_STEP):
+    for minute in range(0, max_entry, PREDICT_STEP):
         increment = max(data.get(minute, 0) - data.get(minute + PREDICT_STEP, 0), 0)
         total += increment
     return total
@@ -9179,7 +9179,7 @@ def test_previous_days_modal_filter(my_predbat):
 
     # Call the function
     my_predbat.previous_days_modal_filter(test_data)
-    data_length = len(test_data)
+    data_length = max(test_data.keys()) if test_data else 0
     data_length_days = data_length / (24 * 60)
     print("Data length after processing: {} minutes ({} days)".format(data_length, data_length_days))
 
@@ -9231,6 +9231,37 @@ def test_previous_days_modal_filter(my_predbat):
 
     # Should now have approximately 24 kWh total (1 kWh per hour for 24 hours)
     expected_final_total = 24.0
+    if final_data_sum != expected_final_total:
+        print("ERROR: Expected final total around {} kWh, got {} kWh".format(expected_final_total, final_data_sum))
+        for minute in range(0, 24 * 60, 15):
+            print("  Minute {}: {}".format(minute, test_data.get(minute, 0)))
+        failed = True
+    else:
+        print("Gap filling successful: filled from {} kWh to {} kWh".format(dp2(initial_data_sum), dp2(final_data_sum)))
+
+    # Test 2.1 alternate gaps in one hour intervals
+    print("Test 2.1: Data with some gaps")
+    test_data = {}
+
+    running_total = 0
+    step_increment = 1.0 / 60
+    for minute in range(0, 24 * 60):
+        hour = int(minute / 60)
+        if hour % 2 == 0:
+            running_total += step_increment  # Increment only in alternate hours
+        test_data[24 * 60 - minute - 1] = dp4(running_total)  # Backwards indexing as used in function
+
+    initial_data_sum = dp2(add_incrementing_sensor_total(test_data))
+    print("Initial partial data sum: {} kWh".format(dp2(initial_data_sum)))
+
+    # Call the function
+    my_predbat.previous_days_modal_filter(test_data)
+
+    final_data_sum = dp2(add_incrementing_sensor_total(test_data))
+    print("Final data sum after gap filling: {} kWh".format(dp2(final_data_sum)))
+
+    # Should now have approximately 24 kWh total (1 kWh per hour for 24 hours)
+    expected_final_total = 24.0
     if abs(final_data_sum - expected_final_total) > 1.0:  # Allow 1 kWh tolerance
         print("ERROR: Expected final total around {} kWh, got {} kWh".format(expected_final_total, final_data_sum))
         for minute in range(0, 24 * 60, 15):
@@ -9238,6 +9269,7 @@ def test_previous_days_modal_filter(my_predbat):
         failed = True
     else:
         print("Gap filling successful: filled from {} kWh to {} kWh".format(dp2(initial_data_sum), dp2(final_data_sum)))
+
 
     # Test 3: Modal filtering - remove lowest consumption day
     print("Test 3: Modal filtering removes lowest day")
