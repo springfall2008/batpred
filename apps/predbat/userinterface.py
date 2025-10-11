@@ -38,6 +38,10 @@ DEBUG_EXCLUDE_LIST = [
     "config_index",
     "comparison",
     "plugin_system",
+    "ge_url_cache",
+    "futurerate_url_cache",
+    "github_url_cache",
+    "octopus_url_cache",
 ]
 
 
@@ -719,7 +723,6 @@ class UserInterface:
                         inverter_debug[key] = inverter.__dict__[key]
             inverters_debug.append(inverter_debug)
         debug["inverters"] = inverters_debug
-
         debug["CONFIG_ITEMS"] = copy.deepcopy(self.CONFIG_ITEMS)
 
         if write_file:

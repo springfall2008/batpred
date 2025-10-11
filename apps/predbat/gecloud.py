@@ -11,6 +11,8 @@ import asyncio
 import random
 import time
 from config import PREDICT_STEP
+import yaml
+import os
 
 """
 GE Cloud data download
@@ -708,6 +710,10 @@ class GECloudDirect:
         self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in batteries]
         self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries]
         self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries]
+        self.base.args["battery_temperature"] = ["sensor.predbat_gecloud_" + device + "_battery_temperature" for device in batteries]
+
+        if len(batteries):
+            self.base.args["battery_temperature_history"] = "sensor.predbat_gecloud_" + batteries[0] + "_battery_temperature"
 
         if has_pause_battery:
             self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
@@ -1333,7 +1339,41 @@ class GECloudDirect:
 
 
 class GECloud:
-    def clean_url_cache(self, now_utc):
+    def get_ge_cache_filename(self):
+        cache_path = self.config_root + "/cache"
+        if not os.path.exists(cache_path):
+            os.makedirs(cache_path, exist_ok=True)
+        cache_file = cache_path + "/givenergy_data.yaml"
+        return cache_file
+
+    def load_ge_cache(self):
+        """
+        Load the GE Cloud cache
+        """
+        cache_file = self.get_ge_cache_filename()
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r") as f:
+                    self.ge_url_cache = yaml.safe_load(f)
+                if not isinstance(self.ge_url_cache, dict):
+                    self.ge_url_cache = {}
+            except (yaml.YAMLError, IOError) as e:
+                self.ge_url_cache = {}
+        else:
+            self.ge_url_cache = {}
+
+    def save_ge_cache(self):
+        """
+        Save the GE Cloud cache
+        """
+        cache_file = self.get_ge_cache_filename()
+        try:
+            with open(cache_file, "w") as f:
+                yaml.safe_dump(self.ge_url_cache, f)
+        except IOError as e:
+            pass
+
+    def clean_ge_url_cache(self, now_utc):
         """
         Clean up the GE Cloud cache
         """
@@ -1350,11 +1390,12 @@ class GECloud:
         """
         if url in self.ge_url_cache:
             stamp = self.ge_url_cache[url]["stamp"]
-            pdata = self.ge_url_cache[url]["data"]
+            mdata = self.ge_url_cache[url]["data"]
+            url_next = self.ge_url_cache[url]["next"]
             age = now_utc - stamp
             if age.seconds < (max_age_minutes * 60):
                 self.log("Return cached GE data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
-                return pdata
+                return mdata, url_next
 
         self.log("Fetching {}".format(url))
         try:
@@ -1362,15 +1403,41 @@ class GECloud:
         except (requests.Timeout, requests.exceptions.ReadTimeout, requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
             return {}
 
+        if r.status_code not in [200, 201]:
+            self.log("Warn: GeCloud: Failed to get data from {} status code {}".format(url, r.status_code))
+            return {}
+
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError as e:
             return {}
 
+        if not data or "data" not in data:
+            return {}
+
+        # Convert to minute data
+        mdata = []
+        darray = data.get("data", None)
+
+        if "links" in data:
+            url_next = data["links"].get("next", None)
+        else:
+            url_next = None
+
+        for item in darray:
+            new_data = {}
+            new_data["last_updated"] = item["time"]
+            new_data["consumption"] = item["total"]["consumption"]
+            new_data["import"] = item["total"]["grid"]["import"]
+            new_data["export"] = item["total"]["grid"]["export"]
+            new_data["pv"] = item["total"]["solar"]
+            mdata.append(new_data)
+
         self.ge_url_cache[url] = {}
         self.ge_url_cache[url]["stamp"] = now_utc
-        self.ge_url_cache[url]["data"] = data
-        return data
+        self.ge_url_cache[url]["data"] = mdata
+        self.ge_url_cache[url]["next"] = url_next
+        return mdata, url_next
 
     def download_ge_data(self, now_utc):
         """
@@ -1378,7 +1445,13 @@ class GECloud:
         """
         geserial = self.get_arg("ge_cloud_serial")
         gekey = self.args.get("ge_cloud_key", None)
-        self.clean_url_cache(now_utc)
+
+        # Load cache if not already loaded
+        if not self.ge_url_cache:
+            self.load_ge_cache()
+
+        # Clean old cache entries
+        self.clean_ge_url_cache(now_utc)
 
         if not geserial:
             self.log("Error: GE Cloud has been enabled but ge_cloud_serial is not set to your serial")
@@ -1402,8 +1475,7 @@ class GECloud:
                     url += "&pageSize=8000"
                 else:
                     url += "?pageSize=8000"
-                data = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 8 * 60)
-                darray = data.get("data", None)
+                darray, url = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 8 * 60)
                 if darray is None:
                     # If we are less than 8 hours into today then ignore errors for today as data may not be available yet
                     if days_prev == 0:
@@ -1414,26 +1486,8 @@ class GECloud:
                         self.log("Warn: Error downloading GE data from URL {}".format(url))
                         self.record_status("Warn: Error downloading GE data from cloud", debug=url)
                         continue
-
-                for item in darray:
-                    timestamp = item["time"]
-                    consumption = item["total"]["consumption"]
-                    dimport = item["total"]["grid"]["import"]
-                    dexport = item["total"]["grid"]["export"]
-                    dpv = item["total"]["solar"]
-
-                    new_data = {}
-                    new_data["last_updated"] = timestamp
-                    new_data["consumption"] = consumption
-                    new_data["import"] = dimport
-                    new_data["export"] = dexport
-                    new_data["pv"] = dpv
-                    mdata.append(new_data)
+                mdata.extend(darray)
                 # self.log("Info: GECloud downloaded {} data points".format(len(darray)))
-                if not darray:
-                    url = None
-                else:
-                    url = data["links"].get("next", None)
             days_prev_count += 1
 
         # Find how old the data is
@@ -1480,4 +1534,7 @@ class GECloud:
             self.pv_today_now = max(pv_today.get(0, 0) - pv_today.get(self.minutes_now, 0), 0)
 
         self.log("Downloaded {} datapoints from GE going back {} days".format(len(self.load_minutes), self.load_minutes_age))
+
+        # Save GE URL cache to disk for next time
+        self.save_ge_cache()
         return True
