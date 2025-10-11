@@ -51,7 +51,7 @@ from octopus import OctopusAPI
 from components import Components
 
 # Mock the components and plugin system
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 KEEP_SCALE = 0.5
 
