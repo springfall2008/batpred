@@ -708,6 +708,10 @@ class GECloudDirect:
         self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in batteries]
         self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries]
         self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries]
+        self.base.args["battery_temperature"] = ["sensor.predbat_gecloud_" + device + "_battery_temperature" for device in batteries]
+
+        if len(batteries):
+            self.base.args["battery_temperature_history"] = "sensor.predbat_gecloud_" + batteries[0] + "_battery_temperature"
 
         if has_pause_battery:
             self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
@@ -1333,7 +1337,7 @@ class GECloudDirect:
 
 
 class GECloud:
-    def clean_url_cache(self, now_utc):
+    def clean_ge_url_cache(self, now_utc):
         """
         Clean up the GE Cloud cache
         """
@@ -1378,7 +1382,9 @@ class GECloud:
         """
         geserial = self.get_arg("ge_cloud_serial")
         gekey = self.args.get("ge_cloud_key", None)
-        self.clean_url_cache(now_utc)
+  
+        # Clean old cache entries
+        self.clean_ge_url_cache(now_utc)
 
         if not geserial:
             self.log("Error: GE Cloud has been enabled but ge_cloud_serial is not set to your serial")

@@ -50,8 +50,8 @@ from gecloud import GECloudDirect
 from octopus import OctopusAPI
 from components import Components
 
-# Import MagicMock
-from unittest.mock import MagicMock
+# Mock the components and plugin system
+from unittest.mock import MagicMock, patch, call
 
 KEEP_SCALE = 0.5
 
@@ -903,9 +903,6 @@ def test_plugin_startup_order(my_predbat):
     """
     print("*** Running test: Plugin startup order and endpoint registration")
     failed = 0
-
-    # Mock the components and plugin system
-    from unittest.mock import MagicMock, patch, call
 
     # Create a mock for tracking call order
     call_order = []
@@ -3283,8 +3280,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.iboost_min_power = 500 / MINUTE_WATT
         pass
 
-    print("Read2 yaml num_cars {}".format(my_predbat.num_cars))
-
     if re_do_rates:
         # Set rate thresholds
         if my_predbat.rate_import or my_predbat.rate_export:
@@ -3395,7 +3390,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     ## Calculate the plan
     my_predbat.plan_valid = False
+    print("Re-calculate plan")
     my_predbat.calculate_plan(recompute=True, debug_mode=debug)
+    print("Plan calculated")
 
     # Predict
     my_predbat.log("> FINAL PLAN")
