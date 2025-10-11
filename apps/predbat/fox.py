@@ -756,7 +756,7 @@ class FoxAPI:
             self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
             self.failures_total += 1
             return None
-        
+
         status_code = response.status_code
         if status_code in [400, 401, 402, 403]:
             self.log("Warn: Fox: Authentication error with status code {} from {}".format(status_code, url))
