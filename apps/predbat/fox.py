@@ -382,7 +382,7 @@ class FoxAPI:
         """
         GET_DEVICE_SETTING = "/op/v0/device/setting/get"
         result = await self.request_get(GET_DEVICE_SETTING, datain={"sn": deviceSN, "key": key}, post=True)
-        if result:
+        if result is not None:
             if deviceSN not in self.device_settings:
                 self.device_settings[deviceSN] = {}
             self.device_settings[deviceSN][key] = result
