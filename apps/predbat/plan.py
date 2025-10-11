@@ -52,6 +52,13 @@ class Plan:
         else:
             self.load_last_status = "baseline"
 
+        # Update entity for last load
+        self.dashboard_item(
+            self.prefix + ".load_energy_last_period",
+            state=dp3(self.load_last_period),
+            attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status": self.load_last_status},
+        )
+
         self.dynamic_load_baseline = {}
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
@@ -64,8 +71,8 @@ class Plan:
                 for car_n in range(0, self.num_cars):
                     for slot_n in range(0, len(self.car_charging_slots[car_n])):
                         slot = self.car_charging_slots[car_n][slot_n]
-                        if (slot["start"] < minutes_now) and (slot["start"] < minutes_end_slot) and (slot["end"] > minutes_now):
-                            # If the slot is within the current 30 minute period
+                        if slot["end"] > minutes_now:
+                            # If the slot is in the future
                             self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n + 1, slot["start"], slot["end"]))
                             self.car_charging_slots[car_n][slot_n]["kwh"] = 0
             if self.load_last_status == "high":
@@ -3325,11 +3332,6 @@ class Plan:
                     self.prefix + ".load_energy_h0",
                     state=dp3(load_kwh_h0),
                     attributes={"friendly_name": "Current load", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
-                )
-                self.dashboard_item(
-                    self.prefix + ".load_energy_last_period",
-                    state=dp3(self.load_last_period),
-                    attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status": self.load_last_status},
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_energy",
