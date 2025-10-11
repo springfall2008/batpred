@@ -1361,7 +1361,7 @@ class GECloud:
                 self.ge_url_cache = {}
         else:
             self.ge_url_cache = {}
-    
+
     def save_ge_cache(self):
         """
         Save the GE Cloud cache
@@ -1406,24 +1406,23 @@ class GECloud:
         if r.status_code not in [200, 201]:
             self.log("Warn: GeCloud: Failed to get data from {} status code {}".format(url, r.status_code))
             return {}
-        
+
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError as e:
             return {}
-        
+
         if not data or "data" not in data:
             return {}
-                
+
         # Convert to minute data
         mdata = []
         darray = data.get("data", None)
 
-        if 'links' in data:
+        if "links" in data:
             url_next = data["links"].get("next", None)
         else:
             url_next = None
-
 
         for item in darray:
             new_data = {}
@@ -1450,7 +1449,7 @@ class GECloud:
         # Load cache if not already loaded
         if not self.ge_url_cache:
             self.load_ge_cache()
-  
+
         # Clean old cache entries
         self.clean_ge_url_cache(now_utc)
 
