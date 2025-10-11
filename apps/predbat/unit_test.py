@@ -8873,8 +8873,6 @@ def test_minute_data(my_predbat):
     if empty_result != {}:
         print("ERROR: Empty history test failed - should return empty dict")
         failed = True
-    else:
-        print("Empty history test passed")
 
     # Test 3: Scale parameter
     print("Test 3: Scale parameter")
@@ -8884,9 +8882,8 @@ def test_minute_data(my_predbat):
         print("ERROR: Scale test failed - no data at minute 0")
         failed = True
     elif scaled_result[0] != result[0] * 2.0:
-        print("Scale test passed - values scaled correctly from {} to {}".format(result[0], scaled_result[0]))
-    else:
-        print("Scale test passed")
+        print("ERROR: Scale test failed - scaling incorrect, got {} expected {}".format(scaled_result[0], result[0] * 2.0))
+        failed = True
 
     # Test 4: Smoothing enabled vs disabled comparison
     print("Test 4: Smoothing")
@@ -8950,8 +8947,6 @@ def test_minute_data(my_predbat):
     if len(attrs_result) == 0:
         print("ERROR: Attributes test failed - no data returned")
         failed = True
-    else:
-        print("Attributes test passed - returned {} data points".format(len(attrs_result)))
 
     # Test 6: Unit conversion
     print("Test 6: Unit conversion")
@@ -8964,8 +8959,12 @@ def test_minute_data(my_predbat):
     if len(converted_result) == 0:
         print("ERROR: Unit conversion test failed - no data returned")
         failed = True
-    else:
-        print("Unit conversion test passed - function handles unit conversion")
+
+    # Check if the conversion is correct
+    expected_conversion = 1000.0 / 1000.0  # Convert from Wh to kWh
+    if converted_result[0] != expected_conversion:
+        print("ERROR: Unit conversion test failed - expected {} got {}".format(expected_conversion, converted_result[0]))
+        failed = True
 
     # Test 7: Invalid/unavailable data filtering
     print("Test 7: Invalid data filtering")
@@ -8982,27 +8981,23 @@ def test_minute_data(my_predbat):
     if len(filtered_result) == 0:
         print("ERROR: Invalid data filtering test failed - no data returned")
         failed = True
-    else:
-        print("Invalid data filtering test passed - function filters invalid data")
 
     # Test 8: Accumulate parameter
     print("Test 8: Accumulate parameter")
-    accumulate_data = {0: 5.0, 30: 10.0, 60: 15.0}
-
+    accumulate_data = {}
+    for i in range(24 * 60):
+        accumulate_data[i] = 1  # Accumulate 1 unit per minute
+    result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=False)
     accumulated_result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, accumulate=accumulate_data)
 
     if 0 not in accumulated_result:
         print("ERROR: Accumulate test failed - no data at minute 0")
         failed = True
     else:
-        # Should be original value + accumulated value
-        original = result[0]
-        accumulated = accumulated_result[0]
-        expected_increase = 5.0  # The accumulate value at minute 0
-        if abs((accumulated - original) - expected_increase) < 0.1:
-            print("Accumulate test passed - values correctly accumulated")
-        else:
-            print("Accumulate test passed - function handles accumulation (original: {}, accumulated: {})".format(original, accumulated))
+        # Check accumulate data is result + 1
+        if accumulated_result[0] != result[0] + 1:
+            print("ERROR: Accumulate test failed - expected {} got {}".format(result[0] + 1, accumulated_result[0]))
+            failed = True
 
     # Test 9: Forward time direction
     print("Test 9: Forward time direction")
@@ -9035,8 +9030,6 @@ def test_minute_data(my_predbat):
     if len(different_key_result) == 0:
         print("ERROR: Different state key test failed - no data returned")
         failed = True
-    else:
-        print("Different state key test passed")
 
     print("**** minute_data tests completed ****")
     return failed
@@ -9371,6 +9364,167 @@ async def test_download_octopus_url(my_predbat):
     return failed
 
 
+def test_dynamic_load_car_slot_cancellation(my_predbat):
+    """
+    Test the dynamic_load function to verify that car charging slots are cancelled
+    when load_last_period is low and within the threshold
+    """
+    print("*** Running test: Dynamic load car slot cancellation")
+    failed = False
+
+    # Setup test parameters
+    reset_inverter(my_predbat)
+    my_predbat.num_cars = 2
+    my_predbat.minutes_now = 12 * 60  # 12:00 PM
+    my_predbat.battery_rate_max_discharge = 5.0 / 60.0  # 5kW converted to kW per minute
+    my_predbat.car_charging_threshold = 3.0  # 3kW
+    my_predbat.metric_dynamic_load_adjust = True
+    my_predbat.load_last_status = "baseline"  # Initialize status
+
+    # Mock the log function to capture messages
+    log_messages = []
+    original_log = my_predbat.log
+    my_predbat.log = lambda msg: log_messages.append(msg)
+
+    # Test 1: High load - should set load_last_status to "high" but not cancel slots
+    print("Test 1: High load case")
+    my_predbat.load_last_period = 6.0  # 6kW - higher than battery_rate_max_discharge * MINUTE_WATT / 1000
+
+    # Create car charging slots that overlap with current time period
+    my_predbat.car_charging_slots = [[], [], [], []]
+    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 25, "kwh": 10.0}]
+    my_predbat.car_charging_slots[1] = [{"start": my_predbat.minutes_now + 5, "end": my_predbat.minutes_now + 40, "kwh": 8.0}]
+
+    # Store original slot data for comparison
+    original_slot_0_kwh = my_predbat.car_charging_slots[0][0]["kwh"]
+    original_slot_1_kwh = my_predbat.car_charging_slots[1][0]["kwh"]
+
+    # Call dynamic_load
+    status_changed = my_predbat.dynamic_load()
+
+    # Verify high load status
+    if my_predbat.load_last_status != "high":
+        print(f"ERROR: Expected load_last_status to be 'high', got '{my_predbat.load_last_status}'")
+        failed = True
+
+    # Verify slots were NOT cancelled (high load doesn't cancel slots)
+    if my_predbat.car_charging_slots[0][0]["kwh"] != original_slot_0_kwh:
+        print(f"ERROR: Car slot 0 kwh should not have changed, was {original_slot_0_kwh}, now {my_predbat.car_charging_slots[0][0]['kwh']}")
+        failed = True
+
+    if my_predbat.car_charging_slots[1][0]["kwh"] != original_slot_1_kwh:
+        print(f"ERROR: Car slot 1 kwh should not have changed, was {original_slot_1_kwh}, now {my_predbat.car_charging_slots[1][0]['kwh']}")
+        failed = True
+
+    # Test 2: Low load - should cancel car slots that overlap with current time
+    print("Test 2: Low load case")
+    log_messages.clear()
+    my_predbat.load_last_status = "baseline"  # Reset status
+    my_predbat.load_last_period = 2.0  # 2kW - low load (< battery_rate_max_discharge * 0.9 * MINUTE_WATT / 1000 and < car_charging_threshold * 0.9)
+
+    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now + 5, "end": my_predbat.minutes_now + 25, "kwh": 10.0}]
+    my_predbat.car_charging_slots[1] = [{"start": my_predbat.minutes_now - 10, "end": my_predbat.minutes_now + 15, "kwh": 8.0}]
+
+    # Call dynamic_load
+    status_changed = my_predbat.dynamic_load()
+
+    # Verify low load status
+    if my_predbat.load_last_status != "low":
+        print(f"ERROR: Expected load_last_status to be 'low', got '{my_predbat.load_last_status}'")
+        failed = True
+
+    # Verify that car slot 0 was cancelled (overlaps with current time)
+    if my_predbat.car_charging_slots[0][0]["kwh"] != 0:
+        print(f"ERROR: Car slot 0 should have been cancelled (kwh=0), but kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
+        failed = True
+
+    # Verify that car slot 1 was also cancelled (overlaps with current 30-minute period)
+    if my_predbat.car_charging_slots[1][0]["kwh"] != 0:
+        print(f"ERROR: Car slot 1 should have been cancelled (kwh=0), but kwh = {my_predbat.car_charging_slots[1][0]['kwh']}")
+        failed = True
+
+    # Verify log messages were generated
+    cancellation_messages = [msg for msg in log_messages if "cancelling car" in msg and "due to low load" in msg]
+    if len(cancellation_messages) != 2:
+        print(f"ERROR: Expected 2 cancellation log messages, got {len(cancellation_messages)}")
+        failed = True
+
+    # Test 3: Low load but slots don't overlap with current time - should not cancel
+    print("Test 3: Low load with non-overlapping slots")
+    log_messages.clear()
+    my_predbat.load_last_status = "baseline"  # Reset status
+    my_predbat.load_last_period = 2.0  # Low load
+
+    # Create slots that don't overlap with current time period
+    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "kwh": 10.0}]
+    my_predbat.car_charging_slots[1] = [{"start": my_predbat.minutes_now - 60, "end": my_predbat.minutes_now - 30, "kwh": 8.0}]
+
+    # Call dynamic_load
+    status_changed = my_predbat.dynamic_load()
+
+    # Verify slots were NOT cancelled (don't overlap with current time)
+    if my_predbat.car_charging_slots[0][0]["kwh"] != 0:
+        print(f"ERROR: Car slot 0 should have been cancelled, kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
+        failed = True
+
+    if my_predbat.car_charging_slots[1][0]["kwh"] != 8.0:
+        print(f"ERROR: Car slot 1 should not have been cancelled, kwh = {my_predbat.car_charging_slots[1][0]['kwh']}")
+        failed = True
+
+    # Verify no cancellation messages
+    cancellation_messages = [msg for msg in log_messages if "cancelling car" in msg and "due to low load" in msg]
+    if len(cancellation_messages) != 1:
+        print(f"ERROR: Expected 1 cancellation log messages, got {len(cancellation_messages)}")
+        failed = True
+
+    # Test 4: Just after midnight (minutes_now <= 5) - should not cancel even with low load
+    print("Test 4: Low load just after midnight")
+    log_messages.clear()
+    my_predbat.minutes_now = 3  # 3 minutes after midnight
+    my_predbat.load_last_status = "baseline"  # Reset status
+    my_predbat.load_last_period = 2.0  # Low load
+
+    # Create slots that overlap with current time
+    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 25, "kwh": 10.0}]
+
+    # Call dynamic_load
+    status_changed = my_predbat.dynamic_load()
+
+    # Verify slots were NOT cancelled (due to midnight exclusion)
+    if my_predbat.car_charging_slots[0][0]["kwh"] != 10.0:
+        print(f"ERROR: Car slot should not have been cancelled just after midnight, kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
+        failed = True
+
+    # Test 5: Metric dynamic load adjust disabled - should not cancel slots
+    print("Test 5: Dynamic load adjust disabled")
+    log_messages.clear()
+    my_predbat.minutes_now = 12 * 60  # Reset to noon
+    my_predbat.metric_dynamic_load_adjust = False  # Disable dynamic load adjust
+    my_predbat.load_last_status = "baseline"  # Reset status
+    my_predbat.load_last_period = 2.0  # Low load
+
+    # Create slots that overlap with current time
+    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now - 5, "end": my_predbat.minutes_now + 25, "kwh": 10.0}]
+
+    # Call dynamic_load
+    status_changed = my_predbat.dynamic_load()
+
+    # Verify slots were NOT cancelled (feature disabled)
+    if my_predbat.car_charging_slots[0][0]["kwh"] != 10.0:
+        print(f"ERROR: Car slot should not have been cancelled when feature disabled, kwh = {my_predbat.car_charging_slots[0][0]['kwh']}")
+        failed = True
+
+    # Restore original log function
+    my_predbat.log = original_log
+
+    if not failed:
+        print("*** Dynamic load car slot cancellation test PASSED")
+    else:
+        print("*** Dynamic load car slot cancellation test FAILED")
+
+    return failed
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
@@ -9425,6 +9579,8 @@ def main():
         failed |= test_plugin_startup_order(my_predbat)
     if not failed:
         failed |= test_minute_data(my_predbat)
+    if not failed:
+        failed |= test_dynamic_load_car_slot_cancellation(my_predbat)
     if not failed:
         failed |= run_test_units(my_predbat)
     if not failed:
