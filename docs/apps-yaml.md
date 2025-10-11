@@ -251,23 +251,24 @@ The template `apps.yaml` for each inverter type comes pre-configured with regula
 
 If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
 
-### Givenergy cloud direct
+### Givenergy Cloud Direct
 
-Predbat now supports direct communication with the GivEnergy cloud services, with this method you can have your inverter auto-configured.
-Just log into the GivEnergy web site and create an API key and copy it into the key settings. The number of inverters and their settings
-will be configured automatically.
+Predbat now supports direct communication with the GivEnergy cloud services instead of local control via GivTCP to your inverter.
 
-If you set **ge_cloud_automatic** to False then you can manually configure to point to Predbat's GE Cloud configuration.
+Log into the GivEnergy Portal web site and create an API key and copy it into the **ge_cloud_key** setting in `apps.yaml`.
 
-If you set **ge_cloud_data** to False then Predbat will use the local data for history rather than the cloud data, you will need to wait until
-you have a few days work (at least days_previous days) before this will work correctly.
+If you set **ge_cloud_automatic** to True, the number of inverters and their settings will be configured automatically.
+Or, if you set **ge_cloud_automatic** to False then you need to manually configure **ge_cloud_serial** to your inverter serial number for Predbat to use on the GivEnergy Cloud.
+
+If you set **ge_cloud_data** to False then Predbat will use the local Home Assistant data for history rather than the cloud data;
+you will need to wait until you have a few days of history established (at least days_previous days) before this will work correctly.
 
 ```yaml
-  ge_cloud_data: True
-  ge_cloud_serial: '{geserial}'
-  ge_cloud_key: 'xxxxx'
   ge_cloud_direct: True
   ge_cloud_automatic: True
+  ge_cloud_serial: '{geserial}'
+  ge_cloud_key: 'xxxxx'
+  ge_cloud_data: True
 ```
 
 ### num_inverters
