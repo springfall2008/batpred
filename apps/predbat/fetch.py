@@ -280,7 +280,7 @@ class Fetch:
                     gap_minutes += PREDICT_STEP
                     if gap_start is None:
                         gap_start = minute - PREDICT_STEP
-                else:                
+                else:
                     if gap_minutes >= gap_size:
                         num_gaps += gap_minutes
                         gap_list.append((gap_start, gap_minutes))

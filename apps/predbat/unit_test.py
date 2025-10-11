@@ -9270,7 +9270,6 @@ def test_previous_days_modal_filter(my_predbat):
     else:
         print("Gap filling successful: filled from {} kWh to {} kWh".format(dp2(initial_data_sum), dp2(final_data_sum)))
 
-
     # Test 3: Modal filtering - remove lowest consumption day
     print("Test 3: Modal filtering removes lowest day")
 
