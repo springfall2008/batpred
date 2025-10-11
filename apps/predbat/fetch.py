@@ -782,18 +782,23 @@ class Fetch:
             # Fill from last sample until now with interpolation if enabled
             if interpolate and clean_increment and backwards:
                 last_sample_minute = 0
-                for minute in range(60 * 24 * days):
+                for minute in range(60):
                     if minute in mdata:
                         last_sample_minute = minute
                         break
-                if last_sample_minute > 0:
+                last_but_one_sample_minute = last_sample_minute
+                for minute in range(last_sample_minute + 1, 60):
+                    if minute in mdata and (mdata[minute] != mdata[last_sample_minute]):
+                        last_but_one_sample_minute = minute
+                        break
+                sample_gap = last_but_one_sample_minute - last_sample_minute
+                if last_sample_minute > 0 and sample_gap > 0 and last_sample_minute < 15:
                     last_sample_value = mdata[last_sample_minute]
-                    last_but_one_minute_sample = mdata[last_sample_minute + 1] if (last_sample_minute + 1) in mdata else last_sample_value
-                    step = last_sample_value - last_but_one_minute_sample
-                    if last_sample_minute < 10 * 60 and last_sample_minute > 0:
+                    last_but_one_minute_sample = mdata[last_but_one_sample_minute]
+                    step = (last_sample_value - last_but_one_minute_sample) / sample_gap
+                    if step > 0:
                         for minute in range(last_sample_minute):
-                            if minute not in mdata:
-                                mdata[minute] = dp4(newest_state + step * (last_sample_minute - minute))
+                            mdata[minute] = dp4(last_sample_value + step * (last_sample_minute - minute))
 
             # Fill from last sample until now
             for minute in range(60 * 24 * days):
