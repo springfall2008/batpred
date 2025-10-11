@@ -1382,7 +1382,7 @@ class GECloud:
         """
         geserial = self.get_arg("ge_cloud_serial")
         gekey = self.args.get("ge_cloud_key", None)
-  
+
         # Clean old cache entries
         self.clean_ge_url_cache(now_utc)
 
