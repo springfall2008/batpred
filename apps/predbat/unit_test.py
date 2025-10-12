@@ -3404,6 +3404,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
     filename = "plan_final.html"
     open(filename, "w").write(my_predbat.html_plan)
+    filename = "plan_final.json"
+    open(filename, "w").write(json.dumps(my_predbat.raw_plan, indent=2))
     print("Wrote plan to {} metric {}".format(filename, metric))
 
     # Expected
