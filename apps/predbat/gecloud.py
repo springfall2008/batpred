@@ -1379,10 +1379,14 @@ class GECloud:
         """
         current_keys = list(self.ge_url_cache.keys())
         for url in current_keys[:]:
-            stamp = self.ge_url_cache[url]["stamp"]
-            age = now_utc - stamp
-            if age.seconds > (24 * 60 * 60):
+            stamp = self.ge_url_cache[url].get("stamp", None)
+            mdata = self.ge_url_cache[url].get("data", None)
+            if stamp is None or mdata is None:
                 del self.ge_url_cache[url]
+            else:
+                age = now_utc - stamp
+                if age.seconds > (24 * 60 * 60):
+                    del self.ge_url_cache[url]
 
     def get_ge_url(self, url, headers, now_utc, max_age_minutes=30):
         """
