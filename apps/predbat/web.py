@@ -1093,8 +1093,40 @@ var options = {
 
     async def html_api_get_log(self, request):
         """
-        JSON API to get log data with filtering
+        JSON API to get log data with filtering and search
         """
+
+        def highlight_search_term(text, search_term):
+            """
+            Highlight search term in text with HTML markup, case-insensitive
+            """
+            if not search_term or not text:
+                return text
+
+            import re
+            import html as html_module
+
+            # Create case-insensitive pattern for the original text
+            pattern = re.compile(re.escape(search_term), re.IGNORECASE)
+
+            # Split text around matches, then escape and highlight each part
+            parts = pattern.split(text)
+            matches = pattern.findall(text)
+
+            result_parts = []
+
+            for i, part in enumerate(parts):
+                # Escape the regular text part
+                result_parts.append(html_module.escape(part))
+
+                # Add highlighted match if there is one
+                if i < len(matches):
+                    escaped_match = html_module.escape(matches[i])
+                    highlighted_match = f'<mark class="search-highlight" style="background-color: #ffff00; font-weight: bold;">{escaped_match}</mark>'
+                    result_parts.append(highlighted_match)
+
+            return "".join(result_parts)
+
         try:
             logfile = "predbat.log"
             logfile_1 = "predbat.1.log"
@@ -1112,16 +1144,19 @@ var options = {
             filter_type = args.get("filter", "warnings")  # all, warnings, errors
             since_line = int(args.get("since", 0))  # Line number to start from
             max_lines = int(args.get("max_lines", 1024))  # Maximum lines to return
+            search_term = args.get("search", "").lower().strip()  # Search term
 
             loglines = logdata.split("\n")
             total_lines = len(loglines)
 
-            # Process log lines with filtering
+            # Process log lines with filtering and search
             result_lines = []
             count_lines = 0
             lineno = total_lines - 1
+            matched_lines = 0  # Count of lines that match search criteria before limiting
+            total_search_matches = 0  # Total matches in entire file (used when search is active)
 
-            while count_lines < max_lines and lineno >= 0:
+            while lineno >= 0:
                 line = loglines[lineno]
                 line_lower = line.lower()
 
@@ -1130,7 +1165,7 @@ var options = {
                     lineno -= 1
                     continue
 
-                # Apply filtering
+                # Apply log level filtering first
                 include_line = False
                 line_type = "info"
 
@@ -1144,11 +1179,46 @@ var options = {
                     line_type = "info"
                     include_line = filter_type == "all"
 
+                # Apply search filter if search term is provided
+                if include_line and search_term:
+                    include_line = search_term in line_lower
+                    if include_line:
+                        total_search_matches += 1
+
+                # Check if we've reached the max lines limit
+                if count_lines >= max_lines:
+                    include_line = False
+
                 if include_line and (since_line == 0 or lineno > since_line):
+                    matched_lines += 1
                     start_line = line[0:27] if len(line) >= 27 else line
                     rest_line = line[27:] if len(line) >= 27 else ""
 
-                    result_lines.append({"line_number": lineno, "timestamp": start_line, "message": rest_line, "type": line_type, "full_line": line})
+                    # Apply highlighting if search term is present
+                    if search_term:
+                        highlighted_timestamp = highlight_search_term(start_line, search_term)
+                        highlighted_message = highlight_search_term(rest_line, search_term)
+                        highlighted_full_line = highlight_search_term(line, search_term)
+                    else:
+                        # Escape HTML characters even when no search highlighting
+                        import html as html_module
+
+                        highlighted_timestamp = html_module.escape(start_line)
+                        highlighted_message = html_module.escape(rest_line)
+                        highlighted_full_line = html_module.escape(line)
+
+                    result_lines.append(
+                        {
+                            "line_number": lineno,
+                            "timestamp": highlighted_timestamp,
+                            "message": highlighted_message,
+                            "type": line_type,
+                            "full_line": highlighted_full_line,
+                            "raw_timestamp": start_line,  # Keep raw versions for any client-side processing
+                            "raw_message": rest_line,
+                            "raw_full_line": line,
+                        }
+                    )
                     count_lines += 1
 
                 lineno -= 1
@@ -1156,7 +1226,13 @@ var options = {
             # Reverse to get reverse chronological order (newest first)
             result_lines.reverse()
 
-            return web.json_response({"status": "success", "total_lines": total_lines, "returned_lines": len(result_lines), "lines": result_lines, "filter": filter_type})
+            response_data = {"status": "success", "total_lines": total_lines, "returned_lines": len(result_lines), "lines": result_lines, "filter": filter_type, "search_term": search_term}
+
+            # If we have a search term, add information about total matches
+            if search_term:
+                response_data["search_matches"] = total_search_matches
+
+            return web.json_response(response_data)
 
         except Exception as e:
             self.log(f"Error in html_api_get_log: {e}")
@@ -1492,7 +1568,7 @@ var options = {
         text += "</div>"
 
         text += '<div class="log-search-container">'
-        text += '<input type="text" id="logSearchInput" class="log-search-input" placeholder="Search log entries..." oninput="filterLogEntries()" />'
+        text += '<input type="text" id="logSearchInput" class="log-search-input" placeholder="Search entire log file..." oninput="filterLogEntries()" />'
         text += '<button id="clearSearchBtn" class="clear-search-button" onclick="clearLogSearch()">Clear</button>'
         text += '<div id="searchStatus" class="search-status"></div>'
         text += "</div>"

@@ -958,6 +958,8 @@ class Output:
         load_total = 0
         xload_total = 0
         car_total = 0
+        raw_plan = {}
+        raw_plan["rows"] = []
 
         import_cost_threshold = self.rate_import_cost_threshold
         export_cost_threshold = self.rate_export_cost_threshold
@@ -966,6 +968,22 @@ class Output:
             import_cost_threshold = self.rate_best_cost_threshold_charge
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
+
+        raw_plan["import_cost_threshold"] = import_cost_threshold
+        raw_plan["export_cost_threshold"] = export_cost_threshold
+        raw_plan["currency_symbols"] = self.currency_symbols
+        raw_plan["soc"] = self.soc_kw
+        raw_plan["soc_max"] = self.soc_max
+        raw_plan["reserve"] = self.reserve
+        raw_plan["time"] = self.midnight_utc.strftime(TIME_FORMAT)
+        raw_plan["mode"] = mode
+        raw_plan["plan_debug"] = plan_debug
+        raw_plan["forecast_minutes"] = self.forecast_minutes
+        raw_plan["end_record"] = end_record
+        raw_plan["end_plan"] = end_plan
+        raw_plan["num_cars"] = self.num_cars
+        raw_plan["iboost_enable"] = self.iboost_enable
+        raw_plan["carbon_enable"] = self.carbon_enable
 
         rate_start = self.midnight_utc
         for minute in range(minute_now_align, end_plan, 30):
@@ -1061,6 +1079,11 @@ class Output:
             pv_total += pv_forecast
             load_total += load_forecast
 
+            raw_pv_forecast = pv_forecast
+            raw_load_forecast = load_forecast
+            raw_pv_total = pv_total
+            raw_load_total = load_total
+
             extra_forecast = ""
             extra_forecast_total = 0
             for value in extra_forecast_array:
@@ -1069,6 +1092,9 @@ class Output:
                 extra_forecast += str(dp2(value))
                 extra_forecast_total += value
             xload_total += extra_forecast_total
+
+            raw_extra_forecast = extra_forecast
+            raw_extra_forecast_total = dp2(xload_total)
 
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
@@ -1093,6 +1119,11 @@ class Output:
             metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
             metric_change = metric_end - metric_start
 
+            # Raw state for raw plan
+            raw_state = "Demand"
+            raw_state_target = ""
+            raw_state_override = ""
+
             soc_sym = ""
             if abs(soc_change) < 0.05:
                 soc_sym = "&rarr;"
@@ -1105,6 +1136,7 @@ class Output:
             state_color = "#FFFFFF"
             if minute in self.manual_demand_times:
                 state += " &#8526;"
+                raw_state_override = "Manual demand"
 
             pv_color = "#FFFFFF"
             load_color = "#FFFFFF"
@@ -1184,22 +1216,28 @@ class Output:
                     if limit == self.reserve:
                         state = "FrzChrg&rarr;"
                         state_color = "#EEEEEE"
+                        raw_state = "FrzChrg"
                         limit_percent = soc_percent
                     elif limit_percent <= soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
+                        raw_state = "HoldChrg"
                     else:
                         state = "Chrg&nearr;"
                         state_color = "#3AEE85"
+                        raw_state = "Chrg"
 
                     if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
                         state += " &#8526;"
+                        raw_state_override = "Manual charge"
                     elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
                         state += " &#8526;"
+                        raw_state_override = "Manual charge freeze"
                     show_limit = str(limit_percent)
                     had_state = True
                     if plan_debug:
                         show_limit += " ({})".format(str(calc_percent_limit(limit, self.soc_max)))
+                    raw_state_target = str(limit_percent)
             else:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]
@@ -1230,6 +1268,7 @@ class Output:
                     else:
                         state_color = "#AAAAAA"
                     state += "FrzExp&rarr;"
+                    raw_state = "FrzExp"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
                 elif limit < 100:
                     if not had_state:
@@ -1241,9 +1280,12 @@ class Output:
                         state_color = "#FFFF00"
                     if limit > soc_percent_max_window:
                         state += "HoldExp&searr;"
+                        raw_state = "HoldExp"
                     else:
                         state += "Exp&searr;"
+                        raw_state = "Exp"
                     show_limit = str(dp2(target))
+                    raw_state_target = str(dp2(target))
 
                     if limit > int(limit):
                         # Snail symbol
@@ -1254,8 +1296,10 @@ class Output:
 
                 if self.export_window_best[export_window_n]["start"] in self.manual_export_times:
                     state += " &#8526;"
+                    raw_state_override = "Manual export"
                 elif self.export_window_best[export_window_n]["start"] in self.manual_freeze_export_times:
                     state += " &#8526;"
+                    raw_state_override = "Manual export freeze"
 
             # Alert
             if in_alert:
@@ -1429,6 +1473,40 @@ class Output:
                 html += "<td id=total_carbon bgcolor=" + carbon_color + "> " + str(carbon_str) + " </td>"
             html += "</tr>\n"
 
+            # Json row
+            json_row = {}
+            json_row["time"] = rate_start.strftime(TIME_FORMAT)
+            json_row["import_rate"] = rate_value_import
+            json_row["export_rate"] = rate_value_export
+            json_row["state"] = raw_state
+            json_row["state_target"] = raw_state_target
+            json_row["state_override"] = raw_state_override
+            json_row["state_html"] = state
+            json_row["pv_forecast"] = raw_pv_forecast
+            json_row["pv_forecast10"] = pv_forecast10
+            json_row["pv_forecast_total"] = raw_pv_total
+            json_row["load_forecast"] = raw_load_forecast
+            json_row["load_forecast10"] = load_forecast10
+            json_row["load_forecast_total"] = raw_load_total
+            json_row["clipped"] = clipped_change
+            if self.load_forecast:
+                json_row["extra_load"] = raw_extra_forecast
+                json_row["extra_load_total"] = raw_extra_forecast_total
+            if self.num_cars > 0:
+                json_row["car_charging"] = car_charging_kwh
+            if self.iboost_enable:
+                json_row["iboost"] = iboost_amount
+                json_row["iboost_change"] = iboost_change
+            json_row["soc_percent"] = soc_percent
+            json_row["soc_change"] = dp2(soc_change)
+            json_row["cost_change"] = dp2(metric_change / 100.0)
+            json_row["total_cost"] = dp2(metric_end / 100.0)
+            if self.carbon_enable:
+                json_row["carbon_intensity"] = carbon_intensity
+                json_row["carbon_change"] = carbon_change
+                json_row["total_carbon"] = dp2(carbon_amount_end / 1000.0)
+            raw_plan["rows"].append(json_row)
+
         # End of plan costs
         if metric_end >= 0:
             total_str = self.currency_symbols[0] + "%02.02f" % (metric_end / 100.0)
@@ -1461,11 +1539,32 @@ class Output:
         html += "</table>"
         html = html.replace("£", "&#163;")
 
-        if publish:
-            self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
-            self.html_plan = html
+        # Json end of plan costs
+        totals = {}
+        totals["total_cost"] = dp2(metric_end / 100.0)
+        totals["pv_forecast"] = dp2(pv_total)
+        totals["load_forecast"] = dp2(load_total)
+        if plan_debug:
+            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+            totals["clipped"] = dp2(clipped_amount_end)
+        if plan_debug and self.load_forecast:
+            totals["extra_load"] = dp2(xload_total)
+        if self.num_cars > 0:
+            totals["car_charging"] = dp2(car_total)
+        totals["soc_percent"] = soc_percent_end
+        if self.iboost_enable:
+            totals["iboost"] = dp2(iboost_amount_end)
+        if self.carbon_enable:
+            totals["carbon_intensity"] = carbon_intensity
+            totals["total_carbon"] = dp2(carbon_amount_end / 1000.0)
+        raw_plan["totals"] = totals
 
-        return html
+        if publish:
+            self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "raw": raw_plan, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+            self.html_plan = html
+            self.raw_plan = raw_plan
+
+        return html, raw_plan
 
     def publish_rates(self, rates, export, gas=False):
         """

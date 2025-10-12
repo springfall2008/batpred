@@ -2350,14 +2350,20 @@ body.dark-mode .search-status {
 /* Highlight matching text */
 mark.search-highlight {
     background-color: #ffeb3b;
+    color: #000;
     font-weight: bold;
-    padding: 0;
+    padding: 1px 2px;
     border-radius: 2px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
 
 body.dark-mode mark.search-highlight {
     background-color: #ffa000;
     color: #000;
+    font-weight: bold;
+    padding: 1px 2px;
+    border-radius: 2px;
+    box-shadow: 0 1px 2px rgba(255,255,255,0.1);
 }
 </style>
 """
@@ -2729,6 +2735,7 @@ def get_logfile_js(filter_type):
         let updateInterval;
         let isUpdating = false;
         let isPaused = false;
+        let searchTimeout = null; // For debouncing search
 
         // Toggle pause/resume updates
         function toggleUpdates() {{
@@ -2790,11 +2797,7 @@ def get_logfile_js(filter_type):
             const shouldAutoScroll = autoScroll ? autoScroll.checked : false;
             let newEntriesAdded = 0;
 
-            // Get current search filter to apply immediately
-            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase();
-            const hasSearchFilter = searchTerm.trim() !== '';
-
-            // Insert new entries at the top (newest first)
+            // Insert entries at the top (newest first)
             lines.forEach(logLine => {{
                 if (logLine.line_number > lastLineNumber) {{
                     const row = document.createElement('tr');
@@ -2808,22 +2811,11 @@ def get_logfile_js(filter_type):
                         color = '#ffA500';
                     }}
 
-                    const timestamp = escapeHtml(logLine.timestamp);
-                    const message = escapeHtml(logLine.message);
+                    // Use highlighted content from server (already HTML-escaped and highlighted)
+                    const timestamp = logLine.timestamp;
+                    const message = logLine.message;
 
                     row.innerHTML = `<td>${{logLine.line_number}}</td><td nowrap><font color="${{color}}">${{timestamp}}</font> ${{message}}</td>`;
-
-                    // Apply search filter immediately if one is active
-                    if (hasSearchFilter) {{
-                        const rowText = row.textContent.toLowerCase();
-                        if (rowText.includes(searchTerm)) {{
-                            // Entry matches filter - highlight and show it
-                            highlightTextInElement(row, searchTerm);
-                        }} else {{
-                            // Entry doesn't match filter - hide it immediately
-                            row.classList.add('log-entry-hidden');
-                        }}
-                    }}
 
                     // Insert at the top of the table body
                     tbody.insertBefore(row, tbody.firstChild);
@@ -2832,15 +2824,6 @@ def get_logfile_js(filter_type):
                     lastLineNumber = Math.max(lastLineNumber, logLine.line_number);
                 }}
             }});
-
-            // Update search status if we have a filter active
-            if (hasSearchFilter && newEntriesAdded > 0) {{
-                const rows = document.querySelectorAll('#logTableBody tr[data-line]');
-                const statusDiv = document.getElementById('searchStatus');
-                const visibleCount = Array.from(rows).filter(row => !row.classList.contains('log-entry-hidden')).length;
-                const totalCount = rows.length;
-                statusDiv.textContent = `Showing ${{visibleCount}} of ${{totalCount}} entries`;
-            }}
 
             // Auto-scroll to top for new entries (since newest are at top)
             if (newEntriesAdded > 0 && shouldAutoScroll) {{
@@ -2863,113 +2846,85 @@ def get_logfile_js(filter_type):
             }});
         }}
 
-        // Search functionality
+        // Debounced search function
+        function debouncedSearch() {{
+            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase().trim();
+
+            // Clear existing timeout
+            if (searchTimeout) {{
+                clearTimeout(searchTimeout);
+            }}
+
+            // Set new timeout for search (500ms delay)
+            searchTimeout = setTimeout(() => {{
+                performServerSearch(searchTerm);
+            }}, 500);
+        }}
+
+        // Search functionality - now uses server-side search with debouncing
         function filterLogEntries() {{
-            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase();
-            const rows = document.querySelectorAll('#logTableBody tr[data-line]');
+            debouncedSearch();
+        }}
+
+        // Perform server-side search
+        async function performServerSearch(searchTerm) {{
+            if (isUpdating) return;
+            isUpdating = true;
+
             const statusDiv = document.getElementById('searchStatus');
+            statusDiv.textContent = 'Searching...';
 
-            let visibleCount = 0;
-            let totalCount = rows.length;
+            try {{
+                const searchParam = searchTerm ? `&search=${{encodeURIComponent(searchTerm)}}` : '';
+                const response = await fetch(`./api/log?filter=${{currentFilter}}&since=0&max_lines=1024${{searchParam}}`);
 
-            // If search is empty, show all entries
-            if (searchTerm.trim() === '') {{
-                rows.forEach(row => {{
-                    row.classList.remove('log-entry-hidden');
-                    // Remove any existing highlights
-                    clearHighlights(row);
-                    visibleCount++;
-                }});
-                statusDiv.textContent = '';
-                return;
-            }}
-
-            // Filter and highlight entries
-            rows.forEach(row => {{
-                const rowText = row.textContent.toLowerCase();
-
-                if (rowText.includes(searchTerm)) {{
-                    row.classList.remove('log-entry-hidden');
-                    visibleCount++;
-
-                    // Clear existing highlights first
-                    clearHighlights(row);
-
-                    // Apply new highlights
-                    highlightTextInElement(row, searchTerm);
-                }} else {{
-                    row.classList.add('log-entry-hidden');
-                    // Clear highlights from hidden rows
-                    clearHighlights(row);
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
                 }}
-            }});
 
-            // Update status
-            statusDiv.textContent = `Showing ${{visibleCount}} of ${{totalCount}} entries`;
-        }}
+                const data = await response.json();
 
-        // Clear all highlights in an element
-        function clearHighlights(element) {{
-            const highlightedElements = element.querySelectorAll('.search-highlight');
-            highlightedElements.forEach(highlighted => {{
-                const parent = highlighted.parentNode;
-                parent.replaceChild(document.createTextNode(highlighted.textContent), highlighted);
-                parent.normalize(); // Merge adjacent text nodes
-            }});
-        }}
+                if (data.status === 'success') {{
+                    // Clear existing table content
+                    const tbody = document.getElementById('logTableBody');
+                    tbody.innerHTML = '';
 
-        // Highlight text in an element without corrupting HTML
-        function highlightTextInElement(element, searchTerm) {{
-            const walker = document.createTreeWalker(
-                element,
-                NodeFilter.SHOW_TEXT,
-                null,
-                false
-            );
+                    // Reset line number tracking
+                    lastLineNumber = 0;
 
-            const textNodes = [];
-            let node;
-            while (node = walker.nextNode()) {{
-                textNodes.push(node);
-            }}
+                    // Add search results
+                    const entriesAdded = addLogEntries(data.lines);
 
-            textNodes.forEach(textNode => {{
-                const text = textNode.textContent;
-                const lowerText = text.toLowerCase();
-                const lowerSearchTerm = searchTerm.toLowerCase();
+                    // Update status with search results info
+                    if (searchTerm) {{
+                        const searchMatches = data.search_matches || data.returned_lines;
+                        const displayedResults = data.returned_lines;
 
-                if (lowerText.includes(lowerSearchTerm)) {{
-                    const parent = textNode.parentNode;
-                    const fragment = document.createDocumentFragment();
-
-                    let lastIndex = 0;
-                    let index = lowerText.indexOf(lowerSearchTerm, 0);
-
-                    while (index !== -1) {{
-                        // Add text before the match
-                        if (index > lastIndex) {{
-                            fragment.appendChild(document.createTextNode(text.substring(lastIndex, index)));
+                        if (searchMatches > displayedResults) {{
+                            statusDiv.textContent = `Found ${{searchMatches}} matching entries (showing ${{displayedResults}})`;
+                        }} else {{
+                            statusDiv.textContent = `Found ${{searchMatches}} matching entries (showing ${{displayedResults}})`;
                         }}
 
-                        // Add highlighted match
-                        const mark = document.createElement('mark');
-                        mark.className = 'search-highlight';
-                        mark.textContent = text.substring(index, index + searchTerm.length);
-                        fragment.appendChild(mark);
-
-                        lastIndex = index + searchTerm.length;
-                        index = lowerText.indexOf(lowerSearchTerm, lastIndex);
+                        updateStatus(`Search completed - ${{searchMatches}} matches found`);
+                    }} else {{
+                        statusDiv.textContent = '';
+                        updateStatus('Search cleared - showing recent entries');
                     }}
-
-                    // Add remaining text
-                    if (lastIndex < text.length) {{
-                        fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
-                    }}
-
-                    parent.replaceChild(fragment, textNode);
+                }} else {{
+                    statusDiv.textContent = `Search error: ${{data.message || 'Unknown error'}}`;
+                    updateStatus(`Search error: ${{data.message || 'Unknown error'}}`);
                 }}
-            }});
-        }}        // Clear search function
+            }} catch (error) {{
+                console.error('Error performing search:', error);
+                statusDiv.textContent = `Search error: ${{error.message}}`;
+                updateStatus(`Search error: ${{error.message}}`);
+            }} finally {{
+                isUpdating = false;
+            }}
+        }}
+
+        // Clear search function
         function clearLogSearch() {{
             document.getElementById('logSearchInput').value = '';
             filterLogEntries();
@@ -2983,10 +2938,23 @@ def get_logfile_js(filter_type):
         // Fetch new log entries
         async function updateLog() {{
             if (isUpdating || isPaused) return;
+
+            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase().trim();
+
             isUpdating = true;
 
             try {{
-                const response = await fetch(`./api/log?filter=${{currentFilter}}&since=${{lastLineNumber}}&max_lines=1024`);
+                let url;
+                if (searchTerm) {{
+                    // If search is active, fetch new entries that match the search criteria
+                    const searchParam = `&search=${{encodeURIComponent(searchTerm)}}`;
+                    url = `./api/log?filter=${{currentFilter}}&since=${{lastLineNumber}}&max_lines=100${{searchParam}}`;
+                }} else {{
+                    // Normal update without search
+                    url = `./api/log?filter=${{currentFilter}}&since=${{lastLineNumber}}&max_lines=1024`;
+                }}
+
+                const response = await fetch(url);
 
                 if (!response.ok) {{
                     throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
@@ -2997,9 +2965,32 @@ def get_logfile_js(filter_type):
                 if (data.status === 'success') {{
                     const newEntries = addLogEntries(data.lines);
                     if (newEntries > 0) {{
-                        updateStatus(`${{newEntries}} new entries added`);
+                        if (searchTerm) {{
+                            updateStatus(`${{newEntries}} new matching entries added`);
+                            // Update search status to reflect new matches
+                            const statusDiv = document.getElementById('searchStatus');
+                            const rows = document.querySelectorAll('#logTableBody tr[data-line]');
+                            const totalDisplayed = rows.length;
+                            const currentText = statusDiv.textContent;
+
+                            // Try to extract existing match count and update it
+                            if (currentText.includes('Found')) {{
+                                const match = currentText.match(/Found (\\d+)/);
+                                if (match) {{
+                                    const oldCount = parseInt(match[1]);
+                                    const newCount = oldCount + newEntries;
+                                    statusDiv.textContent = `Found ${{newCount}} matching entries (showing ${{totalDisplayed}})`;
+                                }}
+                            }}
+                        }} else {{
+                            updateStatus(`${{newEntries}} new entries added`);
+                        }}
                     }} else {{
-                        updateStatus('No new entries');
+                        if (searchTerm) {{
+                            updateStatus('No new matching entries');
+                        }} else {{
+                            updateStatus('No new entries');
+                        }}
                     }}
                 }} else {{
                     updateStatus(`Error: ${{data.message || 'Unknown error'}}`);
