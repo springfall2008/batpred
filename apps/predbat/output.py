@@ -11,7 +11,7 @@
 import math
 from datetime import datetime, timedelta
 from config import THIS_VERSION, TIME_FORMAT, PREDICT_STEP
-from utils import dp0, dp1, dp2, dp3, dp4, calc_percent_limit
+from utils import dp0, dp1, dp2, dp3, calc_percent_limit
 from prediction import Prediction
 
 
