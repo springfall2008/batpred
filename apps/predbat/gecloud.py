@@ -1401,19 +1401,19 @@ class GECloud:
         try:
             r = requests.get(url, headers=headers)
         except (requests.Timeout, requests.exceptions.ReadTimeout, requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
-            return {}
+            return {}, None
 
         if r.status_code not in [200, 201]:
             self.log("Warn: GeCloud: Failed to get data from {} status code {}".format(url, r.status_code))
-            return {}
+            return {}, None
 
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError as e:
-            return {}
+            return {}, None
 
         if not data or "data" not in data:
-            return {}
+            return {}, None
 
         # Convert to minute data
         mdata = []
