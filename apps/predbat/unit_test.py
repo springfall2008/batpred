@@ -9469,7 +9469,7 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
 
     if my_predbat.car_charging_slots[1][0]["kwh"] != 8.0:
         print(f"ERROR: Car slot 1 should not have been cancelled, kwh = {my_predbat.car_charging_slots[1][0]['kwh']}")
-        failed = True        
+        failed = True
 
     # Test 4: Just after midnight (minutes_now <= 5) - should not cancel even with low load
     print("Test 4: Low load just after midnight")

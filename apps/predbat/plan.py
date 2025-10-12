@@ -82,7 +82,7 @@ class Plan:
             # Note never do this just after midnight due to the load sensor reset
             if self.load_last_status == "low" and self.minutes_now > 5:
                 if load_car_slot and prev_last_load_car_slot:
-                   for car_n in range(0, self.num_cars):
+                    for car_n in range(0, self.num_cars):
                         for slot_n in range(0, len(self.car_charging_slots[car_n])):
                             slot = self.car_charging_slots[car_n][slot_n]
                             if slot["end"] > minutes_now:
@@ -104,7 +104,7 @@ class Plan:
             if prev_last_load_status != self.load_last_status:
                 self.log("Dynamic load status changed from {} to {}".format(prev_last_load_status, self.load_last_status))
                 return True
-            
+
         return False
 
     def find_price_levels(
