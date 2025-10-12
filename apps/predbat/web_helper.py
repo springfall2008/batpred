@@ -2849,12 +2849,12 @@ def get_logfile_js(filter_type):
         // Debounced search function
         function debouncedSearch() {{
             const searchTerm = document.getElementById('logSearchInput').value.toLowerCase().trim();
-            
+
             // Clear existing timeout
             if (searchTimeout) {{
                 clearTimeout(searchTimeout);
             }}
-            
+
             // Set new timeout for search (500ms delay)
             searchTimeout = setTimeout(() => {{
                 performServerSearch(searchTerm);
@@ -2888,24 +2888,24 @@ def get_logfile_js(filter_type):
                     // Clear existing table content
                     const tbody = document.getElementById('logTableBody');
                     tbody.innerHTML = '';
-                    
+
                     // Reset line number tracking
                     lastLineNumber = 0;
-                    
+
                     // Add search results
                     const entriesAdded = addLogEntries(data.lines);
-                    
+
                     // Update status with search results info
                     if (searchTerm) {{
                         const searchMatches = data.search_matches || data.returned_lines;
                         const displayedResults = data.returned_lines;
-                        
+
                         if (searchMatches > displayedResults) {{
                             statusDiv.textContent = `Found ${{searchMatches}} matching entries (showing ${{displayedResults}})`;
                         }} else {{
                             statusDiv.textContent = `Found ${{searchMatches}} matching entries (showing ${{displayedResults}})`;
                         }}
-                        
+
                         updateStatus(`Search completed - ${{searchMatches}} matches found`);
                     }} else {{
                         statusDiv.textContent = '';
@@ -2938,9 +2938,9 @@ def get_logfile_js(filter_type):
         // Fetch new log entries
         async function updateLog() {{
             if (isUpdating || isPaused) return;
-            
+
             const searchTerm = document.getElementById('logSearchInput').value.toLowerCase().trim();
-            
+
             isUpdating = true;
 
             try {{
@@ -2972,7 +2972,7 @@ def get_logfile_js(filter_type):
                             const rows = document.querySelectorAll('#logTableBody tr[data-line]');
                             const totalDisplayed = rows.length;
                             const currentText = statusDiv.textContent;
-                            
+
                             // Try to extract existing match count and update it
                             if (currentText.includes('Found')) {{
                                 const match = currentText.match(/Found (\\d+)/);

@@ -1095,37 +1095,38 @@ var options = {
         """
         JSON API to get log data with filtering and search
         """
+
         def highlight_search_term(text, search_term):
             """
             Highlight search term in text with HTML markup, case-insensitive
             """
             if not search_term or not text:
                 return text
-            
+
             import re
             import html as html_module
-            
+
             # Create case-insensitive pattern for the original text
             pattern = re.compile(re.escape(search_term), re.IGNORECASE)
-            
+
             # Split text around matches, then escape and highlight each part
             parts = pattern.split(text)
             matches = pattern.findall(text)
-            
+
             result_parts = []
-            
+
             for i, part in enumerate(parts):
                 # Escape the regular text part
                 result_parts.append(html_module.escape(part))
-                
+
                 # Add highlighted match if there is one
                 if i < len(matches):
                     escaped_match = html_module.escape(matches[i])
                     highlighted_match = f'<mark class="search-highlight" style="background-color: #ffff00; font-weight: bold;">{escaped_match}</mark>'
                     result_parts.append(highlighted_match)
-            
-            return ''.join(result_parts)
-        
+
+            return "".join(result_parts)
+
         try:
             logfile = "predbat.log"
             logfile_1 = "predbat.1.log"
@@ -1192,7 +1193,7 @@ var options = {
                     matched_lines += 1
                     start_line = line[0:27] if len(line) >= 27 else line
                     rest_line = line[27:] if len(line) >= 27 else ""
-                    
+
                     # Apply highlighting if search term is present
                     if search_term:
                         highlighted_timestamp = highlight_search_term(start_line, search_term)
@@ -1201,20 +1202,23 @@ var options = {
                     else:
                         # Escape HTML characters even when no search highlighting
                         import html as html_module
+
                         highlighted_timestamp = html_module.escape(start_line)
                         highlighted_message = html_module.escape(rest_line)
                         highlighted_full_line = html_module.escape(line)
 
-                    result_lines.append({
-                        "line_number": lineno, 
-                        "timestamp": highlighted_timestamp, 
-                        "message": highlighted_message, 
-                        "type": line_type, 
-                        "full_line": highlighted_full_line,
-                        "raw_timestamp": start_line,  # Keep raw versions for any client-side processing
-                        "raw_message": rest_line,
-                        "raw_full_line": line
-                    })
+                    result_lines.append(
+                        {
+                            "line_number": lineno,
+                            "timestamp": highlighted_timestamp,
+                            "message": highlighted_message,
+                            "type": line_type,
+                            "full_line": highlighted_full_line,
+                            "raw_timestamp": start_line,  # Keep raw versions for any client-side processing
+                            "raw_message": rest_line,
+                            "raw_full_line": line,
+                        }
+                    )
                     count_lines += 1
 
                 lineno -= 1
@@ -1222,15 +1226,8 @@ var options = {
             # Reverse to get reverse chronological order (newest first)
             result_lines.reverse()
 
-            response_data = {
-                "status": "success", 
-                "total_lines": total_lines, 
-                "returned_lines": len(result_lines), 
-                "lines": result_lines, 
-                "filter": filter_type,
-                "search_term": search_term
-            }
-            
+            response_data = {"status": "success", "total_lines": total_lines, "returned_lines": len(result_lines), "lines": result_lines, "filter": filter_type, "search_term": search_term}
+
             # If we have a search term, add information about total matches
             if search_term:
                 response_data["search_matches"] = total_search_matches
