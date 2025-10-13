@@ -314,7 +314,7 @@ If you  have more than one GivEnergy inverter you will need one per inverter to 
 ```
 
 If you are running GivTCP v3 and have an 'All-In-One' (AIO) or a 3-phase inverter then the helper regular expression will not correctly work
-and you will need to manually set geserial in apps.yaml to your inverter serial number, e.g.:
+and you will need to manually set geserial in apps.yaml to your inverter serial number which must be entered in lower case, e.g.:
 
 ```yaml
   geserial: 'chNNNNgZZZ'
