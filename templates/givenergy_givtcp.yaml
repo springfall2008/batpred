@@ -381,7 +381,7 @@ pred_bat:
   # Overrides metric_octopus_export and rates_export
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-A/standard-unit-rates"
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
-  
+
   # Import rates can be overridden with rate_import_override
   # Export rates can be overridden with rate_export_override
   # Use the same format as above, but a date can be included if it just applies for a set day (e.g. Octopus power ups)

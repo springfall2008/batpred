@@ -56,7 +56,7 @@ To prevent this happening, in the Zappi configuration set the Export Margin to 8
 ### Predbat-led charging
 
 Here Predbat plans and can initiate the car charging based on the upcoming low import rate slots
-  
+
 - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml` to point to the appropriate sensors from your EV (see [Car charging config in apps.yaml](apps-yaml.md#car-charging-integration))
 
 - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned when the car is 'plugged in and ready to charge' is in the list of **car_charging_planned_response** values
