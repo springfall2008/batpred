@@ -21,19 +21,19 @@ The [Octopus Energy integration supports Octopus Intelligent](https://bottlecapd
 and through that, Predbat gets most of the information it needs.
 
 - **octopus_intelligent_slot** in `apps.yaml` is pre-configured with a regular expression to point to the Intelligent Slot sensor in the Octopus Energy integration.
-You should not need to change this, but it is worth checking the [Predbat logfile](output-data.md#predbat-logfile) to confirm that it has found your Octopus account details.<BR>
+You should not need to change this, but it is worth checking the [Predbat logfile](output-data.md#predbat-logfile) to confirm that it has found your EV charger details.<BR>
 If you are using the [Octopus Energy direct](energy-rates.md#octopus-energy-direct) method of Predbat directly connecting to your Octopus account then this configuration line is not required and should be commented out of `apps.yaml`.
 
 - Set **switch.predbat_octopus_intelligent_charging** to On
 
 - You should set the car's current SoC sensor, **car_charging_soc** in `apps.yaml` to point to a Home Assistant sensor that specifies the car's current % charge level to have accurate results.
 This should normally be a sensor provided by your car charger.
-If you don't have this available for your charger then Predbat will assume the car's current charge level is 0%
+If you don't have this available for your charger then Predbat will assume the car's current charge level is 0%.
 
 - If you set **car_charging_limit** in `apps.yaml` then Predbat can also know if the car's limit is set lower than in Intelligent Octopus.
 If you don't set this Predbat will default to 100%.
 
-- **octopus_charge_limit** and **octopus_ready_time** in `apps.yaml` are pre-configured with regular expressions to point to the appropriate sensors in the Octopus Energy integration.
+- **octopus_charge_limit** and **octopus_ready_time** in `apps.yaml` are pre-configured with regular expressions to point to the appropriate sensors for your EV charger in the Octopus Energy integration.
 These retrieve details of the charge limit and when the car will finish charging from your Octopus app settings.
 Again, if you are using the Octopus Energy direct method for Predbat then these configuration lines are not required and should be commented out of `apps.yaml`.
 

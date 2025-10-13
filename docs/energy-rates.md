@@ -105,14 +105,14 @@ but you can comment out the regular expression lines to disable, or you set them
 - **metric_octopus_import** - Import rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_METER_NUMBER_current_rate
 - **metric_octopus_export** - Export rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_METER_NUMBER_export_current_rate
 - **metric_octopus_gas** - Gas rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_gas_METER_NUMBER_current_rate
-- **octopus_intelligent_slot** - If you have the Octopus Intelligent Go tariff this should point to the 'slot' sensor binary_sensor.octopus_energy_ACCOUNT_ID_intelligent_dispatching
+- **octopus_intelligent_slot** - If you have the Octopus Intelligent Go tariff this should point to the 'slot' sensor binary_sensor.octopus_energy_DEVICE_ID_intelligent_dispatching
 
 metric_octopus_gas is (as above) only required to be configured if you are using Predbat to determine whether to heat your hot water via your iBoost or gas.
 
 If you do not have an export rate or are not on the Octopus Go tariff, then the appropriate lines can be commented out in apps.yaml.
 
-NOTE: Predbat using the Octopus integration rates relies upon the day rate events being enabled (see above) and the events and the sensor found by metric_octopus_xxx in apps.yaml being similarly named.
-There have been occasions with some Octopus Integration installations where the event name is as above but the sensor name has a different prefix, e.g. sensor.electricity_METER_NUMBER_current_rate and not sensor.octopus_energy_electricity_METER_NUMBER_current_rate.
+NOTE: Predbat using the Octopus integration rates relies upon the day rate events being enabled (see above) and the events and the sensor found by metric_octopus_xxx in `apps.yaml` being similarly named.<BR>
+There have been occasions with some Octopus Integration installations where the event name is as above but the sensor name has a different prefix, e.g. sensor.electricity_METER_NUMBER_current_rate and not sensor.octopus_energy_electricity_METER_NUMBER_current_rate.<BR>
 If this is the case then the sensor must be renamed to the correct format so that Predbat can function correctly.
 
 ### Standing charge

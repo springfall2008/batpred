@@ -200,13 +200,12 @@ pred_bat:
   # car_charging_soc:
   #   - 're:sensor.tsunami_battery'
 
-  # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
+  # If you have Octopus Intelligent Go and are not using the Octopus Direct connection method, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
-  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
-  # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
-
-  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy_([0-9a-z_]+|)_intelligent_dispatching)'
-  octopus_ready_time: 're:(time.octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless Octopus intelligent charging is False)
+  # This matches the intelligent slot from the Octopus Energy integration
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
 
   # Carbon Intensity data from National grid
