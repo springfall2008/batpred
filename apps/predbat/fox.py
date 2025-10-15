@@ -90,7 +90,7 @@ class FoxAPI:
             try:
                 if first or (count_seconds % (30 * 60) == 0):
                     if first:
-                        # Only do these once as battery charging times are overriden with scheduler 
+                        # Only do these once as battery charging times are ignored with the scheduler 
                         # and we get the realtime data every 5 minutes
                         await self.get_device_list()
                         self.log("Fox API: Found {} devices".format(len(self.device_list)))
@@ -362,7 +362,7 @@ class FoxAPI:
             'hardwareVersion': '--',
             'managerVersion': '1.28',
             'stationName': 'My Home',
-            'moduleSN': 'XXKE8020479C034',
+            'moduleSN': '12348020479C034',
             'batteryList':
                 [{'batterySN': 'YYYYY', 'model': 'EP11', 'type': 'bcu', 'version': '1.005'},
                  {'batterySN': 'YYYYY', 'model': 'EP11', 'type': 'bmu', 'version': '1.05', 'capacity': 10360},
