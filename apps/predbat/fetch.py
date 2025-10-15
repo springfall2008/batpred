@@ -269,10 +269,26 @@ class Fetch:
             use_days = max(min(days, self.load_minutes_age), 1)
             num_gaps = 0
             full_days = 24 * 60 * (use_days - 1)
-            for minute in range(0, 24 * 60, PREDICT_STEP):
-                minute_previous = 24 * 60 - minute + full_days - 1
-                if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
-                    num_gaps += PREDICT_STEP
+            gap_minutes = 0
+            gap_start = None
+            gap_list = []
+
+            # Find all the gaps
+            for minute in range(PREDICT_STEP, 24 * 60 + PREDICT_STEP, PREDICT_STEP):
+                minute_previous = 24 * 60 - minute + full_days
+                if data.get(minute_previous, 0) == data.get(minute_previous + PREDICT_STEP, 0):
+                    gap_minutes += PREDICT_STEP
+                    if gap_start is None:
+                        gap_start = minute - PREDICT_STEP
+                else:
+                    if gap_minutes >= gap_size:
+                        num_gaps += gap_minutes
+                        gap_list.append((gap_start, gap_minutes))
+                    gap_minutes = 0
+                    gap_start = None
+            if gap_minutes >= gap_size:
+                num_gaps += gap_minutes
+                gap_list.append((gap_start, gap_minutes))
 
             # If we have some gaps
             if num_gaps > 0:
@@ -287,16 +303,16 @@ class Fetch:
 
                 # Do the filling
                 per_minute_increment = average_day / (24 * 60)
-                for minute in range(0, 24 * 60, PREDICT_STEP):
-                    minute_previous = 24 * 60 - minute + full_days - 1
-                    if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
-                        total_to_add = 0
-                        for offset in range(minute_previous + gap_size, -1, -1):
-                            if offset in data:
-                                data[offset] = dp4(data[offset] + total_to_add)
-                            else:
-                                data[offset] = dp4(total_to_add)
-                            if offset > minute_previous:
+                for gap in gap_list:
+                    gap_start = gap[0]
+                    gap_minutes = gap[1]
+                    total_to_add = 0
+                    end_of_data = 24 * 60 + full_days
+                    for minute in range(gap_start, end_of_data + 1):
+                        minute_previous = 24 * 60 - minute + full_days
+                        if minute_previous >= 0:
+                            data[minute_previous] = dp4(data.get(minute_previous, 0) + total_to_add)
+                            if minute < (gap_start + gap_minutes):
                                 total_to_add += per_minute_increment
 
     def get_historical_base(self, data, minute, base_minutes):
@@ -766,18 +782,23 @@ class Fetch:
             # Fill from last sample until now with interpolation if enabled
             if interpolate and clean_increment and backwards:
                 last_sample_minute = 0
-                for minute in range(60 * 24 * days):
+                for minute in range(60):
                     if minute in mdata:
                         last_sample_minute = minute
                         break
-                if last_sample_minute > 0:
+                last_but_one_sample_minute = last_sample_minute
+                for minute in range(last_sample_minute + 5, 60):
+                    if minute in mdata and (mdata[minute] != mdata[last_sample_minute]):
+                        last_but_one_sample_minute = minute
+                        break
+                sample_gap = last_but_one_sample_minute - last_sample_minute
+                if last_sample_minute > 0 and sample_gap > 0 and last_sample_minute < 15:
                     last_sample_value = mdata[last_sample_minute]
-                    last_but_one_minute_sample = mdata[last_sample_minute + 1] if (last_sample_minute + 1) in mdata else last_sample_value
-                    step = last_sample_value - last_but_one_minute_sample
-                    if last_sample_minute < 10 * 60 and last_sample_minute > 0:
+                    last_but_one_minute_sample = mdata[last_but_one_sample_minute]
+                    step = (last_sample_value - last_but_one_minute_sample) / sample_gap
+                    if step > 0:
                         for minute in range(last_sample_minute):
-                            if minute not in mdata:
-                                mdata[minute] = dp4(newest_state + step * (last_sample_minute - minute))
+                            mdata[minute] = dp4(last_sample_value + step * (last_sample_minute - minute))
 
             # Fill from last sample until now
             for minute in range(60 * 24 * days):

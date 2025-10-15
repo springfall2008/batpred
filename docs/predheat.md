@@ -27,7 +27,7 @@ Future versions will also offer Predbat to run in master mode, controlling your 
 
 ## Installation guide
 
-Predheat is now part of Predbat, you will need to configure it using apps.yaml and then enable it by turning on **switch.predbat_predheat_enable**
+Predheat is now part of Predbat, you will need to configure it using `apps.yaml` and then enable it by turning on **switch.predbat_predheat_enable**
 
 ### Openweather install
 

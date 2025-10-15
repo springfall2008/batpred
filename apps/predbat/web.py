@@ -19,7 +19,23 @@ import json
 import shutil
 import html as html_module
 import time
-from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css, get_logfile_js, get_entity_toggle_js, get_entity_control_css
+from web_helper import (
+    get_header_html,
+    get_plan_css,
+    get_editor_js,
+    get_editor_css,
+    get_log_css,
+    get_charts_css,
+    get_apps_css,
+    get_html_config_css,
+    get_apps_js,
+    get_components_css,
+    get_logfile_js,
+    get_entity_toggle_js,
+    get_entity_control_css,
+    get_entity_css,
+    get_entity_js,
+)
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
@@ -143,6 +159,7 @@ class WebInterface:
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
         app.router.add_get("/api/log", self.html_api_get_log)
+        app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
 
         # Notify plugin system that web interface is ready
@@ -583,6 +600,59 @@ class WebInterface:
             text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format("", entity, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity, from_db=True))
         return text
 
+    def get_entity_list_data(self):
+        """
+        Generate entity list data for the entity selector
+        """
+        # Get app list
+        app_list = ["predbat"]
+        for entity_id in self.base.dashboard_index_app.keys():
+            app = self.base.dashboard_index_app[entity_id]
+            if app not in app_list:
+                app_list.append(app)
+
+        entity_data_list = []
+
+        for app in app_list:
+            if app == "predbat":
+                entity_list = self.base.dashboard_index if hasattr(self.base, "dashboard_index") and self.base.dashboard_index else []
+            else:
+                entity_list = []
+                if hasattr(self.base, "dashboard_index_app") and self.base.dashboard_index_app:
+                    for entity_id in self.base.dashboard_index_app.keys():
+                        if self.base.dashboard_index_app[entity_id] == app:
+                            entity_list.append(entity_id)
+
+            for entity_id in entity_list:
+                if hasattr(self.base, "dashboard_values") and self.base.dashboard_values:
+                    entity_friendly_name = self.base.dashboard_values.get(entity_id, {}).get("attributes", {}).get("friendly_name", entity_id)
+                else:
+                    entity_friendly_name = entity_id
+
+                entity_data_list.append({"id": entity_id, "name": entity_friendly_name, "group": f"{app[0].upper() + app[1:]} Entities"})
+
+        # Add config settings
+        if hasattr(self.base, "CONFIG_ITEMS") and self.base.CONFIG_ITEMS:
+            for item in self.base.CONFIG_ITEMS:
+                if self.base.user_config_item_enabled(item):
+                    entity_id = item.get("entity", "")
+                    entity_friendly_name = item.get("friendly_name", "")
+                    if entity_id:
+                        entity_data_list.append({"id": entity_id, "name": entity_friendly_name, "group": "Config Settings"})
+
+        return entity_data_list
+
+    async def html_api_get_entities(self, request):
+        """
+        API endpoint to get entity list as JSON
+        """
+        try:
+            entity_list = self.get_entity_list_data()
+            return web.json_response(entity_list)
+        except Exception as e:
+            self.base.log(f"Error in html_api_get_entities: {e}")
+            return web.json_response({"error": str(e)}, status=500)
+
     async def html_entity(self, request):
         """
         Return the Predbat entity as an HTML page
@@ -605,64 +675,27 @@ class WebInterface:
         unit_of_measurement = attributes.get("unit_of_measurement", "")
         friendly_name = attributes.get("friendly_name", "")
 
-        # Add entity dropdown selector
+        # Add entity dropdown selector with search functionality
         text += """<div style="margin-bottom: 20px;">
             <form id="entitySelectForm" style="display: flex; align-items: center;">
-                <label for="entitySelect" style="margin-right: 10px; font-weight: bold;">Select Entity: </label>
-                <select id="entitySelect" name="entity_id" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; flex-grow: 1; max-width: 500px;" onchange="document.getElementById('entitySelectForm').submit();">
-        """
-
-        # Add app list entries to dropdown
-        app_list = ["predbat"]
-        for entity_id in self.base.dashboard_index_app.keys():
-            app = self.base.dashboard_index_app[entity_id]
-            if app not in app_list:
-                app_list.append(app)
-
-        if not entity:
-            text += f'<optgroup label="Not selected">\n'
-            text += f'<option value="" selected></option>\n'
-            text += "</optgroup>\n"
-        elif entity not in self.base.dashboard_values:
-            text += f'<optgroup label="Selected">\n'
-            text += f'<option value="{entity}" selected>{entity}</option>\n'
-            text += "</optgroup>\n"
-
-        # Group entities by app in the dropdown
-        for app in app_list:
-            text += f'<optgroup label="{app[0].upper() + app[1:]} Entities">\n'
-
-            if app == "predbat":
-                entity_list = self.base.dashboard_index
-            else:
-                entity_list = []
-                for entity_id in self.base.dashboard_index_app.keys():
-                    if self.base.dashboard_index_app[entity_id] == app:
-                        entity_list.append(entity_id)
-
-            for entity_id in entity_list:
-                entity_friendly_name = self.base.dashboard_values.get(entity_id, {}).get("attributes", {}).get("friendly_name", entity_id)
-                selected = "selected" if entity_id == entity else ""
-                text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>\n'
-
-            text += "</optgroup>\n"
-
-        text += f'<optgroup label="Config Settings">\n'
-        for item in self.base.CONFIG_ITEMS:
-            if self.base.user_config_item_enabled(item):
-                entity_id = item.get("entity", "")
-                entity_friendly_name = item.get("friendly_name", "")
-                if entity_id:
-                    selected = "selected" if entity_id == entity else ""
-                    text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>\n'
-
-        text += "</optgroup>\n"
-        text += """
-                </select>
+                <label for="entitySearchInput" style="margin-right: 10px; font-weight: bold;">Select Entity: </label>
+                <div class="entity-search-container" style="position: relative; flex-grow: 1; max-width: 800px;">
+                    <input type="text" id="entitySearchInput" name="entity_search"
+                           placeholder="Type to search entities..."
+                           style="width: 100%; padding: 8px 30px 8px 8px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box;"
+                           autocomplete="off" />
+                    <button type="button" id="clearEntitySearch"
+                            style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); background: none; border: none; font-size: 16px; color: #999; cursor: pointer; padding: 2px 5px;"
+                            title="Clear search">×</button>
+                    <div id="entityDropdown" class="entity-dropdown"
+                         style="position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-top: none; max-height: 300px; overflow-y: auto; z-index: 1000; display: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    </div>
+                    <input type="hidden" id="selectedEntityId" name="entity_id" value="{}" />
+                </div>
                 <input type="hidden" name="days" value="{}" />
             </form>
         </div>""".format(
-            days
+            entity, days
         )
 
         # Add days selector
@@ -684,6 +717,11 @@ class WebInterface:
         </div>""".format(
             entity
         )
+        # CSS
+        text += get_entity_css()
+
+        # Add JavaScript and CSS for entity list and search
+        text += get_entity_js(entity)
 
         if entity:
             config_text = self.html_config_item_text(entity)
@@ -1055,8 +1093,40 @@ var options = {
 
     async def html_api_get_log(self, request):
         """
-        JSON API to get log data with filtering
+        JSON API to get log data with filtering and search
         """
+
+        def highlight_search_term(text, search_term):
+            """
+            Highlight search term in text with HTML markup, case-insensitive
+            """
+            if not search_term or not text:
+                return text
+
+            import re
+            import html as html_module
+
+            # Create case-insensitive pattern for the original text
+            pattern = re.compile(re.escape(search_term), re.IGNORECASE)
+
+            # Split text around matches, then escape and highlight each part
+            parts = pattern.split(text)
+            matches = pattern.findall(text)
+
+            result_parts = []
+
+            for i, part in enumerate(parts):
+                # Escape the regular text part
+                result_parts.append(html_module.escape(part))
+
+                # Add highlighted match if there is one
+                if i < len(matches):
+                    escaped_match = html_module.escape(matches[i])
+                    highlighted_match = f'<mark class="search-highlight" style="background-color: #ffff00; font-weight: bold;">{escaped_match}</mark>'
+                    result_parts.append(highlighted_match)
+
+            return "".join(result_parts)
+
         try:
             logfile = "predbat.log"
             logfile_1 = "predbat.1.log"
@@ -1074,16 +1144,19 @@ var options = {
             filter_type = args.get("filter", "warnings")  # all, warnings, errors
             since_line = int(args.get("since", 0))  # Line number to start from
             max_lines = int(args.get("max_lines", 1024))  # Maximum lines to return
+            search_term = args.get("search", "").lower().strip()  # Search term
 
             loglines = logdata.split("\n")
             total_lines = len(loglines)
 
-            # Process log lines with filtering
+            # Process log lines with filtering and search
             result_lines = []
             count_lines = 0
             lineno = total_lines - 1
+            matched_lines = 0  # Count of lines that match search criteria before limiting
+            total_search_matches = 0  # Total matches in entire file (used when search is active)
 
-            while count_lines < max_lines and lineno >= 0:
+            while lineno >= 0:
                 line = loglines[lineno]
                 line_lower = line.lower()
 
@@ -1092,7 +1165,7 @@ var options = {
                     lineno -= 1
                     continue
 
-                # Apply filtering
+                # Apply log level filtering first
                 include_line = False
                 line_type = "info"
 
@@ -1106,11 +1179,46 @@ var options = {
                     line_type = "info"
                     include_line = filter_type == "all"
 
+                # Apply search filter if search term is provided
+                if include_line and search_term:
+                    include_line = search_term in line_lower
+                    if include_line:
+                        total_search_matches += 1
+
+                # Check if we've reached the max lines limit
+                if count_lines >= max_lines:
+                    include_line = False
+
                 if include_line and (since_line == 0 or lineno > since_line):
+                    matched_lines += 1
                     start_line = line[0:27] if len(line) >= 27 else line
                     rest_line = line[27:] if len(line) >= 27 else ""
 
-                    result_lines.append({"line_number": lineno, "timestamp": start_line, "message": rest_line, "type": line_type, "full_line": line})
+                    # Apply highlighting if search term is present
+                    if search_term:
+                        highlighted_timestamp = highlight_search_term(start_line, search_term)
+                        highlighted_message = highlight_search_term(rest_line, search_term)
+                        highlighted_full_line = highlight_search_term(line, search_term)
+                    else:
+                        # Escape HTML characters even when no search highlighting
+                        import html as html_module
+
+                        highlighted_timestamp = html_module.escape(start_line)
+                        highlighted_message = html_module.escape(rest_line)
+                        highlighted_full_line = html_module.escape(line)
+
+                    result_lines.append(
+                        {
+                            "line_number": lineno,
+                            "timestamp": highlighted_timestamp,
+                            "message": highlighted_message,
+                            "type": line_type,
+                            "full_line": highlighted_full_line,
+                            "raw_timestamp": start_line,  # Keep raw versions for any client-side processing
+                            "raw_message": rest_line,
+                            "raw_full_line": line,
+                        }
+                    )
                     count_lines += 1
 
                 lineno -= 1
@@ -1118,7 +1226,13 @@ var options = {
             # Reverse to get reverse chronological order (newest first)
             result_lines.reverse()
 
-            return web.json_response({"status": "success", "total_lines": total_lines, "returned_lines": len(result_lines), "lines": result_lines, "filter": filter_type})
+            response_data = {"status": "success", "total_lines": total_lines, "returned_lines": len(result_lines), "lines": result_lines, "filter": filter_type, "search_term": search_term}
+
+            # If we have a search term, add information about total matches
+            if search_term:
+                response_data["search_matches"] = total_search_matches
+
+            return web.json_response(response_data)
 
         except Exception as e:
             self.log(f"Error in html_api_get_log: {e}")
@@ -1234,10 +1348,26 @@ var options = {
             in_override = False
             cell_bg_color = "#FFFFFF"
             override_class = ""
-            if minutes_from_midnight in manual_all_times:
+            if minutes_from_midnight in manual_charge_times:
                 in_override = True
-                cell_bg_color = "#FFC0CB"  # Pink background for cells with active overrides
-                override_class = "override-active"
+                cell_bg_color = "#3AEE85"  # Matches auto charging green
+                override_class = "override-charge"
+            elif minutes_from_midnight in manual_export_times:
+                in_override = True
+                cell_bg_color = "#FFFF00"  # Matches export yellow
+                override_class = "override-export"
+            elif minutes_from_midnight in manual_demand_times:
+                in_override = True
+                cell_bg_color = "#F18261"  # Matches high-cost demand red
+                override_class = "override-demand"
+            elif minutes_from_midnight in manual_freeze_charge_times:
+                in_override = True
+                cell_bg_color = "#C0C0C0"  # Matches freeze charging grey
+                override_class = "override-freeze-charge"
+            elif minutes_from_midnight in manual_freeze_export_times:
+                in_override = True
+                cell_bg_color = "#AAAAAA"  # Matches freeze exporting dark grey
+                override_class = "override-freeze-export"
 
             # Create clickable cell and dropdown HTML
             button_html = f"""<td bgcolor={cell_bg_color} onclick="toggleForceDropdown('{dropdown_id}')" class="clickable-time-cell {override_class}">
@@ -1438,7 +1568,7 @@ var options = {
         text += "</div>"
 
         text += '<div class="log-search-container">'
-        text += '<input type="text" id="logSearchInput" class="log-search-input" placeholder="Search log entries..." oninput="filterLogEntries()" />'
+        text += '<input type="text" id="logSearchInput" class="log-search-input" placeholder="Search entire log file..." oninput="filterLogEntries()" />'
         text += '<button id="clearSearchBtn" class="clear-search-button" onclick="clearLogSearch()">Clear</button>'
         text += '<div id="searchStatus" class="search-status"></div>'
         text += "</div>"

@@ -513,6 +513,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Enable use of Calibrated PV data",
         "type": "switch",
         "default": True,
+        "enable": "expert_mode",
     },
     {
         "name": "metric_dynamic_load_adjust",
@@ -1627,7 +1628,7 @@ INVERTER_DEF = {
         "target_soc_used_for_discharge": True,
     },
     "SIG": {
-        "name": "Huawei Solar",
+        "name": "Sigenergy Sigenstor",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "output_charge_control": "power",

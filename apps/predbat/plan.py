@@ -42,32 +42,57 @@ class Plan:
         Return True if load status has changed and hence we need to re-plan
         """
         prev_last_load_status = self.load_last_status
+        prev_last_load_car_slot = self.load_last_car_slot
+
+        threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
+        threshold_car = self.car_charging_threshold * MINUTE_WATT / 1000
+
         # Last period load analysis
         self.load_last_status = "baseline"
-        if self.load_last_period > self.battery_rate_max_discharge * MINUTE_WATT / 1000:
+        if self.load_last_period >= threshold_battery:
             self.load_last_status = "high"
-        elif (self.load_last_period < self.battery_rate_max_discharge * 0.9 * MINUTE_WATT / 1000) and (self.load_last_period < self.car_charging_threshold * 0.9):
+        elif (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < (threshold_car * 0.9)):
             # Check if the load is less than car charging threshold
             self.load_last_status = "low"
         else:
             self.load_last_status = "baseline"
 
+        # Update entity for last load
+        self.dashboard_item(
+            self.prefix + ".load_energy_last_period",
+            state=dp3(self.load_last_period),
+            attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status": self.load_last_status},
+        )
+        self.log("Dynamic load last period {:.2f}kW status {} threshold_battery {} threshold_car {}".format(self.load_last_period, self.load_last_status, threshold_battery, threshold_car))
+
+        # Is the car currently planned to charge?
+        load_car_slot = False
+        for car_n in range(0, self.num_cars):
+            for slot_n in range(0, len(self.car_charging_slots[car_n])):
+                slot = self.car_charging_slots[car_n][slot_n]
+                # Don't include the exact start minute as it may take a few for the load to filter through
+                if slot["start"] <= self.minutes_now < slot["end"]:
+                    load_car_slot = True
+                    self.log("Dynamic load adjust sees car {} charging now slot {}-{} previous car slot {}".format(car_n + 1, slot["start"], slot["end"], self.load_last_car_slot))
+        self.load_last_car_slot = load_car_slot
         self.dynamic_load_baseline = {}
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
             minutes_end_slot = int((self.minutes_now + 30) / 30) * 30
             # When dynamic load is enabled we try can do two things
             # 1. Increase the load prediction in the current 30 minute period to match the actual load (if the load is higher than expected)
-            # 2. If the load is low and car charging is predicted then cancel off that car slot
+            # 2. If the load is low and car charging is predicted then cancel off future car slots
             # Note never do this just after midnight due to the load sensor reset
             if self.load_last_status == "low" and self.minutes_now > 5:
-                for car_n in range(0, self.num_cars):
-                    for slot_n in range(0, len(self.car_charging_slots[car_n])):
-                        slot = self.car_charging_slots[car_n][slot_n]
-                        if (slot["start"] < minutes_now) and (slot["start"] < minutes_end_slot) and (slot["end"] > minutes_now):
-                            # If the slot is within the current 30 minute period
-                            self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n + 1, slot["start"], slot["end"]))
-                            self.car_charging_slots[car_n][slot_n]["kwh"] = 0
+                if load_car_slot and prev_last_load_car_slot:
+                    for car_n in range(0, self.num_cars):
+                        for slot_n in range(0, len(self.car_charging_slots[car_n])):
+                            slot = self.car_charging_slots[car_n][slot_n]
+                            if slot["end"] > minutes_now:
+                                # If the slot is in the future
+                                self.log("Dynamic load adjust is cancelling car {} slot {}-{} due to low load".format(car_n + 1, slot["start"], slot["end"]))
+                                self.car_charging_slots[car_n][slot_n]["kwh"] = 0
+
             if self.load_last_status == "high":
                 have_printed = False
                 for minute_absolute in range(minutes_now, minutes_end_slot, PREDICT_STEP):
@@ -80,7 +105,9 @@ class Plan:
                             have_printed = True
                         self.dynamic_load_baseline[minute_absolute] = load_last_period
             if prev_last_load_status != self.load_last_status:
+                self.log("Dynamic load status changed from {} to {}".format(prev_last_load_status, self.load_last_status))
                 return True
+
         return False
 
     def find_price_levels(
@@ -1118,7 +1145,7 @@ class Plan:
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
                 # Web history
-                if self.components.get_component("web"):
+                if self.components and self.components.get_component("web"):
                     self.components.get_component("web").history_update()
 
         # Destroy pool
@@ -3325,11 +3352,6 @@ class Plan:
                     self.prefix + ".load_energy_h0",
                     state=dp3(load_kwh_h0),
                     attributes={"friendly_name": "Current load", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
-                )
-                self.dashboard_item(
-                    self.prefix + ".load_energy_last_period",
-                    state=dp3(self.load_last_period),
-                    attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status": self.load_last_status},
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_energy",

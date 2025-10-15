@@ -15,12 +15,15 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | [Givenergy/Octopus No Home Assistant](#givenergyoctopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
-   | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
+   | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
    | [LuxPower](#lux-power) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml)|
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
+
+Additionally you can create a [custom inverter definition for Predbat](#i-want-to-add-an-unsupported-inverter-to-predbat) if your inverter type is not directly supported.
+Once you get everything working please share the configuration as a github issue so it can be incorporated into the predbat documentation.
 
 NB: By default the apps.yaml template for GivTCP is installed with Predbat.
 If you are using a different inverter then you will need to copy the appropriate apps.yaml template from the above list and use it to **replace the GivTCP apps.yaml** - if
@@ -98,9 +101,9 @@ The rest of the [Predbat installation instructions](install.md) should now be fo
 but its worth highlighting that there are a few specific settings that should be set for certain GivEnergy equipment.
 These settings are documented in the appropriate place in the documentation, but for ease of identification, are repeated here:
 
-- If you are using GivTCP v3 and have an AIO or 3-phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number as the auto-detect doesn't work for this setup
+- If you are using GivTCP v3 and have an AIO or 3-phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number in lower case as the auto-detect doesn't work for this setup
 - If you have a single AIO then control is directly to the AIO. Ensure [geserial in apps.yaml](apps-yaml.md#geserial) is correctly picking the AIO and comment out geserial2 lines
-- If you have multiple AIOs then all control of the AIOs is done through the Gateway so [geserial in apps.yaml](apps-yaml.md#geserial) should be set to the Gateway serial number
+- If you have multiple AIOs then all control of the AIOs is done through the Gateway so [geserial in apps.yaml](apps-yaml.md#geserial) should be set to the Gateway serial number in lower case
 - If you have multiple AIOs you might want to consider setting [inverter charge and discharge limits](apps-yaml.md#inverter-control-configurations)
 unless you want to charge and discharge at the full 12kWh!
 - If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set [battery_scaling in apps.yaml](apps-yaml.md#battery-size-scaling)
@@ -682,32 +685,44 @@ The following additions are needed to facilitate integration with Predbat and ne
 - First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have
 - Create a GitHub ticket for support and add what you know to the ticket
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
-- You can create a new inverter type in apps.yaml and change the options as to which controls it has
-- Set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) to match the custom inverter definition ('MINE' in the example below)
-- The easy way to integrate using Home Assistant services to start charges and discharges, edit the template below:
+- You can create a new inverter type in `apps.yaml` and change the options as to which controls it has
+- You **must** set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) with a custom name ('MINE' in the example below) - if you do not do this then Predbat will assume you have a GivEnergy inverter
+and will apply inverter limits for that inverter (e.g. max charge/discharge of 2600W)
+- Configure Predbat with the appropriate Home Assistant services to start charges and discharges, etc.
+
+The following template can be used as a starting point:
 
 ```yaml
   inverter_type: MINE
   inverter:
-    name: "My Shiny new Inverter"
+    name: "MINE"
     has_rest_api: False
     has_mqtt_api: False
+    has_service_api: True
     output_charge_control: "power"
+    charge_control_immediate: False
+    current_dp: 1
+    charge_discharge_with_rate: False
     has_charge_enable_time: False
     has_discharge_enable_time: False
     has_target_soc: False
+    target_soc_used_for_discharge: True
     has_reserve_soc: False
+    has_timed_pause: False
+    time_button_press: False
+    support_charge_freeze: False
+    support_discharge_freeze: False
+    has_ge_inverter_mode: False
+    has_fox_inverter_mode: False
+    has_idle_time: False
+    has_time_window: False
     charge_time_format: "S"
     charge_time_entity_is_option: False
-    soc_units: "%"
-    num_load_entities: 1
-    has_ge_inverter_mode": False
-    time_button_press: False
+    can_span_midnight: False
     clock_time_format: "%Y-%m-%d %H:%M:%S"
+    num_load_entities: 1
+    soc_units: "%"
     write_and_poll_sleep: 2
-    has_time_window: False
-    support_charge_freeze: False
-    support_discharge_freeze": False
 
   # Services to control charging/discharging
   charge_start_service:
@@ -722,43 +737,42 @@ The following additions are needed to facilitate integration with Predbat and ne
     service: select.select_option
     entity_id: "select.solaredge_i1_storage_command_mode"
     option: "Maximize Self Consumption"
-
 ```
 
-## Inverter control option
+## Inverter control options
 
 The following options are supported per inverter:
 
 ### has_rest_api
 
-When True the REST API will be used to fetch data/control the inverter. This is currently only for GivEnergy inverters with GivTCP and **givtcp_rest** must be set in apps.yaml
+When True the REST API will be used to fetch data/control the inverter. This is currently only for GivEnergy inverters with GivTCP and **givtcp_rest** must be set in `apps.yaml`
 
 ### has_mqtt_api
 
-When True the MQTT API to Home Assistant will be used to issue control messages for the inverter
+When True the Home Assistant MQTT API will be used to issue control messages for the inverter
 
-The MQTT/publish service is used with the topic as defined by **mqtt_topic** in apps.yaml
+The MQTT/publish service is used with the topic as defined by **mqtt_topic** in `apps.yaml`
 
 Messages will be sent through these controls:
 
 Values that are updated:
 
-- **topic**/set/reserve  - payload=reserve
+- **topic**/set/reserve - payload=reserve
 - **topic**/set/charge_rate - payload=new_rate
 - **topic**/set/discharge_rate - payload=new_rate
 - **topic**/set/target_soc - payload=target_soc
 
-These three change between battery charge/discharge and auto (idle) mode:
+These three messages change between battery charge/discharge and auto (demand) mode:
 
 - **topic**/set/charge - payload=charge_rate
 - **topic**/set/discharge - payload=discharge_rate
 - **topic**/set/auto - payload=true
 
-### Service API
+### has_service_api
 
-When True a Home Assistant service will be used to issue control messages for the inverter
+When True a Home Assistant service will be used to issue control messages for the inverter.
 
-For each service you wish to use it must be defined in apps.yaml.
+For each service you wish to use it must be defined in `apps.yaml`.
 
 There are two ways to define a service, the basic mode:
 
@@ -766,9 +780,9 @@ There are two ways to define a service, the basic mode:
   charge_start_service: my_service_name_charge
 ```
 
-Will call my_service_name_charge for the charge start service.
+Will call `my_service_name_charge` for the charge start service.
 
-Or the custom method:
+Or the custom method where you can define all the parameter values passed to the service and use the default values from the template, or define your own:
 
 ```yaml
   charge_start_service:
@@ -779,8 +793,6 @@ Or the custom method:
       charge_start_time: "{charge_start_time}"
       charge_end_time: "{charge_end_time}"
 ```
-
-Here you can define all the values passed to the service and use the default values from the template or define your own.
 
 You can also call more than one service e.g:
 
@@ -812,8 +824,8 @@ Called to start a charge
 
 The default options passed in are:
 
-- device_id - as defined in apps.yaml by **device_id**
-- target_soc - The SOC to charge to
+- device_id - as defined in `apps.yaml` by **device_id**
+- target_soc - The SoC to charge to
 - power - The charge power to use
 - charge_start_time - Start time for the charge
 - charge_end_time - End time for the charge
@@ -822,133 +834,155 @@ The default options passed in are:
 
 If defined will be called for freeze charge, otherwise, charge_start_service is used for freeze charge also.
 
+#### charge_stop_service
+
+Called to stop a charge
+
+- device_id - as defined in `apps.yaml` by **device_id**
+
 #### discharge_start_service
 
 Called to start a discharge
 
 The default options passed in are:
 
-- device_id - as defined in apps.yaml by **device_id**
-- target_soc - The SOC to discharge to
+- device_id - as defined in `apps.yaml` by **device_id**
+- target_soc - The SoC to discharge to
 - power - The discharge power to use
 
 #### discharge_freeze_service
 
 If defined will be called for Discharge freeze, otherwise, discharge_start_service is used for freeze discharge also.
 
-#### charge_stop_service
-
-Called to stop a charge
-
-device_id - as defined in apps.yaml by **device_id**
-
 #### discharge_stop_service
 
 Called to stop a discharge, if not set then **charge_stop_service** will be used instead
 
-- device_id - as defined in apps.yaml by **device_id**
+- device_id - as defined in `apps.yaml` by **device_id**
 
 ### output_charge_control
 
-Set to power, current or none
+Controls what charge control units are to be used when starting charging. Set to "power", "current" or "none".
 
-When power the inverter has a **charge_rate** and **discharge_rate** setting in watts defined in apps.yaml
+When set to "power", Predbat will use the inverter sensors configured as **charge_rate** and **discharge_rate** in `apps.yaml` to set the inverter charge/discharge power levels. These inverter sensors must be in watts.
 
-When current the inverter has  **timed_charge_current** and **timed_discharge_current** setting in amps defined in apps.yaml
+When set to "current", Predbat will use the inverter sensors configured as  **timed_charge_current** and **timed_discharge_current** in `apps.yaml` to set the inverter charge/discharge current levels. These inverter sensors must be in amps.<BR>
+Additionally if you are using "current" control for your inverter you must set **battery_voltage** in `apps.yaml` to your nominal maximum battery voltage (NB: not the current battery voltage)
+as Predbat will use this to convert its output commands from watts to amps for the inverter.
 
 ### charge_control_immediate
 
-When True the inverter uses **timed_charge_current** and **timed_discharge_current** to control charging and discharging by setting current levels directly, instead of following a time-based plan.
+When True, the inverter uses **timed_charge_current** and **timed_discharge_current** in `apps.yaml` to control charging and discharging by setting current levels directly, instead of following a time-based plan.
 
 ### current_dp
 
-Sets the number of decimal places when setting the current in Amps, which should be 0 or 1
-
-### has_charge_enable_time
-
-When True the inverter has a setting defined in apps.yaml called **scheduled_charge_enable** when can be used to enable/disable timed charging.
-
-### has_discharge_enable_time
-
-When True the inverter has a setting defined in apps.yaml called **scheduled_discharge_enable** when can be used to enable/disable timed discharging.
-
-### has_target_soc
-
-When True the inverter has a target charge SoC setting in apps.yaml called **charge_limit**.
-When False charging must be turned on and off by Predbat rather than the inverter doing it based on the target SoC %.
-
-### has_reserve_soc
-
-When True the inverter has a discharge reserve SoC setting in apps.yaml called **reserve** which is the target % to discharge the battery down to.
-When False discharging must be turned on and off by Predbat rather than the inverter doing it based on discharge Soc %.
-
-### has_timed_pause
-
-When True the inverter has a setting in apps.yaml called **pause_mode** and settings **pause_start_time** and **pause_end_time** which can be used to pause the inverter from
-charging and discharging the battery - this is for GivEnergy systems only right now.
-
-### charge_time_format
-
-When set to "HH:MM:SS" the inverter has:
-
-**charge_start_time** **charge_end_time**
-**discharge_start_time** **discharge_end_time**
-
-Which are option selectors in the format HH:MM:SS (e.g. 12:23:00) where seconds are always 00.
-
-When set to "H M" the inverter has:
-
-**charge_start_hour** **charge_end_hour** **charge_start_minute** **charge_end_minute**
-**discharge_start_hour** **discharge_end_hour** **discharge_start_minute** **discharge_end_minute**
-
-Settings in apps.yaml which can be used to set the start and end times of charges and discharges
-
-### charge_time_entity_is_option
-
-When True **charge_start_time** **charge_end_time** **discharge_start_time** and **discharge_end_time** are all Options, when false they are number values.
-
-### clock_time_format
-
-Defines the time format of the inverter clock setting **inverter_time** in apps.yaml
-
-### soc_units
-
-Defines the units of the SOC setting (currently not used)
-
-### time_button_press
-
-When true the inverter has a button press which is needed to update the inverter registers from the Home Assistant values.
-
-The apps.yaml setting **charge_discharge_update_button** is the entity name of the button that must be pressed and polled until it updates after each inverter register change.
-
-### support_charge_freeze
-
-When True the inverter supports charge freeze modes
-
-### support_discharge_freeze
-
-When True the inverter supports discharge freeze modes
-
-### has_ge_inverter_mode
-
-When True the inverter as the GivEnergy inverter modes (ECO, Timed Export etc).
-
-### num_load_entities
-
-Sets the number of **load_power_n** settings in apps.yaml are present in addition to **load_power** (the default)
-
-### write_and_poll_sleep
-
-Sets the number of seconds between polls of inverter settings
-
-### has_idle_time
-
-When True the inverter has an idle time register which must be set to the start and end times for ECO mode (GivEnergy EMS)
-
-### can_span_midnight
-
-When True start and end times for charge and discharge can span midnight e.g. 23:00:00 - 01:00:00 is a 2-hour slot.
+Sets the number of decimal places to be used when setting the current in Amps, which should be 0 or 1.
 
 ### charge_discharge_with_rate
 
-When True when charging discharge rate must be 0 and visa-versa. When false the rate does not have to change.
+When True, the inverter requires that when charging the discharge rate must set be 0; and vice-versa, when discharging the charge rate must be set to 0.
+
+When False, the charge/discharge rate does not have to change.
+
+### has_charge_enable_time
+
+When True, Predbat uses the **scheduled_charge_enable** switch configured in `apps.yaml` to enable/disable timed charging on the inverter.
+
+### has_discharge_enable_time
+
+When True, Predbat uses the **scheduled_discharge_enable** switch configured in `apps.yaml` to enable/disable timed discharging on the inverter.
+
+### has_target_soc
+
+When True, Predbat uses the **charge_limit** sensor configured in `apps.yaml` to set the target charge SoC % setting for the inverter. The charge limit is the limit that the inverter will charge the battery up to.
+When False, charging will be turned on and off by Predbat rather than the inverter doing it based on the target SoC %.
+
+### target_soc_used_for_discharge
+
+When True, Predbat will use the **charge_limit** sensor configured in `apps.yaml` to control the target discharge SoC% for the inverter.
+
+When False, Predbat will not adjust the **charge_limit** sensor when discharging.
+
+### has_reserve_soc
+
+When True, Predbat uses the **reserve** sensor configured in `apps.yaml` to set the discharge reserve SoC % for the inverter. The reserve SoC is the target % to discharge the battery down to.
+When False, discharging will be turned on and off by Predbat rather than the inverter doing it based on discharge SoC %.
+
+### has_timed_pause
+
+When True, Predbat uses the **pause_mode** and optional **pause_start_time** and **pause_end_time**  settings in `apps.yaml` to pause the inverter from charging and discharging the battery. This setting is for GivEnergy systems only right now.
+
+### time_button_press
+
+When True, the inverter requires a button press to update the inverter registers from the Home Assistant values.
+
+The `apps.yaml` setting **charge_discharge_update_button** is the entity name of the button that Predbat will "push" to update the inverter registers.
+
+### support_charge_freeze
+
+When True, the inverter supports charge freeze modes.
+
+### support_discharge_freeze
+
+When True, the inverter supports discharge freeze modes.
+
+### has_ge_inverter_mode
+
+When True, the inverter supports the GivEnergy inverter modes (ECO, Timed Export etc).
+
+### has_fox_inverter_mode
+
+When True, the inverter supports Fox inverter modes, i.e. Eco (Paused) is treated the same as Eco mode and the inverter mode is always set to "SelfUse" as all charging and discharging is controlled by schedule, not inverter modes.
+
+### has_idle_time
+
+When True, the inverter has an idle time register which must be set to the start and end times for Eco mode (GivEnergy EMS).  **idle_start_time** and **idle_end_time** must be configured in `apps.yaml` to the appropriate inverter controls.
+
+### has_time_window
+
+Not currently used by Predbat.
+
+### charge_time_format
+
+This setting is used to control what format of charge and discharge times the inverter requires.
+
+When set to "HH:MM:SS", Predbat will control the inverter charge/discharge start and end times by setting the entities defined by **charge_start_time**, **charge_end_time**, **discharge_start_time** and **discharge_end_time** in `apps.yaml`.
+
+The format of these entities depends on **charge_time_entity_is_option** as defined below.
+
+When set to "H M", Predbat will control the inverter charge/discharge start and end times by setting the entities defined by **charge_start_hour**, **charge_start_minute**, **charge_end_hour**, **charge_end_minute**,
+**discharge_start_hour**,  **discharge_start_minute**, **discharge_end_hour** and **discharge_end_minute** in `apps.yaml`.
+
+These entities are used to set the start and end hours and minutes of charges and discharges.
+
+When set to "H:M-H:M", Predbat will control the inverter charge/discharge start and end times by setting the entities defined by **charge_time** and **discharge_time** in `apps.yaml`.
+The entities take a single time range value in the format "*start hour*:*start minute*-*end hour*:*end minute*"
+
+### charge_time_entity_is_option
+
+When True, **charge_start_time** **charge_end_time** **discharge_start_time** and **discharge_end_time** are all option selectors for time in the format HH:MM:SS (e.g. 12:23:00) where seconds are always 00.
+
+When False, these entities are all number values.
+
+### can_span_midnight
+
+When True, start and end times for charge and discharge can span midnight e.g. 23:00:00 - 01:00:00 is a 2-hour slot.
+
+When False, start and end times can't span midnight and Predbat will control the inverter with separate charges/discharges up to and then after midnight if required by the plan.
+
+### clock_time_format
+
+Defines the time format of the inverter clock setting **inverter_time** in `apps.yaml`
+
+### num_load_entities
+
+Enables you to define additional house load power sensors in `apps.yaml` in addition to the default **load_power** sensor.  e.g. if set to 2 then Predbat will additionally use **load_power_1** and **load_power_2** settings in `apps.yaml`.
+This setting might be required for 3-phase inverters.
+
+### soc_units
+
+Defines the units of the SoC setting (currently not used), it defaults to "%".
+
+### write_and_poll_sleep
+
+Sets the number of seconds between polls of inverter settings.
