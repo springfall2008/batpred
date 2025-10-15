@@ -44,11 +44,14 @@ class Plan:
         prev_last_load_status = self.load_last_status
         prev_last_load_car_slot = self.load_last_car_slot
 
+        threshold_battery = self.battery_rate_max_discharge * MINUTE_WATT / 1000
+        threshold_car = self.car_charging_threshold * MINUTE_WATT / 1000
+
         # Last period load analysis
         self.load_last_status = "baseline"
-        if self.load_last_period > self.battery_rate_max_discharge * MINUTE_WATT / 1000:
+        if self.load_last_period >= threshold_battery:
             self.load_last_status = "high"
-        elif (self.load_last_period < self.battery_rate_max_discharge * 0.9 * MINUTE_WATT / 1000) and (self.load_last_period < self.car_charging_threshold * 0.9):
+        elif (self.load_last_period < (threshold_battery * 0.9)) and (self.load_last_period < (threshold_car * 0.9)):
             # Check if the load is less than car charging threshold
             self.load_last_status = "low"
         else:
@@ -60,7 +63,7 @@ class Plan:
             state=dp3(self.load_last_period),
             attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status": self.load_last_status},
         )
-        self.log("Dynamic load last period {:.2f}kW status {}".format(self.load_last_period, self.load_last_status))
+        self.log("Dynamic load last period {:.2f}kW status {} threshold_battery {} threshold_car {}".format(self.load_last_period, self.load_last_status, threshold_battery, threshold_car))
 
         # Is the car currently planned to charge?
         load_car_slot = False
