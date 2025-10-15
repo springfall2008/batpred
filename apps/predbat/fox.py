@@ -99,9 +99,9 @@ class FoxAPI:
                         for device in self.device_list:
                             sn = device.get("deviceSN", None)
                             if sn:
-                            await self.get_device_detail(sn)
-                            await self.get_device_history(sn)
-                            await self.get_battery_charging_time(sn)
+                                await self.get_device_detail(sn)
+                                await self.get_device_history(sn)
+                                await self.get_battery_charging_time(sn)
 
                     # Regular updates for registers and scheduler data
                     for device in self.device_list:

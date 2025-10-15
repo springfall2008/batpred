@@ -867,6 +867,7 @@ class OctopusAPI:
                 self.log(msg)
                 return None
             elif response.status not in [404]:
+                msg = f"Warn: Octopus API: Response received - {url} ({request_context}) - Unexpected response received: {response.status}; {text}"
                 self.log(msg)
                 return None
 
