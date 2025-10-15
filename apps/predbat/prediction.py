@@ -10,7 +10,7 @@
 
 from datetime import timedelta
 from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
-from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
+from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot
 
 
 # Only assign globals once to avoid re-creating them with processes are forked
@@ -366,47 +366,6 @@ class Prediction:
                     charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
-    def in_iboost_slot(self, minute):
-        """
-        Is the given minute inside a car slot
-        """
-        load_amount = 0
-
-        if self.iboost_plan:
-            for slot in self.iboost_plan:
-                start_minutes = slot["start"]
-                end_minutes = slot["end"]
-                kwh = slot["kwh"]
-                slot_minutes = end_minutes - start_minutes
-                slot_hours = slot_minutes / 60.0
-
-                # Return the load in that slot
-                if minute >= start_minutes and minute < end_minutes:
-                    load_amount = abs(kwh / slot_hours)
-                    break
-        return load_amount
-
-    def in_car_slot(self, minute):
-        """
-        Is the given minute inside a car slot
-        """
-        load_amount = [0 for car_n in range(self.num_cars)]
-
-        for car_n in range(self.num_cars):
-            if self.car_charging_slots[car_n]:
-                for slot in self.car_charging_slots[car_n]:
-                    start_minutes = slot["start"]
-                    end_minutes = slot["end"]
-                    kwh = slot["kwh"]
-                    slot_minutes = end_minutes - start_minutes
-                    slot_hours = slot_minutes / 60.0
-
-                    # Return the load in that slot
-                    if minute >= start_minutes and minute < end_minutes:
-                        load_amount[car_n] = abs(kwh / slot_hours)
-                        break
-        return load_amount
-
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP, cache=False):
         """
         Run a prediction scenario given a charge limit, return the results
@@ -676,10 +635,8 @@ class Prediction:
                 discharge_rate_now = battery_rate_max_discharge
 
             # Simulate car charging
-            car_freeze = False
-
             if car_enable:
-                car_load = self.in_car_slot(minute_absolute)
+                car_load = in_car_slot(minute_absolute, self.num_cars, self.car_charging_slots)
 
                 # Car charging?
                 for car_n in range(self.num_cars):
@@ -692,9 +649,6 @@ class Prediction:
                         # Model not allowing the car to charge from the battery
                         if (car_load_scale > 0) and (not self.car_charging_from_battery) and set_charge_window:
                             discharge_rate_now = battery_rate_min  # 0
-                            car_freeze = True
-            else:
-                car_load = 0
 
             # Iboost
             iboost_rate_okay = True
@@ -724,7 +678,7 @@ class Prediction:
                 # IBoost solar diverter on load, don't do on discharge
                 # IBoost based on plan for given rates
                 if self.iboost_plan and (self.iboost_on_export or (export_window_n < 0)):
-                    iboost_load = self.in_iboost_slot(minute_absolute) * step / 60.0
+                    iboost_load = in_iboost_slot(minute_absolute, self.iboost_plan) * step / 60.0
                     iboost_amount = min(iboost_load, self.iboost_max_power * step, max(self.iboost_max_energy - iboost_today_kwh, 0))
 
                 # IBoost based on Predbat charging

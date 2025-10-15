@@ -26,6 +26,7 @@ OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:
 FOX_DOMAIN = "https://www.foxesscloud.com"
 FOX_LANG = "en"
 TIMEOUT = 60
+FOX_RETRIES = 10
 FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
 OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 
@@ -88,28 +89,33 @@ class FoxAPI:
         while not self.stop_api:
             try:
                 if first or (count_seconds % (30 * 60) == 0):
-                    await self.get_device_list()
                     if first:
+                        # Only do these once as battery charging times are ignored with the scheduler
+                        # and we get the realtime data every 5 minutes
+                        await self.get_device_list()
                         self.log("Fox API: Found {} devices".format(len(self.device_list)))
+
+                        # Get per device data
+                        for device in self.device_list:
+                            sn = device.get("deviceSN", None)
+                            if sn:
+                                await self.get_device_detail(sn)
+                                await self.get_device_history(sn)
+                                await self.get_battery_charging_time(sn)
+
+                    # Regular updates for registers and scheduler data
                     for device in self.device_list:
                         sn = device.get("deviceSN", None)
                         if sn:
-                            await self.get_device_detail(sn)
                             await self.get_device_settings(sn)
                             await self.get_schedule_settings_ha(sn)
-                            await self.get_battery_charging_time(sn)
                             await self.get_scheduler(sn)
                             await self.compute_schedule(sn)
 
                 if first and self.automatic:
                     await self.automatic_config()
 
-                if first or (count_seconds % (10 * 60)) == 0:
-                    for device in self.device_list:
-                        sn = device.get("deviceSN", None)
-                        if sn:
-                            await self.get_device_history(sn)
-
+                # Real time data every 5 minutes
                 if first or (count_seconds % (5 * 60)) == 0:
                     for device in self.device_list:
                         sn = device.get("deviceSN", None)
@@ -130,7 +136,6 @@ class FoxAPI:
             await asyncio.sleep(1)
             count_seconds += 1
 
-        await self.client.close()
         print("Fox API: Stopped")
 
     async def stop(self):
@@ -348,7 +353,7 @@ class FoxAPI:
             'afciVersion': '',
             'hasPV': True,
             'deviceSN':
-            '60KE8020479C034',
+            '1234567890ABCDE',
             'slaveVersion': '1.01',
             'capacity': 8,
             'hasBattery': True,
@@ -356,14 +361,14 @@ class FoxAPI:
 
             'hardwareVersion': '--',
             'managerVersion': '1.28',
-            'stationName': '2 Dona Fold',
-            'moduleSN': '609W6EUF46MB519',
+            'stationName': 'My Home',
+            'moduleSN': '12348020479C034',
             'batteryList':
-                [{'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'bcu', 'version': '1.005'},
-                 {'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'bmu', 'version': '1.05', 'capacity': 10360},
-                 {'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'ivu', 'version': '0.00'}],
+                [{'batterySN': 'YYYYY', 'model': 'EP11', 'type': 'bcu', 'version': '1.005'},
+                 {'batterySN': 'YYYYY', 'model': 'EP11', 'type': 'bmu', 'version': '1.05', 'capacity': 10360},
+                 {'batterySN': 'YYYYY', 'model': 'EP11', 'type': 'ivu', 'version': '0.00'}],
             'productType': 'KH',
-            'stationID': '2958ff16-13a5-4ab9-957a-79e938f86a19',
+            'stationID': '23123-213123-231329',
             'status': 1
         }
         """
@@ -387,7 +392,7 @@ class FoxAPI:
         """
         GET_DEVICE_SETTING = "/op/v0/device/setting/get"
         result = await self.request_get(GET_DEVICE_SETTING, datain={"sn": deviceSN, "key": key}, post=True)
-        if result:
+        if result is not None:
             if deviceSN not in self.device_settings:
                 self.device_settings[deviceSN] = {}
             self.device_settings[deviceSN][key] = result
@@ -737,11 +742,12 @@ class FoxAPI:
         Retry wrapper
         """
         retries = 0
-        while retries < 5:
+        while retries < FOX_RETRIES:
             result = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
                 return result
             retries += 1
+            await asyncio.sleep(retries * random.random())
         return result
 
     async def request_get_func(self, path, post=False, datain=None):
@@ -761,16 +767,22 @@ class FoxAPI:
             self.failures_total += 1
             return None
 
+        status_code = response.status_code
+        if status_code in [400, 401, 402, 403]:
+            self.log("Warn: Fox: Authentication error with status code {} from {}".format(status_code, url))
+            self.failures_total += 1
+            return None
+
         try:
             data = response.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("Warn: GeCloud: Failed to decode response from {}".format(url))
+            self.log("Warn: Fox: Failed to decode response from {} code {}".format(url, status_code))
             data = None
         except (requests.Timeout, requests.exceptions.ReadTimeout):
-            self.log("Warn: GeCloud: Timeout from {}".format(url))
+            self.log("Warn: Fox: Timeout from {}".format(url))
             data = None
         except (requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
-            self.log("Warn: GeCloud: Could not connect to {}".format(url))
+            self.log("Warn: Fox: Could not connect to {}".format(url))
             data = None
 
         if response.status_code in [200, 201]:
@@ -780,7 +792,7 @@ class FoxAPI:
             msg = data.get("msg", "")
             if errno != 0:
                 self.failures_total += 1
-                if errno == 40400:
+                if errno in [40400, 41200, 41203, 41935]:
                     # Rate limiting so wait up to 10 seconds
                     self.log("Fox: Rate limiting detected, waiting...")
                     await asyncio.sleep(random.random() * 10 + 1)
@@ -923,10 +935,12 @@ class FoxAPI:
                     except ValueError:
                         self.log("Warn: Fox: Invalid number value for {}: {}".format(entity_id, value))
                         return
-            if await self.set_device_setting(sn, register, value):
-                self.device_settings[serial][register]["value"] = value
+            if self.device_settings[serial].get(register, {}).get("value", None) != value:
+                # Only write if value has changed
+                if await self.set_device_setting(sn, register, value):
+                    self.device_settings[serial][register]["value"] = value
         else:
-            self.log("Warn: Fox: Unknown select event for {}".format(entity_id))
+            self.log("Warn: Fox: Unknown write event event for {} value {}".format(entity_id, value))
         await self.publish_data()
 
     async def select_event(self, entity_id, value):
@@ -1071,6 +1085,7 @@ class FoxAPI:
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
                 minSocOnGrid = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
 
+                """
                 start_minutes = start_hour * 60 + start_minute
                 end_minutes = end_hour * 60 + end_minute
                 minutes_now = datetime.now().hour * 60 + datetime.now().minute
@@ -1079,6 +1094,7 @@ class FoxAPI:
                     start_minutes = minutes_now + 1
                     start_hour = start_minutes // 60
                     start_minute = start_minutes % 60
+                """
 
                 if direction == "charge":
                     new_schedule.append(
@@ -1126,9 +1142,11 @@ class FoxAPI:
             if hasPV:
                 pvs.append(sn.lower())
 
-        self.log("Fox API: Found {} batteries and {} PVs".format(len(batteries), len(pvs)))
-
         num_inverters = len(batteries)
+        self.log("Fox API: Found {} batteries and {} PVs".format(num_inverters, len(pvs)))
+        if not num_inverters:
+            raise ValueError("Fox API: No batteries with scheduler found, cannot configure")
+
         self.base.args["inverter_type"] = ["FoxCloud" for _ in range(num_inverters)]
         self.base.args["num_inverters"] = num_inverters
         self.base.args["inverter_mode"] = [f"select.predbat_fox_{device}_setting_workmode" for device in batteries]
@@ -1144,7 +1162,7 @@ class FoxAPI:
         self.base.args["load_power"] = [f"sensor.predbat_fox_{device}_loadspower" for device in batteries]
         self.base.args["soc_percent"] = [f"sensor.predbat_fox_{device}_soc" for device in batteries]
         self.base.args["soc_max"] = [f"sensor.predbat_fox_{device}_battery_capacity" for device in batteries]
-        self.base.args["reserve"] = [f"sensor.predbat_fox_{device}_battery_minsocongrid" for device in batteries]
+        self.base.args["reserve"] = [f"number.predbat_fox_{device}_setting_minsocongrid" for device in batteries]
         self.base.args["battery_min_soc"] = [f"sensor.predbat_fox_{device}_battery_reserve_min" for device in batteries]
         self.base.args["charge_start_time"] = [f"select.predbat_fox_{device}_battery_schedule_charge_start_time" for device in batteries]
         self.base.args["charge_end_time"] = [f"select.predbat_fox_{device}_battery_schedule_charge_end_time" for device in batteries]

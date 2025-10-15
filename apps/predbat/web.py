@@ -19,7 +19,23 @@ import json
 import shutil
 import html as html_module
 import time
-from web_helper import get_header_html, get_plan_css, get_editor_js, get_editor_css, get_log_css, get_charts_css, get_apps_css, get_html_config_css, get_apps_js, get_components_css
+from web_helper import (
+    get_header_html,
+    get_plan_css,
+    get_editor_js,
+    get_editor_css,
+    get_log_css,
+    get_charts_css,
+    get_apps_css,
+    get_html_config_css,
+    get_apps_js,
+    get_components_css,
+    get_logfile_js,
+    get_entity_toggle_js,
+    get_entity_control_css,
+    get_entity_css,
+    get_entity_js,
+)
 
 from utils import calc_percent_limit, str2time, dp0, dp2
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
@@ -122,6 +138,7 @@ class WebInterface:
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_get("/entity", self.html_entity)
+        app.router.add_post("/entity", self.html_entity_post)
         app.router.add_post("/config", self.html_config_post)
         app.router.add_get("/dash", self.html_dash)
         app.router.add_post("/dash", self.html_dash_post)
@@ -141,6 +158,8 @@ class WebInterface:
         app.router.add_get("/api/ping", self.html_api_ping)
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
+        app.router.add_get("/api/log", self.html_api_get_log)
+        app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
 
         # Notify plugin system that web interface is ready
@@ -581,6 +600,59 @@ class WebInterface:
             text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format("", entity, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity, from_db=True))
         return text
 
+    def get_entity_list_data(self):
+        """
+        Generate entity list data for the entity selector
+        """
+        # Get app list
+        app_list = ["predbat"]
+        for entity_id in self.base.dashboard_index_app.keys():
+            app = self.base.dashboard_index_app[entity_id]
+            if app not in app_list:
+                app_list.append(app)
+
+        entity_data_list = []
+
+        for app in app_list:
+            if app == "predbat":
+                entity_list = self.base.dashboard_index if hasattr(self.base, "dashboard_index") and self.base.dashboard_index else []
+            else:
+                entity_list = []
+                if hasattr(self.base, "dashboard_index_app") and self.base.dashboard_index_app:
+                    for entity_id in self.base.dashboard_index_app.keys():
+                        if self.base.dashboard_index_app[entity_id] == app:
+                            entity_list.append(entity_id)
+
+            for entity_id in entity_list:
+                if hasattr(self.base, "dashboard_values") and self.base.dashboard_values:
+                    entity_friendly_name = self.base.dashboard_values.get(entity_id, {}).get("attributes", {}).get("friendly_name", entity_id)
+                else:
+                    entity_friendly_name = entity_id
+
+                entity_data_list.append({"id": entity_id, "name": entity_friendly_name, "group": f"{app[0].upper() + app[1:]} Entities"})
+
+        # Add config settings
+        if hasattr(self.base, "CONFIG_ITEMS") and self.base.CONFIG_ITEMS:
+            for item in self.base.CONFIG_ITEMS:
+                if self.base.user_config_item_enabled(item):
+                    entity_id = item.get("entity", "")
+                    entity_friendly_name = item.get("friendly_name", "")
+                    if entity_id:
+                        entity_data_list.append({"id": entity_id, "name": entity_friendly_name, "group": "Config Settings"})
+
+        return entity_data_list
+
+    async def html_api_get_entities(self, request):
+        """
+        API endpoint to get entity list as JSON
+        """
+        try:
+            entity_list = self.get_entity_list_data()
+            return web.json_response(entity_list)
+        except Exception as e:
+            self.base.log(f"Error in html_api_get_entities: {e}")
+            return web.json_response({"error": str(e)}, status=500)
+
     async def html_entity(self, request):
         """
         Return the Predbat entity as an HTML page
@@ -603,64 +675,27 @@ class WebInterface:
         unit_of_measurement = attributes.get("unit_of_measurement", "")
         friendly_name = attributes.get("friendly_name", "")
 
-        # Add entity dropdown selector
+        # Add entity dropdown selector with search functionality
         text += """<div style="margin-bottom: 20px;">
             <form id="entitySelectForm" style="display: flex; align-items: center;">
-                <label for="entitySelect" style="margin-right: 10px; font-weight: bold;">Select Entity: </label>
-                <select id="entitySelect" name="entity_id" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; flex-grow: 1; max-width: 500px;" onchange="document.getElementById('entitySelectForm').submit();">
-        """
-
-        # Add app list entries to dropdown
-        app_list = ["predbat"]
-        for entity_id in self.base.dashboard_index_app.keys():
-            app = self.base.dashboard_index_app[entity_id]
-            if app not in app_list:
-                app_list.append(app)
-
-        if not entity:
-            text += f'<optgroup label="Not selected">\n'
-            text += f'<option value="" selected></option>\n'
-            text += "</optgroup>\n"
-        elif entity not in self.base.dashboard_values:
-            text += f'<optgroup label="Selected">\n'
-            text += f'<option value="{entity}" selected>{entity}</option>\n'
-            text += "</optgroup>\n"
-
-        # Group entities by app in the dropdown
-        for app in app_list:
-            text += f'<optgroup label="{app[0].upper() + app[1:]} Entities">\n'
-
-            if app == "predbat":
-                entity_list = self.base.dashboard_index
-            else:
-                entity_list = []
-                for entity_id in self.base.dashboard_index_app.keys():
-                    if self.base.dashboard_index_app[entity_id] == app:
-                        entity_list.append(entity_id)
-
-            for entity_id in entity_list:
-                entity_friendly_name = self.base.dashboard_values.get(entity_id, {}).get("attributes", {}).get("friendly_name", entity_id)
-                selected = "selected" if entity_id == entity else ""
-                text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>\n'
-
-            text += "</optgroup>\n"
-
-        text += f'<optgroup label="Config Settings">\n'
-        for item in self.base.CONFIG_ITEMS:
-            if self.base.user_config_item_enabled(item):
-                entity_id = item.get("entity", "")
-                entity_friendly_name = item.get("friendly_name", "")
-                if entity_id:
-                    selected = "selected" if entity_id == entity else ""
-                    text += f'<option value="{entity_id}" {selected}>{entity_friendly_name} ({entity_id})</option>\n'
-
-        text += "</optgroup>\n"
-        text += """
-                </select>
+                <label for="entitySearchInput" style="margin-right: 10px; font-weight: bold;">Select Entity: </label>
+                <div class="entity-search-container" style="position: relative; flex-grow: 1; max-width: 800px;">
+                    <input type="text" id="entitySearchInput" name="entity_search"
+                           placeholder="Type to search entities..."
+                           style="width: 100%; padding: 8px 30px 8px 8px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box;"
+                           autocomplete="off" />
+                    <button type="button" id="clearEntitySearch"
+                            style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); background: none; border: none; font-size: 16px; color: #999; cursor: pointer; padding: 2px 5px;"
+                            title="Clear search">×</button>
+                    <div id="entityDropdown" class="entity-dropdown"
+                         style="position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-top: none; max-height: 300px; overflow-y: auto; z-index: 1000; display: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    </div>
+                    <input type="hidden" id="selectedEntityId" name="entity_id" value="{}" />
+                </div>
                 <input type="hidden" name="days" value="{}" />
             </form>
         </div>""".format(
-            days
+            entity, days
         )
 
         # Add days selector
@@ -682,6 +717,11 @@ class WebInterface:
         </div>""".format(
             entity
         )
+        # CSS
+        text += get_entity_css()
+
+        # Add JavaScript and CSS for entity list and search
+        text += get_entity_js(entity)
 
         if entity:
             config_text = self.html_config_item_text(entity)
@@ -692,6 +732,10 @@ class WebInterface:
                 text += "</table>\n"
             else:
                 text += config_text
+
+            control_html = self.get_entity_control_html(entity, days)
+            if control_html:
+                text += control_html
 
             text += "<h2>History Chart</h2>\n"
             text += '<div id="chart"></div>'
@@ -734,6 +778,127 @@ class WebInterface:
         # Return web response
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_entity_post(self, request):
+        """
+        Handle POST request for entity value updates
+        """
+        try:
+            postdata = await request.post()
+            entity_id = postdata.get("entity_id", "")
+            new_value = postdata.get("value", "")
+            days = postdata.get("days", "7")
+            attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
+
+            if entity_id:
+                # Determine entity type from entity_id domain
+                domain = entity_id.split(".")[0] if "." in entity_id else ""
+
+                # Convert value based on entity type
+                if domain in ["switch", "input_boolean"]:
+                    # For toggle switches, check if value is 'on' or 'off'
+                    new_value = new_value.lower() == "on"
+                elif domain in ["number", "input_number"]:
+                    try:
+                        new_value = float(new_value) if new_value else 0.0
+                    except ValueError:
+                        new_value = 0.0
+                elif domain in ["select", "input_select"]:
+                    # Keep as string for select entities
+                    pass
+
+                # Set the entity state
+                await self.base.ha_interface.set_state_external(entity_id, new_value, attributes=attributes)
+                self.log(f"Entity {entity_id} updated to {new_value} via web interface")
+
+        except Exception as e:
+            self.log(f"Error updating entity value: {e}")
+
+        # Redirect back to entity page with same parameters
+        redirect_url = f"./entity?entity_id={entity_id}&days={days}"
+        raise web.HTTPFound(redirect_url)
+
+    def is_entity_writable(self, entity_id):
+        """
+        Determine if an entity is writable and return its control type
+        Returns: (is_writable, control_type, options)
+        """
+        if not entity_id or "." not in entity_id:
+            return False, None, None
+
+        domain = entity_id.split(".")[0]
+
+        # Check if it's a writable entity type
+        if domain in ["switch", "input_boolean"]:
+            return True, "toggle", None
+        elif domain in ["number", "input_number"]:
+            return True, "number", None
+        elif domain in ["select", "input_select"]:
+            options = self.base.get_state_wrapper(entity_id=entity_id, attribute="options", default=[])
+            return True, "select", options
+
+        return False, None, None
+
+    def get_entity_control_html(self, entity_id, days):
+        """
+        Generate HTML control for writable entities
+        """
+        current_value = self.base.get_state_wrapper(entity_id=entity_id)
+
+        is_writable, control_type, options = self.is_entity_writable(entity_id)
+
+        if not is_writable:
+            return ""
+
+        html = '<div class="entity-edit-container" style="margin-top: 15px; padding: 15px; border: 1px solid var(--border-color, #ddd); border-radius: 5px; background-color: var(--background-secondary, #f9f9f9);">'
+
+        # Add CSS for dark mode support
+        html += get_entity_control_css()
+
+        html += f'<form method="post" action="./entity" style="display: flex; align-items: center; gap: 10px;">'
+        html += f'<input type="hidden" name="entity_id" value="{entity_id}">'
+        html += f'<input type="hidden" name="days" value="{days}">'
+
+        if control_type == "toggle":
+            is_active = str(current_value).lower() in ["true", "on", "1"]
+            toggle_class = "toggle-switch active" if is_active else "toggle-switch"
+
+            html += f'<div style="display: flex; align-items: center; gap: 10px;">'
+            html += f'<button class="{toggle_class}" type="button" onclick="toggleEntitySwitch(this, \'{entity_id}\', {days})"></button>'
+            html += f"<span>Enable/Disable</span>"
+            html += f"</div>"
+
+            # Add JavaScript for toggle functionality
+            html += get_entity_toggle_js()
+
+        elif control_type == "number":
+            min_val = self.base.get_state_wrapper(entity_id=entity_id, attribute="min", default=None)
+            max_val = self.base.get_state_wrapper(entity_id=entity_id, attribute="max", default=None)
+            step = self.base.get_state_wrapper(entity_id=entity_id, attribute="step", default=1)
+            unit = self.base.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
+
+            unit_display = f" {unit}" if unit else ""
+
+            html += f'<input type="number" name="value" value="{current_value}" '
+            if min_val is not None and max_val is not None and step is not None:
+                html += f'min="{min_val}" max="{max_val}" step="{step}" '
+            html += f'style="padding: 8px; border-radius: 4px; border: 1px solid var(--border-color, #ccc); width: 120px; background-color: var(--input-background, #fff); color: var(--text-color, #333);" '
+            if unit_display:
+                html += f'<span style="margin-left: 5px; color: var(--text-secondary, #666);">{unit}</span>'
+            html += '<button type="submit" style="padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update</button>'
+
+        elif control_type == "select" and options:
+            html += f'<select name="value" style="padding: 8px; border-radius: 4px; border: 1px solid var(--border-color, #ccc); min-width: 150px; background-color: var(--input-background, #fff); color: var(--text-color, #333);">'
+            for option in options:
+                selected = "selected" if str(option) == str(current_value) else ""
+                html += f'<option value="{option}" {selected}>{option}</option>'
+            html += "</select>"
+            html += '<button type="submit" style="padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update</button>'
+
+        html += "</form>"
+        html += "</div>"
+
+        return html
 
     def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
         results = {}
@@ -926,6 +1091,153 @@ var options = {
         text += "</script>\n"
         return text
 
+    async def html_api_get_log(self, request):
+        """
+        JSON API to get log data with filtering and search
+        """
+
+        def highlight_search_term(text, search_term):
+            """
+            Highlight search term in text with HTML markup, case-insensitive
+            """
+            if not search_term or not text:
+                return text
+
+            import re
+            import html as html_module
+
+            # Create case-insensitive pattern for the original text
+            pattern = re.compile(re.escape(search_term), re.IGNORECASE)
+
+            # Split text around matches, then escape and highlight each part
+            parts = pattern.split(text)
+            matches = pattern.findall(text)
+
+            result_parts = []
+
+            for i, part in enumerate(parts):
+                # Escape the regular text part
+                result_parts.append(html_module.escape(part))
+
+                # Add highlighted match if there is one
+                if i < len(matches):
+                    escaped_match = html_module.escape(matches[i])
+                    highlighted_match = f'<mark class="search-highlight" style="background-color: #ffff00; font-weight: bold;">{escaped_match}</mark>'
+                    result_parts.append(highlighted_match)
+
+            return "".join(result_parts)
+
+        try:
+            logfile = "predbat.log"
+            logfile_1 = "predbat.1.log"
+            logdata = ""
+
+            if os.path.exists(logfile):
+                with open(logfile, "r") as f:
+                    logdata = f.read()
+            if os.path.exists(logfile_1):
+                with open(logfile_1, "r") as f:
+                    logdata = f.read() + "\n" + logdata
+
+            # Get query parameters
+            args = request.query
+            filter_type = args.get("filter", "warnings")  # all, warnings, errors
+            since_line = int(args.get("since", 0))  # Line number to start from
+            max_lines = int(args.get("max_lines", 1024))  # Maximum lines to return
+            search_term = args.get("search", "").lower().strip()  # Search term
+
+            loglines = logdata.split("\n")
+            total_lines = len(loglines)
+
+            # Process log lines with filtering and search
+            result_lines = []
+            count_lines = 0
+            lineno = total_lines - 1
+            matched_lines = 0  # Count of lines that match search criteria before limiting
+            total_search_matches = 0  # Total matches in entire file (used when search is active)
+
+            while lineno >= 0:
+                line = loglines[lineno]
+                line_lower = line.lower()
+
+                # Skip empty lines
+                if not line.strip():
+                    lineno -= 1
+                    continue
+
+                # Apply log level filtering first
+                include_line = False
+                line_type = "info"
+
+                if "error" in line_lower:
+                    line_type = "error"
+                    include_line = True
+                elif "warn" in line_lower:
+                    line_type = "warning"
+                    include_line = filter_type in ["all", "warnings"]
+                else:
+                    line_type = "info"
+                    include_line = filter_type == "all"
+
+                # Apply search filter if search term is provided
+                if include_line and search_term:
+                    include_line = search_term in line_lower
+                    if include_line:
+                        total_search_matches += 1
+
+                # Check if we've reached the max lines limit
+                if count_lines >= max_lines:
+                    include_line = False
+
+                if include_line and (since_line == 0 or lineno > since_line):
+                    matched_lines += 1
+                    start_line = line[0:27] if len(line) >= 27 else line
+                    rest_line = line[27:] if len(line) >= 27 else ""
+
+                    # Apply highlighting if search term is present
+                    if search_term:
+                        highlighted_timestamp = highlight_search_term(start_line, search_term)
+                        highlighted_message = highlight_search_term(rest_line, search_term)
+                        highlighted_full_line = highlight_search_term(line, search_term)
+                    else:
+                        # Escape HTML characters even when no search highlighting
+                        import html as html_module
+
+                        highlighted_timestamp = html_module.escape(start_line)
+                        highlighted_message = html_module.escape(rest_line)
+                        highlighted_full_line = html_module.escape(line)
+
+                    result_lines.append(
+                        {
+                            "line_number": lineno,
+                            "timestamp": highlighted_timestamp,
+                            "message": highlighted_message,
+                            "type": line_type,
+                            "full_line": highlighted_full_line,
+                            "raw_timestamp": start_line,  # Keep raw versions for any client-side processing
+                            "raw_message": rest_line,
+                            "raw_full_line": line,
+                        }
+                    )
+                    count_lines += 1
+
+                lineno -= 1
+
+            # Reverse to get reverse chronological order (newest first)
+            result_lines.reverse()
+
+            response_data = {"status": "success", "total_lines": total_lines, "returned_lines": len(result_lines), "lines": result_lines, "filter": filter_type, "search_term": search_term}
+
+            # If we have a search term, add information about total matches
+            if search_term:
+                response_data["search_matches"] = total_search_matches
+
+            return web.json_response(response_data)
+
+        except Exception as e:
+            self.log(f"Error in html_api_get_log: {e}")
+            return web.json_response({"status": "error", "message": str(e)}, status=500)
+
     async def html_api_post_state(self, request):
         """
         JSON API
@@ -1036,10 +1348,26 @@ var options = {
             in_override = False
             cell_bg_color = "#FFFFFF"
             override_class = ""
-            if minutes_from_midnight in manual_all_times:
+            if minutes_from_midnight in manual_charge_times:
                 in_override = True
-                cell_bg_color = "#FFC0CB"  # Pink background for cells with active overrides
-                override_class = "override-active"
+                cell_bg_color = "#3AEE85"  # Matches auto charging green
+                override_class = "override-charge"
+            elif minutes_from_midnight in manual_export_times:
+                in_override = True
+                cell_bg_color = "#FFFF00"  # Matches export yellow
+                override_class = "override-export"
+            elif minutes_from_midnight in manual_demand_times:
+                in_override = True
+                cell_bg_color = "#F18261"  # Matches high-cost demand red
+                override_class = "override-demand"
+            elif minutes_from_midnight in manual_freeze_charge_times:
+                in_override = True
+                cell_bg_color = "#C0C0C0"  # Matches freeze charging grey
+                override_class = "override-freeze-charge"
+            elif minutes_from_midnight in manual_freeze_export_times:
+                in_override = True
+                cell_bg_color = "#AAAAAA"  # Matches freeze exporting dark grey
+                override_class = "override-freeze-export"
 
             # Create clickable cell and dropdown HTML
             button_html = f"""<td bgcolor={cell_bg_color} onclick="toggleForceDropdown('{dropdown_id}')" class="clickable-time-cell {override_class}">
@@ -1186,16 +1514,11 @@ var options = {
 
     async def html_log(self, request):
         """
-        Return the Predbat log as an HTML page
+        Return the Predbat log as an HTML page with dynamic updates
         """
-        logfile = "predbat.log"
-        logdata = ""
         self.default_page = "./log"
-        if os.path.exists(logfile):
-            with open(logfile, "r") as f:
-                logdata = f.read()
 
-        # Decode method get arguments
+        # Decode method get arguments to determine filter type
         args = request.query
         errors = False
         warnings = False
@@ -1212,8 +1535,8 @@ var options = {
             self.default_log = "warnings"
             warnings = True
 
-        loglines = logdata.split("\n")
-        text = self.get_header("Predbat Log", refresh=10)
+        # Remove refresh from header since we'll update dynamically
+        text = self.get_header("Predbat Log", refresh=0)
         text += """<body>"""
         text += get_log_css()
 
@@ -1221,14 +1544,17 @@ var options = {
             active_all = ""
             active_warnings = ""
             active_errors = "active"
+            filter_type = "errors"
         elif warnings:
             active_all = ""
             active_warnings = "active"
             active_errors = ""
+            filter_type = "warnings"
         else:
             active_all = "active"
             active_warnings = ""
             active_errors = ""
+            filter_type = "all"
 
         text += '<div class="log-menu">'
         text += "<h3>Logfile</h3> "
@@ -1236,35 +1562,27 @@ var options = {
         text += f'<a href="./log?warnings" class="{active_warnings}">Warnings</a>'
         text += f'<a href="./log?errors" class="{active_errors}">Errors</a>'
         text += '<a href="./debug_log">Download</a>'
+        text += '<label class="auto-scroll-toggle"><input type="checkbox" id="autoScroll"> Auto-scroll to new</label>'
+        text += '<button class="scroll-to-bottom" onclick="scrollToBottom()">Scroll to Bottom</button>'
+        text += '<button id="pauseResumeBtn" onclick="toggleUpdates()" style="margin-left: 10px; padding: 4px 8px;">Pause</button>'
         text += "</div>"
 
-        text += "<table width=100%>\n"
+        text += '<div class="log-search-container">'
+        text += '<input type="text" id="logSearchInput" class="log-search-input" placeholder="Search entire log file..." oninput="filterLogEntries()" />'
+        text += '<button id="clearSearchBtn" class="clear-search-button" onclick="clearLogSearch()">Clear</button>'
+        text += '<div id="searchStatus" class="search-status"></div>'
+        text += "</div>"
 
-        total_lines = len(loglines)
-        count_lines = 0
-        lineno = total_lines - 1
-        while count_lines < 1024 and lineno >= 0:
-            line = loglines[lineno]
-            line_lower = line.lower()
-            lineno -= 1
-
-            start_line = line[0:27]
-            rest_line = line[27:]
-
-            if "error" in line_lower:
-                text += "<tr><td>{}</td><td nowrap><font color=#ff3333>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-                count_lines += 1
-                continue
-            elif (not errors) and ("warn" in line_lower):
-                text += "<tr><td>{}</td><td nowrap><font color=#ffA500>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-                count_lines += 1
-                continue
-
-            if line and (not errors) and (not warnings):
-                text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-                count_lines += 1
-
+        text += '<div id="logStatus" class="log-status">Loading log data...</div>'
+        text += "<table width=100% id='logTable'>\n"
+        text += "<tbody id='logTableBody'>\n"
+        text += "<!-- Log entries will be loaded dynamically via JavaScript -->\n"
+        text += "</tbody>\n"
         text += "</table>"
+
+        # Add JavaScript for dynamic updates
+        text += get_logfile_js(filter_type)
+
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -1289,6 +1607,7 @@ var options = {
             elif pitem.startswith("input_number"):
                 new_value = float(new_value)
 
+            self.log("Web interface setting {} to {}".format(pitem, new_value))
             await self.base.ha_interface.set_state_external(pitem, new_value)
 
         raise web.HTTPFound("./config")
@@ -2017,17 +2336,21 @@ var options = {
                     text += f"</form></td>\n"
                 elif itemtype == "input_number":
                     input_number_with_save = input_number.replace('onchange="javascript: this.form.submit();"', 'onchange="saveFilterValue(); this.form.submit();"')
-                    text += "<td>{}</td>\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
+                    text += '<td><form style="display: inline;" method="post" action="./config">'
+                    text += "{}\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
+                    text += f"</form></td>\n"
                 elif itemtype == "select":
                     options = item.get("options", [])
                     if value not in options:
                         options.append(value)
-                    text += '<td><select name="{}" id="{}" onchange="saveFilterValue(); this.form.submit();">'.format(useid, useid)
+                    text += f'<td><form style="display: inline;" method="post" action="./config">'
+                    text += '<select name="{}" id="{}" onchange="saveFilterValue(); this.form.submit();">'.format(useid, useid)
                     for option in options:
                         selected = option == value
                         option_label = option if option else "None"
                         text += '<option value="{}" label="{}" {}>{}</option>'.format(option, option_label, "selected" if selected else "", option)
-                    text += "</select></td>\n"
+                    text += "</select>\n"
+                    text += f"</form></td>\n"
                 else:
                     text += "<td>{}</td>\n".format(value)
 
@@ -2454,6 +2777,12 @@ var options = {
         if add_days < 0:
             add_days += 7
         override_time += timedelta(days=add_days)
+
+        # Ensure minutes are either 0 or 30
+        if override_time.minute >= 30:
+            override_time = override_time.replace(minute=30)
+        else:
+            override_time = override_time.replace(minute=0)
         return override_time
 
     async def html_rate_override(self, request):

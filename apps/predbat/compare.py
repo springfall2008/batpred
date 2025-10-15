@@ -168,7 +168,7 @@ class Compare:
 
         # Subtract the start metric from the end metric to avoid credit for the current battery level re-based on the new tariff
         metric = metric_end - metric_start
-        html = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record, publish=False)
+        html, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record, publish=False)
 
         result_data = {
             "cost": dp2(cost),
@@ -198,6 +198,7 @@ class Compare:
         for item in result_data:
             result_data[item] = dp2(result_data[item])
         result_data["html"] = html
+        result_data["raw"] = raw_plan
         result_data["date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         result_data["best"] = False
 

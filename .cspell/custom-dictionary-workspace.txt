@@ -22,6 +22,7 @@ Batpred
 battemperature
 batteri
 batteryb
+beforeunload
 bierner
 calib
 cexxxx
@@ -47,6 +48,7 @@ darkred
 darray
 dasharray
 datain
+datalog
 datap
 datapoints
 datas
@@ -217,6 +219,7 @@ pytz
 rarr
 recp
 Redownload
+regname
 remotecontrol
 resetmidnight
 resultid
@@ -280,6 +283,7 @@ useid
 userinterface
 varh
 venv
+visibilitychange
 Wallbox
 weblink
 welink

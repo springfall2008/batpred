@@ -504,6 +504,13 @@ CONFIG_ITEMS = [
         "name": "metric_pv_calibration_enable",
         "friendly_name": "Enable use of Calibrated PV data",
         "type": "switch",
+        "default": True,
+        "enable": "expert_mode",
+    },
+    {
+        "name": "metric_dynamic_load_adjust",
+        "friendly_name": "Dynamic Load Adjust",
+        "type": "switch",
         "default": False,
     },
     {

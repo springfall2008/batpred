@@ -11,6 +11,402 @@
 # Helper functions for web pages
 
 
+def get_entity_js(entity):
+    text = (
+        """
+        <script>
+        // Entity data structure
+        let allEntities = [];
+        let filteredEntities = [];
+        let selectedIndex = -1;
+        let isDropdownVisible = false;
+
+        // Initialize entity data
+
+        document.addEventListener('DOMContentLoaded', function() {
+            // Load entity data from API
+            loadEntityData();
+        });
+
+        async function loadEntityData() {
+            try {
+                const response = await fetch('./api/entities');
+                if (!response.ok) {
+                    throw new Error('Failed to load entities');
+                }
+                allEntities = await response.json();
+
+                // Set initial value if entity is selected
+                const currentEntity = '"""
+        + (entity.replace("'", "\\'").replace('"', '\\"') if entity else "")
+        + """';
+                if (currentEntity) {
+                    const entityInput = document.getElementById('entitySearchInput');
+                    const selectedEntity = allEntities.find(e => e.id === currentEntity);
+                    if (selectedEntity) {
+                        entityInput.value = selectedEntity.id;
+                    }
+                }
+
+                // Set up event listeners after data is loaded
+                setupEventListeners();
+            } catch (error) {
+                console.error('Error loading entities:', error);
+                allEntities = [];
+                setupEventListeners();
+            }
+        }
+
+        function setupEventListeners() {
+            const entityInput = document.getElementById('entitySearchInput');
+            const clearButton = document.getElementById('clearEntitySearch');
+
+            if (entityInput) {
+                entityInput.addEventListener('input', filterEntityOptions);
+                entityInput.addEventListener('keydown', handleEntityKeyDown);
+                entityInput.addEventListener('focus', showAllEntities);
+                entityInput.addEventListener('click', showAllEntities);
+            }
+
+            if (clearButton) {
+                clearButton.addEventListener('click', function() {
+                    entityInput.value = '';
+                    document.getElementById('selectedEntityId').value = '';
+                    hideEntityDropdown();
+                    entityInput.focus();
+                });
+            }
+
+            // Set up click outside handler
+            document.addEventListener('click', function(event) {
+                const container = document.querySelector('.entity-search-container');
+                if (!container.contains(event.target)) {
+                    hideEntityDropdown();
+                }
+            });
+        }
+
+        function filterEntityOptions() {
+            const input = document.getElementById('entitySearchInput');
+            const dropdown = document.getElementById('entityDropdown');
+            const searchTerm = input.value.toLowerCase();
+
+            // Show all entities if no search term, or filter based on search term
+            if (searchTerm.length === 0) {
+                filteredEntities = [...allEntities]; // Show all entities
+            } else {
+                // Filter entities
+                filteredEntities = allEntities.filter(entity =>
+                    entity.name.toLowerCase().includes(searchTerm) ||
+                    entity.id.toLowerCase().includes(searchTerm)
+                );
+            }
+
+            renderEntityDropdown();
+        }
+
+        function showAllEntities() {
+            const input = document.getElementById('entitySearchInput');
+            // If input is empty or contains a selection, show all entities
+            if (input.value === '' || input.value.includes('(')) {
+                filteredEntities = [...allEntities];
+                renderEntityDropdown();
+            }
+        }
+
+        function renderEntityDropdown() {
+            const dropdown = document.getElementById('entityDropdown');
+
+            // Group filtered entities
+            const groups = {};
+            filteredEntities.forEach(entity => {
+                if (!groups[entity.group]) {
+                    groups[entity.group] = [];
+                }
+                groups[entity.group].push(entity);
+            });
+
+            // Detect if we're in dark mode by checking body class or computed styles
+            const isDarkMode = document.body.classList.contains('dark-mode') ||
+                              getComputedStyle(document.body).backgroundColor.includes('rgb(51, 51, 51)') ||
+                              getComputedStyle(document.body).color.includes('rgb(255, 255, 255)');
+
+            // Render dropdown
+            let html = '';
+
+            Object.keys(groups).forEach(groupName => {
+                html += '<div class="entity-group-header">' + groupName + '</div>';
+                groups[groupName].forEach((entity, index) => {
+                    const globalIndex = filteredEntities.indexOf(entity);
+                    const nameColor = isDarkMode ? '#ffffff' : '#333333';
+                    const idColor = isDarkMode ? '#cccccc' : '#666666';
+                    html += '<div class="entity-option" data-index="' + globalIndex + '" onclick="selectEntity(\\'' + entity.id + '\\')">';
+                    html += '<span class="entity-name" style="color: ' + nameColor + ' !important;">' + entity.name + '</span>';
+                    html += '<span class="entity-id" style="color: ' + idColor + ' !important;">' + entity.id + '</span>';
+                    html += '</div>';
+                });
+            });
+
+            if (html === '' || filteredEntities.length === 0) {
+                const textColor = isDarkMode ? '#ffffff' : '#333333';
+                html = '<div class="entity-option" style="color: ' + textColor + ' !important;">No entities found</div>';
+            }
+
+            dropdown.innerHTML = html;
+            dropdown.style.display = 'block';
+            isDropdownVisible = true;
+            selectedIndex = -1;
+        }
+
+        function selectEntity(entityId) {
+            const entity = allEntities.find(e => e.id === entityId);
+            if (entity) {
+                const input = document.getElementById('entitySearchInput');
+                const hiddenInput = document.getElementById('selectedEntityId');
+
+                input.value = entity.id;
+                hiddenInput.value = entity.id;
+
+                hideEntityDropdown();
+
+                // Submit the form
+                document.getElementById('entitySelectForm').submit();
+            }
+        }
+
+        function hideEntityDropdown() {
+            const dropdown = document.getElementById('entityDropdown');
+            dropdown.style.display = 'none';
+            isDropdownVisible = false;
+            selectedIndex = -1;
+        }
+
+        function handleEntityKeyDown(event) {
+            if (!isDropdownVisible) return;
+
+            const options = document.querySelectorAll('.entity-option[data-index]');
+
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                selectedIndex = Math.min(selectedIndex + 1, options.length - 1);
+                updateSelection(options);
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                selectedIndex = Math.max(selectedIndex - 1, -1);
+                updateSelection(options);
+            } else if (event.key === 'Enter') {
+                event.preventDefault();
+                if (selectedIndex >= 0 && options[selectedIndex]) {
+                    const entityIndex = parseInt(options[selectedIndex].getAttribute('data-index'));
+                    const entity = filteredEntities[entityIndex];
+                    if (entity) {
+                        selectEntity(entity.id);
+                    }
+                }
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                hideEntityDropdown();
+            }
+        }
+
+        function updateSelection(options) {
+            options.forEach((option, index) => {
+                option.classList.toggle('selected', index === selectedIndex);
+            });
+
+            if (selectedIndex >= 0 && options[selectedIndex]) {
+                options[selectedIndex].scrollIntoView({ block: 'nearest' });
+            }
+        }
+        </script>
+    """
+    )
+    return text
+
+
+def get_entity_css():
+    html = """
+        <style>
+        .entity-search-container {
+            position: relative;
+        }
+        .entity-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            min-width: 500px;
+            background: white;
+            border: 1px solid #ddd;
+            border-top: none;
+            max-height: 300px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .entity-option {
+            padding: 10px 15px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+        .entity-option:hover,
+        .entity-option.selected {
+            background-color: #f0f0f0;
+        }
+        .entity-option .entity-name {
+            font-weight: bold;
+            flex: 0 1 40%;
+            margin-right: 15px;
+            font-size: 14px;
+            word-break: break-word;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #333;
+        }
+        .entity-option .entity-id {
+            color: #666;
+            font-size: 11px;
+            flex: 0 1 60%;
+            text-align: right;
+            font-family: monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .entity-group-header {
+            padding: 8px 10px;
+            background-color: #f5f5f5;
+            font-weight: bold;
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            font-size: 12px;
+        }
+        /* Dark mode styles */
+        body.dark-mode .entity-dropdown {
+            background: #333 !important;
+            border: 1px solid #666 !important;
+            color: #fff !important;
+        }
+        body.dark-mode .entity-dropdown * {
+            color: #fff !important;
+        }
+        body.dark-mode .entity-option {
+            border-bottom: 1px solid #555 !important;
+            color: #fff !important;
+        }
+        body.dark-mode .entity-option:hover,
+        body.dark-mode .entity-option.selected {
+            background-color: #555;
+        }
+        body.dark-mode .entity-dropdown .entity-option .entity-name {
+            color: #fff !important;
+        }
+        body.dark-mode .entity-option .entity-name {
+            color: #fff !important;
+        }
+        body.dark-mode .entity-option .entity-id {
+            color: #ccc !important;
+        }
+        body.dark-mode .entity-group-header {
+            background-color: #444;
+            color: #e0e0e0;
+            border-bottom: 1px solid #666;
+        }
+        body.dark-mode #entitySearchInput {
+            background-color: #333;
+            color: #fff;
+            border: 1px solid #666;
+        }
+        body.dark-mode #clearEntitySearch {
+            color: #ccc !important;
+        }
+        body.dark-mode #clearEntitySearch:hover {
+            color: #fff !important;
+        }
+        </style>
+"""
+    return html
+
+
+def get_entity_control_css():
+    # Add CSS for dark mode support
+    html = """
+    <style>
+    .entity-edit-container {
+        --border-color: #ddd;
+        --background-secondary: #f9f9f9;
+        --text-color: #333;
+        --text-secondary: #666;
+        --input-background: #fff;
+    }
+
+    body.dark-mode .entity-edit-container {
+        --border-color: #555;
+        --background-secondary: #2d2d2d;
+        --text-color: #e0e0e0;
+        --text-secondary: #bbb;
+        --input-background: #3d3d3d;
+        color: var(--text-color);
+    }
+
+    body.dark-mode .entity-edit-container input[type="number"],
+    body.dark-mode .entity-edit-container select {
+        background-color: var(--input-background) !important;
+        border-color: var(--border-color) !important;
+        color: var(--text-color) !important;
+    }
+
+    body.dark-mode .entity-edit-container span {
+        color: var(--text-color) !important;
+    }
+    </style>
+    """
+    return html
+
+
+def get_entity_toggle_js():
+    """
+    JavaScript for entity toggle buttons
+    """
+    html = f"""
+    <script>
+    function toggleEntitySwitch(button, entityId, days) {{
+        // Toggle the visual state
+        button.classList.toggle('active');
+
+        // Determine the new value
+        const newValue = button.classList.contains('active') ? 'on' : 'off';
+
+        // Create form data
+        const formData = new FormData();
+        formData.append('entity_id', entityId);
+        formData.append('days', days);
+        formData.append('value', newValue);
+
+        // Submit the form
+        fetch('./entity', {{
+            method: 'POST',
+            body: formData
+        }}).then(response => {{
+            if (response.redirected) {{
+                window.location.href = response.url;
+            }}
+        }}).catch(error => {{
+            console.error('Error:', error);
+            // Revert the toggle on error
+            button.classList.toggle('active');
+        }});
+    }}
+    </script>
+    """
+    return html
+
+
 def get_apps_js(all_states_json):
     text = (
         f"""
@@ -1469,8 +1865,11 @@ def get_components_css():
     border-radius: 8px;
     padding: 20px;
     background: #fff;
+    color: #333;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     transition: border-color 0.3s ease;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
 }
 
 .component-card.active {
@@ -1480,6 +1879,7 @@ def get_components_css():
 .component-card.inactive {
     border-color: #999;
     background: #f9f9f9;
+    color: #333;
 }
 
 .component-header {
@@ -1517,6 +1917,7 @@ def get_components_css():
 .status-text {
     font-weight: bold;
     font-size: 0.9em;
+    color: #333;
 }
 
 .component-details {
@@ -1527,10 +1928,12 @@ def get_components_css():
 .component-details p {
     margin: 8px 0;
     font-size: 0.95em;
+    color: #333;
 }
 
 .component-args {
     margin-top: 15px;
+    overflow: hidden;
 }
 
 .component-args h4 {
@@ -1544,6 +1947,7 @@ def get_components_css():
     border-collapse: collapse;
     font-size: 0.9em;
     margin: 10px 0;
+    table-layout: fixed;
 }
 
 .args-table th {
@@ -1552,12 +1956,32 @@ def get_components_css():
     text-align: left;
     border: 1px solid #ddd;
     font-weight: bold;
+    color: #333;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.args-table th:nth-child(1) {
+    width: 40%;
+}
+
+.args-table th:nth-child(2) {
+    width: 20%;
+}
+
+.args-table th:nth-child(3) {
+    width: 40%;
 }
 
 .args-table td {
     padding: 8px;
     border: 1px solid #ddd;
     vertical-align: top;
+    color: #333;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-all;
+    max-width: 0;
 }
 
 .args-table tr.required-arg {
@@ -1566,6 +1990,14 @@ def get_components_css():
 
 .args-table tr.optional-arg {
     background-color: #f9f9f9;
+}
+
+/* Special handling for long values like URLs */
+.args-table td:nth-child(3) {
+    word-break: break-all;
+    overflow-wrap: anywhere;
+    hyphens: auto;
+    max-width: 200px;
 }
 
 .entity-count-positive {
@@ -1602,6 +2034,14 @@ body.dark-mode .component-details {
     border-top-color: #555;
 }
 
+body.dark-mode .component-details p {
+    color: #e0e0e0;
+}
+
+body.dark-mode .component-details strong {
+    color: #e0e0e0;
+}
+
 body.dark-mode .component-args h4 {
     color: #e0e0e0;
 }
@@ -1610,11 +2050,28 @@ body.dark-mode .args-table th {
     background-color: #333;
     color: #e0e0e0;
     border-color: #555;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+body.dark-mode .args-table th:nth-child(1) {
+    width: 40%;
+}
+
+body.dark-mode .args-table th:nth-child(2) {
+    width: 20%;
+}
+
+body.dark-mode .args-table th:nth-child(3) {
+    width: 40%;
 }
 
 body.dark-mode .args-table td {
     border-color: #555;
     color: #e0e0e0;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-all;
 }
 
 body.dark-mode .args-table tr.required-arg {
@@ -1804,8 +2261,161 @@ body.dark-mode .log-menu a.active {
     background-color: #4CAF50;
     color: white;
 }
+
+/* Log search container styles */
+.log-search-container {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    padding: 8px;
+    background-color: #f8f9fa;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    gap: 8px;
+}
+
+.log-search-input {
+    flex-grow: 1;
+    padding: 6px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+    min-width: 200px;
+}
+
+.log-search-input:focus {
+    outline: none;
+    border-color: #4CAF50;
+    box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+}
+
+.clear-search-button {
+    padding: 6px 12px;
+    background-color: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+.clear-search-button:hover {
+    background-color: #5a6268;
+}
+
+.search-status {
+    font-size: 12px;
+    color: #6c757d;
+    white-space: nowrap;
+}
+
+/* Dark mode search styles */
+body.dark-mode .log-search-container {
+    background-color: #2d3748;
+    border-color: #4a5568;
+}
+
+body.dark-mode .log-search-input {
+    background-color: #4a5568;
+    border-color: #718096;
+    color: #fff;
+}
+
+body.dark-mode .log-search-input:focus {
+    border-color: #4CAF50;
+}
+
+body.dark-mode .log-search-input::placeholder {
+    color: #a0aec0;
+}
+
+body.dark-mode .clear-search-button {
+    background-color: #4a5568;
+}
+
+body.dark-mode .clear-search-button:hover {
+    background-color: #2d3748;
+}
+
+body.dark-mode .search-status {
+    color: #a0aec0;
+}
+
+/* Hide filtered log entries */
+.log-entry-hidden {
+    display: none !important;
+}
+
+/* Highlight matching text */
+mark.search-highlight {
+    background-color: #ffeb3b;
+    color: #000;
+    font-weight: bold;
+    padding: 1px 2px;
+    border-radius: 2px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+body.dark-mode mark.search-highlight {
+    background-color: #ffa000;
+    color: #000;
+    font-weight: bold;
+    padding: 1px 2px;
+    border-radius: 2px;
+    box-shadow: 0 1px 2px rgba(255,255,255,0.1);
+}
 </style>
 """
+
+    # Add custom CSS for live updates
+    text += """
+        <style>
+        .log-status {
+            margin: 10px 0;
+            padding: 8px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        body.dark-mode .log-status {
+            background-color: #333;
+            color: #fff;
+        }
+        .new-log-entry {
+            animation: highlight 2s ease-out;
+        }
+        @keyframes highlight {
+            0% { background-color: #ffff99; }
+            100% { background-color: transparent; }
+        }
+        body.dark-mode .new-log-entry {
+            animation: highlight-dark 2s ease-out;
+        }
+        @keyframes highlight-dark {
+            0% { background-color: #555500; }
+            100% { background-color: transparent; }
+        }
+        .auto-scroll-toggle {
+            margin-left: 10px;
+            cursor: pointer;
+        }
+        .scroll-to-bottom {
+            margin-left: 10px;
+            padding: 4px 8px;
+            background: #007cba;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .scroll-to-bottom:hover {
+            background: #005a87;
+        }
+        </style>
+    """
+
     return text
 
 
@@ -2111,6 +2721,326 @@ body.dark-mode .revert-button:disabled {
     border: 2px solid #555555 !important;
 }
 </style>"""
+    return text
+
+
+def get_logfile_js(filter_type):
+    """
+    Return JavaScript for log file page
+    """
+    text = f"""
+        <script>
+        let currentFilter = '{filter_type}';
+        let lastLineNumber = 0;
+        let updateInterval;
+        let isUpdating = false;
+        let isPaused = false;
+        let searchTimeout = null; // For debouncing search
+
+        // Toggle pause/resume updates
+        function toggleUpdates() {{
+            const btn = document.getElementById('pauseResumeBtn');
+            if (isPaused) {{
+                // Resume
+                isPaused = false;
+                btn.textContent = 'Pause';
+                updateInterval = setInterval(updateLog, 2000);
+                updateLog(); // Immediate update
+                updateStatus('Updates resumed');
+            }} else {{
+                // Pause
+                isPaused = true;
+                btn.textContent = 'Resume';
+                if (updateInterval) {{
+                    clearInterval(updateInterval);
+                    updateInterval = null;
+                }}
+                updateStatus('Updates paused');
+            }}
+        }}
+
+        // Get the highest line number currently displayed
+        function getLastLineNumber() {{
+            const rows = document.querySelectorAll('#logTableBody tr[data-line]');
+            let maxLine = 0;
+            rows.forEach(row => {{
+                const lineNum = parseInt(row.getAttribute('data-line'));
+                if (lineNum > maxLine) {{
+                    maxLine = lineNum;
+                }}
+            }});
+            return maxLine;
+        }}
+
+        // Update log status
+        function updateStatus(message) {{
+            const statusDiv = document.getElementById('logStatus');
+            if (statusDiv) {{
+                const now = new Date().toLocaleTimeString();
+                statusDiv.textContent = `${{message}} (Last updated: ${{now}})`;
+            }}
+        }}
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {{
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+
+        // Add new log entries
+        function addLogEntries(lines) {{
+            const tbody = document.getElementById('logTableBody');
+            if (!tbody) return 0;
+
+            const autoScroll = document.getElementById('autoScroll');
+            const shouldAutoScroll = autoScroll ? autoScroll.checked : false;
+            let newEntriesAdded = 0;
+
+            // Insert entries at the top (newest first)
+            lines.forEach(logLine => {{
+                if (logLine.line_number > lastLineNumber) {{
+                    const row = document.createElement('tr');
+                    row.setAttribute('data-line', logLine.line_number);
+                    row.className = 'new-log-entry';
+
+                    let color = '#33cc33'; // Default green for info
+                    if (logLine.type === 'error') {{
+                        color = '#ff3333';
+                    }} else if (logLine.type === 'warning') {{
+                        color = '#ffA500';
+                    }}
+
+                    // Use highlighted content from server (already HTML-escaped and highlighted)
+                    const timestamp = logLine.timestamp;
+                    const message = logLine.message;
+
+                    row.innerHTML = `<td>${{logLine.line_number}}</td><td nowrap><font color="${{color}}">${{timestamp}}</font> ${{message}}</td>`;
+
+                    // Insert at the top of the table body
+                    tbody.insertBefore(row, tbody.firstChild);
+                    newEntriesAdded++;
+
+                    lastLineNumber = Math.max(lastLineNumber, logLine.line_number);
+                }}
+            }});
+
+            // Auto-scroll to top for new entries (since newest are at top)
+            if (newEntriesAdded > 0 && shouldAutoScroll) {{
+                setTimeout(() => {{
+                    window.scrollTo({{
+                        top: 0,
+                        behavior: 'smooth'
+                    }});
+                }}, 100);
+            }}
+
+            return newEntriesAdded;
+        }}
+
+        // Scroll to bottom function
+        function scrollToBottom() {{
+            window.scrollTo({{
+                top: document.body.scrollHeight,
+                behavior: 'smooth'
+            }});
+        }}
+
+        // Debounced search function
+        function debouncedSearch() {{
+            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase().trim();
+
+            // Clear existing timeout
+            if (searchTimeout) {{
+                clearTimeout(searchTimeout);
+            }}
+
+            // Set new timeout for search (500ms delay)
+            searchTimeout = setTimeout(() => {{
+                performServerSearch(searchTerm);
+            }}, 500);
+        }}
+
+        // Search functionality - now uses server-side search with debouncing
+        function filterLogEntries() {{
+            debouncedSearch();
+        }}
+
+        // Perform server-side search
+        async function performServerSearch(searchTerm) {{
+            if (isUpdating) return;
+            isUpdating = true;
+
+            const statusDiv = document.getElementById('searchStatus');
+            statusDiv.textContent = 'Searching...';
+
+            try {{
+                const searchParam = searchTerm ? `&search=${{encodeURIComponent(searchTerm)}}` : '';
+                const response = await fetch(`./api/log?filter=${{currentFilter}}&since=0&max_lines=1024${{searchParam}}`);
+
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                }}
+
+                const data = await response.json();
+
+                if (data.status === 'success') {{
+                    // Clear existing table content
+                    const tbody = document.getElementById('logTableBody');
+                    tbody.innerHTML = '';
+
+                    // Reset line number tracking
+                    lastLineNumber = 0;
+
+                    // Add search results
+                    const entriesAdded = addLogEntries(data.lines);
+
+                    // Update status with search results info
+                    if (searchTerm) {{
+                        const searchMatches = data.search_matches || data.returned_lines;
+                        const displayedResults = data.returned_lines;
+
+                        if (searchMatches > displayedResults) {{
+                            statusDiv.textContent = `Found ${{searchMatches}} matching entries (showing ${{displayedResults}})`;
+                        }} else {{
+                            statusDiv.textContent = `Found ${{searchMatches}} matching entries (showing ${{displayedResults}})`;
+                        }}
+
+                        updateStatus(`Search completed - ${{searchMatches}} matches found`);
+                    }} else {{
+                        statusDiv.textContent = '';
+                        updateStatus('Search cleared - showing recent entries');
+                    }}
+                }} else {{
+                    statusDiv.textContent = `Search error: ${{data.message || 'Unknown error'}}`;
+                    updateStatus(`Search error: ${{data.message || 'Unknown error'}}`);
+                }}
+            }} catch (error) {{
+                console.error('Error performing search:', error);
+                statusDiv.textContent = `Search error: ${{error.message}}`;
+                updateStatus(`Search error: ${{error.message}}`);
+            }} finally {{
+                isUpdating = false;
+            }}
+        }}
+
+        // Clear search function
+        function clearLogSearch() {{
+            document.getElementById('logSearchInput').value = '';
+            filterLogEntries();
+        }}
+
+        // Escape special regex characters
+        function escapeRegExp(string) {{
+            return string.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+        }}
+
+        // Fetch new log entries
+        async function updateLog() {{
+            if (isUpdating || isPaused) return;
+
+            const searchTerm = document.getElementById('logSearchInput').value.toLowerCase().trim();
+
+            isUpdating = true;
+
+            try {{
+                let url;
+                if (searchTerm) {{
+                    // If search is active, fetch new entries that match the search criteria
+                    const searchParam = `&search=${{encodeURIComponent(searchTerm)}}`;
+                    url = `./api/log?filter=${{currentFilter}}&since=${{lastLineNumber}}&max_lines=100${{searchParam}}`;
+                }} else {{
+                    // Normal update without search
+                    url = `./api/log?filter=${{currentFilter}}&since=${{lastLineNumber}}&max_lines=1024`;
+                }}
+
+                const response = await fetch(url);
+
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
+                }}
+
+                const data = await response.json();
+
+                if (data.status === 'success') {{
+                    const newEntries = addLogEntries(data.lines);
+                    if (newEntries > 0) {{
+                        if (searchTerm) {{
+                            updateStatus(`${{newEntries}} new matching entries added`);
+                            // Update search status to reflect new matches
+                            const statusDiv = document.getElementById('searchStatus');
+                            const rows = document.querySelectorAll('#logTableBody tr[data-line]');
+                            const totalDisplayed = rows.length;
+                            const currentText = statusDiv.textContent;
+
+                            // Try to extract existing match count and update it
+                            if (currentText.includes('Found')) {{
+                                const match = currentText.match(/Found (\\d+)/);
+                                if (match) {{
+                                    const oldCount = parseInt(match[1]);
+                                    const newCount = oldCount + newEntries;
+                                    statusDiv.textContent = `Found ${{newCount}} matching entries (showing ${{totalDisplayed}})`;
+                                }}
+                            }}
+                        }} else {{
+                            updateStatus(`${{newEntries}} new entries added`);
+                        }}
+                    }} else {{
+                        if (searchTerm) {{
+                            updateStatus('No new matching entries');
+                        }} else {{
+                            updateStatus('No new entries');
+                        }}
+                    }}
+                }} else {{
+                    updateStatus(`Error: ${{data.message || 'Unknown error'}}`);
+                }}
+            }} catch (error) {{
+                console.error('Error updating log:', error);
+                updateStatus(`Error fetching log data: ${{error.message}}`);
+            }} finally {{
+                isUpdating = false;
+            }}
+        }}
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {{
+            lastLineNumber = 0; // Start from 0 since we're loading all initial data
+            updateStatus('Log viewer loaded - fetching initial data...');
+
+            // Load initial data immediately
+            updateLog();
+
+            // Start periodic updates every 2 seconds
+            updateInterval = setInterval(updateLog, 2000);
+
+            // Handle page visibility changes to pause/resume updates
+            document.addEventListener('visibilitychange', function() {{
+                if (isPaused) return; // Don't auto-resume if manually paused
+
+                if (document.hidden) {{
+                    if (updateInterval) {{
+                        clearInterval(updateInterval);
+                        updateInterval = null;
+                    }}
+                }} else {{
+                    if (!updateInterval) {{
+                        updateInterval = setInterval(updateLog, 2000);
+                    }}
+                    updateLog(); // Immediate update when page becomes visible
+                }}
+            }});
+        }});
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', function() {{
+            if (updateInterval) {{
+                clearInterval(updateInterval);
+                updateInterval = null;
+            }}
+        }});
+        </script>
+        """
     return text
 
 
@@ -2653,14 +3583,62 @@ def get_plan_css():
         background-color: #444 !important;
     }
 
-    /* Override cell styling */
+    /* ============================
+   Override cell styling
+   ============================ */
+
+    /* Generic fallback */
     .override-active {
         position: relative;
-        background-color: #FFC0CB !important; /* Light pink for light mode */
+        background-color: #FFC0CB !important; /* Light pink */
+    }
+    body.dark-mode .override-active {
+        background-color: #93264c !important; /* Dark pink */
     }
 
-    body.dark-mode .override-active {
-        background-color: #93264c !important; /* Darker pink for dark mode */
+    /* Manual Charge */
+    .override-charge {
+        position: relative;
+        background-color: #3AEE85 !important; /* Green (same as charging) */
+    }
+    body.dark-mode .override-charge {
+        background-color: #247e59 !important;
+    }
+
+    /* Manual Export */
+    .override-export {
+        position: relative;
+        background-color: #FFFF00 !important; /* Bright yellow */
+    }
+    body.dark-mode .override-export {
+        background-color: #999900 !important;
+    }
+
+    /* Manual Demand */
+    .override-demand {
+        position: relative;
+        background-color: #F18261 !important; /* Red-orange (high demand) */
+    }
+    body.dark-mode .override-demand {
+        background-color: #7e2e1f !important;
+    }
+
+    /* Manual Freeze Charge (improved visibility) */
+    .override-freeze-charge {
+        position: relative;
+        background-color: #C0C0C0 !important; /* Medium gray for light mode */
+    }
+    body.dark-mode .override-freeze-charge {
+        background-color: #888888 !important; /* Lighter gray for dark mode */
+    }
+
+    /* Manual Freeze Export */
+    .override-freeze-export {
+        position: relative;
+        background-color: #AAAAAA !important; /* Darker gray */
+    }
+    body.dark-mode .override-freeze-export {
+        background-color: #444444 !important;
     }
 
     /* Rate input field styles */
