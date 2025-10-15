@@ -80,7 +80,7 @@ To access the entire HA directory structure, click the three horizontal bars to 
 
 **Recommended**
 
-The simplest way to install Predbat now is with the Predbat add-on.
+The simplest way to install Predbat now is with the Predbat add-on. The Predbat-Appdaemon add-on and Appdaemon install methods previously used for Predbat have been retired.
 
 Go to settings, add-ons, select Add-on Store, three dots on the top right, Repositories, then add the following repo
 '<https://github.com/springfall2008/predbat_addon>' to the list and click close. Now refresh the list and find Predbat, click on it and click 'install'.
@@ -97,7 +97,11 @@ You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on)
 
 The Predbat web interface will work through the Predbat add-on, you can click on the 'Web UI' button to open it once Predbat is running.
 
-If you wish to use Docker with Predbat it is recommended you read the Docker installation instructions inside the Predbat.
+## Docker Install
+
+As an alternative to the Predbat add-on, Predbat can be installed via Docker
+
+The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and a fork of the Predbat add-on with installation instructions and updates for Docker can be found at [https://github.com/nipar4/predbat_addon](https://github.com/nipar4/predbat_addon).
 
 ## Solcast Install
 
@@ -109,6 +113,9 @@ If you do not want to use Solcast you can also use Forecast.solar (less accurate
 If you don't have one already, register for a free [Solcast hobbyist account](https://solcast.com/) and enter the details of your system.
 You can create 2 sites maximum under one (free hobbyist) account, if you have more aspects then it suggests you average the angle based on the number of panels
 e.g. $7/10 * 240^\circ + 3/10 * 120^\circ$.
+
+Make sure you configure the Azimuth (panel orientation) correctly in your Solcast account, Azimuth is not set as a 0-359 degree value, but rather as 0-180 for westerly facing, or 0 to minus 179 for easterly facing.
+The Azimuth value is the number of degrees angled away from North, with the sign being West or East. If you're not sure, then do some quick research and check your roof orientation with a protractor on Google maps.
 
 **Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
 (both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let Predbat handle any necessary clipping instead.
@@ -147,7 +154,7 @@ You can create one or more rooftops by providing a list of the data for each one
 
 The latitude and longitude are your location in world, or for the UK you can set a postcode.
 
-The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South
+The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 = South - note these are different to how Solcast measures azimuth so if you do swap from forecast.solar to Solcast, don't just copy the azimuth over!
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
 The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
 The optional forecast_solar_max_age setting sets the number of hours between updates to PV data, the default is 8.
@@ -169,7 +176,7 @@ or you can set longitude and latitude if you are not in the UK or postcode does 
       longitude: -0.1276
 ```
 
-Optionally you can set an api_key for personal or professional accounts and you can also set 'days' to define how many future days of data the forecast includes (2 for free, 3 for personal or 6 for professional)
+Optionally you can set an api_key for personal or professional accounts and you can also set 'days' to define how many future days of data the forecast includes (2 for free, 3 for personal or 6 for professional).
 
 ``` yaml
   forecast_solar:
@@ -185,25 +192,18 @@ Note you can omit any of these settings for a default value. They do not have to
 Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
+Make sure that the configuration option 'Enable forecast half-hourly detail attributes' is turned on as predbat requires the half-hourly detailed solar forecast to populate the predbat plan.
+By default the Solcast integration only provides hourly forecasts and Predbat will take each hourly PV forecast and treat it as a half-hour value - doubling your solar generation forecast!
+
 Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities created by the Solcast integration in Home Assistant.
 
-If you don't have any solar generation then use a file editor to comment out the following lines from the Solar forecast part of the `apps.yaml` configuration:
-
-```yaml
-  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
-  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
-  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
-  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
-```
-
-Note that Predbat does not update Solcast integration for you so you will need to create your own Home Assistant automation that updates the solar
-forecast a few times a day (e.g. dawn, dusk, and just before your nightly charge slot). Keep in mind hobbyist accounts only have 10 polls per day
-so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls need to be kept under the limit or you will experience failures.
+Note that Predbat does not update Solcast integration for you so you will either need to use the default forecast auto-update within the integration, or create your own Home Assistant automation that updates the solar forecast a few times a day
+(e.g. dawn, dusk, and just before your nightly charge slot).
+Keep in mind hobbyist accounts only have 10 polls per day so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls need to be kept under the limit or you will experience failures.
 
 Due to the popularity of the Solcast Hobbyist service, Solcast has introduced rate limiting for Hobbyist (free) accounts. If your update gets a 429 error then this is due to rate limiting.
 Solcast recommends that you poll for updated solar forecasts at random times, i.e. don't poll at precisely X o'clock and zero seconds.
-The Solcast integration will auto-retry if it gets a 429 error,
-but to minimise the potential rate limiting the sample Solcast automation below contains non-precise poll times for just this reason.
+The Solcast integration will auto-retry if it gets a 429 error, but to minimise the potential rate limiting the sample Solcast automation below contains non-precise poll times for just this reason.
 
 Example Solcast update automation script:
 
@@ -226,6 +226,17 @@ mode: single
 
 Manually run the automation and then make sure the Solcast integration is working in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
 and check that you can see the half-hourly solar forecasts in the Solcast entities.
+
+### No solar
+
+If you don't have any solar generation then use a file editor to comment out the following lines from the Solar forecast part of the `apps.yaml` configuration:
+
+```yaml
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+```
 
 ## Energy Rates
 
@@ -299,13 +310,13 @@ Once Predbat is running successfully the recommended next step is to start Predb
 This enables you to get a feel for the Predbat plan and further [customise Predbat's settings](customisation.md) to meet your needs.
 
 Set **select.predbat_mode** to the correct [mode of operation](customisation.md#predbat-mode) for your system - usually 'Control charge' or 'Control charge & discharge'.
-Also, you should set **switch.predbat_set_read_only** to True to stop Predbat from making any changes to your inverter.
+Also, you should set **switch.predbat_set_read_only** to On to stop Predbat from making any changes to your inverter.
 
 You can see the planned solar and grid charging and discharging activity in the [Predbat Plan](predbat-plan-card.md).
 Another set of views can be seen in the detailed [Apex Charts showing Predbat's predictions](creating-charts.md).
 
 Once you are happy with the plan Predbat is producing, and are ready to let Predbat start controlling your inverter charging and discharging,
-set the switch **switch.predbat_set_read_only** to False and Predbat will start controlling your inverter.
+set the switch **switch.predbat_set_read_only** to Off and Predbat will start controlling your inverter.
 
 ## Updating Predbat
 
@@ -331,12 +342,12 @@ Click on the update and select Install:
 Predbat can now update itself, just select the version of Predbat you want to install from the **select.predbat_update** drop-down menu,
 the latest version will be at the top of the list. Predbat will update itself and automatically restart.
 
-Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on GitHub.
+Alternatively, if you turn On **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on GitHub.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
 
 Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
-or by enabling the **switch.predbat_auto_update** to auto-update Predbat.
+or by turning on the **switch.predbat_auto_update** to auto-update Predbat.
 
 ## Upgrading from AppDaemon to Predbat add-on
 

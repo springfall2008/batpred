@@ -251,23 +251,24 @@ The template `apps.yaml` for each inverter type comes pre-configured with regula
 
 If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
 
-### Givenergy cloud direct
+### Givenergy Cloud Direct
 
-Predbat now supports direct communication with the GivEnergy cloud services, with this method you can have your inverter auto-configured.
-Just log into the GivEnergy web site and create an API key and copy it into the key settings. The number of inverters and their settings
-will be configured automatically.
+Predbat now supports direct communication with the GivEnergy cloud services instead of local control via GivTCP to your inverter.
 
-If you set **ge_cloud_automatic** to False then you can manually configure to point to Predbat's GE Cloud configuration.
+Log into the GivEnergy Portal web site and create an API key and copy it into the **ge_cloud_key** setting in `apps.yaml`.
 
-If you set **ge_cloud_data** to False then Predbat will use the local data for history rather than the cloud data, you will need to wait until
-you have a few days work (at least days_previous days) before this will work correctly.
+If you set **ge_cloud_automatic** to True, the number of inverters and their settings will be configured automatically.
+Or, if you set **ge_cloud_automatic** to False then you need to manually configure **ge_cloud_serial** to your inverter serial number for Predbat to use on the GivEnergy Cloud.
+
+If you set **ge_cloud_data** to False then Predbat will use the local Home Assistant data for history rather than the cloud data;
+you will need to wait until you have a few days of history established (at least days_previous days) before this will work correctly.
 
 ```yaml
-  ge_cloud_data: True
-  ge_cloud_serial: '{geserial}'
-  ge_cloud_key: 'xxxxx'
   ge_cloud_direct: True
   ge_cloud_automatic: True
+  ge_cloud_serial: '{geserial}'
+  ge_cloud_key: 'xxxxx'
+  ge_cloud_data: True
 ```
 
 ### num_inverters
@@ -280,23 +281,26 @@ The number of inverters you have. If you increase this above 1 you must provide 
 
 ### inverter_type
 
-inverter_type defaults to 'GE' (GivEnergy) if not set in apps.yaml, or should be set to one of the inverter types that are already pre-programmed into Predbat:
+inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should be set to one of the inverter types that are already pre-programmed into Predbat:
 
-  GE: GivEnergy
-  GEC: GivEnergy Cloud
+  FoxCloud: Fox Cloud integration
+  FoxESS: FoxESS via modbus
+  GE: GivEnergy via GivTCP
+  GEC: GivEnergy Cloud integration
   GEE: GivEnergy EMC
   GS: Ginlong Solis
+  HU: Huawei Solar
+  SA: Solar Assistant
   SE: SolarEdge
-  SX4: Solax Gen4 (Modbus Power Control)
   SF: Sofar HYD
   SFMB: Sofar HYD with solarman modbus
-  HU: Huawei Solar
+  SIG: SigEnergy Sigenstor
   SK: Sunsynk
-  SA: Solar Assistant
+  SX4: Solax Gen4 (Modbus Power Control)
 
 If you have multiple inverters, then set inverter_type to a list of the inverter types.
 
-If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in apps.yaml then inverter_type must be set to the same code as has been used in the custom inverter definition.
+If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in `apps.yaml` then inverter_type **must** be set to the same code as has been used in the custom inverter definition.
 
 ### geserial
 
@@ -310,7 +314,7 @@ If you  have more than one GivEnergy inverter you will need one per inverter to 
 ```
 
 If you are running GivTCP v3 and have an 'All-In-One' (AIO) or a 3-phase inverter then the helper regular expression will not correctly work
-and you will need to manually set geserial in apps.yaml to your inverter serial number, e.g.:
+and you will need to manually set geserial in apps.yaml to your inverter serial number which must be entered in lower case, e.g.:
 
 ```yaml
   geserial: 'chNNNNgZZZ'
@@ -498,21 +502,26 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 #### Charge/Discharge rate
 
 - **charge_rate** - Battery charge rate entity in watts
-- **discharge_rate** - Battery discharge max rate entity in watts
+- **discharge_rate** - Battery discharge rate entity in watts
 
 or
 
 - **charge_rate_percent** - Battery charge rate entity in percent of maximum rate (0-100)
 - **discharge_rate_percent** - Battery discharge max rate entity in percent of maximum rate (0-100)
 
+or
+
+- **timed_charge_current** - Battery charge rate entity in amps
+- **timed_discharge_current** - Battery discharge rate entity in amps
+
 #### Battery Information
 
-- **battery_voltage** - Current battery voltage (only needed for inverters controlled via amps)
+- **battery_voltage** - Nominal maximum battery voltage (not current battery voltage) - only needed for inverters controlled via Amps and used internally by Predbat to convert Watts to Amps to control the inverter.
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh
-- **battery_min_soc** - When set limits the target SOC% setting for charge and discharge to a minimum percentage value
-- **reserve** - sensor name for the reserve setting in %
-- **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set)
+- **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
+- **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
+- **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
 
 #### Power Data
 
@@ -566,15 +575,23 @@ or
 
 - **charge_start_time** - Battery charge start time entity - can be a HA select entity in format HH:MM or HH:MM:SS or a HA time entity.
 - **charge_end_time** - Battery charge end time entity - can be a HA select entity in format HH:MM or HH:MM:SS or a HA time entity.
+- **discharge_start_time** - Battery discharge start time, same format as charge_start_time.
+- **discharge_end_time** - Battery discharge end time, same format as charge_end_time.
+- **charge_start_hour**, **charge_start_minute** - Battery charge start time for inverters with separate hour and minute control entities.
+- **charge_end_hour**, **charge_end_minute** - Ditto for battery charge end time.
+- **discharge_start_hour**,  **discharge_start_minute** - Ditto for battery discharge start time
+- **discharge_end_hour** and **discharge_end_minute** - Ditto for battery discharge end time
+- **charge_time** - Battery charge time entity for inverters that require a charge time expressed as a range in the format "*start hour*:*start minute*-*end hour*:*end minute*".
+- **discharge_time** = Ditto battery discharge time expressed as a time range.
 - **charge_limit** - Entity name for used to set the SOC target for the battery in percentage (AC charge target)
-- **scheduled_charge_enable** - Scheduled charge enable config
-- **scheduled_discharge_enable** - Scheduled discharge enable config
-- **discharge_start_time** - scheduled discharge slot_1 start time
-- **discharge_end_time** - scheduled discharge slot_1 end time
+- **scheduled_charge_enable** - Switch to enable/disable battery charge according to the charge start/end times defined above.
+- **scheduled_discharge_enable** - Switch to enable/disable battery discharge according to the discharge start/end times defined above.
 - **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
-- **pause_mode** - Givenergy pause mode register (if present)
+- **pause_mode** - GivEnergy pause mode register (if present)
 - **pause_start_time** - scheduled pause start time (only if supported by your inverter)
 - **pause_end_time** - scheduled pause start time (only if supported by your inverter)
+- **idle_start_time** - start time for idle (Eco) mode - for GivEnergy EMS
+- **idle_end_time** - end time for idle (Eco) mode - for GivEnergy EMS
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
@@ -627,9 +644,9 @@ Example service is below:
     entity_id: "switch.sunsynk_inverter_use_timer"
 ```
 
-See [Service API](https://springfall2008.github.io/batpred/inverter-setup/#service-api) for details.
+See [Service API](inverter-setup.md#has_service_api) for details.
 
-Note that **device_id** will be passed to the service automatically, it can be set in apps.yaml.
+Note that **device_id** will be passed to the service automatically, or it can be set in `apps.yaml`.
 
 ### MQTT API
 
@@ -873,10 +890,11 @@ high battery charge levels when the car was charged previously (e.g. last week).
 
 *TIP:* Check the house load being reported by your inverter when your car is charging. If it doesn't include the car charging load then there is no need to follow these steps below (and if you do, you'll artificially deflate your house load).
 
-- **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from your historical house load
-so that Predbat's battery prediction plan is not distorted by previous car charging.
+- **switch.predbat_car_charging_hold** - A switch that when turned on (True) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. Default is off.
 
-- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the daily incrementing kWh data for the car charger.
+If you are getting erroneous house load predictions in your plan then check this setting and **car_charging_energy** are set correctly.
+
+- **car_charging_energy** - Set in `apps.yaml` to point to an entity which is the daily incrementing kWh data for the car charger.
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
 or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 Note that this must be configured to point to an 'energy today' sensor in kWh not an instantaneous power sensor (in kW) from the car charger.<BR><BR>
@@ -892,13 +910,10 @@ car_charging_energy can be set to a list of energy sensors, one per line if you 
     - sensor.mixergy_ID_energy
 ```
 
-- **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range of 0 to 1.0)
-to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW).
+- **input_number.predbat_car_charging_energy_scale** - Used to define a scaling factor (in the range of 0 to 1.0)
+to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW). Default 1.0, i.e. no scaling.
 
-If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure the following Home Assistant entity:
-
-- **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
-and **input_number.predbat_car_charging_rate** will be subtracted from the historical load data.
+If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure **input_number.predbat_car_charging_threshold** (see [Additional car charging configuration](car-charging.md#additional-car-charging-configurations)).
 
 ### Planned Car Charging
 
@@ -945,7 +960,7 @@ low rate slot for the car/house (and might therefore start charging the battery)
 WARNING: Some cars will briefly start charging as soon as they are plugged in, which Predbat will detect and assume that this is a low rate slot even when it isn't.
 It is therefore recommended that you do NOT set car_charging_now unless you have problems with the Octopus Intelligent slots, and car_charging_now should be commented out in `apps.yaml`.
 
-**CAUTION:** Do not use car_charging_now with Predbat led charging or you will create an infinite loop. Do you use car_charging_now with Octopus intelligent
+**CAUTION:** Do not use car_charging_now with Predbat-led charging or you will create an infinite loop. Only use car_charging_now with Octopus Intelligent-led charging
 unless you can't make it work any other way as it will assume all car charging is at a low rate.
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging.

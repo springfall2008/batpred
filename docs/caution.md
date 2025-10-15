@@ -32,3 +32,5 @@ Things you can do to have a less complex plan include:
 
 Predbat creates an entity called **predbat.inverter_register_writes** which can be used to check the total number of writes across all inverters. If you divide this by the period of use
 and by the number of inverters, you will be able to figure out the actual rate of register writes - see the [Simple inverter writes dashboard](output-data.md#inverter-data).
+
+If you do use Predbat's balance inverters function, then you are strongly recommended to turn on "real time registers" using `switch.givtcp_xxxx_real_time_control` for GivEnergy inverters controlled via GivTCP, or an equivalent function for your inverter.

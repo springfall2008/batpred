@@ -243,12 +243,12 @@ pred_bat:
   # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 0
 
-  # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
+  # If you have Octopus Intelligent Go and are not using the Octopus Direct connection method, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
-  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
-  # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
-  octopus_intelligent_slot: 're:(binary_sensor.octopus_intelligent_slot|re:binary_sensor.octopus_energy_intelligent_dispatching)'
-  octopus_ready_time: 're:(time.octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless Octopus intelligent charging is False)
+  # This matches the intelligent slot from the Octopus Energy integration
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
 
   # Example alternative configuration for Ohme integration release >=v0.6.1
@@ -305,13 +305,14 @@ pred_bat:
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
+  # See the 'energy rates' part of the documentation for instructions on how to find the correct URL for your tariff and DNO region
+  #
   # rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
-  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-FLEX-BB-23-02-08/electricity-tariffs/E-1R-AGILE-FLEX-BB-23-02-08-A/standard-unit-rates"
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates"
 
   # Overrides metric_octopus_export and rates_export
-  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-A/standard-unit-rates"
-  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"
-  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/"
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-A/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
 
   # Import rates can be overridden with rate_import_override
   # Export rates can be overridden with rate_export_override

@@ -19,25 +19,24 @@ At least one of these methods must be used to define your import and export rate
 
 ## Octopus Energy direct
 
-If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information
-is to connect Predbat directly to Octopus.
+If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information is to connect Predbat directly to Octopus.
 
 - This method will not work correctly if you have multiple import or export meters.
-- A single Octopus Intelligent GO car charger or car is supported.
-- Saving sessions are also supported, including auto-enroll.
+- A single Octopus Intelligent GO car charger or car is supported and Predbat will plan your battery charging based on iGo sessions.
+- Saving sessions are also supported, including Predbat auto-enrolling you to them (note you must be joined to both the Octopus Octopoints and then the Saving Sessions schemes beforehand).
 
-You should first log into your Octopus account and go to the [Accounts](https://octopus.energy/dashboard/new/accounts/) section and copy your account number e.g. A-1234567.
+You should first log into your Octopus account and go to the [Accounts](https://octopus.energy/dashboard/new/accounts/) section and copy your Octopus account number e.g. `A-1234567`.
 
-Then go to the [API Access page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access) where you can copy your API key e.g. sk_live_1as12355...
+Then go to the [API Access page](https://octopus.energy/dashboard/new/accounts/personal-details/api-access), click 'regenerate API key' and copy your API key e.g. `sk_live_1as12355...`
 
-Put these both into your apps.yaml and you are done.
+Put these both into your `apps.yaml` and you are done.
 
 ```yaml
   octopus_api_account: 'XXXXXXXX'
   octopus_api_key: 'sk_live_yyyyyyyy'
 ```
 
-Free energy sessions:
+### Octopus Free energy sessions
 
 Predbat can obtain details of Free energy sessions directly from the Octopus Web Site.
 As Octopus do not publish an API for this information it has to be done by 'scraping' the website - there may be future issues with this if Octopus ever change the website format.
@@ -57,15 +56,14 @@ this brings greater configurability than the direct method.
 The Octopus Energy integration connects to your Octopus Energy account and retrieves the tariffs you are on, and the current tariff rates.
 If you change tariff within Octopus the integration will automatically retrieve the updated tariff information, and as tariff prices change, again they are automatically retrieved.
 
-The integration also provides support for Intelligent Octopus charging to support car charging.
+The integration also provides support for Intelligent Octopus charging to support (multiple) car charging.
 
 Follow the instructions provided in the Octopus Energy integration documentation to install and set up the integration.
 
 Once installed, you will need to configure the integration (go to Settings / Devices & Services / Integrations / Octopus Energy then click 'Configure')
 and provide the integration with your 'Octopus API key' (that you obtain from your Octopus account: Personal Details / API access).
 
-**CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following
-Octopus Energy events which are disabled by default when the integration is installed:
+**CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following Octopus Energy events which are disabled by default when the integration is installed:
 
 ```yaml
   event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
@@ -107,11 +105,15 @@ but you can comment out the regular expression lines to disable, or you set them
 - **metric_octopus_import** - Import rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_METER_NUMBER_current_rate
 - **metric_octopus_export** - Export rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_METER_NUMBER_export_current_rate
 - **metric_octopus_gas** - Gas rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_gas_METER_NUMBER_current_rate
-- **octopus_intelligent_slot** - If you have the Octopus Intelligent Go tariff this should point to the 'slot' sensor binary_sensor.octopus_energy_ACCOUNT_ID_intelligent_dispatching
+- **octopus_intelligent_slot** - If you have the Octopus Intelligent Go tariff this should point to the 'slot' sensor binary_sensor.octopus_energy_DEVICE_ID_intelligent_dispatching
 
 metric_octopus_gas is (as above) only required to be configured if you are using Predbat to determine whether to heat your hot water via your iBoost or gas.
 
 If you do not have an export rate or are not on the Octopus Go tariff, then the appropriate lines can be commented out in apps.yaml.
+
+NOTE: Predbat using the Octopus integration rates relies upon the day rate events being enabled (see above) and the events and the sensor found by metric_octopus_xxx in `apps.yaml` being similarly named.<BR>
+There have been occasions with some Octopus Integration installations where the event name is as above but the sensor name has a different prefix, e.g. sensor.electricity_METER_NUMBER_current_rate and not sensor.octopus_energy_electricity_METER_NUMBER_current_rate.<BR>
+If this is the case then the sensor must be renamed to the correct format so that Predbat can function correctly.
 
 ### Standing charge
 
@@ -123,12 +125,17 @@ The following configuration item in apps.yaml defaults to obtaining the standing
 You can manually change this to a standing charge in pounds, e.g. 0.50 is 50p, or delete this line from apps.yaml, or set it to zero
 if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
 
+Note that this configuration option to suppress the standing charge only applies if you are using the Octopus Integration from Predbat.
+If you are using the Octopus Energy direct method of Predbat directly connecting to Octopus then the standing charge will always be included in the plan and charts.
+
 ### Octopus Saving sessions
 
 Predbat can automatically join you to Octopus saving sessions and plan battery activity for the saving session period to maximise your income.
 
-For Predbat to automatically manage Octopus saving sessions the following additional configuration item in apps.yaml is used.
-Like the electricity rates, this is set in the apps.yaml template to a regular expression that should auto-discover the Octopus Energy integration.
+Note: **You must have signed up to both the Octopus Octoplus and then the Saving Session schemes to benefit from these events**
+
+For Predbat to automatically manage Octopus saving sessions the following additional configuration item in `apps.yaml` is used.
+Like the electricity rates, this is set in the `apps.yaml` template to a regular expression that should auto-discover the Octopus Energy integration.
 
 - **octopus_saving_session** - Indicates if a saving session is active, should point to the sensor binary_sensor.octopus_energy_ACCOUNT_ID_octoplus_saving_sessions.
 
@@ -153,7 +160,7 @@ or 'Control charge & discharge' for Predbat to be able to manage the battery for
 If you do not have an export tariff then forced export will not apply and Predbat will just ensure you have enough battery charge to see you through the saving session period.
 
 If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
-simply delete or comment out the **octopus_saving_session** entry in apps.yaml.
+simply delete or comment out the **octopus_saving_session** entry in `apps.yaml`.
 
 ### Octopus free (power up) events
 
@@ -161,7 +168,7 @@ Predbat can automatically detect Octopus free events and adjust your battery pla
 
 For Predbat to automatically manage Octopus free sessions the following additional configuration item in apps.yaml is used.
 
-Note: **You must have signed up to Octoplus and eligible to benefit from these events**
+Note: **You must have signed up to the Octopus Octoplus scheme and eligible to benefit from these events**
 
 Like the electricity rates, this is set in the apps.yaml template to a regular expression that should auto-discover the Octopus Energy integration.
 
@@ -188,29 +195,39 @@ not work in future if Octopus ever change the website format. If you enable this
 
 ## Octopus Rates URL
 
-If you do not wish to use the Octopus Energy integration and are an Octopus Energy customer then you can configure Predbat to get the electricity rates
-directly online from the Octopus website.
+As an alternative to the Octopus Direct or Octopus Energy integration methods, for Octopus Energy customers,  you can configure Predbat to get the electricity rates directly online from the Octopus website.
 
 In apps.yaml configure the following lines:
 
 - **rates_import_octopus_url** to point to the appropriate import tariff URL on the Octopus website
 - **rates_export_octopus_url** to point to the export tariff URL
 
-e.g.
+e.g. (for DNO region A)
 
 ```yaml
   rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
-  rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-FLEX-BB-23-02-08/electricity-tariffs/E-1R-AGILE-FLEX-BB-23-02-08-A/standard-unit-rates"
+  rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates"
 
-  rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-A/standard-unit-rates"
-  rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"
-  rates_export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/"
+  rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-A/standard-unit-rates"
+  rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
 ```
 
 If you configure the rates_import_octopus_url then Predbat will use this instead of metric_octopus or rates_import.
 Similarly, rates_export_octopus_url takes precedence over metric_octopus_export or rates_export.
 
-Configuring the Octopus rates URL is an expert feature and for most users, the Octopus Energy integration is a simpler solution.
+A full list of available Octopus products is at <https://api.octopus.energy/v1/products/>.
+
+If you view this page, search for the tariff by name, then copy the URL it shows into a new tab.
+
+E.g. <https://api.octopus.energy/v1/products/GO-VAR-22-10-14/>
+
+Look through that page to find the right URL for usage charges in your DNO area
+
+<https://api.octopus.energy/v1/products/GO-VAR-22-10-14//electricity-tariffs/E-1R-GO-VAR-22-10-14-A/standard-unit-rates>
+
+(For area A)
+
+Configuring the Octopus rates URL is an expert feature as Octopus change the available products from time to time, so for most users, the Octopus Direct or Octopus Energy integration are simpler solutions.
 
 ## Energidataservice Integration
 
@@ -221,7 +238,7 @@ This integration allows you to automatically retrieve rates and apply them withi
 
 The integration processes hourly pricing data and converts it into 30-minute intervals, making it ideal for scheduling and optimizing energy usage.
 
-## Configuring Predbat to Use the Energidataservice Integration
+### Configuring Predbat to Use the Energidataservice Integration
 
 The following configuration items in apps.yaml are used to configure Predbat to use the Energidataservice integration. These items must be set explicitly to ensure that Predbat retrieves the correct import and export rates.
 

@@ -569,11 +569,20 @@ The following sensors give the forecast Solar data from Solcast.
 Predbat populates these sensors irrespective of whether you are using the [Predbat direct Solcast or Solcast integration method](install.md#solcast-install) to get your Solar forecast,
 but if you are using the Solcast integration then the Predbat sensors mirror the similarly named Solcast integration sensors so could be disabled if you so wish.
 
-- sensor.predbat_pv_today - Tracks the PV forecast in kWh for today, attributes give the remaining amount today and the half-hourly data
-- sensor.predbat_pv_tomorrow - Tracks the PV forecast in kWh for tomorrow, attributes give the remaining amount today and the half-hourly data
+- sensor.predbat_pv_today - Tracks the PV forecast in kWh for today, attributes give the total today, remaining amount today and the half-hourly data
+- sensor.predbat_pv_tomorrow - Tracks the PV forecast in kWh for tomorrow, attributes give the total today, remaining amount today and the half-hourly data
 - sensor.predbat_pv_d2 - Similar to the above, but tracking the PV forecast for the day after tomorrow
 - sensor.predbat_pv_d3 - PV forecast for two days after tomorrow
 - sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in Watts, attributes give the 10% and 90% power now forecast
+
+The solar sensor attributes include:
+
+- total - total PV forecast for the day
+- total10 - total PV 10% forecast for the day
+- total90 - total PV 90% forecast for the day
+- totalCL - total calibrated PV forecast for the day, this is the PV forecast adjusted by Predbat based on historical forecast vs generation data. The calibration should take account of shading or panel performance issues
+- remaining/remaining10/remaining90/remainingCL - forecast solar generation for the remainder of the day
+- detailedForecast - a half hourly breakdown of solar forecast for the day, with similar PV estimate, 10% estimate, 90% estimate and calibrated estimate values
 
 ## Dummy inverter sensors
 
@@ -767,24 +776,24 @@ The script will need to be customised for your mobile details.
 alias: Predbat error monitor
 description: Alert when Predbat has raised an exception
 trace:
-  stored_traces: 20
+  stored_traces: 50
 triggers:
   - trigger: template
-    alias: Predbat status contains 'Error' for 5 minutes
+    alias: Predbat status contains 'Error' for 10 minutes
     value_template: "{{ 'Error' in states('predbat.status') }}"
     for:
-      minutes: 5
+      minutes: 10
     variables:
       alert_text: >-
         Predbat status is {{ states('predbat.status') }}, error={{
         state_attr('predbat.status', 'error') }}
   - trigger: state
-    alias: Predbat is in error status for 5 minutes
+    alias: Predbat is in error status for 10 minutes
     entity_id: predbat.status
     attribute: error
     to: "true"
     for:
-      minutes: 5
+      minutes: 10
     variables:
       alert_text: >-
         Predbat status is {{ states('predbat.status') }}, error={{
@@ -797,10 +806,10 @@ triggers:
       minutes: 20
     variables:
       alert_text: >-
-        Predbat stalled? Restarting. last_updated=' {{
+        Predbat last_updated=' {{
         state_attr('predbat.status','last_updated')|as_timestamp|timestamp_custom('%a
         %H:%M') }}', unchanged for 20 mins; Status='{{ states('predbat.status')
-        }}'
+        }}', restarting
       restart_predbat: "Y"
   - trigger: state
     alias: Predbat add-on not running for 15 minutes
@@ -820,7 +829,38 @@ triggers:
     variables:
       alert_text: Predbat active has been stuck on (updating the plan) for 20 minutes, restarting
       restart_predbat: "Y"
+  - trigger: template
+    alias: Predbat entities not populated for 20 minutes
+    value_template: "{{ states('predbat.plan_html') == 'unknown' }}"
+    for:
+      minutes: 20
+    variables:
+      alert_text: >-
+        Predbat plan is unknown for 20 minutes, possibly failed on startup,
+        restarting
+      restart_predbat: "Y"
+  - alias: "Heartbeat: check predbat has populated output entities OK"
+    trigger: time_pattern
+    minutes: /30
+    id: heartbeat
 actions:
+  - alias: Heartbeat, check predbat output variables are populated
+    if:
+      - condition: trigger
+        id:
+          - heartbeat
+    then:
+      - if:
+          - condition: template
+            value_template: "{{states('predbat.plan_html') == 'unknown' }}"
+        then:
+          - variables:
+              alert_text: >-
+                Predbat has not populated its output entities, possibly failed
+                on startup, restarting
+              restart_predbat: "Y"
+        else:
+          - stop: "Heartbeat check: Predbat plan is populated, all is OK"
   - action: notify.mobile_app_<your mobile device id>
     alias: Send alert message
     data:
