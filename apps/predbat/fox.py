@@ -90,7 +90,7 @@ class FoxAPI:
             try:
                 if first or (count_seconds % (30 * 60) == 0):
                     if first:
-                        # Only do these once as battery charging times are overriden with scheduler 
+                        # Only do these once as battery charging times are overriden with scheduler
                         # and we get the realtime data every 5 minutes
                         await self.get_device_list()
                         self.log("Fox API: Found {} devices".format(len(self.device_list)))
