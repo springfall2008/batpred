@@ -89,23 +89,33 @@ class FoxAPI:
         while not self.stop_api:
             try:
                 if first or (count_seconds % (30 * 60) == 0):
-                    await self.get_device_list()
                     if first:
+                        # Only do these once as battery charging times are ignored with the scheduler
+                        # and we get the realtime data every 5 minutes
+                        await self.get_device_list()
                         self.log("Fox API: Found {} devices".format(len(self.device_list)))
+
+                        # Get per device data
+                        for device in self.device_list:
+                            sn = device.get("deviceSN", None)
+                            if sn:
+                                await self.get_device_detail(sn)
+                                await self.get_device_history(sn)
+                                await self.get_battery_charging_time(sn)
+
+                    # Regular updates for registers and scheduler data
                     for device in self.device_list:
                         sn = device.get("deviceSN", None)
                         if sn:
-                            await self.get_device_detail(sn)
                             await self.get_device_settings(sn)
                             await self.get_schedule_settings_ha(sn)
-                            await self.get_battery_charging_time(sn)
                             await self.get_scheduler(sn)
-                            await self.get_device_history(sn)
                             await self.compute_schedule(sn)
 
                 if first and self.automatic:
                     await self.automatic_config()
 
+                # Real time data every 5 minutes
                 if first or (count_seconds % (5 * 60)) == 0:
                     for device in self.device_list:
                         sn = device.get("deviceSN", None)
@@ -343,7 +353,7 @@ class FoxAPI:
             'afciVersion': '',
             'hasPV': True,
             'deviceSN':
-            '60KE8020479C034',
+            '1234567890ABCDE',
             'slaveVersion': '1.01',
             'capacity': 8,
             'hasBattery': True,
@@ -351,14 +361,14 @@ class FoxAPI:
 
             'hardwareVersion': '--',
             'managerVersion': '1.28',
-            'stationName': '2 Dona Fold',
-            'moduleSN': '609W6EUF46MB519',
+            'stationName': 'My Home',
+            'moduleSN': '12348020479C034',
             'batteryList':
-                [{'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'bcu', 'version': '1.005'},
-                 {'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'bmu', 'version': '1.05', 'capacity': 10360},
-                 {'batterySN': '60EP01104APP050', 'model': 'EP11', 'type': 'ivu', 'version': '0.00'}],
+                [{'batterySN': 'YYYYY', 'model': 'EP11', 'type': 'bcu', 'version': '1.005'},
+                 {'batterySN': 'YYYYY', 'model': 'EP11', 'type': 'bmu', 'version': '1.05', 'capacity': 10360},
+                 {'batterySN': 'YYYYY', 'model': 'EP11', 'type': 'ivu', 'version': '0.00'}],
             'productType': 'KH',
-            'stationID': '2958ff16-13a5-4ab9-957a-79e938f86a19',
+            'stationID': '23123-213123-231329',
             'status': 1
         }
         """

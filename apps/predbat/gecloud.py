@@ -814,6 +814,9 @@ class GECloudDirect:
         for device in device_list:
             self.pending_writes[device] = []
 
+        if not device_list and not evc_device_list:
+            self.log("Error: GECloud: No devices found, check your GE Cloud credentials")
+
         seconds = 0
         while not self.stop_cloud and not self.base.fatal_error:
             try:
