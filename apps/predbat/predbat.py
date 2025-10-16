@@ -1340,7 +1340,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.plugin_system = None
 
             # Now start all sub-components (including web server which will pick up registered endpoints)
-            self.components.start()
+            if not self.components.start():
+                raise ValueError("Failed to start components")
 
             if not self.ha_interface:
                 raise ValueError("HA interface not found")
