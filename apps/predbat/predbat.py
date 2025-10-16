@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.25.11"
+THIS_VERSION = "v8.25.12"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py"]
@@ -1340,7 +1340,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.plugin_system = None
 
             # Now start all sub-components (including web server which will pick up registered endpoints)
-            self.components.start()
+            if not self.components.start():
+                raise ValueError("Failed to start components")
 
             if not self.ha_interface:
                 raise ValueError("HA interface not found")

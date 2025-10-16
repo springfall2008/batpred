@@ -137,6 +137,7 @@ class Components:
 
     def start(self, only=None):
         """Start all initialized components"""
+        failed = False
         for component_name, component_info in COMPONENT_LIST.items():
             if only and component_name != only:
                 continue
@@ -147,7 +148,8 @@ class Components:
                 if not component.wait_api_started():
                     self.log(f"Error: {component_info['name']} API failed to start")
                     self.base.record_status(f"Error: {component_info['name']} API failed to start")
-                    raise ValueError(f"{component_info['name']} API failed to start")
+                    failed = True
+        return not failed
 
     async def stop(self, only=None):
         for component_name, component_info in reversed(list(self.components.items())):
