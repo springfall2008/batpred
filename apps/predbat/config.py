@@ -1843,7 +1843,7 @@ APPS_SCHEMA = {
     "days_previous_weight": {"type": "float_list"},
     "forecast_hours": {"type": "integer"},
     "notify_devices": {"type": "string_list"},
-    "battery_scaling": {"type": "float_list"},
+    "battery_scaling": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters", "modify": False},
     "import_export_scaling": {"type": "float"},
     "export_triggers": {"type": "dict_list"},
     "iboost_energy_today": {"type": "sensor", "sensor_type": "float"},

@@ -711,6 +711,7 @@ class GECloudDirect:
         self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries]
         self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries]
         self.base.args["battery_temperature"] = ["sensor.predbat_gecloud_" + device + "_battery_temperature" for device in batteries]
+        self.base.args["battery_scaling"] = ["sensor.predbat_gecloud_" + device + "_battery_dod" for device in batteries]
 
         if len(batteries):
             self.base.args["battery_temperature_history"] = "sensor.predbat_gecloud_" + batteries[0] + "_battery_temperature"
