@@ -147,7 +147,6 @@ class Components:
                 self.component_tasks[component_name] = self.base.create_task(component.start())
                 if not component.wait_api_started():
                     self.log(f"Error: {component_info['name']} API failed to start")
-                    self.base.record_status(f"Error: {component_info['name']} API failed to start")
                     failed = True
         return not failed
 
