@@ -44,6 +44,10 @@ COMPONENT_LIST = {
         "name": "GivEnergy Cloud Direct",
         "event_filter": "predbat_gecloud_",
         "args": {
+            "ge_cloud_direct": {
+                "required": True,
+                "config": "ge_cloud_direct",
+            },
             "api_key": {
                 "required": True,
                 "config": "ge_cloud_key",
