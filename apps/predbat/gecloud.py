@@ -203,7 +203,7 @@ def regname_to_ha(name):
 
 
 class GECloudDirect:
-    def __init__(self, api_key, automatic, base):
+    def __init__(self, direct, api_key, automatic, base):
         """
         Setup client
         """
@@ -224,6 +224,7 @@ class GECloudDirect:
         self.evc_device = {}
         self.evc_data = {}
         self.evc_sessions = {}
+        self.api_fatal = False
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -236,7 +237,7 @@ class GECloudDirect:
         """
         self.log("GECloud: Waiting for API to start")
         count = 0
-        while not self.api_started and count < MAX_START_TIME:
+        while not self.api_started and count < MAX_START_TIME and not self.api_fatal:
             time.sleep(1)
             count += 1
         if not self.api_started:
@@ -711,6 +712,7 @@ class GECloudDirect:
         self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries]
         self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries]
         self.base.args["battery_temperature"] = ["sensor.predbat_gecloud_" + device + "_battery_temperature" for device in batteries]
+        self.base.args["battery_scaling"] = ["sensor.predbat_gecloud_" + device + "_battery_dod" for device in batteries]
 
         if len(batteries):
             self.base.args["battery_temperature_history"] = "sensor.predbat_gecloud_" + batteries[0] + "_battery_temperature"
@@ -779,6 +781,7 @@ class GECloudDirect:
         """
         Start the client
         """
+
         self.stop_cloud = False
         self.api_started = False
         self.polling_mode = True
@@ -816,6 +819,8 @@ class GECloudDirect:
 
         if not device_list and not evc_device_list:
             self.log("Error: GECloud: No devices found, check your GE Cloud credentials")
+            self.api_fatal = True
+            return
 
         seconds = 0
         while not self.stop_cloud and not self.base.fatal_error:
@@ -1333,6 +1338,7 @@ class GECloudDirect:
         if response.status_code in [401, 403, 404, 422]:
             # Unauthorized
             self.failures_total += 1
+            self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, response.status_code))
             return {}
         if response.status_code == 429:
             # Rate limiting so wait up to 30 seconds
