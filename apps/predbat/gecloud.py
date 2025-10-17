@@ -203,7 +203,7 @@ def regname_to_ha(name):
 
 
 class GECloudDirect:
-    def __init__(self, api_key, automatic, base):
+    def __init__(self, direct, api_key, automatic, base):
         """
         Setup client
         """
@@ -781,6 +781,7 @@ class GECloudDirect:
         """
         Start the client
         """
+
         self.stop_cloud = False
         self.api_started = False
         self.polling_mode = True
