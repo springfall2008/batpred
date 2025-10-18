@@ -17,6 +17,7 @@ from ha import HAInterface
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from datetime import datetime, timezone, timedelta
+import asyncio
 import os
 
 COMPONENT_LIST = {
@@ -27,6 +28,7 @@ COMPONENT_LIST = {
             "db_enable": {"required": True, "config": "db_enable"},
             "db_days": {"required": False, "config": "db_days", "default": 30},
         },
+        "can_restart": False,
     },
     "ha": {
         "class": HAInterface,
@@ -38,6 +40,7 @@ COMPONENT_LIST = {
             "db_mirror_ha": {"required": False, "config": "db_mirror_ha", "default": False},
             "db_primary": {"required": False, "config": "db_primary", "default": False},
         },
+        "can_restart": False,
     },
     "web": {"class": WebInterface, "name": "Web Interface", "args": {"port": {"required": False, "config": "web_port", "default": 5052}}},
     "gecloud": {
@@ -81,8 +84,8 @@ COMPONENT_LIST = {
                 "default": [7],
                 "config": "days_previous",
             },
-        }
-    },    
+        },
+    },
     "octopus": {
         "class": OctopusAPI,
         "name": "Octopus Energy Direct",
@@ -143,9 +146,12 @@ class Components:
         self.base = base
         self.log = base.log
 
-    def initialize(self):
+    def initialize(self, only=None):
         """Initialize components without starting them"""
         for component_name, component_info in COMPONENT_LIST.items():
+            if only and component_name != only:
+                continue
+
             have_all_args = True
             self.components[component_name] = None
             self.component_tasks[component_name] = None
@@ -180,7 +186,15 @@ class Components:
                 continue
             component = self.components.get(component_name)
             if component:
-                self.log(f"Starting {component_info['name']} interface")
+                if self.component_tasks.get(component_name, None) and self.component_tasks[component_name].is_alive():
+                    self.log(f"Info: {component_info['name']} interface already started")
+                    continue
+                elif self.component_tasks.get(component_name, None):
+                    self.log(f"Info: {component_info['name']} interface task not alive, restarting")
+                else:
+                    self.log(f"Starting {component_info['name']} interface")
+
+                # Create new task
                 self.component_tasks[component_name] = self.base.create_task(component.start())
                 if not component.wait_api_started():
                     self.log(f"Error: {component_info['name']} API failed to start")
@@ -198,6 +212,20 @@ class Components:
                 await component.stop()
                 self.component_tasks[component_name] = None
                 self.components[component_name] = None
+
+    async def restart(self, only):
+        """Restart components"""
+        # Check can restart
+        if not self.can_restart(only):
+            self.log(f"Warn: Restarting component {only} is not supported")
+            return
+        self.log(f"Restarting {only} component")
+        await self.stop(only=only)
+        self.log("Waiting 10 seconds before restarting component(s)")
+        await asyncio.sleep(10)
+        self.log("Starting component(s) again")
+        self.initialize(only=only)
+        self.start(only=only)
 
     """
     Pass through events to the appropriate component
@@ -241,7 +269,7 @@ class Components:
         if not diff_time or diff_time > timedelta(minutes=30):
             return False
         return True
-    
+
     def last_updated_time(self, name):
         """Get last successful update time for a component"""
         if name not in self.components:
@@ -262,3 +290,9 @@ class Components:
     def get_all(self):
         all_components = [name for name in self.components.keys()]
         return all_components
+
+    def can_restart(self, name):
+        """Check if a component can be restarted"""
+        if name not in COMPONENT_LIST:
+            return False
+        return COMPONENT_LIST[name].get("can_restart", True)

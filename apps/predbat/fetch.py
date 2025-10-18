@@ -1464,7 +1464,7 @@ class Fetch:
         if not mdata:
             self.log("Warn: No GE Cloud data returned from GECloudData component, check if it is configured correctly")
             return
-        
+
         age = now_utc - oldest_data_time
         self.load_minutes_age = age.days
         self.load_minutes = self.minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)

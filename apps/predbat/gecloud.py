@@ -6,11 +6,10 @@
 
 import requests
 from datetime import timedelta, datetime, timezone
-from utils import str2time, dp1, dp2
+from utils import str2time, dp1
 import asyncio
 import random
 import time
-from config import PREDICT_STEP
 import yaml
 import os
 
@@ -250,7 +249,7 @@ class GECloudDirect:
         Check if the API is alive
         """
         return self.api_started
-    
+
     def last_updated_time(self):
         """
         Get the last successful update time
@@ -1396,7 +1395,7 @@ class GECloudData:
         Check if the API is alive
         """
         return self.api_started
-        
+
     def last_updated_time(self):
         """
         Get the last successful update time
@@ -1413,7 +1412,6 @@ class GECloudData:
         self.api_started = False
         self.max_days_previous = max(self.days_previous) + 1
 
-
         # Resolve any templated values
         self.ge_cloud_serial = self.base.get_arg(self.ge_cloud_serial_config_item, default="")
 
@@ -1422,7 +1420,7 @@ class GECloudData:
         seconds = 0
         while not self.stop_cloud and not self.base.fatal_error:
             try:
-                if seconds % (5*60) == 0:
+                if seconds % (5 * 60) == 0:
                     now_utc = datetime.now(timezone.utc)
                     await self.download_ge_data(now_utc)
 
@@ -1606,7 +1604,7 @@ class GECloudData:
         # Save GE URL cache to disk for next time
         self.save_ge_cache()
         return True
-    
+
     def get_data(self):
         """
         Get the GECloudData data

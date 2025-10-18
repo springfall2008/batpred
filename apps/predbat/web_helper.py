@@ -11,6 +11,64 @@
 # Helper functions for web pages
 
 
+def get_restart_button_js():
+    # Add JavaScript for restart functionality
+    text = """
+<script>
+async function restartComponent(componentName) {
+    const button = event.target;
+    const originalText = button.textContent;
+
+    // Disable button and show loading state
+    button.disabled = true;
+    button.textContent = 'Restarting...';
+
+    try {
+        const response = await fetch('./component_restart', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `component=${encodeURIComponent(componentName)}`
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            button.textContent = 'Restarted!';
+            button.style.backgroundColor = '#4CAF50';
+
+            // Show success message briefly, then restore button
+            setTimeout(() => {
+                button.disabled = false;
+                button.textContent = originalText;
+                button.style.backgroundColor = '';
+                // Optionally refresh the page to show updated status
+                location.reload();
+            }, 2000);
+        } else {
+            throw new Error(result.message || 'Unknown error');
+        }
+    } catch (error) {
+        console.error('Error restarting component:', error);
+        button.textContent = 'Error!';
+        button.style.backgroundColor = '#f44336';
+
+        // Restore button after showing error
+        setTimeout(() => {
+            button.disabled = false;
+            button.textContent = originalText;
+            button.style.backgroundColor = '';
+        }, 2000);
+
+        alert('Failed to restart component: ' + error.message);
+    }
+}
+</script>
+"""
+    return text
+
+
 def get_entity_js(entity):
     text = (
         """
@@ -1915,9 +1973,32 @@ def get_components_css():
 }
 
 .status-text {
+    flex-grow: 1;
     font-weight: bold;
     font-size: 0.9em;
     color: #333;
+}
+
+.restart-button {
+    background-color: #2196F3;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: bold;
+    transition: background-color 0.3s ease;
+    margin-left: 10px;
+}
+
+.restart-button:hover {
+    background-color: #1976D2;
+}
+
+.restart-button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
 }
 
 .component-details {
@@ -2100,6 +2181,20 @@ body.dark-mode .entity-count-zero {
 body.dark-mode .last-updated-time {
     color: #aaa;
     font-style: italic;
+}
+
+body.dark-mode .restart-button {
+    background-color: #2196F3;
+    color: white;
+}
+
+body.dark-mode .restart-button:hover {
+    background-color: #1976D2;
+}
+
+body.dark-mode .restart-button:disabled {
+    background-color: #555;
+    color: #999;
 }
 
 /* Responsive design */

@@ -74,7 +74,6 @@ from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
 from solcast import Solcast
-from gecloud import GECloudData
 from components import Components
 from execute import Execute
 from plan import Plan
