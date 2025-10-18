@@ -162,7 +162,7 @@ MG4 EV Vehicle with a Hypervolt Car Charger. There is no 3rd party integration w
 
 Yet it can be stopped and started with a 3rd party integration.
 
-In Home Assistant, create a helper entity (Settings / Devices & Services / Helpers) of type 'Number', check minimum value is set to 0, maximum value to 100, and under Advanced Settings, set 'Unit of Measurement' to '%:
+In Home Assistant, create a helper entity (Settings / Devices & Services / Helpers) of type 'Number', check minimum value is set to 0, maximum value to 100, and under Advanced Settings, set 'Unit of Measurement' to '%':
 
 - Car Max Charge - input_number.car_max_charge
 
