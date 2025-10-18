@@ -14,7 +14,7 @@ import os
 import requests
 import traceback
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from config import TIME_FORMAT, TIME_FORMAT_SOLCAST, TIME_FORMAT_FORECAST_SOLAR
 from utils import dp1, dp2, dp4
 

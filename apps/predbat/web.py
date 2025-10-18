@@ -3002,6 +3002,9 @@ var options = {
                     # Get current value
                     current_value = self.base.get_arg(config_key, default, indirect=False)
 
+                    if isinstance(current_value, dict):
+                        current_value = "{...}"
+
                     # Hide sensitive values
                     display_value = current_value
                     if any(sensitive in arg_name.lower() for sensitive in ["password", "key", "secret", "token"]):

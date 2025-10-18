@@ -10,36 +10,96 @@
 
 import requests
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from utils import str2time, dp1
 import xml.etree.ElementTree as etree
+import asyncio
+import time
 
+class AlertFeed:
+    def __init__(self, alert_config, base):
+        self.base = base
+        self.prefix = self.base.prefix
+        self.alert_cache = {}
+        self.log = self.base.log
+        self.alert_config = alert_config
+        self.alert_url = self.alert_config.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom")
+        self.last_success_timestamp = None
+        self.stop_api = False
+        self.api_started = False
 
-class Alertfeed:
-    def process_alerts(self, testing=False):
+    def wait_api_started(self):
+        """
+        Wait for the API to start
+        """
+        self.log("Ohme API: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 240:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: Ohme API: Failed to start")
+            return False
+        return True
+
+    def is_alive(self):
+        """
+        Check if the API is alive
+        """
+        return self.api_started
+
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
+
+    async def start(self):
+        """
+        Main run loop
+        """
+        first = True
+        count_seconds = 0
+        self.api_started = True
+        while not self.stop_api:
+            try:
+                if first or count_seconds % (60*30) == 0:
+                    # Download alerts
+                    self.alert_xml = self.download_alert_data(self.alert_url)
+                    first = False
+                    self.api_started = True
+            except Exception as e:
+                self.log("Warn: Exception in alert feed main loop: {}".format(e))
+
+            await asyncio.sleep(5)
+            count_seconds += 5
+
+        # Clean up on exit
+        self.api_started = False
+
+    async def stop(self):
+        self.stop_api = True
+
+    def process_alerts(self, minutes_now, midnight_utc, testing=False):
         """
         Process the alerts from the alert feed
         """
-
-        self.alerts = []
-        self.alert_active_keep = {}
-
-        alerts = self.get_arg("alerts", {})
-        if not alerts:
+        alert_config = self.alert_config
+        if not alert_config:
             return
-        if not isinstance(alerts, dict):
+        if not isinstance(alert_config, dict):
             self.log("Warn: Alerts must be a dictionary, ignoring")
             return
 
         # Try apps.yaml
-        latitude = alerts.get("latitude", None)
-        longitude = alerts.get("longitude", None)
+        latitude = alert_config.get("latitude", None)
+        longitude = alert_config.get("longitude", None)
 
         # If latitude and longitude are not provided, use zone.home
         if latitude is None:
-            latitude = self.get_state_wrapper("zone.home", attribute="latitude")
+            latitude = self.base.get_state_wrapper("zone.home", attribute="latitude")
         if longitude is None:
-            longitude = self.get_state_wrapper("zone.home", attribute="longitude")
+            longitude = self.base.get_state_wrapper("zone.home", attribute="longitude")
 
         # If latitude and longitude are not found, we cannot process alerts
         if latitude and longitude:
@@ -49,21 +109,24 @@ class Alertfeed:
                 self.log("Warn: No latitude or longitude found, cannot process alerts")
                 return
 
-        alert_url = alerts.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom")
-        area = alerts.get("area", "")
-        event = alerts.get("event", "")
-        severity = alerts.get("severity", "")
-        certainty = alerts.get("certainty", "")
-        urgency = alerts.get("urgency", "")
-        keep = alerts.get("keep", 100)
+        area = alert_config.get("area", "")
+        event = alert_config.get("event", "")
+        severity = alert_config.get("severity", "")
+        certainty = alert_config.get("certainty", "")
+        urgency = alert_config.get("urgency", "")
+        keep = alert_config.get("keep", 100)
 
-        alert_xml = self.download_alert_data(alert_url)
-        if alert_xml:
-            self.alerts = self.parse_alert_data(alert_xml)
-            self.alerts = self.filter_alerts(self.alerts, area, event, severity, certainty, urgency, latitude, longitude)
-            self.alert_active_keep = self.apply_alerts(self.alerts, keep)
+        alerts = []
+        alert_active_keep = {}
 
-    def apply_alerts(self, alerts, keep):
+        if self.alert_xml:
+            alerts = self.parse_alert_data(self.alert_xml)
+            alerts = self.filter_alerts(alerts, area, event, severity, certainty, urgency, latitude, longitude)
+            alert_active_keep = self.apply_alerts(alerts, keep, minutes_now, midnight_utc)
+
+        return alerts, alert_active_keep
+
+    def apply_alerts(self, alerts, keep, minutes_now, midnight_utc):
         """
         Apply the alerts to the active alert list
         """
@@ -81,20 +144,20 @@ class Alertfeed:
                 area = alert.get("areaDesc", "")
 
                 if onset and expires:
-                    onset_minutes = int((onset - self.midnight_utc).total_seconds() / 60)
-                    expires_minutes = int((expires - self.midnight_utc).total_seconds() / 60)
-                    if expires_minutes >= self.minutes_now:
+                    onset_minutes = int((onset - midnight_utc).total_seconds() / 60)
+                    expires_minutes = int((expires - midnight_utc).total_seconds() / 60)
+                    if expires_minutes >= minutes_now:
                         self.log("Info: Active alert: {} severity {} certainty {} urgency {} from {} to {} applying keep {}".format(alert.get("event"), severity, certainty, urgency, onset, expires, keep))
                         for minute in range(onset_minutes, expires_minutes):
                             if minute not in alert_active_keep:
                                 alert_active_keep[minute] = keep
                             else:
                                 alert_active_keep[minute] = max(alert_active_keep[minute], keep)
-                            if minute == self.minutes_now:
+                            if minute == minutes_now:
                                 active_alert_text = alert.get("event") + " until " + str(expires)
                                 active_alert = True
 
-        alert_keep = alert_active_keep.get(self.minutes_now, 0)
+        alert_keep = alert_active_keep.get(minutes_now, 0)
         alert_show = []
         for alert in alerts:
             item = {}
@@ -108,7 +171,7 @@ class Alertfeed:
             item["title"] = alert.get("title", "")
             item["status"] = alert.get("status", "")
             alert_show.append(item)
-        self.dashboard_item(self.prefix + ".alerts", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts": alert_show})
+        self.base.dashboard_item(self.prefix + ".alerts", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts": alert_show}, app="alertfeed")
 
         return alert_active_keep
 
@@ -199,18 +262,20 @@ class Alertfeed:
             age = now - stamp
             if age.seconds < (30 * 60):
                 self.log("Return cached alert data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+                self.last_success_timestamp = datetime.now(timezone.utc)
                 return pdata
 
         r = requests.get(url)
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
-            self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
+            self.base.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
             return None
 
         # Return new data
         self.alert_cache[url] = {}
         self.alert_cache[url]["stamp"] = now
         self.alert_cache[url]["data"] = r.text
+        self.last_success_timestamp = datetime.now(timezone.utc)
         return r.text
 
     def parse_alert_data(self, xml):

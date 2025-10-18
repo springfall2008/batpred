@@ -80,12 +80,11 @@ from plan import Plan
 from fetch import Fetch
 from output import Output
 from userinterface import UserInterface
-from alertfeed import Alertfeed
 from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
     """
@@ -624,7 +623,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Alertfeed, Fetch, 
         self.battery_temperature_prediction = {}
         self.alerts = []
         self.alert_active_keep = {}
-        self.alert_cache = {}
         self.calculate_tweak_plan = False
         self.set_charge_low_power = False
         self.set_export_low_power = False
