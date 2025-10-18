@@ -2899,6 +2899,12 @@ class Plan:
                         self.window_as_text(self.export_window_best, self.export_limits_best, ignore_max=True),
                     )
                 )
+                
+        # Update price levels for final plan
+        best_price_charge, best_price_export, best_price_charge_level, best_price_export_level = self.find_price_levels(price_set, price_links, window_index, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best)
+        self.rate_best_cost_threshold_charge = best_price_charge
+        self.rate_best_cost_threshold_export = best_price_export
+
         self.plan_write_debug(debug_mode, "plan_main_first.html")
         return best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
 

@@ -7,8 +7,7 @@
 # -----------------------------------------------------------------------------
 
 import asyncio
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import traceback
 import time
 import hashlib
@@ -58,6 +57,7 @@ class FoxAPI:
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
+        self.last_success_timestamp = None
 
     def wait_api_started(self):
         """
@@ -78,6 +78,12 @@ class FoxAPI:
         Check if the API is alive
         """
         return self.api_started and self.device_list
+    
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
 
     async def start(self):
         """
@@ -805,7 +811,7 @@ class FoxAPI:
                 if data is None:
                     data = {}
 
-            self.last_success_timestamp = time.time()
+            self.last_success_timestamp = datetime.now(timezone.utc)
             return data
         else:
             self.failures_total += 1

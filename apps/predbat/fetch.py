@@ -1451,6 +1451,57 @@ class Fetch:
         )
         return predicted_temp
 
+    def download_ge_data(self, now_utc):
+        """
+        Gets the GE Cloud data into the required format
+        """
+        mdata = None
+        if self.components:
+            ge_cloud_data = self.components.get_component("gecloud_data")
+            if ge_cloud_data:
+                mdata, last_updated_time = ge_cloud_data.get_data()
+
+        if not mdata:
+            self.log("Warn: No GE Cloud data returned from GECloudData component, check if it is configured correctly")
+            return
+        
+        age = now_utc - last_updated_time
+        self.load_minutes_age = age.days
+        self.load_minutes = self.minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)
+        self.import_today = self.minute_data(mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.export_today = self.minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.pv_today = self.minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+
+        self.load_minutes_now = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0)
+        self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
+        self.import_today_now = self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0)
+        self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
+        self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
+
+        # More up to date sensors for current values if set
+        if "load_today" in self.args:
+            load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
+            self.load_minutes_now = max(load_minutes.get(0, 0) - load_minutes.get(self.minutes_now, 0), 0)
+            self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
+            self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
+
+        if "import_today" in self.args:
+            import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
+            self.import_today_now = max(import_today.get(0, 0) - import_today.get(self.minutes_now, 0), 0)
+
+        # Load export today data
+        if "export_today" in self.args:
+            export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
+            self.export_today_now = max(export_today.get(0, 0) - export_today.get(self.minutes_now, 0), 0)
+
+        # PV today data
+        if "pv_today" in self.args:
+            pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
+            self.pv_today_now = max(pv_today.get(0, 0) - pv_today.get(self.minutes_now, 0), 0)
+
+        self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
+        return True
+
     def rate_replicate(self, rates, rate_io={}, is_import=True, is_gas=False):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others

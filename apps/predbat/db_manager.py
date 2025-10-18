@@ -7,7 +7,7 @@
 # This module handles all SQL Lite database operations.
 # -----------------------------------------------------------------------------
 
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 import asyncio
 import time
 import traceback
@@ -28,6 +28,7 @@ class DatabaseManager:
         self.async_event = asyncio.Event()
         self.return_event = threading.Event()
         self.api_started = False
+        self.last_success_timestamp = None
 
     def bridge_event(self, loop):
         """
@@ -43,6 +44,12 @@ class DatabaseManager:
     def is_alive(self):
         """Check if the database manager is alive"""
         return self.api_started
+
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
 
     def wait_api_started(self):
         """
@@ -100,6 +107,8 @@ class DatabaseManager:
                 elif command == "stop":
                     self.stop_thread = True
                     self.log("db_manager: stopping")
+
+                self.last_success_timestamp = datetime.now(timezone.utc)
 
             except Exception as e:
                 self.log(f"Error in database thread: {e}")

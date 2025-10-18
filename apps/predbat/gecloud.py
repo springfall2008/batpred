@@ -250,6 +250,12 @@ class GECloudDirect:
         Check if the API is alive
         """
         return self.api_started
+    
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
 
     async def switch_event(self, entity_id, service):
         """
@@ -1333,7 +1339,7 @@ class GECloudDirect:
         if response.status_code in [200, 201]:
             if data is None:
                 data = {}
-            self.last_success_timestamp = time.time()
+            self.last_success_timestamp = datetime.now(timezone.utc)
             return data
         if response.status_code in [401, 403, 404, 422]:
             # Unauthorized
@@ -1347,9 +1353,92 @@ class GECloudDirect:
         return None
 
 
-class GECloud:
+class GECloudData:
+    def __init__(self, enable_data, ge_cloud_key, ge_cloud_serial, days_previous, base):
+        """
+        Setup client
+        """
+        self.base = base
+        self.log = base.log
+        self.ge_cloud_key = ge_cloud_key
+        self.ge_cloud_serial_config_item = ge_cloud_serial
+        self.days_previous = days_previous
+        self.ge_cloud_serial = None
+        self.enable_data = enable_data
+        self.api_fatal = False
+        self.api_started = False
+        self.stop_cloud = False
+        self.ge_url_cache = {}
+        self.mdata = []
+
+        # API request metrics for monitoring
+        self.requests_total = 0
+        self.failures_total = 0
+        self.last_success_timestamp = None
+
+    def wait_api_started(self):
+        """
+        Return if the API has started
+        """
+        self.log("GECloudData: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < MAX_START_TIME and not self.api_fatal:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: GECloudData: API failed to start in required time")
+            return False
+        return True
+
+    def is_alive(self):
+        """
+        Check if the API is alive
+        """
+        return self.api_started
+        
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        Turn into localtime as we are keeping UTC internally
+        """
+        return self.last_success_timestamp
+
+    async def start(self):
+        """
+        Start the client
+        """
+
+        self.stop_cloud = False
+        self.api_started = False
+        self.max_days_previous = max(self.days_previous) + 1
+
+
+        # Resolve any templated values
+        self.ge_cloud_serial = self.base.get_arg(self.ge_cloud_serial_config_item, default="")
+
+        self.log("GECloudData: Starting up with max_days_previous {} and serial {}".format(self.max_days_previous, self.ge_cloud_serial))
+
+        seconds = 0
+        while not self.stop_cloud and not self.base.fatal_error:
+            try:
+                if seconds % (5*60) == 0:
+                    now_utc = datetime.now(timezone.utc)
+                    await self.download_ge_data(now_utc)
+
+            except Exception as e:
+                self.log("Error: GECloudData: Exception in main loop {}".format(e))
+
+            if not self.api_started:
+                print("GECloudData API Started")
+                self.api_started = True
+            await asyncio.sleep(5)
+            seconds += 5
+
+    async def stop(self):
+        self.stop_cloud = True
+
     def get_ge_cache_filename(self):
-        cache_path = self.config_root + "/cache"
+        cache_path = self.base.config_root + "/cache"
         if not os.path.exists(cache_path):
             os.makedirs(cache_path, exist_ok=True)
         cache_file = cache_path + "/givenergy_data.yaml"
@@ -1452,12 +1541,12 @@ class GECloud:
         self.ge_url_cache[url]["next"] = url_next
         return mdata, url_next
 
-    def download_ge_data(self, now_utc):
+    async def download_ge_data(self, now_utc):
         """
         Download consumption data from GE Cloud
         """
-        geserial = self.get_arg("ge_cloud_serial")
-        gekey = self.args.get("ge_cloud_key", None)
+        geserial = self.ge_cloud_serial
+        gekey = self.ge_cloud_key
 
         # Load cache if not already loaded
         if not self.ge_url_cache:
@@ -1467,12 +1556,10 @@ class GECloud:
         self.clean_ge_url_cache(now_utc)
 
         if not geserial:
-            self.log("Error: GE Cloud has been enabled but ge_cloud_serial is not set to your serial")
-            self.record_status("Warn: GE Cloud has been enabled but ge_cloud_serial is not set to your serial", had_errors=True)
+            self.log("Error: GECloudDirect has been enabled but ge_cloud_serial is not set to your serial")
             return False
         if not gekey:
-            self.log("Error: GE Cloud has been enabled but ge_cloud_key is not set to your appkey")
-            self.record_status("Warn: GE Cloud has been enabled but ge_cloud_key is not set to your appkey", had_errors=True)
+            self.log("Error: GECloudDirect has been enabled but ge_cloud_key is not set to your appkey")
             return False
 
         headers = {"Authorization": "Bearer  " + gekey, "Content-Type": "application/json", "Accept": "application/json"}
@@ -1492,12 +1579,11 @@ class GECloud:
                 if darray is None:
                     # If we are less than 8 hours into today then ignore errors for today as data may not be available yet
                     if days_prev == 0:
-                        self.log("Info: No GE Cloud data available for today yet, continuing")
+                        self.log("Info: GECloudDirect: No GECloudDirect data available for today yet, continuing")
                         days_prev_count += 1
                         break
                     else:
-                        self.log("Warn: Error downloading GE data from URL {}".format(url))
-                        self.record_status("Warn: Error downloading GE data from cloud", debug=url)
+                        self.log("Warn: GECloudDirect: Error downloading GE data from URL {}".format(url))
                         continue
                 mdata.extend(darray)
                 # self.log("Info: GECloud downloaded {} data points".format(len(darray)))
@@ -1511,43 +1597,14 @@ class GECloud:
                 last_updated_time = str2time(item["last_updated"])
             except (ValueError, TypeError):
                 pass
-
-        age = now_utc - last_updated_time
-        self.load_minutes_age = age.days
-        self.load_minutes = self.minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)
-        self.import_today = self.minute_data(mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
-        self.export_today = self.minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
-        self.pv_today = self.minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
-
-        self.load_minutes_now = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0)
-        self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
-        self.import_today_now = self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0)
-        self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
-        self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
-
-        # More up to date sensors for current values if set
-        if "load_today" in self.args:
-            load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
-            self.load_minutes_now = max(load_minutes.get(0, 0) - load_minutes.get(self.minutes_now, 0), 0)
-            self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
-            self.log("GE GECloud load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
-
-        if "import_today" in self.args:
-            import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.import_today_now = max(import_today.get(0, 0) - import_today.get(self.minutes_now, 0), 0)
-
-        # Load export today data
-        if "export_today" in self.args:
-            export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.export_today_now = max(export_today.get(0, 0) - export_today.get(self.minutes_now, 0), 0)
-
-        # PV today data
-        if "pv_today" in self.args:
-            pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-            self.pv_today_now = max(pv_today.get(0, 0) - pv_today.get(self.minutes_now, 0), 0)
-
-        self.log("Downloaded {} datapoints from GE going back {} days".format(len(self.load_minutes), self.load_minutes_age))
-
         # Save GE URL cache to disk for next time
         self.save_ge_cache()
+        self.mdata = mdata
+        self.last_success_timestamp = last_updated_time
         return True
+    
+    def get_data(self):
+        """
+        Get the GECloudData data
+        """
+        return self.mdata, self.last_success_timestamp

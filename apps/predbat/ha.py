@@ -9,8 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import os
-from datetime import timedelta
-from datetime import datetime
+from datetime import timedelta, datetime, timezone
 import asyncio
 from aiohttp import ClientSession, WSMsgType
 import json
@@ -60,6 +59,12 @@ class HAInterface:
             return False
         return True
 
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
+
     def wait_api_started(self):
         """
         Wait for the API to start
@@ -91,6 +96,7 @@ class HAInterface:
         self.api_errors = 0
         self.stop_thread = False
         self.api_started = False
+        self.last_success_timestamp = None
 
         self.base = base
         self.log = base.log
@@ -191,6 +197,7 @@ class HAInterface:
                                         if not success:
                                             self.log("Warn: Service call {}/{} data {} failed with response {}".format(domain, service, service_data, response))
                                         break
+                                self.last_success_timestamp = datetime.now(timezone.utc)
 
                             except Exception as e:
                                 self.log("Error: Web Socket exception in update loop: {}".format(e))
@@ -304,6 +311,9 @@ class HAInterface:
                                             raise Exception("Web Socket auth failed")
                                         else:
                                             self.log("Info: Web Socket unknown message {}".format(data))
+
+                                        self.last_success_timestamp = datetime.now(timezone.utc)
+
                                 except Exception as e:
                                     self.log("Error: Web Socket exception in update loop: {}".format(e))
                                     self.log("Error: " + traceback.format_exc())

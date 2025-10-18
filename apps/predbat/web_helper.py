@@ -2010,6 +2010,11 @@ def get_components_css():
     font-weight: bold;
 }
 
+.last-updated-time {
+    color: #666;
+    font-style: italic;
+}
+
 /* Dark mode styles */
 body.dark-mode .component-card {
     background: #2d2d2d;
@@ -2090,6 +2095,11 @@ body.dark-mode .entity-count-positive {
 body.dark-mode .entity-count-zero {
     color: #666;
     font-weight: bold;
+}
+
+body.dark-mode .last-updated-time {
+    color: #aaa;
+    font-style: italic;
 }
 
 /* Responsive design */

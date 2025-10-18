@@ -14,7 +14,7 @@ from aiohttp import web
 import asyncio
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import shutil
 import html as html_module
@@ -37,7 +37,7 @@ from web_helper import (
     get_entity_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2
+from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
 import urllib.parse
@@ -62,6 +62,7 @@ class WebInterface:
         self.web_port = web_port
         self.default_log = "warnings"
         self.api_started = False
+        self.last_success_timestamp = None
 
         # Plugin registration system
         self.registered_endpoints = []
@@ -208,6 +209,12 @@ class WebInterface:
 
     def is_alive(self):
         return self.api_started
+    
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
 
     def get_attributes_html(self, entity, from_db=False):
         """
@@ -919,6 +926,7 @@ class WebInterface:
         calculating = self.base.get_arg("active", False)
         if self.base.update_pending:
             calculating = True
+        self.last_success_timestamp = datetime.now(timezone.utc)
         return get_header_html(title, calculating, self.default_page, self.base.arg_errors, THIS_VERSION, self.get_battery_status_icon(), refresh, codemirror=codemirror)
 
     def get_chart_series(self, name, results, chart_type, color):
@@ -2945,6 +2953,10 @@ var options = {
             component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
             is_active = component_name in active_components
+            
+            # Get last updated time
+            last_updated_time = self.base.components.last_updated_time(component_name)
+            time_ago_text = format_time_ago(last_updated_time)
 
             # Create component card
             text += f'<div class="component-card {"active" if is_active else "inactive"}">\n'
@@ -2963,6 +2975,9 @@ var options = {
 
             # Component details
             text += f'<div class="component-details">\n'
+            
+            # Add last updated time
+            text += f'<p><strong>Last Updated:</strong> <span class="last-updated-time">{time_ago_text}</span></p>\n'
 
             # Show args and their current values
             args_info = component_info.get("args", {})

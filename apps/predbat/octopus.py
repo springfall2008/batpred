@@ -350,6 +350,12 @@ class OctopusAPI:
     def is_alive(self):
         return self.api_started and self.account_data
 
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
+
     async def start(self):
         """
         Main run loop
@@ -744,7 +750,7 @@ class OctopusAPI:
                 return {}
             try:
                 data = r.json()
-                self.last_success_timestamp = time.time()
+                self.last_success_timestamp = datetime.now(timezone.utc)
             except requests.exceptions.JSONDecodeError:
                 self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
@@ -940,7 +946,7 @@ class OctopusAPI:
             async with client.post(url, json=payload, headers=headers) as response:
                 response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
                 if response_body and ("data" in response_body):
-                    self.last_success_timestamp = time.time()
+                    self.last_success_timestamp = datetime.now(timezone.utc)
                     return response_body["data"]
                 else:
                     self.failures_total += 1
@@ -1529,7 +1535,7 @@ class Octopus:
             try:
                 data = r.json()
                 if api:
-                    api.last_success_timestamp = time.time()
+                    api.last_success_timestamp = datetime.now(timezone.utc)
             except requests.exceptions.JSONDecodeError:
                 self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))

@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.25.15"
+THIS_VERSION = "v8.26.0"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py"]
@@ -74,7 +74,7 @@ from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
 from solcast import Solcast
-from gecloud import GECloud
+from gecloud import GECloudData
 from components import Components
 from execute import Execute
 from plan import Plan
@@ -86,7 +86,7 @@ from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
     """

@@ -18,7 +18,7 @@ import traceback
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
-from datetime import timedelta
+from datetime import timedelta, timezone
 from config import TIME_FORMAT_HA
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
@@ -196,6 +196,14 @@ class OhmeAPI:
         Check if the API is alive
         """
         return self.api_started
+
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        if self.client:
+            return self.client.last_success_timestamp
+        return None
 
     async def start(self):
         """
@@ -462,6 +470,7 @@ class OhmeApiClient:
         self._close_session = False
         self._timeout = 10
         self._last_rule: dict[str, Any] = {}
+        self.last_success_timestamp = None
 
     # Auth methods
 
@@ -872,6 +881,7 @@ class OhmeApiClient:
             resp = resp[0]
 
             if resp.get("mode") != "CALCULATING" and resp.get("mode") != "DELIVERING":
+                self.last_success_timestamp = datetime.datetime.now(timezone.utc)
                 break
 
             if attempt < 2:  # Only sleep if there are more retries left

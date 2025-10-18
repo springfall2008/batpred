@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 
-from gecloud import GECloudDirect
+from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
 from octopus import OctopusAPI
 from web import WebInterface
@@ -45,7 +45,7 @@ COMPONENT_LIST = {
         "event_filter": "predbat_gecloud_",
         "args": {
             "ge_cloud_direct": {
-                "required": True,
+                "required_true": True,
                 "config": "ge_cloud_direct",
             },
             "api_key": {
@@ -59,6 +59,29 @@ COMPONENT_LIST = {
             },
         },
     },
+    "gecloud_data": {
+        "class": GECloudData,
+        "name": "GivEnergy Cloud Data",
+        "args": {
+            "ge_cloud_data": {
+                "required_true": True,
+                "config": "ge_cloud_data",
+            },
+            "ge_cloud_key": {
+                "required": True,
+                "config": "ge_cloud_key",
+            },
+            "ge_cloud_serial": {
+                "config": "ge_cloud_serial",
+                "config_late_resolve": True,
+            },
+            "days_previous": {
+                "required": False,
+                "default": [7],
+                "config": "days_previous",
+            },
+        }
+    },    
     "octopus": {
         "class": OctopusAPI,
         "name": "Octopus Energy Direct",
@@ -130,11 +153,20 @@ class Components:
             arg_dict = {}
             for arg, arg_info in component_info["args"].items():
                 required = arg_info.get("required", False)
+                required_true = arg_info.get("required_true", False)
                 default = arg_info.get("default", None)
-                if required and self.base.get_arg(arg_info["config"], None, indirect=False) is None:
+                indirect = arg_info.get("indirect", False)
+                config_late_resolve = arg_info.get("config_late_resolve", False)
+                if config_late_resolve:
+                    # Defer resolution of config value until later
+                    arg_dict[arg] = arg_info["config"]
+                    continue
+                elif required_true and not self.base.get_arg(arg_info["config"], False, indirect=False):
+                    have_all_args = False
+                elif required and self.base.get_arg(arg_info["config"], None, indirect=False) is None:
                     have_all_args = False
                 else:
-                    arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=False)
+                    arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
             if have_all_args:
                 self.log(f"Initializing {component_info['name']} interface")
                 self.components[component_name] = component_info["class"](*arg_dict.values(), self.base)
@@ -204,6 +236,16 @@ class Components:
         if not self.components[name].is_alive():
             return False
         return True
+    
+    def last_updated_time(self, name):
+        """Get last successful update time for a component"""
+        if name not in self.components:
+            return None
+        if not self.components[name]:
+            return None
+        if "last_updated_time" not in dir(self.components[name]):
+            return None
+        return self.components[name].last_updated_time()
 
     def get_active(self):
         active_components = [name for name, comp in self.components.items() if comp]
