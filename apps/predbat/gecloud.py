@@ -6,11 +6,10 @@
 
 import requests
 from datetime import timedelta, datetime, timezone
-from utils import str2time, dp1, dp2
+from utils import str2time, dp1
 import asyncio
 import random
 import time
-from config import PREDICT_STEP
 import yaml
 import os
 

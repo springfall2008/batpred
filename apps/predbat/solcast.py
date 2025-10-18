@@ -86,12 +86,8 @@ class Solcast:
             try:
                 data = r.json()
                 if is_solcast_api and hasattr(self, "solcast_last_success_timestamp"):
-                    import time
-
                     self.solcast_last_success_timestamp = datetime.now(timezone.utc)
                 if is_forecast_solar_api and hasattr(self, "forecast_solar_last_success_timestamp"):
-                    import time
-
                     self.forecast_solar_last_success_timestamp = datetime.now(timezone.utc)
             except requests.exceptions.JSONDecodeError as e:
                 self.log("Warn: Error downloading data from URL {}, error {} code {} data was {}".format(url, e, r.status_code, r.text))
