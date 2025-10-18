@@ -35,7 +35,7 @@ from web_helper import (
     get_entity_control_css,
     get_entity_css,
     get_entity_js,
-    get_restart_button_js
+    get_restart_button_js,
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago
@@ -211,7 +211,7 @@ class WebInterface:
 
     def is_alive(self):
         return self.api_started
-    
+
     def last_updated_time(self):
         """
         Get the last successful update time
@@ -2956,7 +2956,7 @@ var options = {
             is_alive = self.base.components.is_alive(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
-            
+
             # Get last updated time
             last_updated_time = self.base.components.last_updated_time(component_name)
             time_ago_text = format_time_ago(last_updated_time)
@@ -2982,7 +2982,7 @@ var options = {
 
             # Component details
             text += f'<div class="component-details">\n'
-            
+
             # Add last updated time
             text += f'<p><strong>Last Updated:</strong> <span class="last-updated-time">{time_ago_text}</span></p>\n'
 
@@ -3038,7 +3038,7 @@ var options = {
         text += "</div>\n"
 
         text += get_restart_button_js()
-                
+
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 

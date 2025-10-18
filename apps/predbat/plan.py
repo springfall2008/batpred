@@ -2899,7 +2899,7 @@ class Plan:
                         self.window_as_text(self.export_window_best, self.export_limits_best, ignore_max=True),
                     )
                 )
-                
+
         # Update price levels for final plan
         best_price_charge, best_price_export, best_price_charge_level, best_price_export_level = self.find_price_levels(price_set, price_links, window_index, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best)
         self.rate_best_cost_threshold_charge = best_price_charge
