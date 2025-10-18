@@ -11,22 +11,23 @@
 from datetime import datetime, timedelta, timezone
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS
 
+
 def format_time_ago(last_updated):
     """
     Format a timestamp to show how many minutes ago it was updated
     """
     if not last_updated:
         return "Never updated"
-    
+
     try:
-        now = datetime.now(timezone.utc)            
+        now = datetime.now(timezone.utc)
         if not last_updated:
             return "Never updated"
-        
+
         # Calculate time difference
         time_diff = now - last_updated
         total_minutes = int(time_diff.total_seconds() / 60)
-        
+
         if total_minutes < 0:
             return "Just now"
         elif total_minutes == 0:
@@ -46,10 +47,11 @@ def format_time_ago(last_updated):
                 return "1 day ago"
             else:
                 return f"{days} days ago"
-                
+
     except Exception as e:
         print(f"Error formatting time ago: {e}")
         return "Unknown ({})".format(last_updated)
+
 
 def in_iboost_slot(minute, iboost_plan):
     """

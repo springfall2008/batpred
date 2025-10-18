@@ -84,8 +84,8 @@ COMPONENT_LIST = {
                 "default": [7],
                 "config": "days_previous",
             },
-        }
-    },    
+        },
+    },
     "octopus": {
         "class": OctopusAPI,
         "name": "Octopus Energy Direct",
@@ -149,7 +149,6 @@ class Components:
     def initialize(self, only=None):
         """Initialize components without starting them"""
         for component_name, component_info in COMPONENT_LIST.items():
-
             if only and component_name != only:
                 continue
 
@@ -191,7 +190,7 @@ class Components:
                     self.log(f"Info: {component_info['name']} interface already started")
                     continue
                 elif self.component_tasks.get(component_name, None):
-                    self.log(f"Info: {component_info['name']} interface task not alive, restarting")                    
+                    self.log(f"Info: {component_info['name']} interface task not alive, restarting")
                 else:
                     self.log(f"Starting {component_info['name']} interface")
 
@@ -270,7 +269,7 @@ class Components:
         if not diff_time or diff_time > timedelta(minutes=30):
             return False
         return True
-    
+
     def last_updated_time(self, name):
         """Get last successful update time for a component"""
         if name not in self.components:
@@ -291,7 +290,7 @@ class Components:
     def get_all(self):
         all_components = [name for name in self.components.keys()]
         return all_components
-    
+
     def can_restart(self, name):
         """Check if a component can be restarted"""
         if name not in COMPONENT_LIST:

@@ -10,6 +10,7 @@
 #
 # Helper functions for web pages
 
+
 def get_restart_button_js():
     # Add JavaScript for restart functionality
     text = """
@@ -17,11 +18,11 @@ def get_restart_button_js():
 async function restartComponent(componentName) {
     const button = event.target;
     const originalText = button.textContent;
-    
+
     // Disable button and show loading state
     button.disabled = true;
     button.textContent = 'Restarting...';
-    
+
     try {
         const response = await fetch('./component_restart', {
             method: 'POST',
@@ -30,13 +31,13 @@ async function restartComponent(componentName) {
             },
             body: `component=${encodeURIComponent(componentName)}`
         });
-        
+
         const result = await response.json();
-        
+
         if (result.success) {
             button.textContent = 'Restarted!';
             button.style.backgroundColor = '#4CAF50';
-            
+
             // Show success message briefly, then restore button
             setTimeout(() => {
                 button.disabled = false;
@@ -52,20 +53,21 @@ async function restartComponent(componentName) {
         console.error('Error restarting component:', error);
         button.textContent = 'Error!';
         button.style.backgroundColor = '#f44336';
-        
+
         // Restore button after showing error
         setTimeout(() => {
             button.disabled = false;
             button.textContent = originalText;
             button.style.backgroundColor = '';
         }, 2000);
-        
+
         alert('Failed to restart component: ' + error.message);
     }
 }
 </script>
 """
     return text
+
 
 def get_entity_js(entity):
     text = (

@@ -78,7 +78,7 @@ class FoxAPI:
         Check if the API is alive
         """
         return self.api_started and self.device_list
-    
+
     def last_updated_time(self):
         """
         Get the last successful update time
