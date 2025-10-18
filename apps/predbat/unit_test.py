@@ -8519,7 +8519,7 @@ def test_alert_feed(my_predbat):
         print("ERROR: Expecting show should be {} got {}".format(expect_show, show))
         failed = 1
 
-    alert_text = ha.get_state("sensor." + my_predbat.prefix + "_alerts")
+    alert_text = ha.get_state("sensor." + my_predbat.prefix + "_alertfeed_status")
     expect_text = "Yellow wind warning until " + today + " 23:59:59+{}:00".format(tz_offset)
     if alert_text != expect_text:
         print("ERROR: Expecting alert text to be '{}' got '{}'".format(expect_text, alert_text))
