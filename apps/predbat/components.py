@@ -16,6 +16,7 @@ from web import WebInterface
 from ha import HAInterface
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from datetime import datetime, timezone, timedelta
 import os
 
 COMPONENT_LIST = {
@@ -234,6 +235,10 @@ class Components:
         if not self.component_tasks[name] or not self.component_tasks[name].is_alive():
             return False
         if not self.components[name].is_alive():
+            return False
+        last_updated_time = self.last_updated_time(name)
+        diff_time = datetime.now(timezone.utc) - last_updated_time if last_updated_time else None
+        if not diff_time or diff_time > timedelta(minutes=30):
             return False
         return True
     

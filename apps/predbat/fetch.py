@@ -1459,13 +1459,13 @@ class Fetch:
         if self.components:
             ge_cloud_data = self.components.get_component("gecloud_data")
             if ge_cloud_data:
-                mdata, last_updated_time = ge_cloud_data.get_data()
+                mdata, oldest_data_time = ge_cloud_data.get_data()
 
         if not mdata:
             self.log("Warn: No GE Cloud data returned from GECloudData component, check if it is configured correctly")
             return
         
-        age = now_utc - last_updated_time
+        age = now_utc - oldest_data_time
         self.load_minutes_age = age.days
         self.load_minutes = self.minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)
         self.import_today = self.minute_data(mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)

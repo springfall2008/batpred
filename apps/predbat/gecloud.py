@@ -1375,6 +1375,7 @@ class GECloudData:
         self.requests_total = 0
         self.failures_total = 0
         self.last_success_timestamp = None
+        self.oldest_data_time = None
 
     def wait_api_started(self):
         """
@@ -1585,6 +1586,8 @@ class GECloudData:
                     else:
                         self.log("Warn: GECloudDirect: Error downloading GE data from URL {}".format(url))
                         continue
+                else:
+                    self.last_success_timestamp = datetime.now(timezone.utc)
                 mdata.extend(darray)
                 # self.log("Info: GECloud downloaded {} data points".format(len(darray)))
             days_prev_count += 1
@@ -1597,14 +1600,15 @@ class GECloudData:
                 last_updated_time = str2time(item["last_updated"])
             except (ValueError, TypeError):
                 pass
+        self.oldest_data_time = last_updated_time
+        self.mdata = mdata
+
         # Save GE URL cache to disk for next time
         self.save_ge_cache()
-        self.mdata = mdata
-        self.last_success_timestamp = last_updated_time
         return True
     
     def get_data(self):
         """
         Get the GECloudData data
         """
-        return self.mdata, self.last_success_timestamp
+        return self.mdata, self.oldest_data_time
