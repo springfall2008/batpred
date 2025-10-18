@@ -1420,7 +1420,7 @@ class GECloudData:
         seconds = 0
         while not self.stop_cloud and not self.base.fatal_error:
             try:
-                if seconds % (5 * 60) == 0:
+                if seconds % (10 * 60) == 0:
                     now_utc = datetime.now(timezone.utc)
                     await self.download_ge_data(now_utc)
 
@@ -1574,7 +1574,7 @@ class GECloudData:
                     url += "&pageSize=8000"
                 else:
                     url += "?pageSize=8000"
-                darray, url = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 8 * 60)
+                darray, url = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 18 * 60)
                 if darray is None:
                     # If we are less than 8 hours into today then ignore errors for today as data may not be available yet
                     if days_prev == 0:
