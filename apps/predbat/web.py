@@ -35,6 +35,7 @@ from web_helper import (
     get_entity_control_css,
     get_entity_css,
     get_entity_js,
+    get_restart_button_js
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago
@@ -144,6 +145,7 @@ class WebInterface:
         app.router.add_get("/dash", self.html_dash)
         app.router.add_post("/dash", self.html_dash_post)
         app.router.add_get("/components", self.html_components)
+        app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/debug_yaml", self.html_debug_yaml)
         app.router.add_get("/debug_log", self.html_debug_log)
         app.router.add_get("/debug_apps", self.html_debug_apps)
@@ -2952,6 +2954,7 @@ var options = {
             component_info = COMPONENT_LIST.get(component_name, {})
             component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
+            can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
             
             # Get last updated time
@@ -2970,6 +2973,10 @@ var options = {
                 text += '<span class="status-indicator status-error">●</span><span class="status-text">Error</span>\n'
             else:
                 text += '<span class="status-indicator status-inactive">●</span><span class="status-text">Disabled</span>\n'
+
+            # Add restart button for active components
+            if is_active and can_restart:
+                text += f'<button class="restart-button" onclick="restartComponent(\'{component_name}\')" title="Restart this component">Restart</button>\n'
 
             text += f"</div>\n"
 
@@ -3029,6 +3036,9 @@ var options = {
             text += f"</div>\n"
 
         text += "</div>\n"
+
+        text += get_restart_button_js()
+                
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -3042,4 +3052,37 @@ var options = {
             return web.json_response({"success": True, "message": "Restart initiated"})
         except Exception as e:
             self.log(f"ERROR: Failed to initiate restart: {str(e)}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
+
+    async def html_component_restart(self, request):
+        """
+        Handle component restart request
+        """
+        try:
+            # Parse form data
+            data = await request.post()
+            component_name = data.get("component")
+
+            if not component_name:
+                return web.json_response({"success": False, "message": "Missing component name"}, status=400)
+
+            # Validate that the component exists and is active
+            all_components = self.base.components.get_all()
+            active_components = self.base.components.get_active()
+
+            if component_name not in all_components:
+                return web.json_response({"success": False, "message": f"Component '{component_name}' not found"}, status=400)
+
+            if component_name not in active_components:
+                return web.json_response({"success": False, "message": f"Component '{component_name}' is not active"}, status=400)
+
+            self.log(f"Component restart requested from web interface: {component_name}")
+
+            # Restart the specific component
+            await self.base.components.restart(only=component_name)
+
+            return web.json_response({"success": True, "message": f"Component '{component_name}' restarted successfully"})
+
+        except Exception as e:
+            self.log(f"ERROR: Failed to restart component: {str(e)}")
             return web.json_response({"success": False, "message": str(e)}, status=500)
