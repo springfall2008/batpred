@@ -12,6 +12,7 @@
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
 from octopus import OctopusAPI
+from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface
 from db_manager import DatabaseManager
@@ -133,6 +134,18 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": False,
                 "config": "fox_automatic",
+            },
+        },
+    },
+    "alert_feed": {
+        "class": AlertFeed,
+        "name": "Alert Feed",
+        "event_filter": "predbat_alertfeed_",
+        "args": {
+            "alert_config": {
+                "required": True,
+                "default": {},
+                "config": "alerts",
             },
         },
     },

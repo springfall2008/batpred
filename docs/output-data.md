@@ -598,7 +598,7 @@ These sensors can be ignored and excluded from the recorder history if you wish.
 
 ## Alert data
 
-- predbat.alerts - Gives you data on the currently active weather alert (if configured) and in the attributes a list of all active alerts with their details
+- sensor.predbat_alertfeed_status - Gives you data on the currently active weather alert (if configured) and in the attributes a list of all active alerts with their details
 
 ## Predbat Logfile
 

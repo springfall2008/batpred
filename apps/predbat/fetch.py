@@ -989,7 +989,10 @@ class Fetch:
         self.octopus_saving_slots = {}
 
         # Alert feed if enabled
-        self.process_alerts()
+        if self.components:
+            alert_feed = self.components.get_component("alert_feed")
+            if alert_feed:
+                self.alerts, self.alert_active_keep = alert_feed.process_alerts(self.minutes_now, self.midnight_utc)
 
         # iBoost load data
         if "iboost_energy_today" in self.args:

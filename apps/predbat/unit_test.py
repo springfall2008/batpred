@@ -49,6 +49,7 @@ from compare import Compare
 from gecloud import GECloudDirect
 from octopus import OctopusAPI
 from components import Components
+from alertfeed import AlertFeed
 
 # Mock the components and plugin system
 from unittest.mock import MagicMock, patch
@@ -8052,49 +8053,51 @@ def test_alert_feed(my_predbat):
 """
     print("Test alert feed")
 
-    result = my_predbat.parse_alert_data(alert_data)
+    alert_feed = AlertFeed({}, my_predbat)
+
+    result = alert_feed.parse_alert_data(alert_data)
     if not result:
         print("ERROR: Could not parse stored alert data")
         failed = 1
         return failed
 
-    filter = my_predbat.filter_alerts(result, area="North West England")
+    filter = alert_feed.filter_alerts(result, area="North West England")
     if len(filter) != 1:
         print("ERROR: Expecting 1 alert for North West England got {}".format(len(filter)))
         failed = 1
         return failed
 
-    filter = my_predbat.filter_alerts(result, area="South West England")
+    filter = alert_feed.filter_alerts(result, area="South West England")
     if len(filter) != 0:
         print("ERROR: Expecting 0 alert for South West England got {}".format(len(filter)))
         failed = 1
         return failed
 
-    filter = my_predbat.filter_alerts(result, latitude=birmingham[0], longitude=birmingham[1])
+    filter = alert_feed.filter_alerts(result, latitude=birmingham[0], longitude=birmingham[1])
     if len(filter) != 0:
         print("ERROR: Expecting 0 alert for Birmingham got {}".format(len(filter)))
         failed = 1
         return failed
 
-    filter = my_predbat.filter_alerts(result, latitude=fife[0], longitude=fife[1])
+    filter = alert_feed.filter_alerts(result, latitude=fife[0], longitude=fife[1])
     if len(filter) != 1:
         print("ERROR: Expecting 1 alert for Fife got {}".format(len(filter)))
         failed = 1
         return failed
 
-    filter = my_predbat.filter_alerts(result, area="Grampian", severity="Moderate|Severe", certainty="Likely")
+    filter = alert_feed.filter_alerts(result, area="Grampian", severity="Moderate|Severe", certainty="Likely")
     if len(filter) != 1:
         print("ERROR: Expecting 1 alert for Grampian got {}".format(len(filter)))
         failed = 1
         return failed
 
-    filter = my_predbat.filter_alerts(result, event="(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)")
+    filter = alert_feed.filter_alerts(result, event="(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)")
     if len(filter) != 2:
         print("ERROR: Expecting 2 alerts for Yellow|Amber but got {}".format(len(filter)))
         failed = 1
         return failed
 
-    alert_active_keep = my_predbat.apply_alerts(result, 1.0)
+    alert_active_keep = alert_feed.apply_alerts(result, 1.0, my_predbat.minutes_now, my_predbat.midnight_utc)
     show = []
     for minute in range(0, 48 * 60, 15):
         show.append(alert_active_keep.get(minute, 0))
@@ -8297,7 +8300,7 @@ def test_alert_feed(my_predbat):
         failed = 1
 
     url = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
-    xml = my_predbat.download_alert_data(url)
+    xml = alert_feed.download_alert_data(url)
     if not xml:
         print("ERROR: Could not download alert data")
         failed = 1
@@ -8309,13 +8312,11 @@ def test_alert_feed(my_predbat):
         "event": "Yellow|Amber",
         "keep": 0.5,
     }
-    original_download_alert_data = my_predbat.download_alert_data
-    my_predbat.download_alert_data = MagicMock(return_value=alert_data)
-    my_predbat.args["alerts"] = alert_config
-    my_predbat.process_alerts(testing=True)
-    my_predbat.download_alert_data = original_download_alert_data
-    alert_active_keep = my_predbat.alert_active_keep
-    my_predbat.alert_active_keep = {}
+    original_download_alert_data = alert_feed.download_alert_data
+    alert_feed.alert_config = alert_config
+    alert_feed.alert_xml = alert_data
+    alerts, alert_active_keep = alert_feed.process_alerts(my_predbat.minutes_now, my_predbat.midnight_utc, testing=True)
+    alert_active_keep = alert_active_keep
     show = []
     for minute in range(0, 48 * 60, 15):
         show.append(alert_active_keep.get(minute, 0))
@@ -8518,7 +8519,7 @@ def test_alert_feed(my_predbat):
         print("ERROR: Expecting show should be {} got {}".format(expect_show, show))
         failed = 1
 
-    alert_text = ha.get_state(my_predbat.prefix + ".alerts")
+    alert_text = ha.get_state("sensor." + my_predbat.prefix + "_alertfeed_status")
     expect_text = "Yellow wind warning until " + today + " 23:59:59+{}:00".format(tz_offset)
     if alert_text != expect_text:
         print("ERROR: Expecting alert text to be '{}' got '{}'".format(expect_text, alert_text))
