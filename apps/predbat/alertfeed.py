@@ -271,7 +271,7 @@ class AlertFeed:
             self.log("Warn: AlertFeed: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
             self.base.record_status("Warn: AlertFeed: Error downloading Octopus free session data", debug=url, had_errors=True)
             return None
-    
+
         self.log("AlertFeed: Downloaded alert data from {} size {} bytes".format(url, len(r.text)))
 
         # Return new data
