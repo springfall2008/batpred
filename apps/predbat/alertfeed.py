@@ -16,6 +16,7 @@ import xml.etree.ElementTree as etree
 import asyncio
 import time
 
+
 class AlertFeed:
     def __init__(self, alert_config, base):
         self.base = base
@@ -63,7 +64,7 @@ class AlertFeed:
         self.api_started = True
         while not self.stop_api:
             try:
-                if first or count_seconds % (60*30) == 0:
+                if first or count_seconds % (60 * 30) == 0:
                     # Download alerts
                     self.alert_xml = self.download_alert_data(self.alert_url)
                     first = False
