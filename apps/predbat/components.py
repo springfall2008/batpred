@@ -140,6 +140,7 @@ COMPONENT_LIST = {
     "alert_feed": {
         "class": AlertFeed,
         "name": "Alert Feed",
+        "event_filter": "predbat_alertfeed_",
         "args": {
             "alert_config": {
                 "required": True,

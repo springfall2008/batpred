@@ -29,6 +29,15 @@ class AlertFeed:
         self.stop_api = False
         self.api_started = False
 
+    async def select_event(self, entity_id, value):
+        pass
+
+    async def number_event(self, entity_id, value):
+        pass
+
+    async def switch_event(self, entity_id, service):
+        pass
+
     def wait_api_started(self):
         """
         Wait for the API to start
@@ -172,7 +181,7 @@ class AlertFeed:
             item["title"] = alert.get("title", "")
             item["status"] = alert.get("status", "")
             alert_show.append(item)
-        self.base.dashboard_item("sensor." + self.prefix + "_alerts", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts": alert_show}, app="alertfeed")
+        self.base.dashboard_item("sensor." + self.prefix + "_alertfeed_status", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts": alert_show}, app="alertfeed")
 
         return alert_active_keep
 
