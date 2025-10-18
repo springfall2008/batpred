@@ -277,8 +277,8 @@ class AlertFeed:
 
         r = requests.get(url)
         if r.status_code not in [200, 201]:
-            self.log("Warn: AlertFeed: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
-            self.base.record_status("Warn: AlertFeed: Error downloading Octopus free session data", debug=url, had_errors=True)
+            self.log("Warn: AlertFeed: Error downloading alert data from URL {}, code {}".format(url, r.status_code))
+            self.base.record_status("Warn: AlertFeed: Error downloading alert data", debug=url, had_errors=True)
             return None
 
         self.log("AlertFeed: Downloaded alert data from {} size {} bytes".format(url, len(r.text)))
