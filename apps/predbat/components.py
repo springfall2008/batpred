@@ -46,8 +46,7 @@ COMPONENT_LIST = {
     "ha_history": {
         "class": HAHistory,
         "name": "Home Assistant History",
-        "args": {
-        },
+        "args": {},
         "can_restart": False,
     },
     "web": {"class": WebInterface, "name": "Web Interface", "args": {"port": {"required": False, "config": "web_port", "default": 5052}}},
