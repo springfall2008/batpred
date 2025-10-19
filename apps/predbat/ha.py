@@ -44,10 +44,12 @@ def run_async(coro):
     else:
         return asyncio.run(coro)
 
+
 class HAHistory:
     """
     Home Assistant History Data
     """
+
     def __init__(self, base):
         self.base = base
         self.log = base.log
@@ -108,10 +110,10 @@ class HAHistory:
             if history_data and len(history_data) > 0:
                 history_data = history_data[0]
                 if tracked:
-                    self.update_entity(entity_id, history_data)    
+                    self.update_entity(entity_id, history_data)
                 return [history_data]
         return None
-     
+
     def prune_history(self, now):
         """
         Prune history data older than required
@@ -140,15 +142,15 @@ class HAHistory:
         """
         if not new_history_data:
             return
-        
+
         FILTER_ATTRIBUTES = ["friendly_name", "unit_of_measurement", "icon", "device_class", "results", "state_class", "entity_id"]
         FILTER_ENTRIES = ["last_changed", "entity_id"]
 
         # Filter useless data from history data
         for entry in new_history_data:
-            if 'attributes' in entry:
+            if "attributes" in entry:
                 for attr in FILTER_ATTRIBUTES:
-                    entry['attributes'].pop(attr, None)
+                    entry["attributes"].pop(attr, None)
             for entry_attr in FILTER_ENTRIES:
                 entry.pop(entry_attr, None)
 
@@ -175,16 +177,16 @@ class HAHistory:
         if not ha_interface:
             self.log("Error: HAHistory: No HAInterface available, cannot start history updates")
             return
-        
+
         self.api_started = True
         seconds = 0
         while not self.api_stop:
             try:
-                if seconds % (2*60) == 0:
+                if seconds % (2 * 60) == 0:
                     # Update history data every 2 minutes
                     now = datetime.now(timezone.utc)
                     for entity_id in self.history_entities:
-                        #self.log("HAHistory: Updating history for {}".format(entity_id))
+                        # self.log("HAHistory: Updating history for {}".format(entity_id))
                         if self.history_data.get(entity_id, None):
                             history_data = ha_interface.get_history(entity_id, now, hours=0.5)
                             if history_data and len(history_data) > 0:
@@ -195,7 +197,7 @@ class HAHistory:
                             if history_data and len(history_data) > 0:
                                 history_data = history_data[0]
                                 self.update_entity(entity_id, history_data)
-                if seconds % (60*60) == 0:
+                if seconds % (60 * 60) == 0:
                     # Prune history data every hour
                     self.log("Info: HAHistory: Pruning history data")
                     now = datetime.now(timezone.utc)
@@ -210,6 +212,7 @@ class HAHistory:
 
     async def stop(self):
         self.api_stop = True
+
 
 class HAInterface:
     """
