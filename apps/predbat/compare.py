@@ -334,6 +334,9 @@ class Compare:
                     "icon": "mdi::compare-horizontal",
                 }
                 for item in result:
+                    if item == "raw":   # skip writing raw compare plan data to the compare entity
+                        continue
+
                     value = result[item]
                     if item != "html":
                         attributes[item] = value
