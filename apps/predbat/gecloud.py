@@ -846,7 +846,7 @@ class GECloudDirect:
                         await self.publish_evc_data(serial, self.evc_data[uuid])
 
                 if seconds % (10 * 60) == 0:
-                    # Get All registers every now and again incase user changes them
+                    # Get All registers every now and again in case user changes them
                     for device in device_list:
                         if seconds == 0 or self.polling_mode or (device == ems_device) or (device == gateway_device):
                             self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
