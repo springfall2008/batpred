@@ -134,31 +134,31 @@ class HAHistory:
                             keep_all = True
             self.history_data[entity_id] = new_history
 
-    def update_entity(self, entity_id, history_data):
+    def update_entity(self, entity_id, new_history_data):
         """
         Update history data for an entity
         """
-        if not history_data:
+        if not new_history_data:
             return
         
         FILTER_ATTRIBUTES = ["friendly_name", "unit_of_measurement", "icon", "device_class", "results", "state_class", "entity_id"]
         FILTER_ENTRIES = ["last_changed", "entity_id"]
 
         # Filter useless data from history data
-        for entry in history_data:
+        for entry in new_history_data:
             if 'attributes' in entry:
                 for attr in FILTER_ATTRIBUTES:
                     entry['attributes'].pop(attr, None)
             for entry_attr in FILTER_ENTRIES:
                 entry.pop(entry_attr, None)
 
-        history_data = self.history_data.get(entity_id, None)
-        last_updated = history_data[-1].get("last_updated", None) if history_data else None
-        if history_data and last_updated:
+        current_history_data = self.history_data.get(entity_id, None)
+        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data else None
+        if last_updated:
             # Find the last timestamp in the previous history data, data is always in order from oldest to newest
             last_timestamp = str2time(last_updated)
             # Scan new data, using the timestamp only add new entries
-            for entry in history_data:
+            for entry in new_history_data:
                 this_updated = entry.get("last_updated", None)
                 if this_updated:
                     entry_time = str2time(this_updated)
@@ -166,7 +166,7 @@ class HAHistory:
                         self.history_data[entity_id].append(entry)
             self.last_success_timestamp = datetime.now(timezone.utc)
         else:
-            self.history_data[entity_id] = history_data
+            self.history_data[entity_id] = new_history_data
             self.last_success_timestamp = datetime.now(timezone.utc)
 
     async def start(self):
