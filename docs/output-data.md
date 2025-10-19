@@ -255,7 +255,7 @@ battery SoC, car and iBoost charging, and Predbat's planned charging and dischar
 
 The plan is contained in the 'html' attribute, and its recommended to [Create the Predbat Plan card](predbat-plan-card.md) as an easy way to see the plan that Predbat has created.
 
-The sensor also contains the 'text' attribute which gives a HTML formatted brief text description of the Predbat plan.
+The sensor also contains the 'text' attribute which gives a HTML formatted brief text description of the Predbat plan, and the 'raw' attribute which repeats the plan data but in raw (unformatted) JSON format.
 
 If you are using the Predbat add-on or docker then the Predbat plan can also be viewed via the ['Plan' view of the Predbat web interface](web-interface#plan-view), and the text description via the ['Dash' view](web-interface.md#dash-view).
 
