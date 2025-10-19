@@ -2354,6 +2354,33 @@ def run_inverter_tests():
         twice=False,
     )
 
+    service_template = """
+charge_start_service:
+  - service: select.select_option
+    entity_id: select.inverter1_work_mode
+    option: "Force Charge"
+  - service: select.select_option
+    entity_id: select.inverter2_work_mode
+    option: "Force Charge"
+"""
+    decoded_template = yaml.safe_load(service_template)
+    print("Decoded template: {}".format(decoded_template))
+    failed |= test_call_service_template(
+        "test_service_complex4",
+        my_predbat,
+        inv,
+        service_name="charge_start_service",
+        domain="charge",
+        service_template=decoded_template.get("charge_start_service"),
+        expected_result=[["select/select_option", {"entity_id": "select.inverter1_work_mode", "option": "Force Charge"}], ["select/select_option", {"entity_id": "select.inverter2_work_mode", "option": "Force Charge"}]],
+        clear=False,
+        repeat=False,
+        twice=False,
+    )
+
+    if failed:
+        return failed
+
     my_predbat.args["extra"] = "42"
     failed |= test_call_service_template(
         "test_service_complex4",

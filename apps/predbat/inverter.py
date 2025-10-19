@@ -2177,7 +2177,10 @@ class Inverter:
                         service_always = service_template[key]
                     else:
                         value = service_template[key]
-                        value = self.base.resolve_arg(service_template, value, indirect=False, index=self.id, default="", extra_args=full_data)
+                        use_index = None
+                        if isinstance(value, list):
+                            use_index = self.id
+                        value = self.base.resolve_arg(service_template, value, indirect=False, index=use_index, default="", extra_args=full_data)
                         if value:
                             service_data[key] = value
 
