@@ -14,7 +14,7 @@ from ohme import OhmeAPI
 from octopus import OctopusAPI
 from alertfeed import AlertFeed
 from web import WebInterface
-from ha import HAInterface
+from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from datetime import datetime, timezone, timedelta
@@ -40,6 +40,13 @@ COMPONENT_LIST = {
             "db_enable": {"required": False, "config": "db_enable", "default": False},
             "db_mirror_ha": {"required": False, "config": "db_mirror_ha", "default": False},
             "db_primary": {"required": False, "config": "db_primary", "default": False},
+        },
+        "can_restart": False,
+    },
+    "ha_history": {
+        "class": HAHistory,
+        "name": "Home Assistant History",
+        "args": {
         },
         "can_restart": False,
     },
