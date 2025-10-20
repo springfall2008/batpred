@@ -172,7 +172,7 @@ class HAHistory:
                         entry_time = str2time(this_updated)
                         if entry_time > last_timestamp:
                             self.history_data[entity_id].append(entry)
-                            add_all = True # Remaining entries are all newer
+                            add_all = True  # Remaining entries are all newer
                             count_added += 1
             self.last_success_timestamp = datetime.now(timezone.utc)
         else:
@@ -180,7 +180,7 @@ class HAHistory:
             self.history_data[entity_id] = new_history_data
             self.last_success_timestamp = datetime.now(timezone.utc)
 
-        #print("Updating history for {} with {} datapoints added {}".format(entity_id, len(new_history_data), count_added))
+        # print("Updating history for {} with {} datapoints added {}".format(entity_id, len(new_history_data), count_added))
 
     async def start(self):
         self.log("Info: Starting HAHistory")
