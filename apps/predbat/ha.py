@@ -156,20 +156,31 @@ class HAHistory:
 
         current_history_data = self.history_data.get(entity_id, None)
         last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
+        count_added = 0
         if last_updated:
             # Find the last timestamp in the previous history data, data is always in order from oldest to newest
             last_timestamp = str2time(last_updated)
             # Scan new data, using the timestamp only add new entries
+            add_all = False
             for entry in new_history_data:
-                this_updated = entry.get("last_updated", None)
-                if this_updated:
-                    entry_time = str2time(this_updated)
-                    if entry_time > last_timestamp:
-                        self.history_data[entity_id].append(entry)
+                if add_all:
+                    self.history_data[entity_id].append(entry)
+                    count_added += 1
+                else:
+                    this_updated = entry.get("last_updated", None)
+                    if this_updated:
+                        entry_time = str2time(this_updated)
+                        if entry_time > last_timestamp:
+                            self.history_data[entity_id].append(entry)
+                            add_all = True # Remaining entries are all newer
+                            count_added += 1
             self.last_success_timestamp = datetime.now(timezone.utc)
         else:
+            count_added += len(new_history_data)
             self.history_data[entity_id] = new_history_data
             self.last_success_timestamp = datetime.now(timezone.utc)
+
+        #print("Updating history for {} with {} datapoints added {}".format(entity_id, len(new_history_data), count_added))
 
     async def start(self):
         self.log("Info: Starting HAHistory")
@@ -187,8 +198,10 @@ class HAHistory:
                     now = datetime.now(timezone.utc)
                     for entity_id in self.history_entities:
                         # self.log("HAHistory: Updating history for {}".format(entity_id))
-                        if self.history_data.get(entity_id, None):
-                            history_data = ha_interface.get_history(entity_id, now, hours=0.5)
+                        current_history_data = self.history_data.get(entity_id, None)
+                        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
+                        if last_updated:
+                            history_data = ha_interface.get_history(entity_id, now, days=1, from_time=str2time(last_updated))
                             if history_data and len(history_data) > 0:
                                 history_data = history_data[0]
                                 self.update_entity(entity_id, history_data)
@@ -614,7 +627,7 @@ class HAInterface:
         else:
             self.log("Warn: Failed to update state data from HA")
 
-    def get_history(self, sensor, now, days=30, hours=None, force_db=False):
+    def get_history(self, sensor, now, days=30, from_time=None, force_db=False):
         """
         Get the history for a sensor from Home Assistant.
 
@@ -629,8 +642,8 @@ class HAInterface:
         if (self.db_primary or force_db) and self.db_enable:
             return self.db_manager.get_history_db(sensor, now, days=days)
 
-        if hours:
-            start = now - timedelta(hours=hours)
+        if from_time:
+            start = from_time
         else:
             start = now - timedelta(days=days)
         end = now
