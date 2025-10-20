@@ -155,7 +155,7 @@ class HAHistory:
                 entry.pop(entry_attr, None)
 
         current_history_data = self.history_data.get(entity_id, None)
-        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data else None
+        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
         if last_updated:
             # Find the last timestamp in the previous history data, data is always in order from oldest to newest
             last_timestamp = str2time(last_updated)
