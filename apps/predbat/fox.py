@@ -777,7 +777,7 @@ class FoxAPI:
     async def request_get_func(self, path, post=False, datain=None):
         headers = self.get_headers(path)
         url = FOX_DOMAIN + path
-        # print("Request: path {} post {} datain {} headers {}".format(path, post, datain, headers))
+        self.log("Fox: API Request: path {} post {} datain {}".format(path, post, datain))
         try:
             if post:
                 if datain:
@@ -820,6 +820,10 @@ class FoxAPI:
                     # Rate limiting so wait up to 10 seconds
                     self.log("Fox: Rate limiting detected, waiting...")
                     await asyncio.sleep(random.random() * 10 + 1)
+                elif errno in [40402]:
+                    self.log("Fox: Has run out of API calls for today, sleeping...")
+                    await asyncio.sleep(5 * 60)
+                    return None
                 else:
                     self.log("Warn: Fox: Error {} from {} message {}".format(errno, url, msg))
                 return None
