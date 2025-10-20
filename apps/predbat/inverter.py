@@ -2423,7 +2423,7 @@ class Inverter:
                     success = False
 
         return success
-    
+
     def _press_single_toggle_button(self, entity_id):
         """
         This is just a switch we can toggle to on, it will turn off again automatically.

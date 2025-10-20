@@ -565,7 +565,7 @@ class FoxAPI:
         # Do change enable if not already modified
         if self.device_scheduler.get(deviceSN, {}).get("enabled", None) == enabled:
             return
-        
+
         SET_SCHEDULER_ENABLED = "/op/v1/device/scheduler/set/flag"
         result = await self.request_get(SET_SCHEDULER_ENABLED, datain={"deviceSN": deviceSN, "enable": 1 if enabled else 0}, post=True)
         if result:
@@ -1206,6 +1206,7 @@ class FoxAPI:
         self.base.args["inverter_limit"] = [f"sensor.predbat_fox_{device}_inverter_capacity" for device in batteries]
         self.base.args["export_limit"] = [f"number.predbat_fox_{device}_setting_exportlimit" for device in batteries]
         self.base.args["schedule_write_button"] = [f"switch.predbat_fox_{device}_battery_schedule_charge_write" for device in batteries]
+
 
 class MockBase:
     """Mock base class for testing"""
