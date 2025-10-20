@@ -285,7 +285,7 @@ class Components:
             return False
         last_updated_time = self.last_updated_time(name)
         diff_time = datetime.now(timezone.utc) - last_updated_time if last_updated_time else None
-        if not diff_time or diff_time > timedelta(minutes=30):
+        if not diff_time or diff_time > timedelta(minutes=60):
             return False
         return True
 
