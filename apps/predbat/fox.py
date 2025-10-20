@@ -822,7 +822,7 @@ class FoxAPI:
                     await asyncio.sleep(random.random() * 10 + 1)
                 elif errno in [40402]:
                     self.log("Fox: Has run out of API calls for today, sleeping...")
-                    await asyncio.sleep(5*60)
+                    await asyncio.sleep(5 * 60)
                     return None
                 else:
                     self.log("Warn: Fox: Error {} from {} message {}".format(errno, url, msg))
