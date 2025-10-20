@@ -240,21 +240,24 @@ The integration processes hourly pricing data and converts it into 30-minute int
 
 ### Configuring Predbat to Use the Energidataservice Integration
 
-The following configuration items in apps.yaml are used to configure Predbat to use the Energidataservice integration. These items must be set explicitly to ensure that Predbat retrieves the correct import and export rates.
+The following configuration items in `apps.yaml` are used to configure Predbat to use the Energidataservice integration. These items must be set explicitly to ensure that Predbat retrieves the correct import and export rates.
 
-metric_energidataservice_import - Import rates from the Energidataservice integration. This should point to the sensor that provides hourly import rates, such as sensor.energi_data_service.
+- **metric_energidataservice_import** - Import rates from the Energidataservice integration. This should point to the sensor that provides hourly import rates, such as sensor.energi_data_service.
 
-metric_energidataservice_export - Export rates from the Energidataservice integration. This should point to the sensor that provides hourly export rates (e.g., solar feed-in rates), such as sensor.energi_data_service_export.
+- **metric_energidataservice_export** - Export rates from the Energidataservice integration. This should point to the sensor that provides hourly export rates (e.g., solar feed-in rates), such as sensor.energi_data_service_export.
 
-## Other spot sensor integrations
+## Other Energy Spot Rate sensor integrations
 
-Different spot integrations that include forecast prices may be used.
+Different spot rate integrations that include forecast prices may be used.
 Because integrations format their attribute data differently, a template sensor is required to convert the attribute data into a new sensor with the correctly formatted attributes: raw_today and raw_tomorrow.
 
-metric_octopus_import: 'sensor.current_buy_electricity_price_raw'
-metric_octopus_export: 'sensor.current_sell_electricity_price_raw'
+```yaml
+  metric_octopus_import: 'sensor.current_buy_electricity_price_raw'
+  metric_octopus_export: 'sensor.current_sell_electricity_price_raw'
+```
 
-Czech Republic example:
+### Czech Republic example
+
 <https://github.com/rnovacek/homeassistant_cz_energy_spot_prices>
 
 ```yaml
@@ -269,8 +272,48 @@ Czech Republic example:
 {{ns.output | sort(attribute='start') }}
 ```
 
-full code for cz energy spot template:
+Full code for CZ energy spot rate template:
 <https://gist.github.com/ziat007/ae29e26ae257f069520b65f0168c3a6b>
+
+### Frank Energie Export rates with export fee
+
+The [Frank Energie integration](https://github.com/HiDiHo01/home-assistant-frank_energie) provides import and export rates for Frank Energie customers in the Netherlands.
+However the integration provides only the market rates and does not include the export fixed fee of 0.0115 per kWh.
+
+A template sensor can be used to manipulate the rates provided by the integration and add the required fee:
+
+```yaml
+      # Export to Grid Payment
+      - name: "Frank export price schedule (€/kWh)"
+        unique_id: frank_export_price_schedule_eur_kwh
+        unit_of_measurement: "€/kWh"
+        icon: mdi:currency-eur
+        state_class: measurement
+        state: >
+          {% set src = 'sensor.frank_energie_prices_current_electricity_market_price' %}
+          {% set fee = states('input_number.frank_export_fee_eur_per_kwh') | float(0.0115) %}
+          {% set arr = state_attr(src, 'prices') or [] %}
+          {% set now_ = now() %}
+          {% set price = states(src) | float(0) %}
+          {% for b in arr %}
+            {% if now_ >= as_datetime(b['from']) and now_ < as_datetime(b['till']) %}
+              {% set price = b['price'] | float(0) %}
+            {% endif %}
+          {% endfor %}
+          {{ (price - fee) | round(5) }}
+        attributes:
+          prices: >
+            {% set src = 'sensor.frank_energie_prices_current_electricity_market_price' %}
+            {% set fee = states('input_number.frank_export_fee_eur_per_kwh') | float(0.0115) %}
+            {% set arr = state_attr(src, 'prices') or [] %}
+            {% set out = namespace(list=[]) %}
+            {% for b in arr %}
+              {% set p = (b['price'] | float(0)) - fee %}
+              {% set item = {'from': b['from'].strftime('%Y-%m-%dT%H:%M:%S%z'), 'till': b['till'].strftime('%Y-%m-%dT%H:%M:%S%z'), 'price': (p | round(5))} %}
+              {% set out.list = out.list + [item] %}
+            {% endfor %}
+            {{ out.list | tojson }}
+```
 
 ## Rate Bands to manually configure Energy Rates
 
