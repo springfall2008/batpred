@@ -204,7 +204,7 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 
 - **switch.predbat_car_charging_hold** - remove the historical car charging load from the house load
 - **input_number.predbat_car_charging_threshold** - power threshold above which Predbat assumes the car is being charged
-- **input_number.predbat_car_charging_energy_scale** - used to scale the **car_charging_energy** sensor in apps.yaml
+- **input_number.predbat_car_charging_energy_scale** - used to scale the **car_charging_energy** sensor in `apps.yaml`
 - **input_number.predbat_car_charging_rate** - car's charging rate in kW per hour
 - **input_number.predbat_car_charging_loss** - percentage energy lost when charging the car
 - **switch.predbat_octopus_intelligent_charging** - controls whether Octopus Intelligent (via the Octopus Energy integration) controls the car charging or Predbat plans the car charging
@@ -214,7 +214,7 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
-- **switch.predbat_car_charging_manual_soc** - ignore the  **car_charging_soc** car SoC sensor set in apps.yaml
+- **switch.predbat_car_charging_manual_soc** - ignore the  **car_charging_soc** car SoC sensor set in `apps.yaml`
 - **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC (used if car SoC sensor is not available)
 
 ## Calculation options

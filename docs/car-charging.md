@@ -223,7 +223,7 @@ And add your custom car charging energy sensor in apps.yaml in place of the temp
 **Example**
 
 ```yaml
-car_charging_energy: 'sensor.car_energy_used'
+  car_charging_energy: 'sensor.car_energy_used'
 ```
 
 **car_charging_now** must be commented out (hashed out) in `apps.yaml`:
