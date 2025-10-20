@@ -94,7 +94,7 @@ class FoxAPI:
         count_seconds = 0
         while not self.stop_api:
             try:
-                if first or (count_seconds % (30 * 60) == 0):
+                if first or (count_seconds % (60 * 60) == 0):
                     if first:
                         # Only do these once as battery charging times are ignored with the scheduler
                         # and we get the realtime data every 5 minutes
