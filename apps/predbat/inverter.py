@@ -2401,10 +2401,14 @@ class Inverter:
         """
         success = True
 
+        entity_id_schedule_write_button = self.base.get_arg("schedule_write_button", indirect=False, index=self.id)
+        entity_id_charge_discharge_updated_button = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
+
         # Try single combined button first
-        entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
-        if entity_id:
-            success = self._press_single_button_and_poll(entity_id)
+        if entity_id_schedule_write_button:
+            success = self._press_single_toggle_button(entity_id_schedule_write_button)
+        elif entity_id_charge_discharge_updated_button:
+            success = self._press_single_button_and_poll(entity_id_charge_discharge_updated_button)
         else:
             # Try separate charge and discharge buttons
             charge_button = self.base.get_arg("charge_update_button", indirect=False, index=self.id)
@@ -2419,6 +2423,14 @@ class Inverter:
                     success = False
 
         return success
+    
+    def _press_single_toggle_button(self, entity_id):
+        """
+        This is just a switch we can toggle to on, it will turn off again automatically.
+        """
+        self.base.call_service_wrapper("switch/turn_on", entity_id=entity_id)
+        self.log(f"Pressed toggle button {entity_id} on Inverter {self.id}")
+        return True
 
     def _press_single_button_and_poll(self, entity_id):
         """
