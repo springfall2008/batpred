@@ -17,6 +17,7 @@ import requests
 import traceback
 import threading
 import time
+from utils import str2time
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 
 
@@ -42,6 +43,188 @@ def run_async(coro):
         return thread.result
     else:
         return asyncio.run(coro)
+
+
+class HAHistory:
+    """
+    Home Assistant History Data
+    """
+
+    def __init__(self, base):
+        self.base = base
+        self.log = base.log
+        self.history_entities = {}
+        self.history_data = {}
+        self.api_started = False
+        self.api_stop = False
+        self.last_success_timestamp = None
+
+    def is_alive(self):
+        return self.api_started
+
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
+
+    def wait_api_started(self):
+        """
+        Wait for the API to start
+        """
+        self.log("HAHistory: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 240:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: HAHistory: Failed to start")
+            return False
+        return True
+
+    def add_entity(self, entity_id, days):
+        """
+        Add an entity to the history list
+        """
+        if entity_id in self.history_entities:
+            if days > self.history_entities[entity_id]:
+                self.history_entities[entity_id] = days
+        else:
+            self.history_entities[entity_id] = days
+
+    def get_history(self, entity_id, days=30, tracked=True):
+        """
+        Get history data for an entity
+        """
+        if self.history_data.get(entity_id, None) and self.history_entities.get(entity_id, 0) >= days:
+            return [self.history_data[entity_id]]
+        else:
+            ha_interface = self.base.components.get_component("ha")
+            if not ha_interface:
+                self.log("Error: HAHistory: No HAInterface available, cannot fetch history")
+                return None
+            if tracked:
+                self.add_entity(entity_id, days)
+                days = self.history_entities[entity_id]
+            history_data = ha_interface.get_history(entity_id, datetime.now(timezone.utc), days=days)
+            if history_data and len(history_data) > 0:
+                history_data = history_data[0]
+                if tracked:
+                    self.update_entity(entity_id, history_data)
+                return [history_data]
+        return None
+
+    def prune_history(self, now):
+        """
+        Prune history data older than required
+        """
+        for entity_id in list(self.history_data.keys()):
+            max_days = self.history_entities.get(entity_id, 30)
+            cutoff_time = now - timedelta(days=max_days)
+            new_history = []
+            keep_all = False
+            for entry in self.history_data[entity_id]:
+                if keep_all:
+                    new_history.append(entry)
+                else:
+                    last_updated = entry.get("last_updated", None)
+                    if last_updated:
+                        entry_time = str2time(last_updated)
+                        if entry_time >= cutoff_time:
+                            new_history.append(entry)
+                            # Keep remaining entries now as they are in order
+                            keep_all = True
+            self.history_data[entity_id] = new_history
+
+    def update_entity(self, entity_id, new_history_data):
+        """
+        Update history data for an entity
+        """
+        if not new_history_data:
+            return
+
+        FILTER_ATTRIBUTES = ["friendly_name", "unit_of_measurement", "icon", "device_class", "results", "state_class", "entity_id"]
+        FILTER_ENTRIES = ["last_changed", "entity_id"]
+
+        # Filter useless data from history data
+        for entry in new_history_data:
+            if "attributes" in entry:
+                for attr in FILTER_ATTRIBUTES:
+                    entry["attributes"].pop(attr, None)
+            for entry_attr in FILTER_ENTRIES:
+                entry.pop(entry_attr, None)
+
+        current_history_data = self.history_data.get(entity_id, None)
+        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
+        count_added = 0
+        if last_updated:
+            # Find the last timestamp in the previous history data, data is always in order from oldest to newest
+            last_timestamp = str2time(last_updated)
+            # Scan new data, using the timestamp only add new entries
+            add_all = False
+            for entry in new_history_data:
+                if add_all:
+                    self.history_data[entity_id].append(entry)
+                    count_added += 1
+                else:
+                    this_updated = entry.get("last_updated", None)
+                    if this_updated:
+                        entry_time = str2time(this_updated)
+                        if entry_time > last_timestamp:
+                            self.history_data[entity_id].append(entry)
+                            add_all = True  # Remaining entries are all newer
+                            count_added += 1
+            self.last_success_timestamp = datetime.now(timezone.utc)
+        else:
+            count_added += len(new_history_data)
+            self.history_data[entity_id] = new_history_data
+            self.last_success_timestamp = datetime.now(timezone.utc)
+
+        # print("Updating history for {} with {} datapoints added {}".format(entity_id, len(new_history_data), count_added))
+
+    async def start(self):
+        self.log("Info: Starting HAHistory")
+        ha_interface = self.base.components.get_component("ha")
+        if not ha_interface:
+            self.log("Error: HAHistory: No HAInterface available, cannot start history updates")
+            return
+
+        self.api_started = True
+        seconds = 0
+        while not self.api_stop:
+            try:
+                if seconds % (2 * 60) == 0:
+                    # Update history data every 2 minutes
+                    now = datetime.now(timezone.utc)
+                    for entity_id in self.history_entities:
+                        # self.log("HAHistory: Updating history for {}".format(entity_id))
+                        current_history_data = self.history_data.get(entity_id, None)
+                        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
+                        if last_updated:
+                            history_data = ha_interface.get_history(entity_id, now, days=1, from_time=str2time(last_updated))
+                            if history_data and len(history_data) > 0:
+                                history_data = history_data[0]
+                                self.update_entity(entity_id, history_data)
+                        else:
+                            history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
+                            if history_data and len(history_data) > 0:
+                                history_data = history_data[0]
+                                self.update_entity(entity_id, history_data)
+                if seconds % (60 * 60) == 0:
+                    # Prune history data every hour
+                    self.log("Info: HAHistory: Pruning history data")
+                    now = datetime.now(timezone.utc)
+                    self.prune_history(now)
+
+            except Exception as e:
+                self.log("Error: HAHistory exception in update loop: {}".format(e))
+                self.log("Error: " + traceback.format_exc())
+            await asyncio.sleep(5)
+            seconds += 5
+        self.api_started = False
+
+    async def stop(self):
+        self.api_stop = True
 
 
 class HAInterface:
@@ -102,9 +285,6 @@ class HAInterface:
         self.log = base.log
         self.state_data = {}
         self.slug = None
-
-        print("HA URL", self.ha_url)
-        print("HA KEY", self.ha_key)
 
         if not self.ha_key:
             if not (self.db_enable and self.db_primary):
@@ -343,7 +523,7 @@ class HAInterface:
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
-        Get state from cached HA data (or from AppDaemon if used)
+        Get state from cached HA data
         """
         if entity_id:
             self.db_mirror_list[entity_id.lower()] = True
@@ -447,7 +627,7 @@ class HAInterface:
         else:
             self.log("Warn: Failed to update state data from HA")
 
-    def get_history(self, sensor, now, days=30, force_db=False):
+    def get_history(self, sensor, now, days=30, from_time=None, force_db=False):
         """
         Get the history for a sensor from Home Assistant.
 
@@ -462,7 +642,10 @@ class HAInterface:
         if (self.db_primary or force_db) and self.db_enable:
             return self.db_manager.get_history_db(sensor, now, days=days)
 
-        start = now - timedelta(days=days)
+        if from_time:
+            start = from_time
+        else:
+            start = now - timedelta(days=days)
         end = now
         res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res

@@ -1690,7 +1690,7 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "has_fox_inverter_mode": True,
-        "time_button_press": False,
+        "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
         "has_time_window": False,

@@ -403,7 +403,7 @@ class GECloudDirect:
                         pass
 
                 max_charge_rate = info.get("max_charge_rate", 0)
-                self.log("GECloud: Device {} battery capacity {} max charge rate {}".format(device, capacity, max_charge_rate))
+                self.log("GECloud: Update data for device {} battery capacity {} max charge rate {}".format(device, capacity, max_charge_rate))
 
                 self.base.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
                 self.base.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
@@ -844,8 +844,9 @@ class GECloudDirect:
                         self.evc_data[uuid] = await self.async_get_evc_device_data(uuid)
                         self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid)
                         await self.publish_evc_data(serial, self.evc_data[uuid])
-                if seconds % 300 == 0:
-                    # Get registers
+
+                if seconds % (10 * 60) == 0:
+                    # Get All registers every now and again in case user changes them
                     for device in device_list:
                         if seconds == 0 or self.polling_mode or (device == ems_device) or (device == gateway_device):
                             self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))

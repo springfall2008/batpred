@@ -20,18 +20,7 @@ import gc
 
 IS_COMPILED = getattr(sys, "frozen", False)
 
-IS_APPDAEMON = False
-
-# Import AppDaemon or our standalone wrapper
-try:
-    import appdaemon.plugins.hass.hassapi as hass
-
-    IS_APPDAEMON = True
-except:
-    import hass as hass
-
-    IS_APPDAEMON = False
-
+import hass as hass
 import pytz
 import requests
 import asyncio
@@ -303,7 +292,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Fetch, Plan, Execu
             return False
         return self.ha_interface.get_services()
 
-    def get_history_wrapper(self, entity_id, days=30, required=True):
+    def get_history_wrapper(self, entity_id, days=30, required=True, tracked=True):
         """
         Wrapper function to get history from HA
         """
@@ -311,7 +300,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Fetch, Plan, Execu
             self.log("Error: get_history_wrapper - No HA interface available")
             return None
 
-        history = self.ha_interface.get_history(entity_id, days=days, now=self.now_utc)
+        # If history cache is enabled then use it
+        ha_history = None
+        if self.components:
+            ha_history = self.components.get_component("ha_history")
+        if ha_history:
+            history = ha_history.get_history(entity_id, days=days, tracked=tracked)
+        else:
+            history = self.ha_interface.get_history(entity_id, days=days, now=self.now_utc)
 
         if required and (history is None):
             self.log("Error: Failure to fetch history for {}".format(entity_id))
@@ -869,7 +865,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Fetch, Plan, Execu
             self.expose_config("holiday_days_left", self.holiday_days_left)
             self.log("Holiday days left is now {}".format(self.holiday_days_left))
 
-        if self.debug_enable and not IS_APPDAEMON:
+        if self.debug_enable:
             self.create_debug_yaml()
 
         if self.had_errors:

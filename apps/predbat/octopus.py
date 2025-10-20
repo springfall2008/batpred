@@ -1499,10 +1499,10 @@ class Octopus:
                 return pdata
             else:
                 # No tariff
-                self.log("Warn: Octopus API direct tariff {} not available, using zero".format(tariff_type))
+                self.log("OctopusDirect: tariff {} not available, using zero".format(tariff_type))
                 return {n: 0 for n in range(0, 60 * 24)}
 
-        self.log("Warn: Octopus API direct not available (get_octopus_direct tariff {})".format(tariff_type))
+        self.log("Warn: OctopusDirect: direct not available (get_octopus_direct tariff {})".format(tariff_type))
         return {}
 
     def download_octopus_rates_func(self, url, api=None):

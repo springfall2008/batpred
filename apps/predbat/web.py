@@ -749,7 +749,7 @@ class WebInterface:
             text += "<h2>History Chart</h2>\n"
             text += '<div id="chart"></div>'
             now_str = self.base.now_utc.strftime(TIME_FORMAT)
-            history = self.base.get_history_wrapper(entity, days, required=False)
+            history = self.base.get_history_wrapper(entity, days, required=False, tracked=False)
             history_chart = self.base.history_attribute(history)
             series_data = []
             series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "3", "stroke_curve": "stepline"})
