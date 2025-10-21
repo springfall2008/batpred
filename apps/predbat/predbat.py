@@ -25,7 +25,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.26.0"
+THIS_VERSION = "v8.26.1"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py"]
@@ -1297,8 +1297,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Fetch, Plan, Execu
         except ValueError:
             return False
 
-        # Check if the last updated time is within the last 6 minutes
-        if (datetime.now() - predbat_last_updated).total_seconds() > 360:
+        # Check if the last updated time is within the last 15 minutes
+        if (datetime.now() - predbat_last_updated).total_seconds() > 15*60:
             return False
         return True
 
