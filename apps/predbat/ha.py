@@ -174,13 +174,12 @@ class HAHistory:
                             self.history_data[entity_id].append(entry)
                             add_all = True  # Remaining entries are all newer
                             count_added += 1
-            self.last_success_timestamp = datetime.now(timezone.utc)
         else:
             count_added += len(new_history_data)
             self.history_data[entity_id] = new_history_data
-            self.last_success_timestamp = datetime.now(timezone.utc)
 
-        # print("Updating history for {} with {} datapoints added {}".format(entity_id, len(new_history_data), count_added))
+        # Update last success timestamp
+        self.last_success_timestamp = datetime.now(timezone.utc)
 
     async def start(self):
         self.log("Info: Starting HAHistory")
@@ -313,7 +312,6 @@ class HAInterface:
 
         # API Has started
         self.base.ha_interface = self  # Set pointer back to ourselves as other components require this one
-        self.api_started = True
 
     async def start(self):
         if self.ha_key:
@@ -321,12 +319,18 @@ class HAInterface:
             self.websocket_active = True
             await self.socketLoop()
         else:
+            self.log("Info: Starting Dummy HA interface")
+            seconds = 0
+            self.api_started = True
             while not self.stop_thread:
-                await asyncio.sleep(1)
+                if seconds % 60 == 0:
+                    self.last_success_timestamp = datetime.now(timezone.utc)
+                await asyncio.sleep(5)
+                seconds += 5
+        self.api_started = False
 
     async def stop(self):
         self.stop_thread = True
-        self.api_started = False
 
     def get_slug(self):
         """
@@ -377,7 +381,6 @@ class HAInterface:
                                         if not success:
                                             self.log("Warn: Service call {}/{} data {} failed with response {}".format(domain, service, service_data, response))
                                         break
-                                self.last_success_timestamp = datetime.now(timezone.utc)
 
                             except Exception as e:
                                 self.log("Error: Web Socket exception in update loop: {}".format(e))
@@ -441,6 +444,7 @@ class HAInterface:
 
                         self.log("Info: Web Socket active")
                         self.base.update_pending = True  # Force an update when web-socket reconnects
+                        self.api_started = True
 
                         async for message in websocket:
                             if self.stop_thread:
@@ -516,6 +520,7 @@ class HAInterface:
                 self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds - error count {}".format(error_count))
                 await asyncio.sleep(5)
 
+        self.api_started = False
         if not self.stop_thread:
             self.log("Error: Web Socket failed to reconnect, stopping....")
             self.websocket_active = False
