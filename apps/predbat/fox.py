@@ -454,7 +454,7 @@ class FoxAPI:
         """
         battery_times = self.device_battery_charging_time.get(deviceSN, {})
         scheduler_times = self.device_scheduler.get(deviceSN, {}).get("groups", [])
-        device_scheduler_enabled = self.device_scheduler.get(deviceSN, {}).get("enabled", False)
+        device_scheduler_enabled = self.device_scheduler.get(deviceSN, {}).get("enable", False)
 
         # First convert battery times into the same format as scheduler times
         # Create an array of 0 - 2 slots containing the battery charge times
@@ -563,7 +563,7 @@ class FoxAPI:
         """
 
         # Do change enable if not already modified
-        if self.device_scheduler.get(deviceSN, {}).get("enabled", None) == enabled:
+        if self.device_scheduler.get(deviceSN, {}).get("enable", None) == enabled:
             return
 
         SET_SCHEDULER_ENABLED = "/op/v1/device/scheduler/set/flag"
@@ -571,14 +571,14 @@ class FoxAPI:
         if result:
             if deviceSN not in self.device_scheduler:
                 self.device_scheduler[deviceSN] = {}
-            self.device_scheduler[deviceSN]["enabled"] = enabled
+            self.device_scheduler[deviceSN]["enable"] = enabled
 
     async def set_scheduler(self, deviceSN, groups):
         """
         Set scheduler groups, also disables scheduler if no groups provided
         """
         SET_SCHEDULER = "/op/v1/device/scheduler/enable"
-        current_enable = self.device_scheduler.get(deviceSN, {}).get("enabled", None)
+        current_enable = self.device_scheduler.get(deviceSN, {}).get("enable", None)
         current_groups = self.device_scheduler.get(deviceSN, {}).get("groups", [])
         if not groups:
             if current_enable:
@@ -591,7 +591,7 @@ class FoxAPI:
             else:
                 result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
                 if result:
-                    self.device_scheduler[deviceSN]["enabled"] = True
+                    self.device_scheduler[deviceSN]["enable"] = True
                     self.device_scheduler[deviceSN]["groups"] = groups
 
     async def publish_schedule_settings_ha(self, deviceSN):
@@ -758,6 +758,7 @@ class FoxAPI:
         if result:
             devices = result.get("data", [])
             self.device_list = devices
+        return devices
 
     def get_headers(self, path):
         headers = {}
@@ -1247,13 +1248,15 @@ async def test_fox_api(api_key):
     sn = "60KE8020479C034"
 
     # Create FoxAPI instance with a lambda that returns the API key
-    fox_api = FoxAPI(api_key, mock_base)
+    fox_api = FoxAPI(api_key, False, mock_base)
+    # device_List = await fox_api.get_device_list()
+    # print(f"Device List: {device_List}")
     # await fox_api.start()
-    res = await fox_api.get_device_settings(sn)
-    res = await fox_api.get_battery_charging_time(sn)
+    # res = await fox_api.get_device_settings(sn)
+    # res = await fox_api.get_battery_charging_time(sn)
     res = await fox_api.get_scheduler(sn)
-    res = await fox_api.compute_schedule(sn)
-    res = await fox_api.publish_data()
+    # res = await fox_api.compute_schedule(sn)
+    # res = await fox_api.publish_data()
     print(res)
 
     """
