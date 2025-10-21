@@ -129,6 +129,8 @@ class WebInterface:
                     self.compare_hist[id]["cost"] = self.base.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
                     self.compare_hist[id]["metric"] = self.base.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
 
+        self.last_success_timestamp = datetime.now(timezone.utc)
+
     async def start(self):
         # Start the web server
         app = web.Application()
