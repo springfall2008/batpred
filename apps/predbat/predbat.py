@@ -1298,7 +1298,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Fetch, Plan, Execu
             return False
 
         # Check if the last updated time is within the last 15 minutes
-        if (datetime.now() - predbat_last_updated).total_seconds() > 15*60:
+        if (datetime.now() - predbat_last_updated).total_seconds() > 15 * 60:
             return False
         return True
 
