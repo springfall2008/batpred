@@ -1249,14 +1249,14 @@ async def test_fox_api(api_key):
 
     # Create FoxAPI instance with a lambda that returns the API key
     fox_api = FoxAPI(api_key, False, mock_base)
-    #device_List = await fox_api.get_device_list()
-    #print(f"Device List: {device_List}")
+    # device_List = await fox_api.get_device_list()
+    # print(f"Device List: {device_List}")
     # await fox_api.start()
-    #res = await fox_api.get_device_settings(sn)
-    #res = await fox_api.get_battery_charging_time(sn)
+    # res = await fox_api.get_device_settings(sn)
+    # res = await fox_api.get_battery_charging_time(sn)
     res = await fox_api.get_scheduler(sn)
-    #res = await fox_api.compute_schedule(sn)
-    #res = await fox_api.publish_data()
+    # res = await fox_api.compute_schedule(sn)
+    # res = await fox_api.publish_data()
     print(res)
 
     """
