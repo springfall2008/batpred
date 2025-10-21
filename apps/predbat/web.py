@@ -131,7 +131,6 @@ class WebInterface:
 
         self.last_success_timestamp = datetime.now(timezone.utc)
 
-
     async def start(self):
         # Start the web server
         app = web.Application()
