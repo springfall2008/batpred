@@ -574,14 +574,25 @@ class FoxAPI:
             self.device_scheduler[deviceSN]["enabled"] = enabled
 
     async def set_scheduler(self, deviceSN, groups):
+        """
+        Set scheduler groups, also disables scheduler if no groups provided
+        """
         SET_SCHEDULER = "/op/v1/device/scheduler/enable"
+        current_enable = self.device_scheduler.get(deviceSN, {}).get("enabled", None)
+        current_groups = self.device_scheduler.get(deviceSN, {}).get("groups", [])
         if not groups:
-            await self.set_scheduler_enabled(deviceSN, False)
-            return
+            if current_enable:
+                # Disable scheduler if enabled and no groups
+                await self.set_scheduler_enabled(deviceSN, False)
         else:
-            result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
-            if result:
-                self.device_scheduler[deviceSN]["groups"] = groups
+            if str(groups) == str(current_groups) and current_enable:
+                # No change
+                return
+            else:
+                result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
+                if result:
+                    self.device_scheduler[deviceSN]["enabled"] = True
+                    self.device_scheduler[deviceSN]["groups"] = groups
 
     async def publish_schedule_settings_ha(self, deviceSN):
         """
@@ -1151,7 +1162,6 @@ class FoxAPI:
         result = await self.set_scheduler(serial, new_schedule)
         if result is not None:
             self.device_current_schedule[serial] = new_schedule
-            self.device_scheduler[serial]["enabled"] = 1 if new_schedule else 0
             await self.publish_data()
 
     async def automatic_config(self):

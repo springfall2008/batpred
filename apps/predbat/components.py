@@ -227,7 +227,6 @@ class Components:
             component = self.components[component_name]
             if component:
                 self.log(f"Stopping {component_name} interface")
-                print(component_name, component)
                 await component.stop()
                 self.component_tasks[component_name] = None
                 self.components[component_name] = None
