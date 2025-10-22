@@ -415,7 +415,7 @@ class FoxAPI:
         if result is None:
             if self.device_settings.get(deviceSN, {}).get(key, None) is None:
                 # Failed to write setting after failure to read, assume it doesn't exist
-                self.log("Fox: Warn: Failed to set device setting for {} key {} value {}, assuming not supported".format(deviceSN, key, value))
+                self.log(f"Fox: Warn: Failed to set device setting for {deviceSN} key {key} value {value}, assuming not supported")
                 return True
             return False
         return True
