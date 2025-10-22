@@ -898,8 +898,9 @@ If you are getting erroneous house load predictions in your plan then check this
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
 or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 Note that this must be configured to point to an 'energy today' sensor in kWh not an instantaneous power sensor (in kW) from the car charger.<BR><BR>
-*IMPORTANT:* If car_charging_energy is not configured with the correct sensor or your car charging energy sensor does not accurately report your car charging data (e.g. it falsely reports charging data when not actually charging),
-this will really mess up your predbat plan as Predbat will exclude all car_charging_energy from your load predictions.  Do check the entity!<BR><BR>
+*IMPORTANT:* Predbat will subtract all car_charging_energy from your historic house load so if  car_charging_energy is not configured with the correct sensor,
+your car charging energy sensor does not accurately report your car charging data (e.g. it falsely reports charging data when not actually charging), or your house load sensor already excludes car charging,
+then this will really mess up your predbat plan as Predbat will exclude all car_charging_energy from your load predictions and you could end up with erroneous or zero house load predictions.  Do check the entity!<BR><BR>
 *TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
 e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.<BR>
 car_charging_energy can be set to a list of energy sensors, one per line if you have multiple EV car chargers, or want to exclude multiple loads, e.g.:

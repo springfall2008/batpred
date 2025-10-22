@@ -212,7 +212,7 @@ to tailor how the Predbat plan looks and is highly recommended if you want to ch
 - Show the weather forecast alongside the plan
 - Display different columns for different screen widths, e.g. less detail on a phone, more on a tablet/PC
 
-![image](https://private-user-images.githubusercontent.com/157808562/444870513-36b5d735-be00-4b7c-80f7-d1e9cc8de06c.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTQxNjk2ODQsIm5iZiI6MTc1NDE2OTM4NCwicGF0aCI6Ii8xNTc4MDg1NjIvNDQ0ODcwNTEzLTM2YjVkNzM1LWJlMDAtNGI3Yy04MGY3LWQxZTljYzhkZTA2Yy5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBVkNPRFlMU0E1M1BRSzRaQSUyRjIwMjUwODAyJTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDI1MDgwMlQyMTE2MjRaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT1jMjFmMzlmZjY0Y2NlMWI5NDZmZGNiNWY3MmM1MzU2Njk0NzJkMTdmNTEyODRlNzAwYzhiODU5YjY2N2Q3OWJmJlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCJ9.qauGQt3-U419Z9vdU4iP5VQr_wjXMQ12ZBm_sskUsMk)
+![image](images/predbat-table-card.png)
 
 See the [Predbat Table Card repository](https://github.com/pacemaker82/PredBat-Table-Card) for more details.
 
@@ -220,6 +220,6 @@ See the [Predbat Table Card repository](https://github.com/pacemaker82/PredBat-T
 
 The same author of the Predbat Table Card has produced a nice visualisation for the Solar Forecast for the next few days:
 
-![image](https://private-user-images.githubusercontent.com/157808562/470713447-2d4ae4a5-2e2b-4bf4-8750-24a0ab1b1e01.png?jwt=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmF3LmdpdGh1YnVzZXJjb250ZW50LmNvbSIsImtleSI6ImtleTUiLCJleHAiOjE3NTQxNjk1NjgsIm5iZiI6MTc1NDE2OTI2OCwicGF0aCI6Ii8xNTc4MDg1NjIvNDcwNzEzNDQ3LTJkNGFlNGE1LTJlMmItNGJmNC04NzUwLTI0YTBhYjFiMWUwMS5wbmc_WC1BbXotQWxnb3JpdGhtPUFXUzQtSE1BQy1TSEEyNTYmWC1BbXotQ3JlZGVudGlhbD1BS0lBVkNPRFlMU0E1M1BRSzRaQSUyRjIwMjUwODAyJTJGdXMtZWFzdC0xJTJGczMlMkZhd3M0X3JlcXVlc3QmWC1BbXotRGF0ZT0yMDI1MDgwMlQyMTE0MjhaJlgtQW16LUV4cGlyZXM9MzAwJlgtQW16LVNpZ25hdHVyZT01ZGRjNDkwNTI2YmQ5Y2M3Mzg0MmJhODFiN2I3MWRlYzA3ODAyOWEzMjgxZGE5YTMzZDNiOWI0OWNhMDMxMmM0JlgtQW16LVNpZ25lZEhlYWRlcnM9aG9zdCJ9.ZGRPpggO-o9t0u5XJb1FMvyUz6Iu_YErR0G5vVOQevk)
+![image](images/pv-card-preview.png)
 
 See the [PV Card Preview repository](https://github.com/pacemaker82/PV-Card-Preview)

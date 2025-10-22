@@ -276,6 +276,7 @@ timelapse
 timeobj
 timestr
 timezone
+tojson
 Trefor
 treforsiphone
 unstaged
