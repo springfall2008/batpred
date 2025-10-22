@@ -403,7 +403,7 @@ class FoxAPI:
             self.device_settings[deviceSN][key] = result
             return result
         else:
-            self.log("Fox: Warn: Failed to get device setting for {} key {}".format(deviceSN, key))
+            self.log(f"Fox: Warn: Failed to get device setting for {deviceSN} key {key}")
         return None
 
     async def set_device_setting(self, deviceSN, key, value):
