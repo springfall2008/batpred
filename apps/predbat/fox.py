@@ -32,7 +32,6 @@ OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 # Dummy attribute table for testing
 fox_attribute_table = {"mode": {}}
 
-
 class FoxAPI:
     """Fox API client."""
 
@@ -404,7 +403,7 @@ class FoxAPI:
             self.device_settings[deviceSN][key] = result
             return result
         else:
-            print("Failed to get device setting for {} key {}".format(deviceSN, key))
+            self.log("Fox: Warn: Failed to get device setting for {} key {}".format(deviceSN, key))
         return None
 
     async def set_device_setting(self, deviceSN, key, value):
@@ -414,6 +413,10 @@ class FoxAPI:
         SET_DEVICE_SETTING = "/op/v0/device/setting/set"
         result = await self.request_get(SET_DEVICE_SETTING, datain={"sn": deviceSN, "key": key, "value": value, "lang": FOX_LANG}, post=True)
         if result is None:
+            if self.device_settings.get(deviceSN, {}).get(key, None) is None:
+                # Failed to write setting after failure to read, assume it doesn't exist
+                self.log("Fox: Warn: Failed to set device setting for {} key {} value {}, assuming not supported".format(deviceSN, key, value))
+                return True
             return False
         return True
 
@@ -779,9 +782,11 @@ class FoxAPI:
         retries = 0
         self.log("Fox: API Requesting {} {}".format("POST" if post else "GET", path))
         while retries < FOX_RETRIES:
-            result = await self.request_get_func(path, post=post, datain=datain)
+            result, allow_retry = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
                 return result
+            if not allow_retry:
+                break
             retries += 1
             await asyncio.sleep(retries * random.random())
         return result
@@ -799,15 +804,15 @@ class FoxAPI:
             else:
                 response = await asyncio.to_thread(requests.get, url, headers=headers, params=datain, timeout=TIMEOUT)
         except requests.exceptions.RequestException as e:
-            self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
+            self.log(f"Warn: Fox: Exception during request to {url}: {e}")
             self.failures_total += 1
-            return None
+            return None, False
 
         status_code = response.status_code
         if status_code in [400, 401, 402, 403]:
             self.log("Warn: Fox: Authentication error with status code {} from {}".format(status_code, url))
             self.failures_total += 1
-            return None
+            return None, False
 
         try:
             data = response.json()
@@ -816,10 +821,10 @@ class FoxAPI:
             data = None
         except (requests.Timeout, requests.exceptions.ReadTimeout):
             self.log("Warn: Fox: Timeout from {}".format(url))
-            data = None
+            return None, True
         except (requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
             self.log("Warn: Fox: Could not connect to {}".format(url))
-            data = None
+            return None, True
 
         if response.status_code in [200, 201]:
             if data is None:
@@ -830,15 +835,25 @@ class FoxAPI:
                 self.failures_total += 1
                 if errno in [40400, 41200, 41203, 41935]:
                     # Rate limiting so wait up to 10 seconds
-                    self.log("Fox: Rate limiting detected, waiting...")
-                    await asyncio.sleep(random.random() * 10 + 1)
+                    self.log("Info: Fox: Rate limiting detected, waiting...")
+                    await asyncio.sleep(random.random() * 30 + 1)
+                    return None, True
                 elif errno in [40402]:
-                    self.log("Fox: Has run out of API calls for today, sleeping...")
+                    # Out of API calls for today
+                    self.log("Warn: Fox: Has run out of API calls for today, sleeping...")
                     await asyncio.sleep(5 * 60)
-                    return None
+                    return None, False
+                elif errno in [44096]:
+                    # Unsupported function code
+                    self.log("Warn: Fox: Unsupported function code {} from {}".format(errno, url))
+                    return None, False
+                elif errno in [40257]:
+                    # Invalid parameter
+                    self.log("Warn: Fox: Invalid parameter {} from {} message {}".format(errno, url, msg))
+                    return None, False
                 else:
                     self.log("Warn: Fox: Error {} from {} message {}".format(errno, url, msg))
-                return None
+                return None, False
 
             if "result" in data:
                 data = data["result"]
@@ -846,13 +861,15 @@ class FoxAPI:
                     data = {}
 
             self.last_success_timestamp = datetime.now(timezone.utc)
-            return data
+            return data, False
         else:
             self.failures_total += 1
             if response.status_code == 429:
                 # Rate limiting so wait up to 30 seconds
-                await asyncio.sleep(random.random() * 30)
-        return None
+                self.log("Info: Fox: Rate limiting detected, waiting...")
+                await asyncio.sleep(random.random() * 30 + 1)
+                return None, True
+        return None, False
 
     async def publish_data(self):
         """
@@ -1254,9 +1271,10 @@ async def test_fox_api(api_key):
     # await fox_api.start()
     # res = await fox_api.get_device_settings(sn)
     # res = await fox_api.get_battery_charging_time(sn)
-    res = await fox_api.get_scheduler(sn)
+    #res = await fox_api.get_scheduler(sn)
     # res = await fox_api.compute_schedule(sn)
     # res = await fox_api.publish_data()
+    res = await fox_api.set_device_setting(sn, "dummy", 42)
     print(res)
 
     """
