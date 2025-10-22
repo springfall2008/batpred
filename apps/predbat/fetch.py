@@ -2107,21 +2107,24 @@ class Fetch:
                 # Extract data from event sensors
                 intensity_key = "intensity_forecast"
                 #  - For current day
-                current_rate_id = entity_id.replace("_current_rating", "_current_day_rates").replace("sensor.", "event.")
-                data_current = self.get_state_wrapper(entity_id=current_rate_id, attribute="rates")
-                if data_current:
-                    data_all += data_current
+                rate_id = entity_id.replace("_current_rating", "_current_day_rates").replace("sensor.", "event.")
+                rate_data = self.get_state_wrapper(entity_id=rate_id, attribute="rates")
+                if rate_data:
+                    data_all += rate_data
                 #  - And next day
-                next_rate_id = current_rate_id.replace("_current_day_rates", "_next_day_rates")
-                data_next = self.get_state_wrapper(entity_id=next_rate_id, attribute="rates")
-                if data_next:
-                    data_all += data_next
-                
+                rate_id = rate_id.replace("_current_day_rates", "_next_day_rates")
+                rate_data = self.get_state_wrapper(entity_id=rate_id, attribute="rates")
+                if rate_data:
+                    data_all += rate_data
+                #  - And the day after that (may not be available)
+                rate_id = rate_id.replace("_next_day_rates", "_second_day_rates")
+                rate_data = self.get_state_wrapper(entity_id=rate_id, attribute="rates")
+                if rate_data:
+                    data_all += rate_data
             else:
                 # Extract from a forecast attribute
                 intensity_key = "intensity"
                 data_all = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
-            
             if data_all:
                 carbon_data = self.minute_data(data_all, self.forecast_days, self.now_utc, intensity_key, "from", backwards=False, to_key="to")
 
