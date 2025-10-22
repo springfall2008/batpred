@@ -32,6 +32,7 @@ OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 # Dummy attribute table for testing
 fox_attribute_table = {"mode": {}}
 
+
 class FoxAPI:
     """Fox API client."""
 
@@ -1271,7 +1272,7 @@ async def test_fox_api(api_key):
     # await fox_api.start()
     # res = await fox_api.get_device_settings(sn)
     # res = await fox_api.get_battery_charging_time(sn)
-    #res = await fox_api.get_scheduler(sn)
+    # res = await fox_api.get_scheduler(sn)
     # res = await fox_api.compute_schedule(sn)
     # res = await fox_api.publish_data()
     res = await fox_api.set_device_setting(sn, "dummy", 42)
