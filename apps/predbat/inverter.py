@@ -533,18 +533,20 @@ class Inverter:
         else:
             max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
 
+        max_power_scaled = max_power * 0.95
+
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
             self.log("Find {} curve with sensors {} and {} and {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
             if soc_kwh_percent:
-                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
+                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
             else:
-                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
-            charge_rate_data = self.base.get_history_wrapper(entity_id=charge_rate_sensor, days=self.base.max_days_previous)
-            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous)
-            predbat_status_data = self.base.get_history_wrapper(entity_id=predbat_status_sensor, days=self.base.max_days_previous)
+                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
+            charge_rate_data = self.base.get_history_wrapper(entity_id=charge_rate_sensor, days=self.base.max_days_previous, required=False)
+            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous, required=False)
+            predbat_status_data = self.base.get_history_wrapper(entity_id=predbat_status_sensor, days=self.base.max_days_previous, required=False)
 
-            if soc_kwh_data and charge_rate_data and charge_rate_data and battery_power_data:
+            if soc_kwh_data and charge_rate_data and battery_power_data and predbat_status_data:
                 if soc_kwh_percent:
                     # If its in percent convert to kWh
                     soc_kwh = self.base.minute_data(
@@ -590,6 +592,11 @@ class Inverter:
                     required_unit="W",
                 )
                 predbat_status = self.base.minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
+                for minute in predbat_status:
+                    status = predbat_status[minute]
+                    if "," in status:
+                        # If there are multiple statuses take the first one
+                        predbat_status[minute] = status.split(",")[0].strip()
                 battery_power = self.base.minute_data(
                     battery_power_data[0],
                     self.base.max_days_previous,
@@ -630,8 +637,8 @@ class Inverter:
                             and predbat_status.get(minute - 1, "") == "Charging"
                             and predbat_status.get(minute, "") == "Charging"
                             and predbat_status.get(minute + 1, "") == "Charging"
-                            and charge_rate.get(minute - 1, 0) == max_power
-                            and charge_rate.get(minute, 0) == max_power
+                            and charge_rate.get(minute - 1, 0) >= max_power_scaled
+                            and charge_rate.get(minute, 0) >= max_power_scaled
                             and battery_power.get(minute, 0) < 0
                         ) or (
                             discharge
@@ -640,8 +647,8 @@ class Inverter:
                             and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
                             and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
                             and predbat_status.get(minute + 1, "") in ["Exporting", "Discharging"]
-                            and charge_rate.get(minute - 1, 0) == max_power
-                            and charge_rate.get(minute, 0) == max_power
+                            and charge_rate.get(minute - 1, 0) >= max_power_scaled
+                            and charge_rate.get(minute, 0) >= max_power_scaled
                             and battery_power.get(minute, 0) > 0
                         ):
                             total_power = 0
@@ -649,9 +656,9 @@ class Inverter:
                             # Find a period where charging was at full rate and the SOC just drops below the data point
                             for target_minute in range(minute, min_len):
                                 this_soc = soc_percent.get(target_minute, 0)
-                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) >= 0):
+                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) < max_power_scaled or battery_power.get(minute, 0) >= 0):
                                     break
-                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0):
+                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(minute, 0) < max_power_scaled or battery_power.get(minute, 0) <= 0):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -777,6 +784,7 @@ class Inverter:
                     self.log("Note: Cannot find battery {} curve (no final curve), one of the required settings for predbat.status, soc_kw, battery_power and {}_rate do not have history, check apps.yaml".format(curve_type, curve_type))
             else:
                 self.log("Note: Cannot find battery {} curve (missing history), one of the required settings for predbat.status, soc_kw, battery_power and {}_rate do not have history, check apps.yaml".format(curve_type, curve_type))
+                self.log("Note: Sensor with history data lengths: soc_kwh {}, charge_rate {}, battery_power {}, predbat_status {}".format(len(soc_kwh), len(charge_rate), len(battery_power), len(predbat_status)))
         else:
             self.log("Note: Cannot find battery {} curve (settings missing), one of the required settings for soc_kw, battery_power and {}_rate are missing from apps.yaml".format(curve_type, curve_type))
         return {}
