@@ -1,4 +1,7 @@
 # Custom Dictionary Words
+generationmix
+dnoregion
+regionid
 activepower
 adata
 adbase
