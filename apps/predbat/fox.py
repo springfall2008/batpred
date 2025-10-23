@@ -589,10 +589,21 @@ class FoxAPI:
                 # Disable scheduler if enabled and no groups
                 await self.set_scheduler_enabled(deviceSN, False)
         else:
-            if str(groups) == str(current_groups) and current_enable:
-                # No change
-                return
+            # Compare old and new schedule to see if it needs setting
+            same = True
+            if len(current_groups) != len(groups):
+                same = False
             else:
+                for i in range(0, len(groups)):
+                    for key in groups[i]:
+                        if groups[i][key] != current_groups[i].get(key, None):
+                            same = False
+                            break
+                    if not same:
+                        break
+
+            self.log("Fox: Debug: Setting scheduler for {} same={} current_enable={} current_groups={} new_groups={}".format(deviceSN, same, current_enable, current_groups, groups))
+            if not same:
                 result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
                 if result:
                     self.device_scheduler[deviceSN]["enable"] = True

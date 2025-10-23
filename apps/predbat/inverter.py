@@ -1938,7 +1938,7 @@ class Inverter:
             else:
                 self.log("Warn: Inverter {} unable write export end time as neither REST or discharge_end_time are set".format(self.id))
 
-        if ((new_end != old_end) or (new_start != old_start)) and self.inv_time_button_press:
+        if ((new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable)) and self.inv_time_button_press:
             self.press_and_poll_button()
 
         # REST export target, always set to minimum
