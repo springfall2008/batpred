@@ -594,9 +594,9 @@ class Inverter:
                 predbat_status = self.base.minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
                 for minute in predbat_status:
                     status = predbat_status[minute]
-                    if ',' in status:
+                    if "," in status:
                         # If there are multiple statuses take the first one
-                        predbat_status[minute] = status.split(',')[0].strip()
+                        predbat_status[minute] = status.split(",")[0].strip()
                 battery_power = self.base.minute_data(
                     battery_power_data[0],
                     self.base.max_days_previous,
@@ -647,7 +647,7 @@ class Inverter:
                             and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
                             and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
                             and predbat_status.get(minute + 1, "") in ["Exporting", "Discharging"]
-                            and charge_rate.get(minute - 1, 0) >=max_power_scaled
+                            and charge_rate.get(minute - 1, 0) >= max_power_scaled
                             and charge_rate.get(minute, 0) >= max_power_scaled
                             and battery_power.get(minute, 0) > 0
                         ):
