@@ -41,6 +41,7 @@ coro
 crosscharge
 customisation
 Customise
+Consolas
 cvalue
 Daeamon
 darkgreen
