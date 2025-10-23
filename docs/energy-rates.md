@@ -468,7 +468,25 @@ Predbat can also track Carbon intensity by linking it to an integration which pr
 
 ### UK Grid Carbon intensity
 
-The National Grid provides this data, please install this integration: <https://github.com/jfparis/sensor.carbon_intensity_uk>
+The National Grid provides this data, you can have Predbat fetch it directly by entering your postcode:
+
+```yaml
+  # Carbon Intensity data from National grid
+  carbon_postcode: 'SW1 5NA'
+  carbon_automatic: True
+```
+
+This direct connection will also set **sensor.predbat_carbon** with the current carbon data.
+
+By enabling **switch.predbat_carbon_enable** you can view Carbon Intensity [in the predbat plan](predbat-plan-card.md).
+
+Predbat can also [optimise your grid charging based on the Carbon footprint](customisation.md#battery-margins-and-metrics-options) by setting **input_number.predbat_carbon_metric**.
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/292c6625-412a-420a-9bd4-df68a937e93c)
+
+### UK Grid Carbon intensity (HA Integration)
+
+If you prefer you can instead install this integration: <https://github.com/jfparis/sensor.carbon_intensity_uk>
 
 Once it is active update apps.yaml to link Predbat to the Sensor (if it's not already in your template):
 
@@ -476,9 +494,3 @@ Once it is active update apps.yaml to link Predbat to the Sensor (if it's not al
   # Carbon Intensity data from National grid
   carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 ```
-
-By enabling **switch.predbat_carbon_enable** you can view Carbon Intensity [in the predbat plan](predbat-plan-card.md).
-
-Predbat can also [optimise your grid charging based on the Carbon footprint](customisation.md#battery-margins-and-metrics-options) by setting **input_number.predbat_carbon_metric**.
-
-![image](https://github.com/springfall2008/batpred/assets/48591903/292c6625-412a-420a-9bd4-df68a937e93c)
