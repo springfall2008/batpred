@@ -163,7 +163,7 @@ COMPONENT_LIST = {
             "postcode": {"required": True, "config": "carbon_postcode"},
             "automatic": {"required": False, "config": "carbon_automatic", "default": False},
         },
-    }
+    },
 }
 
 
