@@ -37,6 +37,7 @@ Codespaces
 collapsable
 compareform
 configform
+Consolas
 coro
 crosscharge
 customisation
