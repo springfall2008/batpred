@@ -1,7 +1,4 @@
 # Custom Dictionary Words
-generationmix
-dnoregion
-regionid
 activepower
 adata
 adbase
@@ -67,6 +64,7 @@ dimport
 dischargefreeze
 diverter
 dlimit
+dnoregion
 dstamp
 dstart
 dwindow
@@ -99,6 +97,7 @@ foxess
 futurerate
 gecloud
 gekey
+generationmix
 generationpower
 geserial
 geseriale
@@ -222,6 +221,7 @@ pytz
 rarr
 recp
 Redownload
+regionid
 regname
 remotecontrol
 resetmidnight

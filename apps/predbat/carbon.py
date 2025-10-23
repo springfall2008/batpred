@@ -21,6 +21,7 @@ from datetime import datetime, timezone, timedelta
 import requests
 from config import TIME_FORMAT_HA
 
+
 class CarbonAPI:
     """Carbon intensity client."""
 
@@ -96,7 +97,7 @@ class CarbonAPI:
                                 from_time = point.get("from", None)
                                 to_time = point.get("to", None)
                                 intensity = point.get("intensity", {}).get("forecast", None)
-                                try: 
+                                try:
                                     # Use TIME_FORMAT_CARBON to parse time strings
                                     from_time = datetime.strptime(from_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
                                     to_time = datetime.strptime(to_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
