@@ -4767,14 +4767,15 @@ setTimeout(function() {
 <a href='./plan'>Plan</a>
 <a href='./entity'>Entities</a>
 <a href='./charts'>Charts</a>
+<a href='./compare'>Compare</a>
 <a href='./config'>Config</a>
 <a href='./apps'>Apps"""
         + config_warning
         + """</a>
+<a href='./browse'>Browse</a>
 <a href='./components'>Components</a>
 <a href='./apps_editor'>Editor</a>
 <a href='./log'>Log</a>
-<a href='./compare'>Compare</a>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
 <div class="dark-mode-toggle">
     """
@@ -4786,3 +4787,188 @@ setTimeout(function() {
 """
     )
     return text
+
+def get_browse_css():
+    """
+    Return CSS styles for the browse page
+    """
+    return """
+<style>
+.breadcrumb-container {
+    margin-bottom: 20px;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+}
+
+.breadcrumb {
+    margin-top: 10px;
+    font-size: 14px;
+}
+
+.breadcrumb-item {
+    color: #4CAF50;
+    text-decoration: none;
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+
+.breadcrumb-item:hover {
+    background-color: #f0f0f0;
+    text-decoration: underline;
+}
+
+.file-list {
+    margin-top: 10px;
+}
+
+.files-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+.files-table th {
+    background-color: #4CAF50;
+    color: white;
+    padding: 10px;
+    text-align: left;
+    border-bottom: 2px solid #45a049;
+}
+
+.files-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #ddd;
+    vertical-align: middle;
+}
+
+.files-table tr:hover {
+    background-color: #f5f5f5;
+}
+
+.files-table a {
+    color: #333;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+}
+
+.files-table a:hover {
+    color: #4CAF50;
+    text-decoration: underline;
+}
+
+.files-table .mdi {
+    margin-right: 8px;
+    font-size: 18px;
+}
+
+.parent-dir .mdi {
+    color: #666;
+}
+
+.directory .mdi {
+    color: #2196F3;
+}
+
+.file .mdi {
+    color: #666;
+}
+
+.file-viewer {
+    margin-top: 20px;
+}
+
+.file-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #ddd;
+}
+
+.back-button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 8px 16px;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.back-button:hover {
+    background-color: #45a049;
+}
+
+.code-content {
+    background-color: #f8f8f8;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 15px;
+    overflow-x: auto;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    padding: 12px;
+    margin: 10px 0;
+}
+
+/* Dark mode styles */
+body.dark-mode .breadcrumb-container {
+    border-bottom-color: #333;
+}
+
+body.dark-mode .breadcrumb-item:hover {
+    background-color: #333;
+}
+
+body.dark-mode .files-table th {
+    background-color: #333;
+    color: #e0e0e0;
+    border-bottom-color: #444;
+}
+
+body.dark-mode .files-table td {
+    border-bottom-color: #333;
+}
+
+body.dark-mode .files-table tr:hover {
+    background-color: #222;
+}
+
+body.dark-mode .files-table a {
+    color: #e0e0e0;
+}
+
+body.dark-mode .files-table a:hover {
+    color: #4CAF50;
+}
+
+body.dark-mode .file-header {
+    border-bottom-color: #333;
+}
+
+body.dark-mode .code-content {
+    background-color: #1e1e1e;
+    border-color: #333;
+    color: #e0e0e0;
+}
+
+body.dark-mode .error {
+    background-color: #3c2124;
+    color: #f5b5c4;
+    border-color: #662c34;
+}
+</style>
+    """

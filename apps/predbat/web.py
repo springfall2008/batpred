@@ -36,6 +36,7 @@ from web_helper import (
     get_entity_css,
     get_entity_js,
     get_restart_button_js,
+    get_browse_css,
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago
@@ -166,6 +167,7 @@ class WebInterface:
         app.router.add_get("/api/log", self.html_api_get_log)
         app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
+        app.router.add_get("/browse", self.html_browse)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -3091,3 +3093,213 @@ var options = {
         except Exception as e:
             self.log(f"ERROR: Failed to restart component: {str(e)}")
             return web.json_response({"success": False, "message": str(e)}, status=500)
+
+    async def html_browse(self, request):
+        """
+        Return the Browse page as an HTML page with file browsing functionality
+        """
+        self.default_page = "./browse"
+        
+        # Get query parameters for navigation and file viewing
+        args = request.query
+        current_path = args.get('path', '.')
+        view_file = args.get('file', None)
+        
+        # Security check - prevent directory traversal attacks
+        # Normalize the path and ensure it's within the current working directory
+        import os.path
+        base_dir = os.getcwd()
+        safe_path = os.path.abspath(os.path.join(base_dir, current_path))
+        
+        # Ensure the path is within the base directory
+        if not safe_path.startswith(base_dir):
+            safe_path = base_dir
+            current_path = '.'
+        
+        text = self.get_header("Predbat File Browser", refresh=0)
+        text += "<body>\n"
+        text += get_browse_css()
+        
+        # Breadcrumb navigation
+        text += '<div class="breadcrumb-container">\n'
+        text += '<h2>File Browser</h2>\n'
+        text += '<div class="breadcrumb">\n'
+        
+        # Build breadcrumb trail
+        path_parts = []
+        if current_path != '.':
+            path_parts = current_path.split('/')
+            path_parts = [part for part in path_parts if part]  # Remove empty parts
+        
+        # Root directory link
+        text += '<a href="./browse?path=." class="breadcrumb-item">Root</a>'
+        
+        # Build each level of the path
+        accumulated_path = '.'
+        for part in path_parts:
+            accumulated_path = os.path.join(accumulated_path, part).replace('\\', '/')
+            text += f' / <a href="./browse?path={accumulated_path}" class="breadcrumb-item">{part}</a>'
+        
+        text += '</div>\n'
+        text += '</div>\n'
+        
+        if view_file:
+            # File viewing mode
+            file_path = os.path.join(safe_path, view_file) if current_path != '.' else view_file
+            try:
+                # Security check for file path
+                file_abs_path = os.path.abspath(file_path)
+                if not file_abs_path.startswith(base_dir):
+                    raise PermissionError("Access denied")
+                
+                if os.path.isfile(file_abs_path):
+                    # Read file content
+                    with open(file_abs_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                    
+                    # Escape HTML content
+                    content = html_module.escape(content)
+                    
+                    # Determine file type for syntax highlighting
+                    file_ext = os.path.splitext(view_file)[1].lower()
+                    
+                    text += f'<div class="file-viewer">\n'
+                    text += f'<div class="file-header">\n'
+                    text += f'<h3>Viewing: {view_file}</h3>\n'
+                    text += f'<a href="./browse?path={current_path}" class="back-button">← Back to Directory</a>\n'
+                    text += f'</div>\n'
+                    
+                    # File content with basic syntax highlighting
+                    syntax_class = "code-content"
+                    if file_ext in ['.yaml', '.yml']:
+                        syntax_class += " yaml"
+                    elif file_ext in ['.py']:
+                        syntax_class += " python"
+                    elif file_ext in ['.json']:
+                        syntax_class += " json"
+                    elif file_ext in ['.log']:
+                        syntax_class += " log"
+                    
+                    text += f'<pre class="{syntax_class}">{content}</pre>\n'
+                    text += f'</div>\n'
+                else:
+                    text += f'<div class="error">File not found: {view_file}</div>\n'
+            except PermissionError:
+                text += f'<div class="error">Permission denied: {view_file}</div>\n'
+            except UnicodeDecodeError:
+                text += f'<div class="error">Cannot display binary file: {view_file}</div>\n'
+            except Exception as e:
+                text += f'<div class="error">Error reading file: {str(e)}</div>\n'
+        else:
+            # Directory listing mode
+            try:
+                items = []
+                
+                # Add parent directory link if not at root
+                if current_path != '.':
+                    parent_path = os.path.dirname(current_path) if current_path != '.' else '.'
+                    if parent_path == '':
+                        parent_path = '.'
+                    items.append({
+                        'name': '..',
+                        'type': 'parent',
+                        'path': parent_path,
+                        'size': '',
+                        'modified': ''
+                    })
+                
+                # List directory contents
+                for item in os.listdir(safe_path):
+                    item_path = os.path.join(safe_path, item)
+                    
+                    # Skip hidden files and directories
+                    if item.startswith('.') and item not in ['..']:
+                        continue
+                    
+                    try:
+                        stat_info = os.stat(item_path)
+                        size = ""
+                        if os.path.isfile(item_path):
+                            # Format file size
+                            size_bytes = stat_info.st_size
+                            if size_bytes < 1024:
+                                size = f"{size_bytes} B"
+                            elif size_bytes < 1024 * 1024:
+                                size = f"{size_bytes / 1024:.1f} KB"
+                            else:
+                                size = f"{size_bytes / (1024 * 1024):.1f} MB"
+                        
+                        # Format modification time
+                        modified = datetime.fromtimestamp(stat_info.st_mtime).strftime('%Y-%m-%d %H:%M')
+                        
+                        items.append({
+                            'name': item,
+                            'type': 'directory' if os.path.isdir(item_path) else 'file',
+                            'path': os.path.join(current_path, item).replace('\\', '/'),
+                            'size': size,
+                            'modified': modified
+                        })
+                    except (OSError, PermissionError):
+                        # Skip items we can't access
+                        continue
+                
+                # Sort items: directories first, then files, both alphabetically
+                items.sort(key=lambda x: (x['type'] != 'parent', x['type'] != 'directory', x['name'].lower()))
+                
+                # Display file list
+                text += '<div class="file-list">\n'
+                text += '<table class="files-table">\n'
+                text += '<thead>\n'
+                text += '<tr><th>Name</th><th>Size</th><th>Modified</th></tr>\n'
+                text += '</thead>\n'
+                text += '<tbody>\n'
+                
+                for item in items:
+                    icon = ""
+                    link_target = ""
+                    css_class = ""
+                    
+                    if item['type'] == 'parent':
+                        icon = '<span class="mdi mdi-arrow-up-bold"></span>'
+                        link_target = f"./browse?path={item['path']}"
+                        css_class = "parent-dir"
+                    elif item['type'] == 'directory':
+                        icon = '<span class="mdi mdi-folder"></span>'
+                        link_target = f"./browse?path={item['path']}"
+                        css_class = "directory"
+                    else:
+                        # File icons based on extension
+                        file_ext = os.path.splitext(item['name'])[1].lower()
+                        if file_ext in ['.yaml', '.yml']:
+                            icon = '<span class="mdi mdi-code-braces"></span>'
+                        elif file_ext in ['.py']:
+                            icon = '<span class="mdi mdi-language-python"></span>'
+                        elif file_ext in ['.json']:
+                            icon = '<span class="mdi mdi-code-json"></span>'
+                        elif file_ext in ['.log']:
+                            icon = '<span class="mdi mdi-text-box-outline"></span>'
+                        elif file_ext in ['.txt', '.md']:
+                            icon = '<span class="mdi mdi-file-document-outline"></span>'
+                        else:
+                            icon = '<span class="mdi mdi-file-outline"></span>'
+                        
+                        link_target = f"./browse?path={current_path}&file={item['name']}"
+                        css_class = "file"
+                    
+                    text += f'<tr class="{css_class}">\n'
+                    text += f'<td><a href="{link_target}">{icon} {item["name"]}</a></td>\n'
+                    text += f'<td>{item["size"]}</td>\n'
+                    text += f'<td>{item["modified"]}</td>\n'
+                    text += f'</tr>\n'
+                
+                text += '</tbody>\n'
+                text += '</table>\n'
+                text += '</div>\n'
+                
+            except PermissionError:
+                text += '<div class="error">Permission denied accessing directory</div>\n'
+            except Exception as e:
+                text += f'<div class="error">Error listing directory: {str(e)}</div>\n'
+        
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
