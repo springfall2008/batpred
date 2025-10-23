@@ -4970,5 +4970,16 @@ body.dark-mode .error {
     color: #f5b5c4;
     border-color: #662c34;
 }
+
+body.dark-mode .back-button {
+    background-color: #333;
+    color: #e0e0e0;
+    border: 1px solid #555;
+}
+
+body.dark-mode .back-button:hover {
+    background-color: #444;
+    color: #fff;
+}
 </style>
     """
