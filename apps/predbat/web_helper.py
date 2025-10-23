@@ -4788,6 +4788,7 @@ setTimeout(function() {
     )
     return text
 
+
 def get_browse_css():
     """
     Return CSS styles for the browse page
