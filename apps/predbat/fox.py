@@ -568,6 +568,7 @@ class FoxAPI:
 
         # Do change enable if not already modified
         if self.device_scheduler.get(deviceSN, {}).get("enable", None) == enabled:
+            self.log("Fox: Debug: Scheduler for {} already set to enabled {}".format(deviceSN, enabled))
             return
 
         SET_SCHEDULER_ENABLED = "/op/v1/device/scheduler/set/flag"
@@ -746,6 +747,7 @@ class FoxAPI:
         if result:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
+            self.log("Fox: Fetched schedule got {}".format(result))
             self.device_scheduler[deviceSN] = result
             return result
         return {}
@@ -1101,39 +1103,24 @@ class FoxAPI:
                 value = int(value)
             except ValueError:
                 value = 100 if direction == "charge" else self.fdsoc_min.get(serial, 10)
-            if value == self.local_schedule[serial][direction].get("soc", None):
-                # Skip null change
-                return
             self.local_schedule[serial][direction]["soc"] = value
         elif "_power" in entity_id:
             try:
                 value = int(value)
             except ValueError:
                 value = self.fdpwr_max.get(serial, 8000)
-            if value == self.local_schedule[serial][direction].get("power", None):
-                # Skip null change
-                return
             self.local_schedule[serial][direction]["power"] = value
         elif "_start_time" in entity_id:
             if value not in OPTIONS_TIME_FULL:
                 value = "00:00:00"
-            if value == self.local_schedule[serial][direction].get("start_time", None):
-                # Skip null change
-                return
             self.local_schedule[serial][direction]["start_time"] = value
         elif "_end_time" in entity_id:
             if value not in OPTIONS_TIME_FULL:
                 value = "00:00:00"
-            if value == self.local_schedule[serial][direction].get("end_time", None):
-                # Skip null change
-                return
             self.local_schedule[serial][direction]["end_time"] = value
         elif "_enable" in entity_id:
             enable = True if self.local_schedule[serial][direction].get("enable", 0) else False
             new_enable = 1 if self.apply_service_to_toggle(enable, value) else 0
-            if new_enable == self.local_schedule[serial][direction].get("enable", None):
-                # Skip null change
-                return
             self.local_schedule[serial][direction]["enable"] = new_enable
         elif "_write" in entity_id:
             await self.apply_battery_schedule(serial)
@@ -1156,17 +1143,6 @@ class FoxAPI:
                 start_hour, start_minute = self.time_string_to_hour_minute(start_time, 0, 0)
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
                 minSocOnGrid = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
-
-                """
-                start_minutes = start_hour * 60 + start_minute
-                end_minutes = end_hour * 60 + end_minute
-                minutes_now = datetime.now().hour * 60 + datetime.now().minute
-                if start_minutes <= minutes_now and end_minutes > minutes_now + 1:
-                    # Schedule seems to not take effect if start time is in the past, so move it forward
-                    start_minutes = minutes_now + 1
-                    start_hour = start_minutes // 60
-                    start_minute = start_minutes % 60
-                """
 
                 if direction == "charge":
                     new_schedule.append(

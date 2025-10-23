@@ -12,6 +12,7 @@
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
 from octopus import OctopusAPI
+from carbon import CarbonAPI
 from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
@@ -155,6 +156,14 @@ COMPONENT_LIST = {
             },
         },
     },
+    "carbon": {
+        "class": CarbonAPI,
+        "name": "Carbon Intensity API",
+        "args": {
+            "postcode": {"required": True, "config": "carbon_postcode"},
+            "automatic": {"required": False, "config": "carbon_automatic", "default": False},
+        },
+    }
 }
 
 
