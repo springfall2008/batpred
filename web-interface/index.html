@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Web Interface - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Web Interface";
+        var mkdocs_page_input_path = "web-interface.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Predbat automation API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Web Interface</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#accessing-the-web-interface">Accessing the Web Interface</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#web-interface-views">Web Interface Views</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#dash-view">Dash View</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#plan-view">Plan View</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#entities-view">Entities View</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#charts-view">Charts View</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#config-view">Config View</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#appsyaml-view">apps.yaml View</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#editor">Editor</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#log-view">Log View</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#compare-view">Compare View</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#docs-view">Docs View</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#toggle-dark-mode">Toggle Dark Mode</a>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Viewing Predbat data</li>
+      <li class="breadcrumb-item active">Web Interface</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="web-interface">Web Interface</h1>
+<p>The Predbat Web Interface provides an easy to use way to see and change different aspects of your Predbat system including view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles.</p>
+<p><img alt="image" src="../images/web-interface-plan-view.png" /></p>
+<h2 id="accessing-the-web-interface">Accessing the Web Interface</h2>
+<p>If you are running the Predbat add-on then the Predbat Web Interface can be accessed by clicking 'Open Web UI' on the add-on screen (arrowed):</p>
+<p><img alt="image" src="../images/predbat-addon-web-interface.png" /></p>
+<p>You can also turn on the 'Show in sidebar' option (circled) to have direct access to the web interface from the Home Assistant side bar.</p>
+<p>Another option is to include a link on your dashboard using an entities card:</p>
+<pre><code class="language-yaml">  - type: entities
+    entities:
+      - type: weblink
+        name: Predbat web interface
+        url: /hassio/ingress/6adb4f0d_predbat
+        icon: mdi:bat
+</code></pre>
+<p>If you are not using the Predbat Add-on then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or native on your Linux/MAC).  The port number can be changed by setting <a href="../apps-yaml/#web-interface">web_port in apps.yaml</a>.</p>
+<p><strong>NOTE:</strong> The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.</p>
+<h2 id="web-interface-views">Web Interface Views</h2>
+<p>A number of different views of Predbat are available and you can change your view using the top menu bar.</p>
+<h3 id="dash-view">Dash View</h3>
+<p>The initial view is the Dash view which gives a summary of Predbat's status and mode, some easy-to-access debug options (see below), a text summary of Predbat's plan, and then all the output entities that Predbat creates.</p>
+<p><img alt="image" src="../images/web-interface-dash-view.png" /></p>
+<p>The Debug panel provides easy access to a number of files that are useful in diagnosing a problem and are usually required if you raise a <a href="https://github.com/springfall2008/batpred/issues">Predbat Github issue</a>:</p>
+<ul>
+<li><strong>Download apps.yaml</strong> - provides a link to download your <a href="../apps-yaml/">apps.yaml file</a>. This is useful to identify issues with your Predbat configuration</li>
+<li><strong>Create predbat_debug.yaml</strong> - turns Predbat's debug mode on and creates a Predbat debug file which contains your entire Predbat Home Assistant configuration;
+all the input settings for Predbat and all Predbat's output data including the current HTML plan, the best_* entities, etc.<BR>
+This debug file enables your setup to be recreated to identify any configuration issues it may have or Predbat bugs to be re-created. Confidential information such as your Solcast API or GECloud API are redacted in the debug file.</li>
+<li><strong>Download predbat.log</strong> - provides a link to download the current <a href="../output-data/#predbat-logfile">Predbat logfile</a> which contains progress and any error messages that occur whilst Predbat is running</li>
+<li><strong>Download predbat_plan.html</strong> - provides a link to download the current <a href="../output-data/#viewing-the-predbat-plan">Predbat HTML plan</a></li>
+</ul>
+<p>Note that before you can attach a downloaded apps.yaml or predbat_debug.yaml file to a Github issue you must rename the file extension, e.g. to '.txt', so for example <code>apps.txt</code> and <code>predbat_debug.txt</code>.
+This is because Github does not accept .yaml file attachments.</p>
+<p>Underneath the Debug panel is the Plan textual description panel which gives a brief summary of current battery level, forthcoming import rates, solar generation, planned charging, discharging and export activity.</p>
+<p>Below this is the Predbat Entities panel which details all the other Predbat output entities, their current state and attributes. Any entity name can be clicked to swap to the <a href="#entities-view">Entities view</a> for that entity.</p>
+<h3 id="plan-view">Plan View</h3>
+<p>This view provides an easy way to see what Predbat is planning for your battery/inverter. It displays the current Predbat plan in 30 minute segments showing import and export rates,
+Predbat's planned state for the battery (charging, discharging, etc), predicted solar generation, predicted house load, car charging, cost, etc.</p>
+<p><img alt="image" src="../images/web-interface-plan-view.png" /></p>
+<p>You can also <a href="../predbat-plan-card/">create the Predbat Plan card</a> to show this plan on your own custom dashboard.</p>
+<h3 id="entities-view">Entities View</h3>
+<p>This view enables you to look at the history of any predbat output entity or (input) configuration setting.</p>
+<p>Select the entity required to be viewed, the time period of history to view the entity over (but note you may need to <a href="../apps-yaml/#days_previous">increase HA's purge_keep_days</a> first).</p>
+<p>Predbat will then display the current value of the entity, a chart of its history and then a list of prior historical values:</p>
+<p><img alt="image" src="../images/web-interface-entities-view.png" /></p>
+<h3 id="charts-view">Charts View</h3>
+<p>The Charts view provides an easy way of viewing a number of pre-created Predbat charts:</p>
+<ul>
+<li><strong>Battery</strong> - Shows the historic Battery SoC for today and the predicted SoC for the plan duration under the Base/Base10/Best and Best10 scenarios (see <a href="../what-does-predbat-do/#basic-terminology">explanation of these terms</a>.
+The chart also shows where charging is planned under the Base and Best scenarios and forced Export under the Best scenario</li>
+<li><strong>Power</strong> - Shows predicted Power for the plan duration. This includes battery charge and discharge, solar generation (PV), house load, iBoost load, car charging load, and grid import/export</li>
+<li><strong>Cost</strong> - Shows the historic import, export and net total cost incurred for today and the predicted cost for the plan duration under the Base/Base10/Best and Best10 scenarios</li>
+<li><strong>Rates</strong> - Shows historic and future import and export rates along with historic hourly and today pence per kWh so you can see where you have earned or spent the most on electricity during today</li>
+<li><strong>InDay</strong> - Shows Predbat's predicted house load for today, the actual house load that has occurred so far today, and then Predbat's adjusted house load prediction based on the variance of today's actual load to predicted load</li>
+<li><strong>PV</strong> - Shows today's predicted solar generation under the PV, PV10 and PV90 scenarios alongside today's actual solar generation</li>
+<li><strong>PV7</strong> - Similar to the PV chart but shows actual solar generation and forecast for the last 7 days including today</li>
+</ul>
+<p>Example PV chart:</p>
+<p><img alt="image" src="../images/web-interface-pv-chart.png" /></p>
+<h3 id="config-view">Config View</h3>
+<p>The Config view provides a way to see and change all of Predbat's configuration entities in Home Assistant.  For each entity is displayed the name, entity type, the current entity value and Predbat's default value for that entity.</p>
+<p>Any entities that are coloured pale red simply denote entities where you have changed the value from Predbat's default value - it does not indicate that the entity value is in error, its just that its different from the default value.</p>
+<p>Any entity name can be clicked to swap to the <a href="#entities-view">Entities view</a> for that entity.</p>
+<p><img alt="image" src="../images/web-interface-config-view.png" /></p>
+<p>You can also create a <a href="../output-data/#creating-a-compact-predbat-control-dashboard">custom dashboard to see and update Predbat's control entities</a>;
+and full explanation of Predbat's control entities and what they do can be found in the <a href="../customisation/">customisation documentation</a>.</p>
+<h3 id="appsyaml-view">apps.yaml View</h3>
+<p>The apps view allows you to look at your configuration and to modify the values within the web browser without having to edit the yaml directly.
+Click the edit button to change a value, when all the edits are complete hit save to save the apps.yaml and restart predbat.</p>
+<p><img width="1746" height="764" alt="image" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" /></p>
+<p>Predbat validates your apps.yaml and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:</p>
+<p><img alt="image" src="../images/web-interface-apps-yaml-validation-error.png" /></p>
+<p>Further details of the apps.yaml error can be found in the <a href="../output-data/#log-view">Predbat Log</a></p>
+<h3 id="editor">Editor</h3>
+<p>The editor view allows you to edit apps.yaml as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
+will be disabled pending a fix.</p>
+<p><img width="1746" height="476" alt="image" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" /></p>
+<h3 id="log-view">Log View</h3>
+<p>Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so the Log view provides an easy way to see and download the Predbat logfile.</p>
+<p><img alt="image" src="../images/web-interface-log-view.png" /></p>
+<p>By default the Log view opens in the Warnings tab which shows a filtered list of Warnings and Errors in the Predbat logfile.</p>
+<p>The Errors tab shows a filtered list of logfile Errors, and the All tab shows all entries in the Predbat logfile.</p>
+<p>Normal log messages are coloured Green, Warnings are Orange, and Errors in Red.  The Logfile view shows newest entries at the top and auto-refreshes so as Predbat is executing the most recent logs will appear at the top and the log will scroll downwards.</p>
+<p>The Download tab gives the ability to download the logfile.</p>
+<p>Further details about the Predbat logfile and its location is <a href="../output-data/#predbat-logfile">described in the output data document</a>.</p>
+<h3 id="compare-view">Compare View</h3>
+<p>The Compare View provides access to Predbat's <a href="../compare/">Compare Energy Tariff feature</a> which enables you compare what it would cost you (or you'd gain from export) on different energy tariffs with your predicted load and solar generation.</p>
+<p><img alt="image" src="../images/web-interface-compare-view.png" /></p>
+<h3 id="docs-view">Docs View</h3>
+<p>Provides a quick link to the <a href="https://springfall2008.github.io/batpred/">Predbat documentation</a>.</p>
+<h3 id="toggle-dark-mode">Toggle Dark Mode</h3>
+<p>As it says, toggles the Predbat web interface between light and dark mode.</p>
+<p><img alt="image" src="../images/web-interface-dark-mode-power-chart.png" /></p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../output-data/" class="btn btn-neutral float-left" title="Output data"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../predbat-plan-card/" class="btn btn-neutral float-right" title="Predbat Plan card">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../output-data/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../predbat-plan-card/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
