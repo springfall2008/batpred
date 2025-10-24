@@ -35,6 +35,7 @@ class CarbonAPI:
         self.stop_api = False
         self.failures_total = 0
         self.last_success_timestamp = None
+        self.last_updated_timestamp = None
         self.carbon_data_points = []
 
     def wait_api_started(self):
@@ -67,8 +68,9 @@ class CarbonAPI:
         """
         Fetch the latest carbon data, update only if data is at least 4 hours old
         """
-        last_updated = self.last_success_timestamp
+        last_updated = self.last_updated_timestamp
         if last_updated is not None and datetime.now(timezone.utc) - last_updated < timedelta(hours=4):
+            self.last_success_timestamp = datetime.now(timezone.utc)
             return
 
         self.log("Carbon API: Fetching latest carbon data for postcode {}".format(self.postcode))
@@ -93,6 +95,7 @@ class CarbonAPI:
                         data_points = data.get("data", {}).get("data", [])
                         if data_points:
                             self.last_success_timestamp = datetime.now(timezone.utc)
+                            self.last_updated_timestamp = self.last_success_timestamp
                             for point in data_points:
                                 from_time = point.get("from", None)
                                 to_time = point.get("to", None)
