@@ -531,7 +531,7 @@ class Inverter:
         charge_rate = []
         battery_power = []
         predbat_status = []
-        
+
         if discharge:
             max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
         else:
