@@ -527,6 +527,7 @@ class Inverter:
 
         final_curve = {}
         final_curve_count = {}
+        soc_kwh = []
 
         if discharge:
             max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
