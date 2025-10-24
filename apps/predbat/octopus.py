@@ -993,16 +993,19 @@ class OctopusAPI:
 
                         if IntelligentdeviceID:
                             device_setting_data = await self.async_graphql_query(intelligent_settings_query.format(account_id=account_id, device_id=IntelligentdeviceID), "get-intelligent-settings")
-                            for setting in device_setting_data.get("devices", []):
-                                if setting.get("id", None) == IntelligentdeviceID:
-                                    device_setting_result["suspended"] = setting.get("status", {}).get("isSuspended", None)
-                                    chargingPreferences = setting.get("chargingPreferences", {})
-                                    device_setting_result["weekday_target_time"] = chargingPreferences.get("weekdayTargetTime", None)
-                                    device_setting_result["weekday_target_soc"] = chargingPreferences.get("weekdayTargetSoc", None)
-                                    device_setting_result["weekend_target_time"] = chargingPreferences.get("weekendTargetTime", None)
-                                    device_setting_result["weekend_target_soc"] = chargingPreferences.get("weekendTargetSoc", None)
-                                    device_setting_result["minimum_soc"] = chargingPreferences.get("minimumSoc", None)
-                                    device_setting_result["maximum_soc"] = chargingPreferences.get("maximumSoc", None)
+                            if device_setting_data:
+                                for setting in device_setting_data.get("devices", []):
+                                    if setting.get("id", None) == IntelligentdeviceID:
+                                        device_setting_result["suspended"] = setting.get("status", {}).get("isSuspended", None)
+                                        chargingPreferences = setting.get("chargingPreferences", {})
+                                        device_setting_result["weekday_target_time"] = chargingPreferences.get("weekdayTargetTime", None)
+                                        device_setting_result["weekday_target_soc"] = chargingPreferences.get("weekdayTargetSoc", None)
+                                        device_setting_result["weekend_target_time"] = chargingPreferences.get("weekendTargetTime", None)
+                                        device_setting_result["weekend_target_soc"] = chargingPreferences.get("weekendTargetSoc", None)
+                                        device_setting_result["minimum_soc"] = chargingPreferences.get("minimumSoc", None)
+                                        device_setting_result["maximum_soc"] = chargingPreferences.get("maximumSoc", None)
+                            else:
+                                return None
 
                         if isCharger:
                             for charger in chargePointVariants:
