@@ -89,7 +89,7 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
         history.append({"last_updated": key, "state": value})
     max_age = now_utc - oldest_date
     max_days = max(max_age.days, 1)
-    mdata, ignore_io_adjusted = minute_data(history, max_days, now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
+    mdata, _ = minute_data(history, max_days, now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
     return [mdata, max_days]
 
 

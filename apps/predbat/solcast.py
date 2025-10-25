@@ -804,7 +804,7 @@ class Solcast:
             else:
                 pv_estimate = "pv_estimate" + str(pv_estimate)
 
-            pv_forecast_minute, ignore_io_adjusted = minute_data(
+            pv_forecast_minute, _ = minute_data(
                 pv_forecast_data,
                 self.forecast_days + 1,
                 self.midnight_utc,
@@ -815,7 +815,7 @@ class Solcast:
                 scale=self.pv_scaling,
                 spreading=30,
             )
-            pv_forecast_minute10, ignore_io_adjusted = minute_data(
+            pv_forecast_minute10, _ = minute_data(
                 pv_forecast_data,
                 self.forecast_days + 1,
                 self.midnight_utc,

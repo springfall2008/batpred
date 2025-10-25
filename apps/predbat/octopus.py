@@ -1667,7 +1667,7 @@ class Octopus:
             url = data.get("next", None)
             pages += 1
 
-        pdata, ignore_io_adjusted = minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+        pdata, _ = minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
 
     def add_now_to_octopus_slot(self, octopus_slots, now_utc):

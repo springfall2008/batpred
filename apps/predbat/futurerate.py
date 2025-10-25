@@ -247,8 +247,8 @@ class FutureRate:
             for key in extracted_keys:
                 array_values.append(extracted_data[key])
             self.log("Loaded {} datapoints of futurerate analysis".format(len(extracted_keys)))
-            mdata_import, ignore_io_adjusted = minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_import", "from", backwards=False, to_key="to")
-            mdata_export, ignore_io_adjusted = minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
+            mdata_import, _ = minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_import", "from", backwards=False, to_key="to")
+            mdata_export, _ = minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
 
         adjust_import = self.get_arg("futurerate_adjust_import", False)
         adjust_export = self.get_arg("futurerate_adjust_export", False)

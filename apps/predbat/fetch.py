@@ -360,7 +360,7 @@ class Fetch:
                 history = []
 
             if history:
-                import_today, ignore_io_adjusted = minute_data(
+                import_today, _ = minute_data(
                     history[0],
                     self.max_days_previous,
                     now_utc,
@@ -407,7 +407,7 @@ class Fetch:
                     age_days = age.days
                 else:
                     age_days = min(age_days, age.days)
-                load_minutes, ignore_io_adjusted = minute_data(
+                load_minutes, _ = minute_data(
                     history[0],
                     max_days_previous,
                     now_utc,
@@ -685,7 +685,7 @@ class Fetch:
         # SOC history
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
         if soc_kwh_data:
-            self.soc_kwh_history, ignore_io_adjusted = minute_data(
+            self.soc_kwh_history, _ = minute_data(
                 soc_kwh_data[0],
                 2,
                 self.now_utc,
@@ -999,10 +999,10 @@ class Fetch:
 
         age = now_utc - oldest_data_time
         self.load_minutes_age = age.days
-        self.load_minutes, ignore_io_adjusted = minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)
-        self.import_today, ignore_io_adjusted = minute_data(mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
-        self.export_today, ignore_io_adjusted = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
-        self.pv_today, ignore_io_adjusted = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.load_minutes, _ = minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)
+        self.import_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.export_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.pv_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
         self.load_minutes_now = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0)
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
@@ -1588,7 +1588,7 @@ class Fetch:
                     data = data_array
 
                 # Load data
-                load_forecast, ignore_io_adjusted = minute_data(
+                load_forecast, _ = minute_data(
                     data,
                     self.forecast_days + 1,
                     self.midnight_utc,
@@ -1634,7 +1634,7 @@ class Fetch:
             self.log("Fetching carbon intensity data from {}".format(entity_id))
             data_all = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
             if data_all:
-                carbon_data, ignore_io_adjusted = minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
+                carbon_data, _ = minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
 
         entity_id = self.prefix + ".carbon_now"
         state = self.get_state_wrapper(entity_id=entity_id)
