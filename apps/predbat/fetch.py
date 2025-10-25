@@ -1142,8 +1142,8 @@ class Fetch:
                     self.log("Warn: Unable to get data from {} - octopus_intelligent_slot using action config {} result was {}".format(entity_id, config_entry, result))
             else:
                 try:
-                    completed = self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
-                    planned = self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
+                    completed = self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches")
+                    planned = self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches")
                 except (ValueError, TypeError):
                     self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
                     self.record_status(message="Error: octopus_intelligent_slot not set correctly", had_errors=True)

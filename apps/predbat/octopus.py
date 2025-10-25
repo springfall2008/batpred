@@ -462,6 +462,7 @@ class OctopusAPI:
                 event_code = command.get("event_code", None)
                 await self.async_join_saving_session_events(self.account_id, event_code)
                 done_command = True
+        return done_command
 
     async def load_octopus_cache(self):
         """
@@ -1000,9 +1001,6 @@ class OctopusAPI:
             # No tariff
             self.log("OctopusDirect: tariff {} not available, using zero".format(tariff_type))
             return {n: 0 for n in range(0, 60 * 24)}
-
-        self.log("Warn: OctopusDirect: direct not available (get_octopus_direct tariff {})".format(tariff_type))
-        return {}            
 
     async def async_read_response(self, response, url, ignore_errors=False):
         """Reads the response, logging any json errors"""
