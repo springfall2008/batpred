@@ -38,7 +38,8 @@ OCTOPUS_DAY_RATE_END_HOUR = 0
 OCTOPUS_DAY_RATE_END_MINUTE = 30
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
-OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(4*60, 11*60, 30)]
+OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(4 * 60, 11 * 60, 30)]
+
 
 def is_active(now_utc, activeFrom, activeTo):
     if not activeFrom:
@@ -269,7 +270,7 @@ octoplus_saving_session_join_mutation = """mutation {{
 }}
 """
 
-intelligent_settings_mutation = '''mutation {{
+intelligent_settings_mutation = """mutation {{
   setDevicePreferences(input: {{
     deviceId: "{device_id}"
     mode: CHARGE
@@ -278,13 +279,13 @@ intelligent_settings_mutation = '''mutation {{
   }}) {{
     id
   }}
-}}'''
+}}"""
 
-intelligent_settings_mutation_schedule = '''{{
+intelligent_settings_mutation_schedule = """{{
     dayOfWeek: {day_of_week}
     time: "{target_time}"
     max: {target_percentage}
-}}'''
+}}"""
 
 
 class OctopusEnergyApiClient:
@@ -778,13 +779,13 @@ class OctopusAPI:
         self.base.dashboard_item(self.get_entity_name("select", "saving_session_join"), "", attributes={"options": possible_codes, "friendly_name": "Join Octopus Saving Session Event", "icon": "mdi:currency-usd"}, app="octopus")
 
         return return_available_events, return_joined_events
-    
+
     def automatic_config(self, tariffs):
         """
         Automatic configuration of entities
         """
         self.log("Octopus API: Automatic configuration of entities")
-        self.base.args['octopus_saving_session'] = self.get_entity_name("binary_sensor", "saving_session")
+        self.base.args["octopus_saving_session"] = self.get_entity_name("binary_sensor", "saving_session")
         self.base.args["octopus_saving_session_join"] = self.get_entity_name("select", "saving_session_join")
         for tariff in tariffs:
             self.base.args["metric_octopus_{}_rates".format(tariff)] = self.get_entity_name("sensor", tariff + "_rates")
@@ -1002,7 +1003,7 @@ class OctopusAPI:
             return {n: 0 for n in range(0, 60 * 24)}
 
         self.log("Warn: OctopusDirect: direct not available (get_octopus_direct tariff {})".format(tariff_type))
-        return {}            
+        return {}
 
     async def async_read_response(self, response, url, ignore_errors=False):
         """Reads the response, logging any json errors"""
@@ -1249,7 +1250,7 @@ class OctopusAPI:
             target_time = weekday_target_time
             target_soc = weekday_target_soc
         if target_time:
-            target_time = target_time[:5] # Only HH:MM
+            target_time = target_time[:5]  # Only HH:MM
         self.base.dashboard_item(self.get_entity_name("select", "intelligent_target_time"), target_time, attributes={"friendly_name": "Octopus Intelligent Target Time", "icon": "mdi:clock-outline", "options": OPTIONS_TIME}, app="octopus")
         self.base.dashboard_item(self.get_entity_name("number", "intelligent_target_soc"), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
 
