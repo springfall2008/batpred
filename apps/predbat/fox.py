@@ -939,7 +939,7 @@ class FoxAPI:
                     "friendly_name": f"Fox {sn} {name}",
                 }
                 # Set device and state class
-                if units in ['kWh', 'Wh']:
+                if units in ["kWh", "Wh"]:
                     attributes["device_class"] = "energy"
                 if item_name.lower() in ["generation", "energythroughput", "gridconsumption", "loads", "feedin", "chargeenergytotal", "dischargeenergytotal"]:
                     attributes["state_class"] = "total_increasing"
