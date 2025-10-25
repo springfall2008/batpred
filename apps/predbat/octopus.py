@@ -421,7 +421,7 @@ class OctopusAPI:
                 first = False
 
                 # Process any queued commands
-                if await self.process_commands(self.account_id)
+                if await self.process_commands(self.account_id):
                     # Trigger a refresh
                     first = True
 
