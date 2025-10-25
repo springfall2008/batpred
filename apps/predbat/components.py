@@ -107,6 +107,11 @@ COMPONENT_LIST = {
                 "required": True,
                 "config": "octopus_api_account",
             },
+            "automatic": {
+                "required": False,
+                "default": True,
+                "config": "octopus_automatic",
+            },
         },
     },
     "ohme": {

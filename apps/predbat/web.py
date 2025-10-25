@@ -1706,7 +1706,7 @@ var options = {
                     text += "<tr><td><b>{}: </b></td><td colspan='2'>{}</td></tr>\n".format(key, self.render_type(key, nested_value, nested_path, row_counter))
             text += "</table>"
         elif isinstance(value, str):
-            pat = re.match(r"^[a-zA-Z]+\.\S+", value)
+            pat = re.match(r"^[a-zA-Z_]+\.\S+", value)
             if "{" in value:
                 text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
                 if text is None:
@@ -2334,7 +2334,7 @@ var options = {
                 unit = item.get("unit", "")
                 icon = self.icon2html(item.get("icon", ""))
 
-                if itemtype == "input_number" and item.get("step", 1) == 1:
+                if itemtype in ["input_number", "number"] and item.get("step", 1) == 1:
                     value = int(value)
 
                 text += '<tr><td>{}</td><td><a href="./entity?entity_id={}">{}</a></td><td>{}</td><td>{}</td>'.format(icon, entity, friendly, entity, itemtype)
@@ -2348,7 +2348,7 @@ var options = {
                     text += f'<td><form style="display: inline;" method="post" action="./config">'
                     text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'{useid}\')"></button>'
                     text += f"</form></td>\n"
-                elif itemtype == "input_number":
+                elif itemtype in ["input_number", "number"]:
                     input_number_with_save = input_number.replace('onchange="javascript: this.form.submit();"', 'onchange="saveFilterValue(); this.form.submit();"')
                     text += '<td><form style="display: inline;" method="post" action="./config">'
                     text += "{}\n".format(input_number_with_save.format(useid, useid, value, item.get("min", 0), item.get("max", 100), item.get("step", 1)))
