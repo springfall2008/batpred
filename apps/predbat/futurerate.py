@@ -4,7 +4,7 @@ import json
 import copy
 
 from config import TIME_FORMAT
-from utils import dp1, dp2
+from utils import dp1, dp2, minute_data
 
 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
 
@@ -17,7 +17,6 @@ class FutureRate:
         self.get_arg = base.get_arg
         self.midnight = base.midnight
         self.midnight_utc = base.midnight_utc
-        self.minute_data = base.minute_data
         self.forecast_days = base.forecast_days
         self.minutes_now = base.minutes_now
         self.forecast_plan_hours = base.forecast_plan_hours
@@ -248,8 +247,8 @@ class FutureRate:
             for key in extracted_keys:
                 array_values.append(extracted_data[key])
             self.log("Loaded {} datapoints of futurerate analysis".format(len(extracted_keys)))
-            mdata_import = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_import", "from", backwards=False, to_key="to")
-            mdata_export = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
+            mdata_import, ignore_io_adjusted = minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_import", "from", backwards=False, to_key="to")
+            mdata_export, ignore_io_adjusted = minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
 
         adjust_import = self.get_arg("futurerate_adjust_import", False)
         adjust_export = self.get_arg("futurerate_adjust_export", False)

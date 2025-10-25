@@ -932,11 +932,17 @@ class FoxAPI:
                 item = self.device_values[sn][item_name]
                 state = item.get("value", None)
                 name = item.get("name", item_name)
+                units = item.get("unit", "")
                 attributes = {
-                    "unit_of_measurement": item.get("unit", ""),
+                    "unit_of_measurement": units,
                     "friendly_name": f"Fox {sn} {name}",
                 }
+                # Set device and state class
+                if units in ['kWh', 'kW', 'W', 'W']:
+                    attributes["device_class"] = "energy"
                 entity_id = entity_name_sensor + "_" + sn.lower() + "_" + item_name.lower()
+                if item_name.lower() in ["generation", "energythroughput", "gridconsumption", "loads", "feedin", "chargeenergytotal", "dischargeenergytotal"]:
+                    attributes["state_class"] = "total_increasing"
                 self.base.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
 
             # Publish schedule settings

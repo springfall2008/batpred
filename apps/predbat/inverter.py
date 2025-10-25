@@ -14,7 +14,7 @@ import pytz
 import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
-from utils import calc_percent_limit, dp0, dp2, dp3, time_string_to_stamp
+from utils import calc_percent_limit, dp0, dp2, dp3, time_string_to_stamp, minute_data, minute_data_state
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -553,7 +553,7 @@ class Inverter:
             if soc_kwh_data and charge_rate_data and battery_power_data and predbat_status_data:
                 if soc_kwh_percent:
                     # If its in percent convert to kWh
-                    soc_kwh = self.base.minute_data(
+                    soc_kwh, ignore_io = minute_data(
                         soc_kwh_data[0],
                         self.base.max_days_previous,
                         self.base.now_utc,
@@ -569,7 +569,7 @@ class Inverter:
                     for entry in soc_kwh:
                         soc_kwh[entry] = calc_percent_limit(soc_kwh[entry], self.soc_max)
                 else:
-                    soc_kwh = self.base.minute_data(
+                    soc_kwh, ignore_io = minute_data(
                         soc_kwh_data[0],
                         self.base.max_days_previous,
                         self.base.now_utc,
@@ -582,7 +582,7 @@ class Inverter:
                         scale=self.battery_scaling,
                         required_unit="kWh",
                     )
-                charge_rate = self.base.minute_data(
+                charge_rate, ignore_io = minute_data(
                     charge_rate_data[0],
                     self.base.max_days_previous,
                     self.base.now_utc,
@@ -595,13 +595,13 @@ class Inverter:
                     scale=1.0,
                     required_unit="W",
                 )
-                predbat_status = self.base.minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
+                predbat_status = minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
                 for minute in predbat_status:
                     status = predbat_status[minute]
                     if "," in status:
                         # If there are multiple statuses take the first one
                         predbat_status[minute] = status.split(",")[0].strip()
-                battery_power = self.base.minute_data(
+                battery_power, ignore_io = minute_data(
                     battery_power_data[0],
                     self.base.max_days_previous,
                     self.base.now_utc,

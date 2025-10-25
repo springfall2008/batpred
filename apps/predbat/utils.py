@@ -9,8 +9,429 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta, timezone
-from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS
+from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT
 
+def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None):
+    """
+    Get historical data for state (e.g. predbat status)
+    """
+    mdata = {}
+    last_state = "unknown"
+    newest_state = 0
+    last_state = 0
+    newest_age = 999999
+
+    if not history:
+        return mdata
+
+    # Process history
+    for item in history:
+        # Ignore data without correct keys
+        if state_key not in item:
+            continue
+        if last_updated_key not in item:
+            continue
+
+        # Unavailable or bad values
+        if item[state_key] == "unavailable" or item[state_key] == "unknown":
+            continue
+
+        state = item[state_key]
+        last_updated_time = str2time(item[last_updated_key])
+
+        # Update prev to the first if not set
+        if not prev_last_updated_time:
+            prev_last_updated_time = last_updated_time
+            last_state = state
+
+        timed = now - last_updated_time
+        timed_to = now - prev_last_updated_time
+
+        minutes_to = int(timed_to.seconds / 60) + int(timed_to.days * 60 * 24)
+        minutes = int(timed.seconds / 60) + int(timed.days * 60 * 24)
+
+        minute = minutes
+        while minute < minutes_to:
+            mdata[minute] = last_state
+            minute += 1
+
+        # Store previous state
+        prev_last_updated_time = last_updated_time
+        last_state = state
+
+        if minutes < newest_age:
+            newest_age = minutes
+            newest_state = state
+
+    state = newest_state
+    for minute in range(0, 60 * 24 * days):
+        rindex = 60 * 24 * days - minute - 1
+        state = mdata.get(rindex, state)
+        mdata[rindex] = state
+        minute += 1
+
+    return mdata
+
+def history_attribute_to_minute_data(now_utc, data, backwards=True):
+    """
+    Get historical data for an attribute with history attribute filtering first
+    """
+    history = []
+    oldest_date = now_utc
+    for key in data:
+        try:
+            timestamp_key = str2time(key)
+            oldest_date = min(oldest_date, timestamp_key)
+        except (ValueError, TypeError) as e:
+            continue
+
+        value = data[key]
+        history.append({"last_updated": key, "state": value})
+    max_age = now_utc - oldest_date
+    max_days = max(max_age.days, 1)
+    mdata, ignore_io_adjusted = minute_data(history, max_days, now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
+    return [mdata, max_days]
+
+def minute_data(
+    history,
+    days,
+    now,
+    state_key,
+    last_updated_key,
+    backwards=False,
+    to_key=None,
+    smoothing=False,
+    clean_increment=False,
+    divide_by=0,
+    scale=1.0,
+    accumulate=[],
+    adjust_key=None,
+    spreading=None,
+    required_unit=None,
+    prev_last_updated_time=None,
+    last_state=0,
+    attributes=False,
+    max_increment=MAX_INCREMENT,
+    interpolate=False,
+):
+    """
+    Turns data from HA into a hash of data indexed by minute with the data being the value
+    Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
+    """
+    mdata = {}
+    adata = {}
+    io_adjusted = None
+    newest_state = 0
+    prev_state = 0
+    newest_age = 999999
+
+    # Bounds on the data we store
+    minute_min = -days * 24 * 60
+    minute_max = days * 24 * 60
+
+    # Check history is valid, if not empty return
+    if not history:
+        return mdata, io_adjusted
+
+    # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
+    if clean_increment and backwards:
+        if len(history) > 2:
+            prev_prev_item = history[0]
+            prev_item = history[1]
+
+            if state_key in prev_item and state_key in prev_prev_item:
+                try:
+                    prev_value = float(prev_item[state_key])
+                except (ValueError, TypeError):
+                    prev_value = 0
+
+                try:
+                    prev_prev_value = float(prev_prev_item[state_key])
+                except (ValueError, TypeError):
+                    prev_prev_value = 0
+
+                for item in history[2:]:
+                    try:
+                        value = float(item[state_key])
+                    except (ValueError, TypeError):
+                        value = prev_value
+                        item[state_key] = value
+
+                    # Filter simple glitch
+                    if (prev_value > value) and (prev_value > prev_prev_value) and abs(prev_value - value) >= 0.1 and (value >= prev_prev_value):
+                        prev_item[state_key] = value
+                        prev_value = value
+
+                    prev_prev_item = prev_item
+                    prev_prev_value = prev_value
+                    prev_value = value
+                    prev_item = item
+
+    # Process history
+    for item in history:
+        if last_updated_key not in item:
+            continue
+
+        if attributes:
+            if state_key not in item["attributes"]:
+                continue
+            if item["attributes"][state_key] == "unavailable" or item["attributes"][state_key] == "unknown":
+                continue
+            state = item["attributes"][state_key]
+        else:
+            # Ignore data without correct keys
+            if state_key not in item:
+                continue
+            # Unavailable or bad values
+            if item[state_key] == "unavailable" or item[state_key] == "unknown":
+                continue
+            state = item[state_key]
+
+        # Get the numerical key and the timestamp and ignore if in error
+        try:
+            state = float(state) * scale
+            last_updated_time = str2time(item[last_updated_key])
+        except (ValueError, TypeError):
+            continue
+
+        # Find and converter units
+        integrate = False
+        if required_unit and ("attributes" in item):
+            if "unit_of_measurement" in item["attributes"]:
+                unit = item["attributes"]["unit_of_measurement"]
+                if unit != required_unit:
+                    if required_unit in ["kWh"] and unit in ["W"]:
+                        state = state / 1000.0
+                        integrate = True
+                    elif required_unit in ["kWh"] and unit in ["kW"]:
+                        integrate = True
+                    elif required_unit in ["kW", "kWh", "kg", "kg/kWh"] and unit in ["W", "Wh", "g", "g/kWh"]:
+                        state = state / 1000.0
+                    elif required_unit in ["W", "Wh", "g", "g/kWh"] and unit in ["kW", "kWh", "kg", "kg/kWh"]:
+                        state = state * 1000.0
+                    else:
+                        # Ignore data in wrong units if we can't converter
+                        continue
+
+        # Divide down the state if required
+        if divide_by:
+            state /= divide_by
+
+        # Update prev to the first if not set
+        if not prev_last_updated_time:
+            prev_last_updated_time = last_updated_time
+            last_state = state
+
+        # Intelligent adjusted?
+        if adjust_key:
+            adjusted = item.get(adjust_key, False)
+        else:
+            adjusted = False
+
+        # Work out end of time period
+        # If we don't get it assume it's to the previous update, this is for historical data only (backwards)
+        if to_key:
+            to_value = item[to_key]
+            if not to_value:
+                to_time = now + timedelta(minutes=24 * 60 * days)
+            else:
+                to_time = str2time(item[to_key])
+        else:
+            if backwards:
+                to_time = prev_last_updated_time
+            else:
+                if smoothing:
+                    to_time = last_updated_time
+                    last_updated_time = prev_last_updated_time
+                else:
+                    to_time = None
+
+        if backwards:
+            timed = now - last_updated_time
+            if to_time:
+                timed_to = now - to_time
+        else:
+            timed = last_updated_time - now
+            if to_time:
+                timed_to = to_time - now
+
+        minutes = int(timed.total_seconds() / 60)
+        if to_time:
+            minutes_to = int(timed_to.total_seconds() / 60)
+
+        if minutes < newest_age:
+            newest_age = minutes
+            prev_state = newest_state
+            newest_state = state
+
+        # Power to Energy
+        if integrate and to_time:
+            total_minutes = abs(minutes_to - minutes)
+            state = last_state + state * total_minutes / 60.0
+
+        if to_time:
+            minute = minutes
+            if minute == minutes_to:
+                mdata[minute] = state
+            else:
+                if smoothing:
+                    # Reset to zero, sometimes not exactly zero
+                    if clean_increment and (state < last_state) and ((last_state - state) >= 1.0):
+                        while minute < minutes_to:
+                            if minute >= minute_min and minute <= minute_max:
+                                mdata[minute] = state
+                            minute += 1
+                    else:
+                        # Incrementing data can't go backwards
+                        if clean_increment and state < last_state:
+                            state = last_state
+
+                        # Create linear function
+                        diff = (state - last_state) / (minutes_to - minute)
+
+                        # If the spike is too big don't smooth it, it will removed in the clean function later
+                        if clean_increment and max_increment > 0 and diff > max_increment:
+                            diff = 0
+
+                        index = 0
+                        while minute < minutes_to:
+                            if minute >= minute_min and minute <= minute_max:
+                                if backwards:
+                                    mdata[minute] = state - diff * index
+                                else:
+                                    mdata[minute] = last_state + diff * index
+                            minute += 1
+                            index += 1
+                else:
+                    while minute < minutes_to:
+                        if minute >= minute_min and minute <= minute_max:
+                            if backwards:
+                                mdata[minute] = last_state
+                            else:
+                                mdata[minute] = state
+
+                            if adjusted:
+                                adata[minute] = True
+                        minute += 1
+        else:
+            if spreading:
+                for minute in range(minutes, minutes + spreading):
+                    if minute >= minute_min and minute <= minute_max:
+                        mdata[minute] = state
+            else:
+                if minutes >= minute_min and minutes <= minute_max:
+                    mdata[minutes] = state
+
+        # Store previous time & state
+        if to_time and not backwards:
+            prev_last_updated_time = to_time
+        else:
+            prev_last_updated_time = last_updated_time
+        last_state = state
+
+    # If we only have a start time then fill the gaps with the last values
+    if not to_key:
+        # Fill from last sample until now with interpolation if enabled
+        if interpolate and clean_increment and backwards:
+            last_sample_minute = 0
+            for minute in range(60):
+                if minute in mdata:
+                    last_sample_minute = minute
+                    break
+            last_but_one_sample_minute = last_sample_minute
+            for minute in range(last_sample_minute + 5, 60):
+                if minute in mdata and (mdata[minute] != mdata[last_sample_minute]):
+                    last_but_one_sample_minute = minute
+                    break
+            sample_gap = last_but_one_sample_minute - last_sample_minute
+            if last_sample_minute > 0 and sample_gap > 0 and last_sample_minute < 15:
+                last_sample_value = mdata[last_sample_minute]
+                last_but_one_minute_sample = mdata[last_but_one_sample_minute]
+                step = (last_sample_value - last_but_one_minute_sample) / sample_gap
+                if step > 0:
+                    for minute in range(last_sample_minute):
+                        mdata[minute] = dp4(last_sample_value + step * (last_sample_minute - minute))
+
+        # Fill from last sample until now
+        for minute in range(60 * 24 * days):
+            if backwards:
+                rindex = minute
+            else:
+                rindex = 60 * 24 * days - minute - 1
+
+            if rindex not in mdata:
+                mdata[rindex] = newest_state
+            else:
+                break
+
+        # Fill gaps before the first value
+        state = 0
+        for minute in range(60 * 24 * days):
+            if backwards:
+                rindex = 60 * 24 * days - minute - 1
+            else:
+                rindex = minute
+            if rindex in mdata:
+                state = mdata[rindex]
+                break
+
+        # Fill gaps in the middle
+        for minute in range(60 * 24 * days):
+            if backwards:
+                rindex = 60 * 24 * days - minute - 1
+            else:
+                rindex = minute
+            state = mdata.get(rindex, state)
+            mdata[rindex] = state
+
+    # Reverse data with smoothing
+    if clean_increment:
+        mdata = clean_incrementing_reverse(mdata, max_increment)
+
+    # Accumulate to previous data?
+    if accumulate:
+        for minute in range(60 * 24 * days):
+            if minute in mdata:
+                mdata[minute] += accumulate.get(minute, 0)
+            else:
+                mdata[minute] = accumulate.get(minute, 0)
+
+    if adjust_key:
+        io_adjusted = adata
+
+    # Rounding
+    for minute in mdata.keys():
+        mdata[minute] = dp4(mdata[minute])
+
+    return mdata, io_adjusted
+
+def clean_incrementing_reverse(data, max_increment=0):
+    """
+    Cleanup an incrementing sensor data that runs backwards in time to remove the
+    resets (where it goes back to 0) and make it always increment
+    """
+    new_data = {}
+    length = max(data) + 1
+
+    increment = 0
+    last = data[length - 1]
+
+    for index in range(length):
+        rindex = length - index - 1
+        nxt = data.get(rindex, last)
+        if nxt >= last:
+            if (max_increment > 0) and ((nxt - last) > max_increment):
+                # Smooth out big spikes
+                pass
+            else:
+                increment += nxt - last
+            last = nxt
+        elif nxt < last:
+            if nxt <= 0 or ((last - nxt) >= (1.0)):
+                last = nxt
+        new_data[rindex] = increment
+
+    return new_data
 
 def format_time_ago(last_updated):
     """

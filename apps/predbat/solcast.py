@@ -16,7 +16,7 @@ import traceback
 import pytz
 from datetime import datetime, timedelta, timezone
 from config import TIME_FORMAT, TIME_FORMAT_SOLCAST, TIME_FORMAT_FORECAST_SOLAR
-from utils import dp1, dp2, dp4
+from utils import dp1, dp2, dp4, history_attribute_to_minute_data
 
 """
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
@@ -599,8 +599,8 @@ class Solcast:
         self.log("PV Calibration: Fetching PV data for calibration")
 
         days = 10
-        pv_power_hist, pv_power_hist_days = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False, intermediate=True))
-        pv_forecast, pv_forecast_hist_days = self.history_attribute_to_minute_data(self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False, intermediate=True))
+        pv_power_hist, pv_power_hist_days = history_attribute_to_minute_data(self.now_utc, self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False, intermediate=True))
+        pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(self.now_utc, self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False, intermediate=True))
 
         hist_days = min(pv_power_hist_days, pv_forecast_hist_days)
         enabled_calibration = True
@@ -802,7 +802,7 @@ class Solcast:
             else:
                 pv_estimate = "pv_estimate" + str(pv_estimate)
 
-            pv_forecast_minute = self.minute_data(
+            pv_forecast_minute, ignore_io_adjusted = minute_data(
                 pv_forecast_data,
                 self.forecast_days + 1,
                 self.midnight_utc,
@@ -813,7 +813,7 @@ class Solcast:
                 scale=self.pv_scaling,
                 spreading=30,
             )
-            pv_forecast_minute10 = self.minute_data(
+            pv_forecast_minute10, ignore_io_adjusted = minute_data(
                 pv_forecast_data,
                 self.forecast_days + 1,
                 self.midnight_utc,

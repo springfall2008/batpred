@@ -13,7 +13,7 @@
 
 from datetime import datetime, timedelta
 import pytz
-from utils import str2time, dp2, dp3
+from utils import str2time, dp2, dp3, minute_data
 
 from config import TIME_FORMAT
 
@@ -113,7 +113,6 @@ class PredHeat:
         self.call_service = base.call_service_wrapper
         self.get_history = base.get_history_wrapper
         self.expose_config = base.expose_config
-        self.minute_data = base.minute_data
         self.get_services = base.get_services_wrapper
         self.run_every = base.run_every
         self.heat_pump_efficiency = HEAT_PUMP_EFFICIENCY.copy()
@@ -187,7 +186,7 @@ class PredHeat:
         self.temperatures = {}
 
         if data:
-            self.temperatures = self.minute_data(data, self.forecast_days, now_utc, "temperature", "datetime", backwards=False, smoothing=True, prev_last_updated_time=now_utc, last_state=self.external_temperature[0])
+            self.temperatures, ignore_io_adjusted = minute_data(data, self.forecast_days, now_utc, "temperature", "datetime", backwards=False, smoothing=True, prev_last_updated_time=now_utc, last_state=self.external_temperature[0], max_increment=MAX_INCREMENT)
         else:
             self.log("WARN: Unable to fetch data for {}".format(entity_id))
             self.record_status("Warn - Unable to fetch data from {}".format(entity_id), had_errors=True)
@@ -225,7 +224,7 @@ class PredHeat:
                     age_days = min(age_days, age.days)
 
             if history:
-                data_points = self.minute_data(history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=smoothing, scale=scaling / total_count, clean_increment=incrementing, accumulate=data_points)
+                data_points, ignore_io_adjusted = minute_data(history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=smoothing, scale=scaling / total_count, clean_increment=incrementing, accumulate=data_points, max_increment=MAX_INCREMENT)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
                 self.record_status("Warn - Unable to fetch history from {}".format(entity_id), had_errors=True)
