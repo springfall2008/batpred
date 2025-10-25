@@ -348,6 +348,8 @@ class OctopusAPI:
     async def select_event(self, entity_id, value):
         if entity_id == self.get_entity_name("select", "intelligent_target_time"):
             self.commands.append({"command": "set_intelligent_target_time", "value": value})
+        elif entity_id == self.get_entity_name("select", "saving_session_join"):
+            self.commands.append({"command": "join_saving_session_event", "event_code": value})
 
     async def number_event(self, entity_id, value):
         if entity_id == self.get_entity_name("number", "intelligent_target_soc"):
@@ -765,7 +767,15 @@ class OctopusAPI:
                 if start <= self.now_utc and end > self.now_utc:
                     active_event = True
                     break
-        self.base.dashboard_item(self.get_entity_name("sensor", "saving_session"), "on" if active_event else "off", attributes=saving_attributes, app="octopus")
+        self.base.dashboard_item(self.get_entity_name("binary_sensor", "saving_session"), "on" if active_event else "off", attributes=saving_attributes, app="octopus")
+
+        # Create joiner dropdown for available events
+        possible_codes = []
+        for event in available_events:
+            code = event.get("code", None)
+            if code:
+                possible_codes.append(code)
+        self.base.dashboard_item(self.get_entity_name("select", "saving_session_join"), "", attributes={"options": possible_codes, "friendly_name": "Join Octopus Saving Session Event", "icon": "mdi:currency-usd"}, app="octopus")
 
         return return_available_events, return_joined_events
     
@@ -774,7 +784,8 @@ class OctopusAPI:
         Automatic configuration of entities
         """
         self.log("Octopus API: Automatic configuration of entities")
-        self.base.args['octopus_saving_session'] = self.get_entity_name("sensor", "saving_session")
+        self.base.args['octopus_saving_session'] = self.get_entity_name("binary_sensor", "saving_session")
+        self.base.args["octopus_saving_session_join"] = self.get_entity_name("select", "saving_session_join")
         for tariff in tariffs:
             self.base.args["metric_octopus_{}_rates".format(tariff)] = self.get_entity_name("sensor", tariff + "_rates")
             self.base.args["metric_octopus_{}_standing".format(tariff)] = self.get_entity_name("sensor", tariff + "_standing")
@@ -2069,21 +2080,26 @@ class Octopus:
                 available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
 
             if available_events:
-                for event in available_events:
-                    code = event.get("code", None)  # decode the available events structure for code, start/end time & rate
-                    start = event.get("start", None)
-                    end = event.get("end", None)
-                    start_time = str2time(start)  # reformat the saving session start & end time for improved readability
-                    end_time = str2time(end)
-                    saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
-                    if code:  # Join the new Octopus saving event and send an alert
-                        self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
-                        octopus_api_direct = self.components.get_component("octopus")
-                        if octopus_api_direct:
-                            octopus_api_direct.join_saving_session_event(code)
-                        else:
-                            self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
-                        self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                # Only try to join every 2 hours to avoid spamming if it fails
+                if not self.octopus_last_joined_try or (self.now_utc - self.octopus_last_joined_try).total_seconds() > 2 * 60 * 60:
+                    for event in available_events:
+                        code = event.get("code", None)  # decode the available events structure for code, start/end time & rate
+                        start = event.get("start", None)
+                        end = event.get("end", None)
+                        start_time = str2time(start)  # reformat the saving session start & end time for improved readability
+                        end_time = str2time(end)
+                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
+                        if code:  # Join the new Octopus saving event and send an alert
+                            self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                            entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
+                            if entity_id_join:
+                                # Join via selector
+                                self.call_service_wrapper("select/select_option", entity_id=entity_id_join, option=code)
+                            else:
+                                # Join via octopus event (Bottle Cap Dave)
+                                self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
+                            self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                            self.octopus_last_joined_try = self.now_utc
 
             if joined_events:
                 for event in joined_events:
