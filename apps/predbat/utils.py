@@ -17,8 +17,7 @@ def minute_data_state(history, days, now, state_key, last_updated_key, prev_last
     """
     mdata = {}
     last_state = "unknown"
-    newest_state = 0
-    last_state = 0
+    newest_state = "unknown"
     newest_age = 999999
 
     if not history:
@@ -68,7 +67,6 @@ def minute_data_state(history, days, now, state_key, last_updated_key, prev_last
         rindex = 60 * 24 * days - minute - 1
         state = mdata.get(rindex, state)
         mdata[rindex] = state
-        minute += 1
 
     return mdata
 
