@@ -1,7 +1,4 @@
 # Custom Dictionary Words
-energythroughput
-chargeenergytotal
-dischargeenergytotal
 activepower
 adata
 adbase
@@ -31,6 +28,7 @@ calib
 cexxxx
 ceyyyy
 chargedischarge
+chargeenergytotal
 chargefreeze
 chargehold
 chargelater
@@ -65,6 +63,7 @@ devcontainers
 dexport
 digestmod
 dimport
+dischargeenergytotal
 dischargefreeze
 diverter
 dlimit
@@ -84,6 +83,7 @@ Energi
 Energidata
 Energidataservice
 energydataservice
+energythroughput
 epod
 euids
 evse
