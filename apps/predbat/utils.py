@@ -11,6 +11,7 @@
 from datetime import datetime, timedelta, timezone
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT
 
+
 def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None):
     """
     Get historical data for state (e.g. predbat status)
@@ -72,6 +73,7 @@ def minute_data_state(history, days, now, state_key, last_updated_key, prev_last
 
     return mdata
 
+
 def history_attribute_to_minute_data(now_utc, data, backwards=True):
     """
     Get historical data for an attribute with history attribute filtering first
@@ -91,6 +93,7 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
     max_days = max(max_age.days, 1)
     mdata, ignore_io_adjusted = minute_data(history, max_days, now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
     return [mdata, max_days]
+
 
 def minute_data(
     history,
@@ -405,6 +408,7 @@ def minute_data(
 
     return mdata, io_adjusted
 
+
 def clean_incrementing_reverse(data, max_increment=0):
     """
     Cleanup an incrementing sensor data that runs backwards in time to remove the
@@ -432,6 +436,7 @@ def clean_incrementing_reverse(data, max_increment=0):
         new_data[rindex] = increment
 
     return new_data
+
 
 def format_time_ago(last_updated):
     """

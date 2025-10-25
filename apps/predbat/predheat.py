@@ -186,7 +186,9 @@ class PredHeat:
         self.temperatures = {}
 
         if data:
-            self.temperatures, ignore_io_adjusted = minute_data(data, self.forecast_days, now_utc, "temperature", "datetime", backwards=False, smoothing=True, prev_last_updated_time=now_utc, last_state=self.external_temperature[0], max_increment=MAX_INCREMENT)
+            self.temperatures, ignore_io_adjusted = minute_data(
+                data, self.forecast_days, now_utc, "temperature", "datetime", backwards=False, smoothing=True, prev_last_updated_time=now_utc, last_state=self.external_temperature[0], max_increment=MAX_INCREMENT
+            )
         else:
             self.log("WARN: Unable to fetch data for {}".format(entity_id))
             self.record_status("Warn - Unable to fetch data from {}".format(entity_id), had_errors=True)
@@ -224,7 +226,9 @@ class PredHeat:
                     age_days = min(age_days, age.days)
 
             if history:
-                data_points, ignore_io_adjusted = minute_data(history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=smoothing, scale=scaling / total_count, clean_increment=incrementing, accumulate=data_points, max_increment=MAX_INCREMENT)
+                data_points, ignore_io_adjusted = minute_data(
+                    history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=smoothing, scale=scaling / total_count, clean_increment=incrementing, accumulate=data_points, max_increment=MAX_INCREMENT
+                )
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
                 self.record_status("Warn - Unable to fetch history from {}".format(entity_id), had_errors=True)
