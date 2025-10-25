@@ -8,7 +8,7 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2
+from utils import str2time, minutes_to_time, dp1, dp2, minute_data
 import aiohttp
 import asyncio
 import json
@@ -996,7 +996,7 @@ class OctopusAPI:
                     if valid_to is None:
                         rate["valid_to"] = (self.midnight_utc + timedelta(days=7)).strftime(TIME_FORMAT_OCTOPUS)
 
-            pdata = self.base.minute_data(tariff_data, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+            pdata, ignore_io = minute_data(tariff_data, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
             return pdata
         else:
             # No tariff
@@ -1667,7 +1667,7 @@ class Octopus:
             url = data.get("next", None)
             pages += 1
 
-        pdata = self.minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+        pdata, _ = minute_data(mdata, 3, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
 
     def add_now_to_octopus_slot(self, octopus_slots, now_utc):
@@ -2022,7 +2022,7 @@ class Octopus:
                 rate_key = "price"
                 from_key = "from"
                 to_key = "till"
-            rate_data = self.minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale)
+            rate_data, self.io_adjusted = minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale)
 
         return rate_data
 

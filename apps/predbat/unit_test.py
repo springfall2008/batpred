@@ -41,7 +41,7 @@ except ImportError:
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2, dp4
+from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2, dp4, minute_data
 from futurerate import FutureRate
 from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST, PREDICT_STEP
 from inverter import Inverter
@@ -8877,7 +8877,7 @@ def test_minute_data(my_predbat):
         {"state": "30.0", "last_updated": "2024-10-04T12:00:00+00:00"},
     ]
 
-    result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=False)
+    result, ignore_io = minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=False)
 
     points = [0, 5, 34, 35, 65]
     result_points = [result.get(p) for p in points]
@@ -8896,7 +8896,7 @@ def test_minute_data(my_predbat):
 
     # Test 2: Empty history
     print("Test 2: Empty history")
-    empty_result = my_predbat.minute_data(history=[], days=1, now=now, state_key="state", last_updated_key="last_updated")
+    empty_result, ignore_io = minute_data(history=[], days=1, now=now, state_key="state", last_updated_key="last_updated")
 
     if empty_result != {}:
         print("ERROR: Empty history test failed - should return empty dict")
@@ -8904,7 +8904,7 @@ def test_minute_data(my_predbat):
 
     # Test 3: Scale parameter
     print("Test 3: Scale parameter")
-    scaled_result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, scale=2.0)
+    scaled_result, ignore_io = minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, scale=2.0)
 
     if 0 not in scaled_result:
         print("ERROR: Scale test failed - no data at minute 0")
@@ -8915,7 +8915,7 @@ def test_minute_data(my_predbat):
 
     # Test 4: Smoothing enabled vs disabled comparison
     print("Test 4: Smoothing")
-    result = my_predbat.minute_data(
+    result, ignore_io = minute_data(
         history=history,
         days=1,
         now=now,
@@ -8939,7 +8939,7 @@ def test_minute_data(my_predbat):
 
     # Test 4.1: Smoothing clean increment
     print("Test 4.1: Smoothing clean increment")
-    result = my_predbat.minute_data(
+    result, ignore_io = minute_data(
         history=history,
         days=1,
         now=now,
@@ -8970,7 +8970,7 @@ def test_minute_data(my_predbat):
         {"attributes": {"power": "25.0"}, "last_updated": "2024-10-04T11:30:00+00:00"},
     ]
 
-    attrs_result = my_predbat.minute_data(history=history_with_attrs, days=1, now=now, state_key="power", last_updated_key="last_updated", backwards=True, attributes=True)
+    attrs_result, ignore_io = minute_data(history=history_with_attrs, days=1, now=now, state_key="power", last_updated_key="last_updated", backwards=True, attributes=True)
 
     if len(attrs_result) == 0:
         print("ERROR: Attributes test failed - no data returned")
@@ -8982,7 +8982,7 @@ def test_minute_data(my_predbat):
         {"state": "1000.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
     ]
 
-    converted_result = my_predbat.minute_data(history=history_with_units, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="kWh")
+    converted_result, ignore_io = minute_data(history=history_with_units, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="kWh")
 
     if len(converted_result) == 0:
         print("ERROR: Unit conversion test failed - no data returned")
@@ -9003,7 +9003,7 @@ def test_minute_data(my_predbat):
         {"state": "20.0", "last_updated": "2024-10-04T11:45:00+00:00"},
     ]
 
-    filtered_result = my_predbat.minute_data(history=history_with_invalid, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True)
+    filtered_result, ignore_io = minute_data(history=history_with_invalid, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True)
 
     # Function should filter out invalid data
     if len(filtered_result) == 0:
@@ -9015,8 +9015,8 @@ def test_minute_data(my_predbat):
     accumulate_data = {}
     for i in range(24 * 60):
         accumulate_data[i] = 1  # Accumulate 1 unit per minute
-    result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=False)
-    accumulated_result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, accumulate=accumulate_data)
+    result, ignore_io = minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=False)
+    accumulated_result, ignore_io = minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, accumulate=accumulate_data)
 
     if 0 not in accumulated_result:
         print("ERROR: Accumulate test failed - no data at minute 0")
@@ -9029,7 +9029,7 @@ def test_minute_data(my_predbat):
 
     # Test 9: Forward time direction
     print("Test 9: Forward time direction")
-    forward_result = my_predbat.minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=False)
+    forward_result, ignore_io = minute_data(history=history, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=False)
 
     # Test 10: Missing keys handling
     print("Test 10: Missing keys handling")
@@ -9038,7 +9038,7 @@ def test_minute_data(my_predbat):
         {"last_updated": "2024-10-04T11:30:00+00:00"},  # Missing state
     ]
 
-    missing_keys_result = my_predbat.minute_data(history=history_missing_keys, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True)
+    missing_keys_result, ignore_io = minute_data(history=history_missing_keys, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True)
 
     # Test 11: Different state key
     print("Test 11: Different state key")
@@ -9047,7 +9047,7 @@ def test_minute_data(my_predbat):
         {"value": "60.0", "last_updated": "2024-10-04T11:30:00+00:00"},
     ]
 
-    different_key_result = my_predbat.minute_data(history=history_different_key, days=1, now=now, state_key="value", last_updated_key="last_updated", backwards=True)
+    different_key_result, ignore_io = minute_data(history=history_different_key, days=1, now=now, state_key="value", last_updated_key="last_updated", backwards=True)
 
     if len(different_key_result) == 0:
         print("ERROR: Different state key test failed - no data returned")
@@ -9371,7 +9371,7 @@ async def test_download_octopus_url(my_predbat):
         failed = True
     else:
         print("Successfully downloaded {} rate points from VAR-22-11-01 tariff".format(len(rates_data)))
-        pdata = my_predbat.minute_data(rates_data, my_predbat.forecast_days + 1, my_predbat.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+        pdata, ignore_io = minute_data(rates_data, my_predbat.forecast_days + 1, my_predbat.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         if len(pdata) < 24 * 60:
             print("ERROR: Expecting at least {} minutes of rate data got {}".format(24 * 60, len(pdata)))
             failed = True
