@@ -942,7 +942,7 @@ class FoxAPI:
                 if units in ["kWh", "Wh"]:
                     attributes["device_class"] = "energy"
                 if item_name.lower() in ["generation", "energythroughput", "gridconsumption", "loads", "feedin", "chargeenergytotal", "dischargeenergytotal"]:
-                    attributes["state_class"] = "total_increasing"
+                    attributes["state_class"] = "total"
                 self.base.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
 
             # Publish schedule settings
