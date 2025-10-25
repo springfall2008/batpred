@@ -1,4 +1,7 @@
 # Custom Dictionary Words
+energythroughput
+chargeenergytotal
+dischargeenergytotal
 activepower
 adata
 adbase
