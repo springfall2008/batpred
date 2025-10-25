@@ -3278,7 +3278,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        # my_predbat.best_soc_keep = 1
+        my_predbat.best_soc_keep = 0
+        my_predbat.rate_low_threshold = 0
+        my_predbat.rate_high_threshold = 0
         # my_predbat.set_charge_freeze = True
         # my_predbat.set_export_freeze = True
         # my_predbat.combine_export_slots = False
@@ -8693,7 +8695,6 @@ def run_test_octopus_api(my_predbat, octopus_api, octopus_account):
     failed = False
 
     octopus_api = OctopusAPI(octopus_api, octopus_account, my_predbat)
-    my_predbat.octopus_api_direct = octopus_api
     my_predbat.create_task(octopus_api.start())
     octopus_api.wait_api_started()
 
@@ -9360,7 +9361,7 @@ async def test_download_octopus_url(my_predbat):
     test_url = "https://api.octopus.energy/v1/products/VAR-22-11-01/electricity-tariffs/E-2R-VAR-22-11-01-A/standard-unit-rates/"
 
     # Test the download function
-    api = OctopusAPI("", "", my_predbat)
+    api = OctopusAPI("", "", False, my_predbat)
     api.now_utc = my_predbat.now_utc
     rates_data = await api.async_download_octopus_url(test_url)
 

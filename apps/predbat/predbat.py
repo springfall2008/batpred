@@ -624,6 +624,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Fetch, Plan, Execu
         self.set_export_low_power = False
         self.config_root = "./"
         self.inverter_can_charge_during_export = True
+        self.octopus_last_joined_try = None
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
