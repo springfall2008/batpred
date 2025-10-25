@@ -186,9 +186,7 @@ class PredHeat:
         self.temperatures = {}
 
         if data:
-            self.temperatures, _ = minute_data(
-                data, self.forecast_days, now_utc, "temperature", "datetime", backwards=False, smoothing=True, prev_last_updated_time=now_utc, last_state=self.external_temperature[0], max_increment=MAX_INCREMENT
-            )
+            self.temperatures, _ = minute_data(data, self.forecast_days, now_utc, "temperature", "datetime", backwards=False, smoothing=True, prev_last_updated_time=now_utc, last_state=self.external_temperature[0], max_increment=MAX_INCREMENT)
         else:
             self.log("WARN: Unable to fetch data for {}".format(entity_id))
             self.record_status("Warn - Unable to fetch data from {}".format(entity_id), had_errors=True)
