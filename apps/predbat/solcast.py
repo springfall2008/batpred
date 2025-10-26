@@ -483,7 +483,7 @@ class SolarAPI:
                 try:
                     data = self.base.get_state_wrapper(entity_id=entity_id, attribute=attribute)
                 except (ValueError, TypeError):
-                    self.log("Warn: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(self.base.get_arg(argname, indirect=False), argname))
+                    self.log("Warn: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(entity_id, argname))
 
             # Solcast new vs old version
             # check the total vs the sum of 30 minute slots and work out scale factor
