@@ -46,6 +46,7 @@ import urllib.parse
 
 ROOT_YAML_KEY = "pred_bat"
 
+
 class WebInterface:
     def __init__(self, web_port, base) -> None:
         self.abort = False

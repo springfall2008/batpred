@@ -13,6 +13,7 @@ from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, 
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
+
 def get_override_time_from_string(now_utc, time_str):
     """
     Convert a time string like "Sun 13:00" into a datetime object
@@ -41,6 +42,7 @@ def get_override_time_from_string(now_utc, time_str):
     else:
         override_time = override_time.replace(minute=0)
     return override_time
+
 
 def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None):
     """
