@@ -856,18 +856,22 @@ class Fetch:
         # Convert keys to integers and values to floats
         pv_forecast_packed = {}
         pv_forecast10_packed = {}
-        for key, value in pv_forecast_packed_ld.items():
-            try:
-                minute = int(key)
-                pv_forecast_packed[minute] = float(value)
-            except (ValueError, TypeError):
-                pass
-        for key, value in pv_forecast10_packed_ld.items():
-            try:
-                minute = int(key)
-                pv_forecast10_packed[minute] = float(value)
-            except (ValueError, TypeError):
-                pass
+
+        if pv_forecast_packed_ld:
+            for key, value in pv_forecast_packed_ld.items():
+                try:
+                    minute = int(key)
+                    pv_forecast_packed[minute] = float(value)
+                except (ValueError, TypeError):
+                    pass
+
+        if pv_forecast10_packed_ld:
+            for key, value in pv_forecast10_packed_ld.items():
+                try:
+                    minute = int(key)
+                    pv_forecast10_packed[minute] = float(value)
+                except (ValueError, TypeError):
+                    pass
 
         # Unpack the forecast data
         max_minute = max(pv_forecast_packed.keys()) if pv_forecast_packed else 0
