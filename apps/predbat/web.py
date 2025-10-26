@@ -2859,7 +2859,7 @@ var options = {
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
 
             now_utc = self.base.now_utc
-            override_time = get_override_time_from_string(time_str)
+            override_time = get_override_time_from_string(now_utc, time_str)
             if not override_time:
                 return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 

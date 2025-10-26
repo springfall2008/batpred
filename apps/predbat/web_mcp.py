@@ -18,14 +18,11 @@ to expose battery prediction data and plan information via the MCP protocol.
 
 import asyncio
 import json
-import logging
-import sys
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict
 from datetime import datetime, timezone
 from utils import calc_percent_limit, get_override_time_from_string
 import re
 from aiohttp import web
-import asyncio
 import time
 
 """
@@ -94,11 +91,6 @@ class PredbatMCPServer:
 
     async def stop(self):
         print("MCP interface stop called")
-        self.abort = True
-        await asyncio.sleep(1)
-
-    async def stop(self):
-        print("Web interface stop called")
         self.abort = True
         await asyncio.sleep(1)
 
@@ -292,6 +284,7 @@ class MCPServerWrapper:
             # Refresh plan
             self.base.update_pending = True
             self.base.plan_valid = False
+            return {"success": True, "error": None, "data": {"action": action, "time": override_time.isoformat()}, "timestamp": datetime.now().isoformat(), "description": f"Plan override applied: {action} at {override_time.isoformat()}"}
         except Exception as e:
             return {"success": False, "error": f"Error applying plan override: {str(e)}", "data": None}
 
