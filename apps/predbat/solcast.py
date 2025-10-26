@@ -344,7 +344,6 @@ class SolarAPI:
         Download solcast data directly from a URL or return from cache if recent.
         """
         cache_path = self.config_root + "/cache"
-        cache_path_p = self.config_root_p + "/cache"
 
         host = self.args.get("solcast_host", None)
         api_keys = self.args.get("solcast_api_key", None)
@@ -358,14 +357,13 @@ class SolarAPI:
 
         self.solcast_data = {}
         cache_file = cache_path + "/solcast.json"
-        cache_file_p = cache_path_p + "/solcast.json"
 
         if os.path.exists(cache_file):
             try:
                 with open(cache_file) as f:
                     self.solcast_data = json.load(f)
             except Exception as e:
-                self.log("Warn: Error loading Solcast cache file {}, error {}".format(cache_file_p, e))
+                self.log("Warn: Error loading Solcast cache file {}, error {}".format(cache_file, e))
                 self.log("Warn: " + traceback.format_exc())
                 os.remove(cache_file)
 
