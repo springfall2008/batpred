@@ -39,7 +39,7 @@ from web_helper import (
     get_browse_css,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string
+from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string, history_attribute, prune_today
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
 import urllib.parse
@@ -106,15 +106,15 @@ class WebInterface:
         Update the history data
         """
         self.log("Web interface history update")
-        self.pv_power_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7, required=False))
-        self.pv_forecast_hist = self.base.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False))
-        self.pv_forecast_histCL = self.base.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
-        self.cost_today_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
-        self.cost_hour_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
-        self.cost_yesterday_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+        self.pv_power_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7, required=False))
+        self.pv_forecast_hist = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False))
+        self.pv_forecast_histCL = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
+        self.cost_today_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
+        self.cost_hour_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
+        self.cost_yesterday_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
 
         if self.base.num_cars > 0:
-            self.cost_yesterday_car_hist = self.base.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            self.cost_yesterday_car_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
             self.cost_yesterday_no_car = self.subtract_daily(self.cost_yesterday_hist, self.cost_yesterday_car_hist)
         else:
             self.cost_yesterday_no_car = self.cost_yesterday_hist
@@ -126,8 +126,8 @@ class WebInterface:
                 self.compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
-                    self.compare_hist[id]["cost"] = self.base.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
-                    self.compare_hist[id]["metric"] = self.base.history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
+                    self.compare_hist[id]["cost"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
+                    self.compare_hist[id]["metric"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
 
         self.last_success_timestamp = datetime.now(timezone.utc)
 
@@ -755,7 +755,7 @@ class WebInterface:
             text += '<div id="chart"></div>'
             now_str = self.base.now_utc.strftime(TIME_FORMAT)
             history = self.base.get_history_wrapper(entity, days, required=False, tracked=False)
-            history_chart = self.base.history_attribute(history)
+            history_chart = history_attribute(history)
             series_data = []
             series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "3", "stroke_curve": "stepline"})
             text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)
@@ -1850,6 +1850,9 @@ var options = {
         rates_gas = self.get_entity_results(self.base.prefix + ".rates_gas")
         record = self.get_entity_results(self.base.prefix + ".record")
 
+        self.now_utc = self.base.now_utc
+        self.midnight_utc = self.base.midnight_utc
+
         text = ""
 
         if not soc_kw_best:
@@ -1896,8 +1899,8 @@ var options = {
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
-            cost_pkwh_today = self.base.prune_today(self.cost_today_hist, prune=False, prune_future=False)
-            cost_pkwh_hour = self.base.prune_today(self.cost_hour_hist, prune=False, prune_future=False)
+            cost_pkwh_today = prune_today(self.cost_today_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
+            cost_pkwh_hour = prune_today(self.cost_hour_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
             series_data = [
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
@@ -1918,17 +1921,17 @@ var options = {
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
         elif chart == "PV" or chart == "PV7":
-            pv_power = self.base.prune_today(self.pv_power_hist, prune=chart == "PV")
-            pv_forecast = self.base.prune_today(self.pv_forecast_hist, prune=chart == "PV", intermediate=True)
-            pv_forecastCL = self.base.prune_today(self.pv_forecast_histCL, prune=chart == "PV", intermediate=True)
-            pv_today_forecast = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate"), prune=False, intermediate=True)
-            pv_today_forecast10 = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate10"), prune=False, intermediate=True)
-            pv_today_forecast90 = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate90"), prune=False, intermediate=True)
-            pv_today_forecastCL = self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimateCL"), prune=False, intermediate=True)
-            pv_today_forecast.update(self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimate"), prune=False, intermediate=True))
-            pv_today_forecast10.update(self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimate10"), prune=False, intermediate=True))
-            pv_today_forecast90.update(self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimate90"), prune=False, intermediate=True))
-            pv_today_forecastCL.update(self.base.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimateCL"), prune=False, intermediate=True))
+            pv_power = prune_today(self.pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
+            pv_forecast = prune_today(self.pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
+            pv_forecastCL = prune_today(self.pv_forecast_histCL, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
+            pv_today_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            pv_today_forecast10 = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            pv_today_forecast90 = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            pv_today_forecastCL = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            pv_today_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            pv_today_forecast10.update(prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            pv_today_forecast90.update(prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            pv_today_forecastCL.update(prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
                 {"name": "Forecast History", "data": pv_forecast, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7", "chart_type": "area"},
@@ -2983,7 +2986,7 @@ var options = {
                     # Get current value
                     current_value = self.base.get_arg(config_key, default, indirect=False)
 
-                    if isinstance(current_value, dict):
+                    if isinstance(current_value, (dict, list)):
                         current_value = "{...}"
 
                     # Hide sensitive values

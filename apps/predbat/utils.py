@@ -9,9 +9,116 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta, timezone
-from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT
+from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, intermediate=False):
+    """
+    Remove data from before today
+    """
+    results = {}
+    last_time = None
+    prev_value = None
+    for key in data:
+        # Convert key in format '2024-09-07T15:40:09.799567+00:00' into a datetime
+        if "." in key:
+            timekey = datetime.strptime(key, TIME_FORMAT_SECONDS)
+        else:
+            timekey = datetime.strptime(key, TIME_FORMAT)
+        if last_time and (timekey - last_time).seconds < group * 60:
+            continue
+        if intermediate and last_time and ((timekey - last_time).seconds > group * 60):
+            # Large gap, introduce intermediate data point
+            seconds_gap = int((timekey - last_time).total_seconds())
+            for i in range(1, seconds_gap // int(group * 60)):
+                new_time = last_time + timedelta(seconds=i * group * 60)
+                results[new_time.strftime(TIME_FORMAT)] = prev_value
+        if not prune or (timekey > midnight_utc):
+            if prune_future and (timekey > now_utc):
+                continue
+            results[key] = data[key]
+            last_time = timekey
+            prev_value = data[key]
+    return results
+
+
+def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False):
+    """
+    Get historical data for an attribute
+    """
+    results = {}
+    last_updated_time = None
+    last_day_stamp = None
+
+    if not isinstance(history, list):
+        return results
+
+    if history and len(history) >= 1:
+        history = history[0]
+
+    if not isinstance(history, list):
+        return results
+
+    # Process history
+    for item in history:
+        if last_updated_key not in item:
+            continue
+
+        if attributes:
+            if state_key not in item["attributes"]:
+                continue
+            state = item["attributes"][state_key]
+        else:
+            # Ignore data without correct keys
+            if state_key not in item:
+                continue
+
+            # Unavailable or bad values
+            if item[state_key] == "unavailable" or item[state_key] == "unknown":
+                continue
+
+            state = item[state_key]
+
+        # Get the numerical key and the timestamp and ignore if in error
+        try:
+            state = float(state) * scale
+            if pounds:
+                state = dp2(state / 100)
+        except (ValueError, TypeError):
+            if isinstance(state, str):
+                if state.lower() in ["on", "true", "yes"]:
+                    state = 1
+                elif state.lower() in ["off", "false", "no"]:
+                    state = 0
+                else:
+                    continue
+            else:
+                continue
+
+        try:
+            last_updated_time = item[last_updated_key]
+            last_updated_stamp = str2time(last_updated_time)
+        except (ValueError, TypeError):
+            continue
+
+        day_stamp = last_updated_stamp.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        if offset_days:
+            day_stamp += timedelta(days=offset_days)
+
+        if first and daily and day_stamp == last_day_stamp:
+            continue
+        last_day_stamp = day_stamp
+
+        # Add the state to the result
+        if daily:
+            # Convert day stamp from UTC into localtime
+            results[day_stamp.strftime(TIME_FORMAT_DAILY)] = state
+        else:
+            results[last_updated_time] = state
+
+    return results
 
 
 def get_override_time_from_string(now_utc, time_str):
