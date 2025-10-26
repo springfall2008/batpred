@@ -228,10 +228,12 @@ class Components:
         self.base = base
         self.log = base.log
 
-    def initialize(self, only=None):
+    def initialize(self, only=None, phase=0):
         """Initialize components without starting them"""
         for component_name, component_info in COMPONENT_LIST.items():
             if only and component_name != only:
+                continue
+            if component_info.get("phase", 0) != phase:
                 continue
 
             have_all_args = True

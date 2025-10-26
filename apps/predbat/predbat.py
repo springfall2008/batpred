@@ -1320,7 +1320,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
             # Start all sub-components
             self.components = Components(self)
-            self.components.initialize()
+            self.components.initialize(phase=0)
 
             # Initialize plugin system early so plugins can register web endpoints
             # before the web server starts
@@ -1359,10 +1359,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             self.validate_config()
             self.comparison = Compare(self)
 
+            self.components.initialize(phase=1)
             if not self.components.start(phase=1):
                 self.log("Error: Some components failed to start (phase1)")
                 self.record_status("Error: Some components failed to start (phase1)", had_errors=True)
-                
+
             self.auto_config(final=True)
 
         except Exception as e:
