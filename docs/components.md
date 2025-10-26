@@ -13,6 +13,7 @@ Predbat uses a modular component architecture where each component provides spec
 **Can be restarted:** No
 
 #### What it does
+
 Stores and manages all historical data for Predbat, including energy usage, sensor values, and system states. This allows Predbat to keep its own database of historical information independent of Home Assistant.
 
 #### When to enable
@@ -39,7 +40,8 @@ Provides the connection between Predbat and Home Assistant. This is the core com
 If you are using Predbat without Home Assistant then this interface layer just talks directly to the Database Manager.
 
 #### When to enable
-This component is always enabled and required for Predbat to function. 
+
+This component is always enabled and required for Predbat to function.
 
 #### Configuration Options
 
@@ -58,10 +60,12 @@ This component is always enabled and required for Predbat to function.
 **Can be restarted:** No
 
 #### What it does
+
 Retrieves and processes historical sensor data from Home Assistant's database (or from the Predbat database).
 This component handles all lookups of past energy usage, battery levels, and other historical information.
 
 #### When to enable
+
 This component is always enabled.
 
 #### Configuration Options
@@ -75,6 +79,7 @@ No configuration required. This component automatically uses your Home Assistant
 **Can be restarted:** Yes
 
 #### What it does
+
 Provides a built-in web server that lets you view and manage Predbat through your web browser. Access dashboards, view battery plans, check logs, and edit configuration all from an easy-to-use web interface.
 
 #### Configuration Options
@@ -84,6 +89,7 @@ Provides a built-in web server that lets you view and manage Predbat through you
 | `port` | Integer | No | 5052 | `web_port` | Port number for the web server |
 
 #### How to access
+
 If you use Predbat is a Home Assistant add on then click 'Open Web UI' from the add-on or add Predbat Web UI to your side bar.
 If you run Predbat outside then you can access it from the port as configured:  `http://homename:5052`
 
@@ -94,14 +100,17 @@ If you run Predbat outside then you can access it from the port as configured:  
 **Can be restarted:** Yes
 
 #### What it does
+
 Provides a programmatic API that allows AI assistants (like ChatGPT, Claude, or other MCP-compatible tools) to read and control Predbat. This enables you to use natural language commands to check status, adjust settings, or override plans.
 
 #### When to enable
+
 - You want to control Predbat through AI assistants
 - You're building custom integrations or tools
 - You want programmatic access to Predbat data
 
 #### Security note
+
 The MCP server requires a secret key for authentication. Keep this secret secure and don't share it publicly.
 
 ***CAUTION*** Predbat WebUI does not support https currently, so exposing this MCP port externally to your home network would be unwise.
@@ -121,22 +130,22 @@ Below is an example MCP configuration inside VSCode, but it will be similar in C
 ```json
 Example usage in VSCode
 {
-	"servers": {
-		"predbat-mcp": {
-			"url": "http://homeassistant.local:8199/mcp",
-			"type": "http",
-			"description": "Predbat Model Context Protocol Server",
-			"headers": {
-				"Authorization" : "Bearer predbat_mcp_secret",
-			},
-		}
-	},
-	"inputs": []
+ "servers": {
+  "predbat-mcp": {
+   "url": "http://homeassistant.local:8199/mcp",
+   "type": "http",
+   "description": "Predbat Model Context Protocol Server",
+   "headers": {
+    "Authorization" : "Bearer predbat_mcp_secret",
+   },
+  }
+ },
+ "inputs": []
 }
 ```
 
-
 #### Available commands
+
 - Get current system status
 - View and update configuration settings
 - Browse all entities
@@ -151,15 +160,18 @@ Example usage in VSCode
 **Can be restarted:** Yes
 
 #### What it does
+
 Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and battery. This allows Predbat to automatically set charge/discharge times, power limits, and read real-time data from your inverter without relying on Home Assistant integrations.
 
 #### When to enable
+
 - You have a GivEnergy inverter
 - You want direct cloud-based control (more reliable than local control)
 - You have your GivEnergy Cloud API key
 - You want automatic control of your battery
 
 #### Important notes
+
 - Requires a GivEnergy Cloud account and API key
 - Only enable `ge_cloud_automatic` after testing that manual controls work
 - Can also control GivEnergy EV chargers and smart devices
@@ -173,7 +185,8 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic` | Boolean | No | False | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no apps.yaml changes requied) |
 
 #### How to get your API key
-1. Log in to your GivEnergy account at https://www.givenergy.cloud
+
+1. Log in to your GivEnergy account at <https://www.givenergy.cloud>
 2. Go to Settings → API Keys
 3. Generate a new API key
 4. Copy the key into your `apps.yaml` configuration
@@ -185,9 +198,11 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 **Can be restarted:** Yes
 
 #### What it does
-Downloads historical energy data from GivEnergy Cloud including consumption, generation, battery usage, and grid import/export. This provides accurate historical data for Predbat's calculations and predictions. 
+
+Downloads historical energy data from GivEnergy Cloud including consumption, generation, battery usage, and grid import/export. This provides accurate historical data for Predbat's calculations and predictions.
 
 #### When to enable
+
 - You have a GivEnergy system
 - You want Predbat to use historical data from GivEnergy Cloud instead of from Home Assistant.
 
@@ -207,15 +222,18 @@ Downloads historical energy data from GivEnergy Cloud including consumption, gen
 **Can be restarted:** Yes
 
 #### What it does
+
 Connects to your Octopus Energy account to automatically download your tariff rates, including support for dynamic tariffs like Agile and Intelligent Octopus. This ensures Predbat always has the most accurate and up-to-date energy pricing.
 
 #### When to enable
+
 - You're an Octopus Energy customer
 - You want automatic tariff updates
 - You're on a variable tariff (Agile, Intelligent Octopus, etc.)
 - You want to see your actual consumption data
 
 #### Important notes
+
 - Works with all Octopus tariffs including Agile and Intelligent Octopus
 - Automatically manages Intelligent Octopus smart charging slots
 - Updates rates automatically, no manual intervention needed
@@ -229,7 +247,8 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 | `automatic` | Boolean | No | True | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update apps.yaml) |
 
 #### How to get your API credentials
-1. Log in to your Octopus Energy account at https://octopus.energy
+
+1. Log in to your Octopus Energy account at <https://octopus.energy>
 2. Go to your account dashboard
 3. Find your API key (usually in Developer settings)
 4. Your account number is shown on your dashboard (format: A-XXXXXXXX)
@@ -241,13 +260,16 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 **Can be restarted:** Yes
 
 #### What it does
+
 Integrates with Ohme EV chargers to monitor charging sessions and coordinate charging with your energy tariff. Works particularly well with Intelligent Octopus to optimize charging times and costs.
 
 #### When to enable
+
 - You have an Ohme EV charger
 - You want Predbat to factor in the charging plan within Ohme, this is mostly used with Octopus Intelligent GO.
 
 #### Important notes
+
 - Requires your Ohme account credentials
 - Can automatically manage Intelligent Octopus charging slots
 - Monitors real-time charging status and energy consumption
@@ -267,9 +289,11 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 **Can be restarted:** Yes
 
 #### What it does
+
 Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery systems. Similar to GivEnergy Cloud Direct, but for Fox ESS equipment.
 
 #### When to enable
+
 - You have a Fox ESS inverter
 - You want direct API control of your Fox system
 - You have your Fox ESS API key
@@ -292,14 +316,17 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 **Can be restarted:** Yes
 
 #### What it does
+
 Monitors weather alert feeds (MeteoAlarm) for severe weather warnings that might impact your energy usage or solar generation. Predbat can use this information to adjust its planning accordingly.
 
 #### When to enable
+
 - You want Predbat to be aware of weather alerts
 - You want to adjust battery strategy based on weather warnings
 - You're in an area with frequent severe weather
 
 #### How it works
+
 - Checks for alerts every 30 minutes
 - Processes weather warnings for your area
 - Can be configured with custom alert URLs and filters
@@ -311,6 +338,7 @@ Monitors weather alert feeds (MeteoAlarm) for severe weather warnings that might
 | `alert_config` | Dictionary | Yes | {} | `alerts` | Alert configuration including URL and filters |
 
 #### Configuration example
+
 ```yaml
 alerts:
   url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
@@ -324,15 +352,18 @@ alerts:
 **Can be restarted:** Yes
 
 #### What it does
+
 Retrieves current and forecast carbon intensity data for the UK electricity grid. This allows Predbat to make environmentally-conscious decisions, charging your battery when grid electricity is greener and discharging when it's more carbon-intensive.
 
 #### When to enable
+
 - You want to minimize your carbon footprint
 - You're interested in carbon-aware energy management
 - You're in the UK (uses UK National Grid data)
 - You want to see carbon intensity alongside cost optimization
 
 #### How it works
+
 - Uses your postcode to get regional carbon intensity data
 - Provides both current intensity and forecasts
 - Updates automatically throughout the day
@@ -353,6 +384,7 @@ Note: To use the carbon data in Predbat you also have to turn on **switch.predba
 ### Checking Component Status
 
 You can check the status of all components through the web interface:
+
 1. Open the web interface (default: `http://your-ha-ip:5052`)
 2. Navigate to the **Components** page (`/components`)
 3. View the status of each component:
@@ -364,6 +396,7 @@ You can check the status of all components through the web interface:
 ### Restarting Components
 
 Most components can be restarted if they encounter problems:
+
 - Use the restart button on the Components page in the web interface
 - Or restart Predbat entirely to restart all components
 
@@ -372,11 +405,13 @@ Most components can be restarted if they encounter problems:
 ### Component Health
 
 A component is considered healthy when:
+
 - Its task is running
 - It has updated within the last 60 minutes
 - It reports no errors
 
 If a component becomes unhealthy:
+
 1. Check your configuration in `apps.yaml`
 2. Verify API keys and credentials are correct
 3. Check network connectivity
@@ -384,4 +419,3 @@ If a component becomes unhealthy:
 5. Try restarting the component
 
 ---
-
