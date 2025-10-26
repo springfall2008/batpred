@@ -1842,6 +1842,8 @@ class Octopus:
                             end_minutes = current_start
                         elif end_minutes > current_end:
                             start_minutes = current_end
+                        else:
+                            start_minutes = end_minutes  # Remove slot
                 # Only add the slot if it has a non-zero duration
                 if start_minutes != end_minutes:
                     slots_decoded.append((start_minutes, end_minutes, kwh, source, location))
