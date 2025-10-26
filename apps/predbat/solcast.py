@@ -56,7 +56,7 @@ class SolarAPI:
         """
         seconds = 0
         while not self.api_stop:
-            if seconds % 30 * 600 == 0:  # Every 30 minutes
+            if seconds % (30 * 60) == 0:  # Every 30 minutes
                 try:
                     self.fetch_pv_forecast()
                 except Exception as e:
