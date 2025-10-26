@@ -880,7 +880,7 @@ class SolarAPI:
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
                 # We have to re-get the arg here as the regexp wouldn't be resolved earlier
                 entity_id = getattr(self, argname, None)
-                
+
                 data, total_data, total_sensor = self.fetch_pv_datapoints(argname, entity_id)
                 if data:
                     self.log("PV Data for {} total {} kWh".format(argname, total_sensor))
