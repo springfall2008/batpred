@@ -1,3 +1,14 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2025 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+#
+# This code creates a web server and serves up the Predbat web pages
 """
 Model Context Protocol (MCP) Server for Predbat
 
@@ -17,14 +28,33 @@ from aiohttp import web
 import asyncio
 import time
 
+"""
+Example usage in VSCode
+{
+	"servers": {
+		"predbat-mcp": {
+			// "url": "http://homeassistant.local:8199/mcp",
+			"url": "http://127.0.0.1:8199/mcp",
+			"type": "http",
+			"description": "Predbat Model Context Protocol Server",
+			"headers": {
+				"Authorization" : "Bearer predbat_mcp_secret",
+			},
+		}
+	},
+	"inputs": []
+}
+"""
+
 class PredbatMCPServer:
     """
     Model Context Protocol (MCP) Server for Predbat
     """
-    def __init__(self, enable, mcp_secret, base):
+    def __init__(self, enable, mcp_secret, mcp_port, base):
         """Initialize the MCP server component"""
         self.enable = enable
         self.mcp_secret = mcp_secret
+        self.mcp_port = mcp_port
         self.base = base
         self.mcp_server = None
         self.log = base.log
@@ -38,7 +68,7 @@ class PredbatMCPServer:
             self.mcp_server = create_mcp_server(self.base, self.log)
             await self.mcp_server.start()
 
-            # Now create Web UI on port 8199
+            # Now create Web UI on port self.mcp_port
             app = web.Application()
             app.router.add_get("/mcp", self.html_mcp_get)
             app.router.add_post("/mcp", self.html_mcp_post)
@@ -46,7 +76,7 @@ class PredbatMCPServer:
             runner = web.AppRunner(app)
             await runner.setup()
 
-            site = web.TCPSite(runner, "0.0.0.0", 8199)
+            site = web.TCPSite(runner, "0.0.0.0", self.mcp_port)
             await site.start()
                     
             print("MCP interface started")

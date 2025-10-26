@@ -58,6 +58,7 @@ COMPONENT_LIST = {
         "args": {
             "mcp_enable": {"required": True, "config": "mcp_enable", "default": False},
             "mcp_secret": {"required": False, "config": "mcp_secret", "default": "predbat_mcp_secret"},
+            "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
     },
     "gecloud": {
