@@ -43,6 +43,7 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             prev_value = data[key]
     return results
 
+
 def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False):
     """
     Get historical data for an attribute
@@ -118,6 +119,7 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
             results[last_updated_time] = state
 
     return results
+
 
 def get_override_time_from_string(now_utc, time_str):
     """

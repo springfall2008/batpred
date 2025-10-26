@@ -56,7 +56,7 @@ class SolarAPI:
         """
         seconds = 0
         while not self.api_stop:
-            if seconds % 30*600 == 0:  # Every 30 minutes
+            if seconds % 30 * 600 == 0:  # Every 30 minutes
                 try:
                     self.fetch_pv_forecast()
                 except Exception as e:
@@ -223,7 +223,7 @@ class SolarAPI:
         configs = self.forecast_solar
         if configs is None:
             raise ValueError("SolarAPI: No forecast solar configurations found")
-        
+
         if not isinstance(configs, list):
             configs = [configs]
 
@@ -664,7 +664,9 @@ class SolarAPI:
         self.log("PV Calibration: Fetching PV data for calibration")
 
         days = 10
-        pv_power_hist, pv_power_hist_days = history_attribute_to_minute_data(self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+        pv_power_hist, pv_power_hist_days = history_attribute_to_minute_data(
+            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+        )
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
             self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
         )
@@ -827,17 +829,11 @@ class SolarAPI:
 
         current_pv_power = dp4(pv_forecast_minute.get(self.minutes_now, 0))
 
-        self.base.dashboard_item("sensor." + self.prefix + "_pv_forecast_raw", state=current_pv_power, 
-                                 attributes=
-                                    {"friendly_name": "PV Forecast minute data", 
-                                     "icon": "mdi:solar-power", 
-                                     "forecast": pv_forcecast_pack, 
-                                     "forecast10": pv_forcecast_pack10,
-                                     "unit_of_measurement": "kW",
-                                     "device_class": "power",
-                                     "state_class": "measurement"
-                                    }
-                                )
+        self.base.dashboard_item(
+            "sensor." + self.prefix + "_pv_forecast_raw",
+            state=current_pv_power,
+            attributes={"friendly_name": "PV Forecast minute data", "icon": "mdi:solar-power", "forecast": pv_forcecast_pack, "forecast10": pv_forcecast_pack10, "unit_of_measurement": "kW", "device_class": "power", "state_class": "measurement"},
+        )
 
     def fetch_pv_forecast(self):
         """
@@ -923,5 +919,3 @@ class SolarAPI:
             self.last_success_timestamp = datetime.now(timezone.utc)
         else:
             self.log("Warn: No solar data has been configured.")
-
-    
