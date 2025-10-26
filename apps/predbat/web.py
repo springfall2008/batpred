@@ -67,7 +67,7 @@ class WebInterface:
 
         # Plugin registration system
         self.registered_endpoints = []
-        
+
     async def select_event(self, entity_id, value):
         pass
 
@@ -167,7 +167,7 @@ class WebInterface:
         app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
         app.router.add_get("/browse", self.html_browse)
-        
+
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
             self.base.plugin_system.call_hooks("on_web_start")
@@ -185,13 +185,13 @@ class WebInterface:
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self.web_port)
         await site.start()
-                
+
         print("Web interface started")
         self.api_started = True
         while not self.abort:
             await asyncio.sleep(1)
         await runner.cleanup()
-        
+
         self.api_started = False
         print("Web interface stopped")
 

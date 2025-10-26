@@ -17,10 +17,12 @@ from aiohttp import web
 import asyncio
 import time
 
+
 class PredbatMCPServer:
     """
     Model Context Protocol (MCP) Server for Predbat
     """
+
     def __init__(self, enable, mcp_secret, base):
         """Initialize the MCP server component"""
         self.enable = enable
@@ -31,7 +33,7 @@ class PredbatMCPServer:
         self.api_started = False
         self.abort = False
         self.last_success_timestamp = None
-        
+
     async def start(self):
         """Start the MCP server if enabled"""
         if self.enable:
@@ -48,7 +50,7 @@ class PredbatMCPServer:
 
             site = web.TCPSite(runner, "0.0.0.0", 8199)
             await site.start()
-                    
+
             print("MCP interface started")
             self.api_started = True
             while not self.abort:
@@ -58,7 +60,7 @@ class PredbatMCPServer:
 
             if self.mcp_server:
                 self.mcp_server.stop()
-            
+
             self.api_started = False
             print("MCP interface stopped")
 
@@ -100,65 +102,38 @@ class PredbatMCPServer:
         Handle GET requests to MCP endpoint - returns server info and available tools
         """
         if not self.mcp_server:
-            return web.json_response({
-                "success": False,
-                "error": "MCP server is not available."
-            }, status=503)
-        
+            return web.json_response({"success": False, "error": "MCP server is not available."}, status=503)
 
         # Check if mcp_secret is in the header as auth bearer
         mcp_secret = request.headers.get("Authorization")
         if mcp_secret != f"Bearer {self.mcp_secret}":
-            return web.json_response({
-                "success": False,
-                "error": "Unauthorized: Invalid MCP secret."
-            }, status=401)
-        
+            return web.json_response({"success": False, "error": "Unauthorized: Invalid MCP secret."}, status=401)
+
         try:
             result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
             return web.json_response(result)
         except Exception as e:
             self.log(f"Error in MCP GET endpoint: {e}")
-            return web.json_response({
-                "success": False,
-                "error": f"Server error: {str(e)}"
-            }, status=500)
+            return web.json_response({"success": False, "error": f"Server error: {str(e)}"}, status=500)
 
     async def html_mcp_post(self, request):
         """
         Handle POST requests to MCP endpoint - executes tools via JSON-RPC 2.0
         """
         if not self.mcp_server:
-            return web.json_response({
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32603,
-                    "message": "MCP server is not available."
-                }
-            }, status=503)
-        
+            return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": "MCP server is not available."}}, status=503)
+
         # Check if mcp_secret is in the header as auth bearer
         mcp_secret = request.headers.get("Authorization")
         if mcp_secret != f"Bearer {self.mcp_secret}":
-            return web.json_response({
-                "success": False,
-                "error": "Unauthorized: Invalid MCP secret."
-            }, status=401)
+            return web.json_response({"success": False, "error": "Unauthorized: Invalid MCP secret."}, status=401)
 
         try:
             result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
             return web.json_response(result)
         except Exception as e:
             self.log(f"Error in MCP POST endpoint: {e}")
-            return web.json_response({
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32603,
-                    "message": f"Server error: {str(e)}"
-                }
-            }, status=500)
+            return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": f"Server error: {str(e)}"}}, status=500)
 
 
 class MCPServerWrapper:
