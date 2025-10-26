@@ -491,7 +491,12 @@ class SolarAPI:
                 for entry in data:
                     total_data += entry["pv_estimate"]
                 total_data = dp2(total_data)
-                total_sensor = dp2(self.base.get_state_wrapper(entity_id=entity_id, default=1.0))
+                total_sensor = self.base.get_state_wrapper(entity_id=entity_id, default=1.0)
+                try:
+                    total_sensor = dp2(float(total_sensor))
+                except (ValueError, TypeError):
+                    total_sensor = 1.0
+
         return data, total_data, total_sensor
 
     def publish_pv_stats(self, pv_forecast_data, divide_by, period):
@@ -873,8 +878,11 @@ class SolarAPI:
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
-                arg_value = getattr(self, argname, None)
-                data, total_data, total_sensor = self.fetch_pv_datapoints(argname, arg_value)
+                # We have to re-get the arg here as the regexp wouldn't be resolved earlier
+                entity_id = self.base.get_arg(argname, default=None, indirect=False)
+                print("Fetching PV data for {} from entity {}".format(argname, entity_id))
+                
+                data, total_data, total_sensor = self.fetch_pv_datapoints(argname, entity_id)
                 if data:
                     self.log("PV Data for {} total {} kWh".format(argname, total_sensor))
                     pv_forecast_data += data
