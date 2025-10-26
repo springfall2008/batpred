@@ -4,7 +4,7 @@ This document provides a comprehensive overview of all Predbat components, their
 
 ## Overview
 
-Predbat uses a modular component architecture where each component provides specific functionality such as database management, cloud API integration, web interfaces, and energy provider integrations. 
+Predbat uses a modular component architecture where each component provides specific functionality such as database management, cloud API integration, web interfaces, and energy provider integrations.
 Each component can be enabled or disabled independently through your `apps.yaml` configuration file.
 
 ## Component List
