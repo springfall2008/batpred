@@ -2986,7 +2986,7 @@ var options = {
                     # Get current value
                     current_value = self.base.get_arg(config_key, default, indirect=False)
 
-                    if isinstance(current_value, dict) or isinstance(current_value, list):
+                    if isinstance(current_value, (dict, list)):
                         current_value = "{...}"
 
                     # Hide sensitive values
