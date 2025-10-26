@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import asyncio
 import hashlib
 import json
 import os
@@ -66,7 +67,7 @@ class SolarAPI:
             if not self.api_started:
                 self.api_started = True
                 self.log("SolarAPI started")
-            time.sleep(15)
+            await asyncio.sleep(1)
             seconds += 15
 
         self.log("Solar API stopped")
