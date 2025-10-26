@@ -39,14 +39,19 @@ from web_helper import (
     get_browse_css,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago
+from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
+try:
+    from web_mcp import create_mcp_server
+    mcp_available = True
+except ImportError as e:
+    print("Warning: MCP Server functionality is not available: {}".format(e))
+    mcp_available = False
+
 import urllib.parse
 
-DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 ROOT_YAML_KEY = "pred_bat"
-
 
 class WebInterface:
     def __init__(self, web_port, base) -> None:
@@ -65,9 +70,17 @@ class WebInterface:
         self.default_log = "warnings"
         self.api_started = False
         self.last_success_timestamp = None
+        self.mcp_server = None
 
         # Plugin registration system
         self.registered_endpoints = []
+        
+        # Initialize MCP server
+        if mcp_available:
+            self.log("Initializing Predbat MCP Server")
+            self.mcp_server = create_mcp_server(base, self.log)
+        else:
+            self.log("MCP Server functionality is not available.")
 
     async def select_event(self, entity_id, value):
         pass
@@ -168,6 +181,10 @@ class WebInterface:
         app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
         app.router.add_get("/browse", self.html_browse)
+        
+        # MCP (Model Context Protocol) endpoints
+        app.router.add_get("/mcp", self.html_mcp_get)
+        app.router.add_post("/mcp", self.html_mcp_post)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -186,11 +203,21 @@ class WebInterface:
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self.web_port)
         await site.start()
+        
+        # Start MCP server
+        if self.mcp_server:
+            await self.mcp_server.start()
+        
         print("Web interface started")
         self.api_started = True
         while not self.abort:
             await asyncio.sleep(1)
         await runner.cleanup()
+        
+        # Stop MCP server
+        if self.mcp_server:
+            await self.mcp_server.stop()
+
         self.api_started = False
         print("Web interface stopped")
 
@@ -1357,7 +1384,11 @@ var options = {
             dropdown_id = f"dropdown_{dropdown_counter}"
             dropdown_counter += 1
 
-            time_stamp = self.get_override_time_from_string(time_text)
+            now_utc = self.base.now_utc
+            time_stamp = get_override_time_from_string(now_utc, time_text)
+            if time_stamp is None:
+                return match.group(0)
+
             minutes_from_midnight = (time_stamp - self.base.midnight_utc).total_seconds() / 60
             in_override = False
             cell_bg_color = "#FFFFFF"
@@ -2769,36 +2800,6 @@ var options = {
 
         return response
 
-    def get_override_time_from_string(self, time_str):
-        """
-        Convert a time string like "Sun 13:00" into a datetime object
-        """
-        now_utc = self.base.now_utc
-        # Parse the time string into a datetime object
-        # Format is Sun 13:00
-        try:
-            override_time = datetime.strptime(time_str, "%a %H:%M")
-        except ValueError:
-            override_time = now_utc
-
-        # Convert day of week text to a number (0=Monday, 6=Sunday)
-        day_of_week_text = time_str.split()[0].lower()
-        day_of_week = DAY_OF_WEEK_MAP.get(day_of_week_text, 0)
-        day_of_week_today = now_utc.weekday()
-
-        override_time = now_utc.replace(hour=override_time.hour, minute=override_time.minute, second=0, microsecond=0)
-        add_days = day_of_week - day_of_week_today
-        if add_days < 0:
-            add_days += 7
-        override_time += timedelta(days=add_days)
-
-        # Ensure minutes are either 0 or 30
-        if override_time.minute >= 30:
-            override_time = override_time.replace(minute=30)
-        else:
-            override_time = override_time.replace(minute=0)
-        return override_time
-
     async def html_rate_override(self, request):
         """
         Handle POST request for rate overrides
@@ -2824,7 +2825,7 @@ var options = {
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
 
             now_utc = self.base.now_utc
-            override_time = self.get_override_time_from_string(time_str)
+            override_time = get_override_time_from_string(now_utc, time_str)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
             if minutes_from_now >= 17 * 60:
@@ -2884,7 +2885,9 @@ var options = {
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
 
             now_utc = self.base.now_utc
-            override_time = self.get_override_time_from_string(time_str)
+            override_time = get_override_time_from_string(time_str)
+            if not override_time:
+                return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
             if minutes_from_now >= 17 * 60:
@@ -3292,3 +3295,49 @@ var options = {
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_mcp_get(self, request):
+        """
+        Handle GET requests to MCP endpoint - returns server info and available tools
+        """
+        if not self.mcp_server:
+            return web.json_response({
+                "success": False,
+                "error": "MCP server is not available."
+            }, status=503)
+        try:
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            return web.json_response(result)
+        except Exception as e:
+            self.log(f"Error in MCP GET endpoint: {e}")
+            return web.json_response({
+                "success": False,
+                "error": f"Server error: {str(e)}"
+            }, status=500)
+
+    async def html_mcp_post(self, request):
+        """
+        Handle POST requests to MCP endpoint - executes tools via JSON-RPC 2.0
+        """
+        if not self.mcp_server:
+            return web.json_response({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32603,
+                    "message": "MCP server is not available."
+                }
+            }, status=503)
+        try:
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            return web.json_response(result)
+        except Exception as e:
+            self.log(f"Error in MCP POST endpoint: {e}")
+            return web.json_response({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32603,
+                    "message": f"Server error: {str(e)}"
+                }
+            }, status=500)
