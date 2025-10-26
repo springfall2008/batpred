@@ -11,6 +11,38 @@
 from datetime import datetime, timedelta, timezone
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT
 
+DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def get_override_time_from_string(now_utc, time_str):
+    """
+    Convert a time string like "Sun 13:00" into a datetime object
+    """
+    # Parse the time string into a datetime object
+    # Format is Sun 13:00
+    try:
+        override_time = datetime.strptime(time_str, "%a %H:%M")
+    except ValueError:
+        return None
+
+    # Convert day of week text to a number (0=Monday, 6=Sunday)
+    day_of_week_text = time_str.split()[0].lower()
+    day_of_week = DAY_OF_WEEK_MAP.get(day_of_week_text, 0)
+    day_of_week_today = now_utc.weekday()
+
+    override_time = now_utc.replace(hour=override_time.hour, minute=override_time.minute, second=0, microsecond=0)
+    add_days = day_of_week - day_of_week_today
+    if add_days < 0:
+        add_days += 7
+    override_time += timedelta(days=add_days)
+
+    # Ensure minutes are either 0 or 30
+    if override_time.minute >= 30:
+        override_time = override_time.replace(minute=30)
+    else:
+        override_time = override_time.replace(minute=0)
+    return override_time
+
 
 def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None):
     """

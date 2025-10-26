@@ -1822,22 +1822,25 @@ def run_load_octopus_slots_tests(my_predbat):
         return failed
 
     today_string = my_predbat.midnight_utc.strftime("%Y-%m-%dT")
+    today_tz_offset = my_predbat.midnight_utc.strftime("%z")
+    today_tz_offset = today_tz_offset[:3] + ":" + today_tz_offset[3:]
+    print("today tz_offset {}".format(today_tz_offset))
     sample_bad = [
-        {"charge_in_kwh": -1.29, "end": today_string + "15:00:00+01:00", "location": "AT_HOME", "source": None, "start": today_string + "14:30:00+01:00"},
-        {"charge_in_kwh": -3.17, "end": today_string + "15:30:00+01:00", "location": "AT_HOME", "source": None, "start": today_string + "15:00:00+01:00"},
-        {"charge_in_kwh": -3.18, "end": today_string + "16:00:00+01:00", "location": "AT_HOME", "source": None, "start": today_string + "15:30:00+01:00"},
-        {"charge_in_kwh": -3.14, "end": today_string + "16:30:00+01:00", "location": "AT_HOME", "source": None, "start": today_string + "16:00:00+01:00"},
-        {"charge_in_kwh": -7.47, "end": today_string + "17:30:00+01:00", "location": None, "source": "smart-charge", "start": today_string + "16:26:00+01:00"},
-        {"charge_in_kwh": -3.0, "end": today_string + "18:00:00+01:00", "location": None, "source": "smart-charge", "start": today_string + "17:30:00+01:00"},
-        {"charge_in_kwh": -3.5, "end": today_string + "03:00:00+01:00", "location": None, "source": "smart-charge", "start": today_string + "02:30:00+01:00"},
-        {"charge_in_kwh": -3.5, "end": today_string + "05:30:00+01:00", "location": None, "source": "smart-charge", "start": today_string + "05:00:00+01:00"},
-        {"end": today_string + "18:00:00+01:00", "start": today_string + "17:30:00+01:00"},
+        {"charge_in_kwh": -1.29, "end": today_string + "15:00:00" + today_tz_offset, "location": "AT_HOME", "source": None, "start": today_string + "14:30:00" + today_tz_offset},
+        {"charge_in_kwh": -3.17, "end": today_string + "15:30:00" + today_tz_offset, "location": "AT_HOME", "source": None, "start": today_string + "15:00:00" + today_tz_offset},
+        {"charge_in_kwh": -3.18, "end": today_string + "16:00:00" + today_tz_offset, "location": "AT_HOME", "source": None, "start": today_string + "15:30:00" + today_tz_offset},
+        {"charge_in_kwh": -3.14, "end": today_string + "16:30:00" + today_tz_offset, "location": "AT_HOME", "source": None, "start": today_string + "16:00:00" + today_tz_offset},
+        {"charge_in_kwh": -7.47, "end": today_string + "17:30:00" + today_tz_offset, "location": None, "source": "smart-charge", "start": today_string + "16:26:00" + today_tz_offset},
+        {"charge_in_kwh": -3.0, "end": today_string + "18:00:00" + today_tz_offset, "location": None, "source": "smart-charge", "start": today_string + "17:30:00" + today_tz_offset},
+        {"charge_in_kwh": -3.5, "end": today_string + "03:00:00" + today_tz_offset, "location": None, "source": "smart-charge", "start": today_string + "02:30:00" + today_tz_offset},
+        {"charge_in_kwh": -3.5, "end": today_string + "05:30:00" + today_tz_offset, "location": None, "source": "smart-charge", "start": today_string + "05:00:00" + today_tz_offset},
+        {"end": today_string + "18:00:00" + today_tz_offset, "start": today_string + "17:30:00" + today_tz_offset, "source": "null", "location": "AT_HOME"},
     ]
 
     loaded_slots = my_predbat.load_octopus_slots(sample_bad, False)
     expected_loaded = "[{'start': 870, 'end': 900, 'kwh': 1.29, 'average': 4, 'cost': 5.16, 'soc': 1.29}, {'start': 900, 'end': 930, 'kwh': 3.17, 'average': 4, 'cost': 12.68, 'soc': 4.46}, {'start': 930, 'end': 960, 'kwh': 3.18, 'average': 4, 'cost': 12.72, 'soc': 7.640000000000001}, {'start': 960, 'end': 990, 'kwh': 3.14, 'average': 4, 'cost': 12.56, 'soc': 10}, {'start': 990, 'end': 1050, 'kwh': 7.47, 'average': 4, 'cost': 29.88, 'soc': 10}, {'start': 1050, 'end': 1080, 'kwh': 3.0, 'average': 4, 'cost': 12.0, 'soc': 10}]"
     if str(loaded_slots) != expected_loaded:
-        print("ERROR: Loaded slots should be {} got {}".format(expected_loaded, loaded_slots))
+        print("ERROR: Loaded slots should be {}\ngot {}".format(expected_loaded, loaded_slots))
         failed = True
 
     if failed:

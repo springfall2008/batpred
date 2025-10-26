@@ -18,6 +18,7 @@ from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from web_mcp import PredbatMCPServer
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
@@ -51,6 +52,15 @@ COMPONENT_LIST = {
         "can_restart": False,
     },
     "web": {"class": WebInterface, "name": "Web Interface", "args": {"port": {"required": False, "config": "web_port", "default": 5052}}},
+    "mcp": {
+        "class": PredbatMCPServer,
+        "name": "MCP Server",
+        "args": {
+            "mcp_enable": {"required": True, "config": "mcp_enable", "default": False},
+            "mcp_secret": {"required": False, "config": "mcp_secret", "default": "predbat_mcp_secret"},
+            "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
+        },
+    },
     "gecloud": {
         "class": GECloudDirect,
         "name": "GivEnergy Cloud Direct",
