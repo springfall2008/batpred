@@ -26,6 +26,14 @@ Solcast class deals with fetching solar predictions, processing the data and pub
 
 
 class SolarAPI:
+    """
+    SolarAPI is responsible for managing and aggregating solar forecast data from multiple sources,
+    including Solcast, Forecast.Solar, and direct sensor inputs. It periodically fetches, processes,
+    and publishes solar production forecasts for use by the home battery system. SolarAPI operates
+    as an asynchronous background component, ensuring up-to-date solar predictions are available
+    for system optimization and decision-making.
+    """
+
     def __init__(self, prefix, solcast_host, solcast_api_key, solcast_sites, solcast_poll_hours, forecast_solar, forecast_solar_max_age, pv_forecast_today, pv_forecast_tomorrow, pv_forecast_d3, pv_forecast_d4, pv_scaling, base):
         self.prefix = prefix
         self.solcast_host = solcast_host
