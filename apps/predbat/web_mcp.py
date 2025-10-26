@@ -10,9 +10,155 @@ import json
 import logging
 import sys
 from typing import Any, Dict, List, Optional, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from utils import calc_percent_limit, get_override_time_from_string
 import re
+from aiohttp import web
+import asyncio
+import time
+
+class PredbatMCPServer:
+    """
+    Model Context Protocol (MCP) Server for Predbat
+    """
+    def __init__(self, enable, mcp_secret, base):
+        """Initialize the MCP server component"""
+        self.enable = enable
+        self.mcp_secret = mcp_secret
+        self.base = base
+        self.mcp_server = None
+        self.log = base.log
+        self.api_started = False
+        self.abort = False
+        self.last_success_timestamp = None
+        
+    async def start(self):
+        """Start the MCP server if enabled"""
+        if self.enable:
+            self.mcp_server = create_mcp_server(self.base, self.log)
+            await self.mcp_server.start()
+
+            # Now create Web UI on port 8199
+            app = web.Application()
+            app.router.add_get("/mcp", self.html_mcp_get)
+            app.router.add_post("/mcp", self.html_mcp_post)
+
+            runner = web.AppRunner(app)
+            await runner.setup()
+
+            site = web.TCPSite(runner, "0.0.0.0", 8199)
+            await site.start()
+                    
+            print("MCP interface started")
+            self.api_started = True
+            while not self.abort:
+                self.last_success_timestamp = datetime.now(timezone.utc)
+                await asyncio.sleep(2)
+            await runner.cleanup()
+
+            if self.mcp_server:
+                self.mcp_server.stop()
+            
+            self.api_started = False
+            print("MCP interface stopped")
+
+    async def stop(self):
+        print("MCP interface stop called")
+        self.abort = True
+        await asyncio.sleep(1)
+
+    async def stop(self):
+        print("Web interface stop called")
+        self.abort = True
+        await asyncio.sleep(1)
+
+    def wait_api_started(self):
+        """
+        Wait for the API to start
+        """
+        self.log("MCP: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 240:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: MCP: Failed to start")
+            return False
+        return True
+
+    def is_alive(self):
+        return self.api_started
+
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
+
+    async def html_mcp_get(self, request):
+        """
+        Handle GET requests to MCP endpoint - returns server info and available tools
+        """
+        if not self.mcp_server:
+            return web.json_response({
+                "success": False,
+                "error": "MCP server is not available."
+            }, status=503)
+        
+
+        # Check if mcp_secret is in the header as auth bearer
+        mcp_secret = request.headers.get("Authorization")
+        if mcp_secret != f"Bearer {self.mcp_secret}":
+            return web.json_response({
+                "success": False,
+                "error": "Unauthorized: Invalid MCP secret."
+            }, status=401)
+        
+        try:
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            return web.json_response(result)
+        except Exception as e:
+            self.log(f"Error in MCP GET endpoint: {e}")
+            return web.json_response({
+                "success": False,
+                "error": f"Server error: {str(e)}"
+            }, status=500)
+
+    async def html_mcp_post(self, request):
+        """
+        Handle POST requests to MCP endpoint - executes tools via JSON-RPC 2.0
+        """
+        if not self.mcp_server:
+            return web.json_response({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32603,
+                    "message": "MCP server is not available."
+                }
+            }, status=503)
+        
+        # Check if mcp_secret is in the header as auth bearer
+        mcp_secret = request.headers.get("Authorization")
+        if mcp_secret != f"Bearer {self.mcp_secret}":
+            return web.json_response({
+                "success": False,
+                "error": "Unauthorized: Invalid MCP secret."
+            }, status=401)
+
+        try:
+            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
+            return web.json_response(result)
+        except Exception as e:
+            self.log(f"Error in MCP POST endpoint: {e}")
+            return web.json_response({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32603,
+                    "message": f"Server error: {str(e)}"
+                }
+            }, status=500)
 
 
 class MCPServerWrapper:

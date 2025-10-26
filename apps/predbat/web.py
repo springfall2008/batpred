@@ -42,13 +42,6 @@ from web_helper import (
 from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
-try:
-    from web_mcp import create_mcp_server
-    mcp_available = True
-except ImportError as e:
-    print("Warning: MCP Server functionality is not available: {}".format(e))
-    mcp_available = False
-
 import urllib.parse
 
 ROOT_YAML_KEY = "pred_bat"
@@ -70,18 +63,10 @@ class WebInterface:
         self.default_log = "warnings"
         self.api_started = False
         self.last_success_timestamp = None
-        self.mcp_server = None
 
         # Plugin registration system
         self.registered_endpoints = []
         
-        # Initialize MCP server
-        if mcp_available:
-            self.log("Initializing Predbat MCP Server")
-            self.mcp_server = create_mcp_server(base, self.log)
-        else:
-            self.log("MCP Server functionality is not available.")
-
     async def select_event(self, entity_id, value):
         pass
 
@@ -182,10 +167,6 @@ class WebInterface:
         app.router.add_post("/api/login", self.html_api_login)
         app.router.add_get("/browse", self.html_browse)
         
-        # MCP (Model Context Protocol) endpoints
-        app.router.add_get("/mcp", self.html_mcp_get)
-        app.router.add_post("/mcp", self.html_mcp_post)
-
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
             self.base.plugin_system.call_hooks("on_web_start")
@@ -203,21 +184,13 @@ class WebInterface:
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self.web_port)
         await site.start()
-        
-        # Start MCP server
-        if self.mcp_server:
-            await self.mcp_server.start()
-        
+                
         print("Web interface started")
         self.api_started = True
         while not self.abort:
             await asyncio.sleep(1)
         await runner.cleanup()
         
-        # Stop MCP server
-        if self.mcp_server:
-            await self.mcp_server.stop()
-
         self.api_started = False
         print("Web interface stopped")
 
@@ -3295,49 +3268,3 @@ var options = {
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
-
-    async def html_mcp_get(self, request):
-        """
-        Handle GET requests to MCP endpoint - returns server info and available tools
-        """
-        if not self.mcp_server:
-            return web.json_response({
-                "success": False,
-                "error": "MCP server is not available."
-            }, status=503)
-        try:
-            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
-            return web.json_response(result)
-        except Exception as e:
-            self.log(f"Error in MCP GET endpoint: {e}")
-            return web.json_response({
-                "success": False,
-                "error": f"Server error: {str(e)}"
-            }, status=500)
-
-    async def html_mcp_post(self, request):
-        """
-        Handle POST requests to MCP endpoint - executes tools via JSON-RPC 2.0
-        """
-        if not self.mcp_server:
-            return web.json_response({
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32603,
-                    "message": "MCP server is not available."
-                }
-            }, status=503)
-        try:
-            result = await self.mcp_server.handle_mcp_request(request, self.mcp_server)
-            return web.json_response(result)
-        except Exception as e:
-            self.log(f"Error in MCP POST endpoint: {e}")
-            return web.json_response({
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32603,
-                    "message": f"Server error: {str(e)}"
-                }
-            }, status=500)
