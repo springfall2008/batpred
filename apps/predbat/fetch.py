@@ -430,109 +430,6 @@ class Fetch:
             age_days = 0
         return load_minutes, age_days
 
-    def prune_today(self, data, prune=True, group=15, prune_future=False, intermediate=False):
-        """
-        Remove data from before today
-        """
-        results = {}
-        last_time = None
-        prev_value = None
-        for key in data:
-            # Convert key in format '2024-09-07T15:40:09.799567+00:00' into a datetime
-            if "." in key:
-                timekey = datetime.strptime(key, TIME_FORMAT_SECONDS)
-            else:
-                timekey = datetime.strptime(key, TIME_FORMAT)
-            if last_time and (timekey - last_time).seconds < group * 60:
-                continue
-            if intermediate and last_time and ((timekey - last_time).seconds > group * 60):
-                # Large gap, introduce intermediate data point
-                seconds_gap = int((timekey - last_time).total_seconds())
-                for i in range(1, seconds_gap // int(group * 60)):
-                    new_time = last_time + timedelta(seconds=i * group * 60)
-                    results[new_time.strftime(TIME_FORMAT)] = prev_value
-            if not prune or (timekey > self.midnight_utc):
-                if prune_future and (timekey > self.now_utc):
-                    continue
-                results[key] = data[key]
-                last_time = timekey
-                prev_value = data[key]
-        return results
-
-    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False):
-        results = {}
-        last_updated_time = None
-        last_day_stamp = None
-
-        if not isinstance(history, list):
-            return results
-
-        if history and len(history) >= 1:
-            history = history[0]
-
-        if not isinstance(history, list):
-            self.log("Warn: history_attribute expects a list of history items, got {}".format(type(history)))
-            return results
-
-        # Process history
-        for item in history:
-            if last_updated_key not in item:
-                continue
-
-            if attributes:
-                if state_key not in item["attributes"]:
-                    continue
-                state = item["attributes"][state_key]
-            else:
-                # Ignore data without correct keys
-                if state_key not in item:
-                    continue
-
-                # Unavailable or bad values
-                if item[state_key] == "unavailable" or item[state_key] == "unknown":
-                    continue
-
-                state = item[state_key]
-
-            # Get the numerical key and the timestamp and ignore if in error
-            try:
-                state = float(state) * scale
-                if pounds:
-                    state = dp2(state / 100)
-            except (ValueError, TypeError):
-                if isinstance(state, str):
-                    if state.lower() in ["on", "true", "yes"]:
-                        state = 1
-                    elif state.lower() in ["off", "false", "no"]:
-                        state = 0
-                    else:
-                        continue
-                else:
-                    continue
-
-            try:
-                last_updated_time = item[last_updated_key]
-                last_updated_stamp = str2time(last_updated_time)
-            except (ValueError, TypeError):
-                continue
-
-            day_stamp = last_updated_stamp.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
-            if offset_days:
-                day_stamp += timedelta(days=offset_days)
-
-            if first and daily and day_stamp == last_day_stamp:
-                continue
-            last_day_stamp = day_stamp
-
-            # Add the state to the result
-            if daily:
-                # Convert day stamp from UTC into localtime
-                results[day_stamp.strftime(TIME_FORMAT_DAILY)] = state
-            else:
-                results[last_updated_time] = state
-
-        return results
-
     def fetch_sensor_data(self):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -943,6 +840,48 @@ class Fetch:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
         else:
             self.load_inday_adjustment = 1.0
+
+    def fetch_pv_forecast(self):
+        """
+        Fetch PV forecast data from one or more sensors
+        """
+        pv_forecast_minute = {}
+        pv_forecast_minute10 = {}
+
+        # Get data from forecast sensor
+        entity_id = "sensor." + self.prefix + "_pv_forecast_raw"
+        pv_forecast_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
+        pv_forecast10_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast10")
+
+        # Convert keys to integers and values to floats
+        pv_forecast_packed = {}
+        pv_forecast10_packed = {}
+        for key, value in pv_forecast_packed_ld.items():
+            try:
+                minute = int(key)
+                pv_forecast_packed[minute] = float(value)
+            except (ValueError, TypeError):
+                pass
+        for key, value in pv_forecast10_packed_ld.items():
+            try:
+                minute = int(key)
+                pv_forecast10_packed[minute] = float(value)
+            except (ValueError, TypeError):
+                pass
+
+        # Unpack the forecast data
+        max_minute = max(pv_forecast_packed.keys()) if pv_forecast_packed else 0
+        last_value = 0
+        last_value10 = 0
+        for minute in range(0, max_minute + 1):
+            last_value = pv_forecast_packed.get(minute, last_value)
+            last_value10 = pv_forecast10_packed.get(minute, last_value10)
+            pv_forecast_minute[minute] = last_value
+            pv_forecast_minute10[minute] = last_value10
+
+        print("PV forecast data points: {}, PV10 forecast data points: {}".format(len(pv_forecast_minute), len(pv_forecast_minute10)))
+
+        return pv_forecast_minute, pv_forecast_minute10
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """

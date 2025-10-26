@@ -62,7 +62,6 @@ from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
-from solcast import Solcast
 from components import Components
 from execute import Execute
 from plan import Plan
@@ -73,7 +72,7 @@ from compare import Compare
 from plugin_system import PluginSystem
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
     """

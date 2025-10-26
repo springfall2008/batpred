@@ -15,26 +15,105 @@ import requests
 import traceback
 import pytz
 from datetime import datetime, timedelta, timezone
-from config import TIME_FORMAT, TIME_FORMAT_SOLCAST, TIME_FORMAT_FORECAST_SOLAR
-from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data
+from config import PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SOLCAST, TIME_FORMAT_FORECAST_SOLAR
+from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
+import time
 
 """
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
 """
 
 
-class Solcast:
+class SolarAPI:
+    def __init__(self, prefix, solcast_host, solcast_api_key, solcast_sites, solcast_poll_hours, forecast_solar, forecast_solar_max_age, pv_forecast_today, pv_forecast_tomorrow, pv_forecast_d3, pv_forecast_d4, pv_scaling, base):
+        self.prefix = prefix
+        self.solcast_host = solcast_host
+        self.solcast_api_key = solcast_api_key
+        self.solcast_sites = solcast_sites
+        self.solcast_poll_hours = solcast_poll_hours
+        self.forecast_solar = forecast_solar
+        self.forecast_solar_max_age = forecast_solar_max_age
+        self.pv_forecast_today = pv_forecast_today
+        self.pv_forecast_tomorrow = pv_forecast_tomorrow
+        self.pv_forecast_d3 = pv_forecast_d3
+        self.pv_forecast_d4 = pv_forecast_d4
+        self.pv_scaling = pv_scaling
+        self.base = base
+        self.log = base.log
+        self.api_started = False
+        self.api_stop = False
+        self.last_success_timestamp = None
+        self.solcast_requests_total = 0
+        self.solcast_failures_total = 0
+        self.forecast_solar_requests_total = 0
+        self.forecast_solar_failures_total = 0
+        self.config_root = base.config_root
+        self.forecast_days = 4
+
+    async def start(self):
+        """
+        Start the Solar API
+        """
+        seconds = 0
+        while not self.api_stop:
+            if seconds % 30*600 == 0:  # Every 30 minutes
+                try:
+                    self.fetch_pv_forecast()
+                except Exception as e:
+                    self.log("Error: Solcast API fetch_pv_forecast exception {}".format(e))
+                    self.log("Error: " + traceback.format_exc())
+
+            if not self.api_started:
+                self.api_started = True
+                self.log("SolarAPI started")
+            time.sleep(15)
+            seconds += 15
+
+        self.log("Solar API stopped")
+
+    async def stop(self):
+        """
+        Stop the Solar API
+        """
+        self.api_stop = True
+
+    def wait_api_started(self):
+        """
+        Wait for the API to start
+        """
+        self.log("SolarAPI: Waiting for API to start")
+        count = 0
+        while not self.api_started and count < 240:
+            time.sleep(1)
+            count += 1
+        if not self.api_started:
+            self.log("Warn: SolarAPI: Failed to start")
+            return False
+        return True
+
+    def is_alive(self):
+        """
+        Check if the API is alive
+        """
+        return self.api_started
+
+    def last_updated_time(self):
+        """
+        Get the last successful update time
+        """
+        return self.last_success_timestamp
+
     def cache_get_url(self, url, params, max_age=8 * 60):
         # Check if this is a Solcast API call for metrics tracking
         is_solcast_api = "solcast.com" in url.lower() or "api.solcast" in url.lower()
         is_forecast_solar_api = "forecast.solar" in url.lower()
 
         # Increment request counter for Solcast API calls
-        if is_solcast_api and hasattr(self, "solcast_requests_total"):
+        if is_solcast_api:
             self.solcast_requests_total += 1
 
         # Increment request counter for forecast.solar API calls
-        if is_forecast_solar_api and hasattr(self, "forecast_solar_requests_total"):
+        if is_forecast_solar_api:
             self.forecast_solar_requests_total += 1
 
         # Get data from cache
@@ -70,30 +149,30 @@ class Solcast:
             r = requests.get(url, params=params)
         except requests.exceptions.ConnectionError as e:
             self.log("Warn: Error downloading data from URL {}, error {}".format(url, e))
-            if is_solcast_api and hasattr(self, "solcast_failures_total"):
+            if is_solcast_api:
                 self.solcast_failures_total += 1
-            if is_forecast_solar_api and hasattr(self, "forecast_solar_failures_total"):
+            if is_forecast_solar_api:
                 self.forecast_solar_failures_total += 1
             return data
 
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading data from url {}, code {}".format(url, r.status_code))
-            if is_solcast_api and hasattr(self, "solcast_failures_total"):
+            if is_solcast_api:
                 self.solcast_failures_total += 1
-            if is_forecast_solar_api and hasattr(self, "forecast_solar_failures_total"):
+            if is_forecast_solar_api:
                 self.forecast_solar_failures_total += 1
         else:
             try:
                 data = r.json()
-                if is_solcast_api and hasattr(self, "solcast_last_success_timestamp"):
+                if is_solcast_api:
                     self.solcast_last_success_timestamp = datetime.now(timezone.utc)
-                if is_forecast_solar_api and hasattr(self, "forecast_solar_last_success_timestamp"):
+                if is_forecast_solar_api:
                     self.forecast_solar_last_success_timestamp = datetime.now(timezone.utc)
             except requests.exceptions.JSONDecodeError as e:
                 self.log("Warn: Error downloading data from URL {}, error {} code {} data was {}".format(url, e, r.status_code, r.text))
-                if is_solcast_api and hasattr(self, "solcast_failures_total"):
+                if is_solcast_api:
                     self.solcast_failures_total += 1
-                if is_forecast_solar_api and hasattr(self, "forecast_solar_failures_total"):
+                if is_forecast_solar_api:
                     self.forecast_solar_failures_total += 1
                 if data:
                     self.log("Warn: Error downloading data from URL {}, using cached data age {} minutes".format(url, dp1(age_minutes)))
@@ -124,23 +203,27 @@ class Solcast:
         return az
 
     def download_forecast_solar_data(self):
+        """
+        Download forecast.solar data directly from a URL or return from cache if recent.
+        """
         cache_path = self.config_root + "/cache"
-        cache_path_p = self.config_root_p + "/cache"
 
         self.forecast_solar_data = {}
         cache_file = cache_path + "/forecast_solar.json"
-        cache_file_p = cache_path_p + "/forecast_solar.json"
 
         if os.path.exists(cache_file):
             try:
                 with open(cache_file) as f:
                     self.forecast_solar_data = json.load(f)
             except Exception as e:
-                self.log("Warn: Error loading forecast.solar cache file {}, error {}".format(cache_file_p, e))
+                self.log("Warn: Error loading forecast.solar cache file {}, error {}".format(cache_file, e))
                 self.log("Warn: " + traceback.format_exc())
                 os.remove(cache_file)
 
-        configs = self.args.get("forecast_solar", [])
+        configs = self.forecast_solar
+        if configs is None:
+            raise ValueError("SolarAPI: No forecast solar configurations found")
+        
         if not isinstance(configs, list):
             configs = [configs]
 
@@ -178,7 +261,7 @@ class Solcast:
                 url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp)
                 days_data = config.get("days", 2)
 
-            data = self.cache_get_url(url, params={}, max_age=self.get_arg("forecast_solar_max_age", 8.0) * 60)
+            data = self.cache_get_url(url, params={}, max_age=self.forecast_solar_max_age * 60)
             watts = data.get("result", {}).get("watt_hours_period", {})
             info = data.get("message", {}).get("info", {})
             if not watts or not info:
@@ -260,8 +343,6 @@ class Solcast:
         """
         Download solcast data directly from a URL or return from cache if recent.
         """
-        self.solcast_api_limit = 0
-        self.solcast_api_used = 0
         cache_path = self.config_root + "/cache"
         cache_path_p = self.config_root_p + "/cache"
 
@@ -292,24 +373,12 @@ class Solcast:
             api_keys = [api_keys]
 
         period_data = {}
-        max_age = self.get_arg("solcast_poll_hours", 8.0) * 60
+        max_age = self.solcast_poll_hours * 60
 
         for api_key in api_keys:
             params = {"format": "json", "api_key": api_key.strip()}
 
-            # API Limit no longer works - 15/8/24
-            # wait for Solcast to provide new API
-            #
-            # url = f"{host}/json/reply/GetUserUsageAllowance"
-            # data = self.cache_get_url(url, params, max_age=0)
-            # if not data:
-            #    self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
-            # else:
-            #    self.solcast_api_limit += data.get("daily_limit", None)
-            #    self.solcast_api_used += data.get("daily_limit_consumed", None)
-            #    self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
-
-            site_config = self.get_arg("solcast_sites", [])
+            site_config = self.solcast_sites
             if site_config:
                 sites = []
                 for site in site_config:
@@ -388,7 +457,7 @@ class Solcast:
         self.log("Solcast returned {} data points".format(len(sorted_data)))
         return sorted_data
 
-    def fetch_pv_datapoints(self, argname):
+    def fetch_pv_datapoints(self, argname, entity_id):
         """
         Get some solcast data from argname argument
         """
@@ -396,20 +465,18 @@ class Solcast:
         total_data = 0
         total_sensor = 0
 
-        if argname in self.args:
+        if entity_id:
             # Found out if detailedForecast is present or not, then set the attribute name
             # in newer solcast plugins only forecast is used
             attribute = "detailedForecast"
-            entity_id = self.get_arg(argname, None, indirect=False)
             if entity_id:
-                result = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
+                result = self.base.get_state_wrapper(entity_id=entity_id, attribute=attribute)
                 if not result:
                     attribute = "forecast"
                 try:
-                    data = self.get_state_wrapper(entity_id=self.get_arg(argname, indirect=False), attribute=attribute)
+                    data = self.base.get_state_wrapper(entity_id=entity_id, attribute=attribute)
                 except (ValueError, TypeError):
-                    self.log("Warn: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(self.get_arg(argname, indirect=False), argname))
-                    self.record_status("Error: {} not be set correctly, check apps.yaml", debug=self.get_arg(argname, indirect=False), had_errors=True)
+                    self.log("Warn: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(self.base.get_arg(argname, indirect=False), argname))
 
             # Solcast new vs old version
             # check the total vs the sum of 30 minute slots and work out scale factor
@@ -417,7 +484,7 @@ class Solcast:
                 for entry in data:
                     total_data += entry["pv_estimate"]
                 total_data = dp2(total_data)
-                total_sensor = dp2(self.get_arg(argname, 1.0))
+                total_sensor = dp2(self.base.get_state_wrapper(entity_id=entity_id, default=1.0))
         return data, total_data, total_sensor
 
     def publish_pv_stats(self, pv_forecast_data, divide_by, period):
@@ -532,7 +599,7 @@ class Solcast:
                         dp2(total_left_todayCL),
                     )
                 )
-                self.dashboard_item(
+                self.base.dashboard_item(
                     "sensor." + self.prefix + "_pv_today",
                     state=dp2(total_day[day]),
                     attributes={
@@ -550,11 +617,9 @@ class Solcast:
                         "remaining90": dp2(total_left_today90),
                         "remainingCL": dp2(total_left_todayCL),
                         "detailedForecast": forecast_day[day],
-                        "api_limit": self.solcast_api_limit,
-                        "api_used": self.solcast_api_used,
                     },
                 )
-                self.dashboard_item(
+                self.base.dashboard_item(
                     "sensor." + self.prefix + "_pv_forecast_h0",
                     state=dp2(power_now),
                     attributes={
@@ -573,7 +638,7 @@ class Solcast:
                 day_name_long = day_name if day == 1 else "day {}".format(day)
                 self.log("PV Forecast for day {} is {} ({} 10% {} 90% {} CL) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day])))
 
-                self.dashboard_item(
+                self.base.dashboard_item(
                     "sensor." + self.prefix + "_pv_" + day_name,
                     state=dp2(total_day[day]),
                     attributes={
@@ -599,9 +664,9 @@ class Solcast:
         self.log("PV Calibration: Fetching PV data for calibration")
 
         days = 10
-        pv_power_hist, pv_power_hist_days = history_attribute_to_minute_data(self.now_utc, self.prune_today(self.history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), prune=False, intermediate=True))
+        pv_power_hist, pv_power_hist_days = history_attribute_to_minute_data(self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
-            self.now_utc, self.prune_today(self.history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), prune=False, intermediate=True)
+            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
         )
 
         hist_days = min(pv_power_hist_days, pv_forecast_hist_days)
@@ -686,17 +751,11 @@ class Solcast:
             if not enabled_calibration:
                 slot_adjustment[slot] = 1.0
 
-            if self.debug_enable:
-                self.log(
-                    "PV slot {}: production {} kWh, forecast {} kWh, distribution {}%, forecast distribution {}% slot adjustment {}x".format(
-                        slot, dp2(pv_power_hist_by_slot.get(slot, 0)), dp2(pv_forecast_by_slot.get(slot, 0)), dp2(pv_distribution[slot] * 100), dp2(forecast_distribution[slot] * 100), slot_adjustment[slot]
-                    )
-                )
         total_adjustment = dp4(total_production / total_forecast if total_forecast > 0 else 1.0)
         total_adjustment = max(min(total_adjustment, 2.0), 0.5)
         if not enabled_calibration:
             total_adjustment = 1.0
-        self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh adjustment {}x slot adjustments {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, slot_adjustment))
+        self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh adjustment {}x slot adjustments {} max_kwh {} divide_by {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, slot_adjustment, max_kwh, divide_by))
 
         # Look at PV forecast today and an adjusted version
         pv_forecast_minute_adjusted = {}
@@ -743,11 +802,42 @@ class Solcast:
             self.log("PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {}".format(dp2(worst_day_scaling)))
 
         # Do we use calibrated or raw data?
-        if self.metric_pv_calibration_enable:
+        if self.base.get_arg("metric_pv_calibration_enable", default=True):
             self.log("PV Calibration: Using calibrated PV data")
             return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_data
         else:
             return pv_forecast_minute, pv_forecast_minute10, pv_forecast_data
+
+    def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10):
+        pv_forcecast_pack = {}
+        pv_forcecast_pack10 = {}
+
+        prev_value = -1
+        prev_value10 = -1
+
+        for minute in range(0, self.forecast_days * 24 * 60):
+            current_value = dp4(pv_forecast_minute.get(minute, 0))
+            current_value10 = dp4(pv_forecast_minute10.get(minute, 0))
+            if current_value != prev_value:
+                pv_forcecast_pack[minute] = current_value
+                prev_value = current_value
+            if current_value10 != prev_value10:
+                pv_forcecast_pack10[minute] = current_value10
+                prev_value10 = current_value10
+
+        current_pv_power = dp4(pv_forecast_minute.get(self.minutes_now, 0))
+
+        self.base.dashboard_item("sensor." + self.prefix + "_pv_forecast_raw", state=current_pv_power, 
+                                 attributes=
+                                    {"friendly_name": "PV Forecast minute data", 
+                                     "icon": "mdi:solar-power", 
+                                     "forecast": pv_forcecast_pack, 
+                                     "forecast10": pv_forcecast_pack10,
+                                     "unit_of_measurement": "kW",
+                                     "device_class": "power",
+                                     "state_class": "measurement"
+                                    }
+                                )
 
     def fetch_pv_forecast(self):
         """
@@ -762,12 +852,16 @@ class Solcast:
         create_pv10 = False
         max_kwh = 9999
 
-        if "forecast_solar" in self.args:
+        self.now_utc = datetime.now(timezone.utc)
+        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = int((self.now_utc - self.midnight_utc).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
+
+        if self.forecast_solar:
             self.log("Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
-        elif "solcast_host" in self.args:
+        elif self.solcast_host:
             self.log("Obtaining solar forecast from Solcast API")
             pv_forecast_data = self.download_solcast_data()
             divide_by = 30.0
@@ -776,7 +870,8 @@ class Solcast:
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
-                data, total_data, total_sensor = self.fetch_pv_datapoints(argname)
+                arg_value = self.__getattribute__(argname, None)
+                data, total_data, total_sensor = self.fetch_pv_datapoints(argname, arg_value)
                 if data:
                     self.log("PV Data for {} total {} kWh".format(argname, total_sensor))
                     pv_forecast_data += data
@@ -798,17 +893,11 @@ class Solcast:
                 self.log("PV Forecast today adds up to {} kWh and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
-            pv_estimate = self.get_arg("pv_estimate", default="")
-            if pv_estimate is None:
-                pv_estimate = "pv_estimate"
-            else:
-                pv_estimate = "pv_estimate" + str(pv_estimate)
-
             pv_forecast_minute, _ = minute_data(
                 pv_forecast_data,
-                self.forecast_days + 1,
+                self.forecast_days,
                 self.midnight_utc,
-                pv_estimate,
+                "pv_estimate",
                 "period_start",
                 backwards=False,
                 divide_by=divide_by,
@@ -817,7 +906,7 @@ class Solcast:
             )
             pv_forecast_minute10, _ = minute_data(
                 pv_forecast_data,
-                self.forecast_days + 1,
+                self.forecast_days,
                 self.midnight_utc,
                 "pv_estimate10",
                 "period_start",
@@ -830,7 +919,9 @@ class Solcast:
             # Run calibration on the data
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / 30.0, max_kwh)
             self.publish_pv_stats(pv_forecast_data, divide_by / 30.0, 30)
+            self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
+            self.last_success_timestamp = datetime.now(timezone.utc)
         else:
             self.log("Warn: No solar data has been configured.")
 
-        return pv_forecast_minute, pv_forecast_minute10
+    

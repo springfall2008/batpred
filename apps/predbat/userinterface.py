@@ -1271,6 +1271,9 @@ class UserInterface:
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
+        if item is None:
+            return []
+
         if new_value:
             values = new_value
         else:
@@ -1346,6 +1349,9 @@ class UserInterface:
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
+        if item is None:
+            return []
+
         if new_value:
             values = new_value
         else:

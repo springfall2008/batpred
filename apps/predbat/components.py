@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 
+from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
 from octopus import OctopusAPI
@@ -60,6 +61,25 @@ COMPONENT_LIST = {
             "mcp_secret": {"required": False, "config": "mcp_secret", "default": "predbat_mcp_secret"},
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
+    },
+    "solar": {
+        "class": SolarAPI,
+        "name": "Solar API",
+        "args": {
+            "prefix": {"required": True, "config": "prefix"},
+            "solcast_host": {"required": False, "config": "solcast_host"},
+            "solcast_api_key": {"required": False, "config": "solcast_api_key"},
+            "solcast_sites": {"required": False, "config": "solcast_sites"},
+            "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8},
+            "forecast_solar": {"required": False, "config": "forecast_solar", "default": False},
+            "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8},
+            "pv_forecast_today": {"required": False, "config": "pv_forecast_today"},
+            "pv_forecast_tomorrow": {"required": False, "config": "pv_forecast_tomorrow"},
+            "pv_forecast_d3": {"required": False, "config": "pv_forecast_d3"},
+            "pv_forecast_d4": {"required": False, "config": "pv_forecast_d4"},
+            "pv_scaling": {"required": False, "config": "pv_scaling", "default": 1.0},
+        },
+        "required_or": ["solcast_host", "forecast_solar", "pv_forecast_today"],
     },
     "gecloud": {
         "class": GECloudDirect,
@@ -217,6 +237,11 @@ class Components:
                     have_all_args = False
                 else:
                     arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
+            required_or = component_info.get("required_or", [])
+            # If required_or is set we must have at least one of the listed args
+            if required_or:
+                if not any(arg_dict.get(arg, None) for arg in required_or):
+                    have_all_args = False
             if have_all_args:
                 self.log(f"Initializing {component_info['name']} interface")
                 self.components[component_name] = component_info["class"](*arg_dict.values(), self.base)
