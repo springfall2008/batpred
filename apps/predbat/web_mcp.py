@@ -43,10 +43,12 @@ Example usage in VSCode
 }
 """
 
+
 class PredbatMCPServer:
     """
     Model Context Protocol (MCP) Server for Predbat
     """
+
     def __init__(self, enable, mcp_secret, mcp_port, base):
         """Initialize the MCP server component"""
         self.enable = enable
