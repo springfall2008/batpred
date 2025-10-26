@@ -1320,7 +1320,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
             # Start all sub-components
             self.components = Components(self)
-            self.components.initialize()
+            self.components.initialize(phase=0)
 
             # Initialize plugin system early so plugins can register web endpoints
             # before the web server starts
@@ -1333,9 +1333,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.plugin_system = None
 
             # Now start all sub-components (including web server which will pick up registered endpoints)
-            if not self.components.start():
-                self.log("Error: Some components failed to start")
-                self.record_status("Error: Some components failed to start", had_errors=True)
+            if not self.components.start(phase=0):
+                self.log("Error: Some components failed to start (phase0)")
+                self.record_status("Error: Some components failed to start (phase0)", had_errors=True)
 
             if not self.ha_interface:
                 raise ValueError("HA interface not found")
@@ -1358,6 +1358,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             self.load_user_config(quiet=False, register=True)
             self.validate_config()
             self.comparison = Compare(self)
+
+            self.components.initialize(phase=1)
+            if not self.components.start(phase=1):
+                self.log("Error: Some components failed to start (phase1)")
+                self.record_status("Error: Some components failed to start (phase1)", had_errors=True)
+
+            self.auto_config(final=True)
+
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
             self.log("Error: " + traceback.format_exc())

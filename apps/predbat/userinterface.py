@@ -1008,7 +1008,7 @@ class UserInterface:
                         break
         return matched, arg_value
 
-    def auto_config(self):
+    def auto_config(self, final=False):
         """
         Auto configure
         match arguments with sensors
@@ -1019,21 +1019,14 @@ class UserInterface:
         disabled = []
         self.unmatched_args = {}
 
-        if 0:
-            predbat_keys = []
-            for key in state_keys:
-                if "predbat" in str(key):
-                    predbat_keys.append(key)
-            predbat_keys.sort()
-            self.log("Keys:\n  - entity: {}".format("\n  - entity: ".join(predbat_keys)))
-
         # Find each arg re to match
         for arg in self.args:
             arg_value = self.args[arg]
             matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
             if not matched:
-                self.log("Warn: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
-                disabled.append(arg)
+                if final:
+                    self.log("Warn: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
+                    disabled.append(arg)
             else:
                 self.args[arg] = arg_value
 

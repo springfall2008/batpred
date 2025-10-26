@@ -33,6 +33,7 @@ COMPONENT_LIST = {
             "db_days": {"required": False, "config": "db_days", "default": 30},
         },
         "can_restart": False,
+        "phase": 0,
     },
     "ha": {
         "class": HAInterface,
@@ -45,14 +46,23 @@ COMPONENT_LIST = {
             "db_primary": {"required": False, "config": "db_primary", "default": False},
         },
         "can_restart": False,
+        "phase": 0,
     },
     "ha_history": {
         "class": HAHistory,
         "name": "Home Assistant History",
         "args": {},
         "can_restart": False,
+        "phase": 0,
     },
-    "web": {"class": WebInterface, "name": "Web Interface", "args": {"port": {"required": False, "config": "web_port", "default": 5052}}},
+    "web": {
+        "class": WebInterface,
+        "name": "Web Interface",
+        "args": {
+            "port": {"required": False, "config": "web_port", "default": 5052},
+        },
+        "phase": 0,
+    },
     "mcp": {
         "class": PredbatMCPServer,
         "name": "MCP Server",
@@ -61,6 +71,7 @@ COMPONENT_LIST = {
             "mcp_secret": {"required": False, "config": "mcp_secret", "default": "predbat_mcp_secret"},
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
+        "phase": 1,
     },
     "solar": {
         "class": SolarAPI,
@@ -80,6 +91,7 @@ COMPONENT_LIST = {
             "pv_scaling": {"required": False, "config": "pv_scaling", "default": 1.0},
         },
         "required_or": ["solcast_host", "forecast_solar", "pv_forecast_today"],
+        "phase": 1,
     },
     "gecloud": {
         "class": GECloudDirect,
@@ -100,6 +112,7 @@ COMPONENT_LIST = {
                 "config": "ge_cloud_automatic",
             },
         },
+        "phase": 1,
     },
     "gecloud_data": {
         "class": GECloudData,
@@ -123,6 +136,7 @@ COMPONENT_LIST = {
                 "config": "days_previous",
             },
         },
+        "phase": 1,
     },
     "octopus": {
         "class": OctopusAPI,
@@ -143,6 +157,7 @@ COMPONENT_LIST = {
                 "config": "octopus_automatic",
             },
         },
+        "phase": 1,
     },
     "ohme": {
         "class": OhmeAPI,
@@ -162,6 +177,7 @@ COMPONENT_LIST = {
                 "config": "ohme_automatic_octopus_intelligent",
             },
         },
+        "phase": 1,
     },
     "fox": {
         "class": FoxAPI,
@@ -178,6 +194,7 @@ COMPONENT_LIST = {
                 "config": "fox_automatic",
             },
         },
+        "phase": 1,
     },
     "alert_feed": {
         "class": AlertFeed,
@@ -190,6 +207,7 @@ COMPONENT_LIST = {
                 "config": "alerts",
             },
         },
+        "phase": 1,
     },
     "carbon": {
         "class": CarbonAPI,
@@ -198,6 +216,7 @@ COMPONENT_LIST = {
             "postcode": {"required": True, "config": "carbon_postcode"},
             "automatic": {"required": False, "config": "carbon_automatic", "default": False},
         },
+        "phase": 1,
     },
 }
 
@@ -209,10 +228,12 @@ class Components:
         self.base = base
         self.log = base.log
 
-    def initialize(self, only=None):
+    def initialize(self, only=None, phase=0):
         """Initialize components without starting them"""
         for component_name, component_info in COMPONENT_LIST.items():
             if only and component_name != only:
+                continue
+            if component_info.get("phase", 0) != phase:
                 continue
 
             have_all_args = True
@@ -246,7 +267,7 @@ class Components:
                 self.log(f"Initializing {component_info['name']} interface")
                 self.components[component_name] = component_info["class"](*arg_dict.values(), self.base)
 
-    def start(self, only=None):
+    def start(self, only=None, phase=0):
         """Start all initialized components"""
         failed = False
         for component_name, component_info in COMPONENT_LIST.items():
@@ -254,6 +275,8 @@ class Components:
                 continue
             component = self.components.get(component_name)
             if component:
+                if component_info.get("phase", 0) != phase:
+                    continue
                 if self.component_tasks.get(component_name, None) and self.component_tasks[component_name].is_alive():
                     self.log(f"Info: {component_info['name']} interface already started")
                     continue
