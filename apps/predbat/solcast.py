@@ -811,8 +811,8 @@ class SolarAPI:
             return pv_forecast_minute, pv_forecast_minute10, pv_forecast_data
 
     def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10):
-        pv_forcecast_pack = {}
-        pv_forcecast_pack10 = {}
+        pv_forecast_pack = {}
+        pv_forecast_pack10 = {}
 
         prev_value = -1
         prev_value10 = -1
@@ -821,10 +821,10 @@ class SolarAPI:
             current_value = dp4(pv_forecast_minute.get(minute, 0))
             current_value10 = dp4(pv_forecast_minute10.get(minute, 0))
             if current_value != prev_value:
-                pv_forcecast_pack[minute] = current_value
+                pv_forecast_pack[minute] = current_value
                 prev_value = current_value
             if current_value10 != prev_value10:
-                pv_forcecast_pack10[minute] = current_value10
+                pv_forecast_pack10[minute] = current_value10
                 prev_value10 = current_value10
 
         current_pv_power = dp4(pv_forecast_minute.get(self.minutes_now, 0))
@@ -832,7 +832,7 @@ class SolarAPI:
         self.base.dashboard_item(
             "sensor." + self.prefix + "_pv_forecast_raw",
             state=current_pv_power,
-            attributes={"friendly_name": "PV Forecast minute data", "icon": "mdi:solar-power", "forecast": pv_forcecast_pack, "forecast10": pv_forcecast_pack10, "unit_of_measurement": "kW", "device_class": "power", "state_class": "measurement"},
+            attributes={"friendly_name": "PV Forecast minute data", "icon": "mdi:solar-power", "forecast": pv_forecast_pack, "forecast10": pv_forecast_pack10, "unit_of_measurement": "kW", "device_class": "power", "state_class": "measurement"},
         )
 
     def fetch_pv_forecast(self):
@@ -866,7 +866,7 @@ class SolarAPI:
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
-                arg_value = self.__getattribute__(argname, None)
+                arg_value = getattr(self, argname, None)
                 data, total_data, total_sensor = self.fetch_pv_datapoints(argname, arg_value)
                 if data:
                     self.log("PV Data for {} total {} kWh".format(argname, total_sensor))

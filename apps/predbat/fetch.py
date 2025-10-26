@@ -879,8 +879,6 @@ class Fetch:
             pv_forecast_minute[minute] = last_value
             pv_forecast_minute10[minute] = last_value10
 
-        print("PV forecast data points: {}, PV10 forecast data points: {}".format(len(pv_forecast_minute), len(pv_forecast_minute10)))
-
         return pv_forecast_minute, pv_forecast_minute10
 
     def predict_battery_temperature(self, battery_temperature_history, step):
