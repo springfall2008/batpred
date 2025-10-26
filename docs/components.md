@@ -182,7 +182,7 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 |--------|------|----------|---------|------------|-------------|
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
-| `automatic` | Boolean | No | False | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no apps.yaml changes requied) |
+| `automatic` | Boolean | No | False | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
 
 #### How to get your API key (gecloud)
 
