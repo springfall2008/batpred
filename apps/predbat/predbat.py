@@ -758,6 +758,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 savings_total_predbat = float(savings_total_predbat)
             except (ValueError, TypeError):
                 savings_total_predbat = 0.0
+            savings_total_last_updated = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat", attribute="last_updated")
+            savings_total_start_date = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat", attribute="start_date")
+            todays_date = self.now_utc_real.strftime("%Y-%m-%d")
+            if not savings_total_start_date:
+                savings_total_start_date = todays_date
+
+            # As last updated date is new we assume if we already have data then its been updated for today
+            if not savings_total_last_updated and savings_total_predbat > 0.0:
+                savings_total_last_updated = todays_date
 
             savings_total_pvbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_pvbat")
             try:
@@ -787,7 +796,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 cost_total_car = 0
 
             # Increment total at midnight for next day
-            if (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every) and scheduled and recompute:
+            if savings_total_last_updated != todays_date and scheduled and recompute:
                 savings_total_predbat += self.savings_today_predbat
                 savings_total_pvbat += self.savings_today_pvbat
                 savings_total_soc = self.savings_today_predbat_soc
@@ -803,6 +812,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "unit_of_measurement": self.currency_symbols[1],
                     "pounds": dp2(savings_total_predbat / 100.0),
                     "icon": "mdi:cash-multiple",
+                    "start_date": savings_total_start_date,
+                    "last_updated": todays_date,
                 },
             )
             self.dashboard_item(
@@ -813,6 +824,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "state_class": "measurement",
                     "unit_of_measurement": "kWh",
                     "icon": "mdi:battery-50",
+                    "start_date": savings_total_start_date,
+                    "last_updated": todays_date,
                 },
             )
             self.dashboard_item(
@@ -824,6 +837,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "unit_of_measurement": self.currency_symbols[1],
                     "pounds": dp2(savings_total_actual / 100.0),
                     "icon": "mdi:cash-multiple",
+                    "start_date": savings_total_start_date,
+                    "last_updated": todays_date,
                 },
             )
             self.dashboard_item(
@@ -835,6 +850,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "unit_of_measurement": self.currency_symbols[1],
                     "pounds": dp2(savings_total_pvbat / 100.0),
                     "icon": "mdi:cash-multiple",
+                    "start_date": savings_total_start_date,
+                    "last_updated": todays_date,
                 },
             )
             if self.num_cars > 0:
@@ -847,6 +864,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                         "unit_of_measurement": self.currency_symbols[1],
                         "pounds": dp2(cost_total_car / 100.0),
                         "icon": "mdi:cash-multiple",
+                        "start_date": savings_total_start_date,
+                        "last_updated": todays_date,
                     },
                 )
 

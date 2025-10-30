@@ -910,8 +910,8 @@ def test_plugin_startup_order(my_predbat):
 
     # Mock the Components class
     mock_components = MagicMock()
-    mock_components.initialize = MagicMock(side_effect=lambda: call_order.append("components.initialize"))
-    mock_components.start = MagicMock(side_effect=lambda: call_order.append("components.start"))
+    mock_components.initialize = MagicMock(side_effect=lambda **kwargs: call_order.append("components.initialize"))
+    mock_components.start = MagicMock(side_effect=lambda **kwargs: call_order.append("components.start") or True)
 
     # Mock the PluginSystem class
     mock_plugin_system = MagicMock()
@@ -919,8 +919,9 @@ def test_plugin_startup_order(my_predbat):
     mock_plugin_system.call_hooks = MagicMock(side_effect=lambda hook: call_order.append(f"plugin.hook.{hook}"))
 
     # Test the initialization order
-    with patch("predbat.Components", return_value=mock_components):
-        with patch("predbat.PluginSystem", return_value=mock_plugin_system):
+    # Patch needs to return a callable that returns the mock
+    with patch("predbat.Components", MagicMock(return_value=mock_components)):
+        with patch("predbat.PluginSystem", MagicMock(return_value=mock_plugin_system)):
             # Create a minimal predbat instance for testing
             test_predbat = PredBat()
             test_predbat.reset()
@@ -959,11 +960,11 @@ def test_plugin_startup_order(my_predbat):
     components_start_index = -1
 
     for i, call in enumerate(call_order):
-        if call == "components.initialize":
+        if call == "components.initialize" and components_init_index == -1:
             components_init_index = i
-        elif call == "plugin.discover":
+        elif call == "plugin.discover" and plugin_discover_index == -1:
             plugin_discover_index = i
-        elif call == "components.start":
+        elif call == "components.start" and components_start_index == -1:
             components_start_index = i
 
     if components_init_index == -1:
