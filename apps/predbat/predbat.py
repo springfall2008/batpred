@@ -664,7 +664,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         recompute = False
         status_extra = ""
         self.had_errors = False
-        self.dashboard_index = []
 
         self.update_time()
         self.save_current_config()
