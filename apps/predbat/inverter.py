@@ -2476,26 +2476,35 @@ class Inverter:
         Get inverter status
 
         :param api: The API endpoint to retrieve data from (default is "readData")
+        :retry: parameter no longer used
         :return: The JSON response containing the inverter status, or None if there was an error
         """
         url = self.rest_api + "/" + api
-        json = self.rest_getData(url)
 
-        if json:
-            if "Control" in json:
-                return json
+        # repeatedly try to get inverter data via REST, sleeping after each failed attempt to enable GivTCP to re-get the data
+        for loop in range(INVERTER_MAX_RETRY_REST):
+            json = self.rest_getData(url)
+
+            if json:
+                if "Control" in json:
+                    if loop == 0:
+                        self.base.log("Inverter {} REST GET {} successful".format(self.id, url))
+                    else:
+                        self.base.log("Info: Inverter {} REST GET {} successful on retry {}".format(self.id, url, loop))
+                    return json
+
+            if loop == 0:
+                delay = 20
             else:
-                if retry:
-                    # If this is the first call in error then try to re-read the data
-                    return self.rest_runAll()
-                else:
-                    self.base.log("Warn: Inverter {} read bad REST data from {} - REST will be disabled".format(self.id, url))
-                    self.base.record_status("Inverter {} read bad REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
-                    return None
-        else:
-            self.base.log("Warn: Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url))
-            self.base.record_status("Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
-            return None
+                delay = 40
+                
+            self.base.log("Warn: inverter {} didn't receive JSON response from REST GET {}, received {}. Waiting {}s then retrying".format(self.id, url, json, delay))
+            self.sleep(delay)
+
+        # Exhausted retry attempts, fail REST GET and fallback to using HA entities (if they have been configured in apps.yaml)
+        self.base.log("Warn: Inverter {} unable to read REST data from {} - REST will be skipped for this run".format(self.id, url))
+        self.base.record_status("Inverter {} unable to read REST data from {} - REST will be skipped".format(self.id, url), had_errors=True)
+        return None
 
     def rest_runAll(self, old_data=None):
         """
