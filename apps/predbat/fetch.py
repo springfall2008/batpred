@@ -1383,7 +1383,7 @@ class Fetch:
 
         have_alerts = len(self.alert_active_keep) > 0
         car_planning_on_rates = self.num_cars > 0 and not self.octopus_intelligent_charging
-        car_charging_max_price = max(self.car_charging_plan_max_price[:self.num_cars]) if car_planning_on_rates else 0.0
+        car_charging_max_price = max(self.car_charging_plan_max_price[: self.num_cars]) if car_planning_on_rates else 0.0
 
         if self.rate_low_threshold > 0:
             self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
