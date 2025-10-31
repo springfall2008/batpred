@@ -227,7 +227,7 @@ class Inverter:
             self.rest_api = self.base.get_arg("givtcp_rest", None, indirect=False, index=self.id)
             if self.rest_api:
                 if not quiet:
-                    self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
+                    self.base.log("Inverter {} using REST API {}".format(self.id, self.rest_api))
                 self.rest_data = self.rest_readData()
                 if not self.rest_data:
                     self.auto_restart("REST read failure")
@@ -2476,7 +2476,7 @@ class Inverter:
         Get inverter status
 
         :param api: The API endpoint to retrieve data from (default is "readData")
-        :retry: parameter no longer used
+        :retry: if the REST GET fails then should the GET be retried? (default is True)
         :return: The JSON response containing the inverter status, or None if there was an error
         """
         url = self.rest_api + "/" + api
@@ -2493,12 +2493,17 @@ class Inverter:
                         self.base.log("Info: Inverter {} REST GET {} successful on retry {}".format(self.id, url, loop))
                     return json
 
+            # if retry = False then don't retry further GET calls
+            if not retry:
+                break
+
+            # firstly retry after a short delay to allow the REST endpoint to get the data, then try longer delays
             if loop == 0:
                 delay = 20
             else:
                 delay = 40
-                
-            self.base.log("Warn: inverter {} didn't receive JSON response from REST GET {}, received {}. Waiting {}s then retrying".format(self.id, url, json, delay))
+
+            self.base.log("Warn: inverter {} didn't receive JSON response from REST GET {}, received \"{}\". Waiting {}s then retrying".format(self.id, url, json, delay))
             self.sleep(delay)
 
         # Exhausted retry attempts, fail REST GET and fallback to using HA entities (if they have been configured in apps.yaml)
