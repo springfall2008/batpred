@@ -796,7 +796,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 cost_total_car = 0
 
             # Increment total at midnight for next day
-            if savings_total_last_updated != todays_date and scheduled and recompute:
+            if savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and recompute:
                 savings_total_predbat += self.savings_today_predbat
                 savings_total_pvbat += self.savings_today_pvbat
                 savings_total_soc = self.savings_today_predbat_soc

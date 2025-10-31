@@ -1393,7 +1393,7 @@ class Fetch:
                 self.rate_import_cost_threshold = self.rate_max + 0.1
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
-        
+
         # When we plan car on the rates we need to include all the rates up to the max car price
         if car_planning_on_rates:
             self.rate_import_cost_threshold = max(self.rate_import_cost_threshold, car_charging_max_price + 0.1)
