@@ -195,7 +195,7 @@ class HAHistory:
                 if seconds % (2 * 60) == 0:
                     # Update history data every 2 minutes
                     now = datetime.now(timezone.utc)
-                    for entity_id in self.history_entities:
+                    for entity_id in list(self.history_entities.keys()):
                         # self.log("HAHistory: Updating history for {}".format(entity_id))
                         current_history_data = self.history_data.get(entity_id, None)
                         last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
