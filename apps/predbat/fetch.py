@@ -1382,15 +1382,21 @@ class Fetch:
         """
 
         have_alerts = len(self.alert_active_keep) > 0
+        car_planning_on_rates = self.num_cars > 0 and not self.octopus_intelligent_charging
+        car_charging_max_price = max(self.car_charging_plan_max_price[: self.num_cars]) if car_planning_on_rates else 0.0
 
         if self.rate_low_threshold > 0:
             self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts or self.num_cars > 0:
+            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts:
                 self.rate_import_cost_threshold = self.rate_max + 0.1
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
+
+        # When we plan car on the rates we need to include all the rates up to the max car price
+        if car_planning_on_rates:
+            self.rate_import_cost_threshold = max(self.rate_import_cost_threshold, car_charging_max_price + 0.1)
 
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:

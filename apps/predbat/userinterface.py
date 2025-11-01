@@ -775,19 +775,28 @@ class UserInterface:
         else:
             self.log("Failed to write predbat dashboard to {}".format(filename_p))
 
-    def load_previous_value_from_ha(self, entity):
+    def load_previous_value_from_ha(self, entity, attribute=None):
         """
         Load HA value either from state or from history if there is any
         """
-        ha_value = self.get_state_wrapper(entity)
-        if ha_value is not None:
-            return ha_value
+        if attribute:
+            ha_value = self.get_state_wrapper(entity, attribute=attribute)
+            if ha_value is not None:
+                return ha_value
+        else:
+            ha_value = self.get_state_wrapper(entity)
+            if ha_value is not None:
+                return ha_value
 
+        # Try history if no current state
         history = self.get_history_wrapper(entity_id=entity, required=False)
         if history:
             history = history[0]
             if history:
-                ha_value = history[-1]["state"]
+                if attribute:
+                    ha_value = history[-1].get("attributes", {}).get(attribute, None)
+                else:
+                    ha_value = history[-1].get("state", None)
         return ha_value
 
     async def trigger_watch_list(self, entity_id, attribute, old, new):

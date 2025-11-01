@@ -622,9 +622,6 @@ class Prediction:
             # Get load and pv forecast, total up for all values in the step
             pv_now = pv_forecast_minute_step_flat[minute]
             load_yesterday = load_minutes_step_flat[minute]
-            # for offset in range(0, step, PREDICT_STEP):
-            #    pv_now += pv_forecast_minute_step[minute + offset]
-            #    load_yesterday += load_minutes_step[minute + offset]
 
             # Count PV kWh
             pv_kwh += pv_now
@@ -854,11 +851,11 @@ class Prediction:
                 pv_dc = 0
                 diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
 
-                required_for_load = load_yesterday * inverter_loss_recp
-                if inverter_hybrid:
-                    potential_to_charge = pv_now
-                else:
-                    potential_to_charge = pv_ac
+                potential_to_charge = pv_ac
+                required_for_load = load_yesterday
+                # Only apply inverter losses on the amount we might draw from the battery and not on the PV amount (which is already inverted)
+                if required_for_load > potential_to_charge:
+                    required_for_load += (required_for_load - potential_to_charge) * inverter_loss_recp - (required_for_load - potential_to_charge)
 
                 diff = required_for_load - potential_to_charge
 
