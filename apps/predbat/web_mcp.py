@@ -214,8 +214,8 @@ class PredbatMCPServer:
             "aud": resource,  # Audience claim (REQUIRED by MCP spec)
             "scope": " ".join(scopes),  # Space-separated scopes
             "type": "access",
-            "iat": datetime.utcnow(),
-            "exp": datetime.utcnow() + self.access_token_lifetime,
+            "iat": datetime.now(timezone.utc),
+            "exp": datetime.now(timezone.utc) + self.access_token_lifetime,
         }
         return pyjwt.encode(payload, self.jwt_secret, algorithm=self.jwt_algorithm)
 
