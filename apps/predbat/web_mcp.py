@@ -489,11 +489,6 @@ class PredbatMCPServer:
                     error_uri = redirect_uri if redirect_uri else "about:blank"
                     return web.HTTPFound(f"{error_uri}?error=invalid_request&state={state}")
                 
-                # Validate redirect URI (MCP spec requirement)
-                if not self.validate_redirect_uri(redirect_uri):
-                    self.log(f"MCP OAuth: Invalid redirect URI in GET request")
-                    return web.HTTPFound(f"about:blank?error=invalid_request&error_description=Invalid+redirect_uri&state={state}")
-                
                 # PKCE is REQUIRED per OAuth 2.1 and MCP spec
                 if not code_challenge or not code_challenge_method:
                     error_uri = redirect_uri if redirect_uri else "about:blank"
@@ -696,18 +691,6 @@ class PredbatMCPServer:
             grant_types = data.get("grant_types", ["authorization_code"])
             response_types = data.get("response_types", ["code"])
             scope = data.get("scope", "mcp:read mcp:write mcp:control")
-            
-            # Validate redirect URIs
-            if redirect_uris:
-                for uri in redirect_uris:
-                    if not self.validate_redirect_uri(uri):
-                        return web.json_response(
-                            {
-                                "error": "invalid_redirect_uri",
-                                "error_description": f"Invalid redirect URI: {uri}. Must be HTTPS or localhost."
-                            },
-                            status=400
-                        )
             
             # Generate client credentials
             # For MCP, we use a shared secret model where all clients use the same secret
