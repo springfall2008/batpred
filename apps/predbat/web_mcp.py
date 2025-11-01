@@ -429,7 +429,7 @@ class PredbatMCPServer:
                             "code_challenge": code_challenge if code_challenge else None,
                             "code_challenge_method": code_challenge_method if code_challenge_method else None,
                             "state": state,
-                            "expires": datetime.utcnow() + self.authorization_code_lifetime,
+                            "expires": datetime.now(timezone.utc) + self.authorization_code_lifetime,
                             "used": False,
                         }
 
@@ -787,7 +787,7 @@ class PredbatMCPServer:
             return web.json_response({"error": "invalid_grant", "error_description": "Authorization code has already been used"}, status=400)
 
         # Check expiration
-        if datetime.utcnow() > code_data.get("expires"):
+        if datetime.now(timezone.utc) > code_data.get("expires"):
             self.log(f"MCP OAuth: Authorization code expired")
             del self.authorization_codes[code]
             return web.json_response({"error": "invalid_grant", "error_description": "Authorization code has expired"}, status=400)
