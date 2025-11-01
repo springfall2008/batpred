@@ -9718,7 +9718,7 @@ def main():
         failed |= run_perf_test(my_predbat)
         if args.perf_only:
             return failed
-        
+
     if not failed:
         failed |= run_model_tests(my_predbat)
 
