@@ -246,6 +246,7 @@ Selfrun
 Selfuse
 semodbus
 Sergoe
+Segoe
 SFMB
 sigen
 sigenergy
