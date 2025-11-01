@@ -1,4 +1,8 @@
 # Custom Dictionary Words
+pyjwt
+Sergoe
+Roboto
+Cantarell
 activepower
 adata
 adbase
