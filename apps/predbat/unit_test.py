@@ -9783,9 +9783,6 @@ def main():
         failed |= run_model_tests(my_predbat)
 
     if not failed:
-        failed |= run_model_tests(my_predbat)
-
-    if not failed:
         failed |= test_previous_days_modal_filter(my_predbat)
     if not failed:
         failed |= test_download_octopus_url_wrapper(my_predbat)
