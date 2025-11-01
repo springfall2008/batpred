@@ -463,7 +463,7 @@ class PredbatMCPServer:
                 if not client_id or not redirect_uri or response_type != "code":
                     error_uri = redirect_uri if redirect_uri else "about:blank"
                     return web.HTTPFound(f"{error_uri}?error=invalid_request&state={state}")
-                
+
                 # PKCE is REQUIRED per OAuth 2.1 and MCP spec
                 if not code_challenge or not code_challenge_method:
                     error_uri = redirect_uri if redirect_uri else "about:blank"
@@ -657,7 +657,7 @@ class PredbatMCPServer:
             grant_types = data.get("grant_types", ["authorization_code"])
             response_types = data.get("response_types", ["code"])
             scope = data.get("scope", "mcp:read mcp:write mcp:control")
-            
+
             # Generate client credentials
             # For MCP, we use a shared secret model where all clients use the same secret
             # In a more sophisticated implementation, you'd generate unique credentials per client
