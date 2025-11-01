@@ -241,12 +241,12 @@ rtype
 ruamel
 saverestore
 searr
+Segoe
 selectattr
 Selfrun
 Selfuse
 semodbus
 Sergoe
-Segoe
 SFMB
 sigen
 sigenergy
