@@ -6220,6 +6220,26 @@ def run_model_tests(my_predbat):
         return failed
 
     failed |= simple_scenario(
+        "hold_during discharge3",
+        my_predbat,
+        0.1,
+        0,
+        assert_final_metric=import_rate,
+        assert_final_soc=5 - 23 * 0.1 / 0.8,
+        with_battery=True,
+        battery_size=10,
+        charge_window_best=[{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": import_rate}],
+        charge_limit_best=[0.5],
+        battery_soc=5.0,
+        set_charge_freeze=True,
+        reserve=0.5,
+        inverter_loss=0.8,
+        hybrid=True,
+    )
+    if failed:
+        return failed
+
+    failed |= simple_scenario(
         "hold_during discharge_pv1",
         my_predbat,
         0.1,
@@ -6282,6 +6302,46 @@ def run_model_tests(my_predbat):
         0.2,
         assert_final_metric=0,
         assert_final_soc=5 + ((0.2 * 0.8) - 0.1) * 24,  # For DC Coupled PV arrives as DC
+        with_battery=True,
+        battery_size=10,
+        charge_window_best=[{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": import_rate}],
+        charge_limit_best=[0.5],
+        battery_soc=5.0,
+        set_charge_freeze=True,
+        reserve=0.5,
+        inverter_loss=0.8,
+        hybrid=True,
+    )
+    if failed:
+        return failed
+
+    failed |= simple_scenario(
+        "hold_during discharge_pv5",
+        my_predbat,
+        0.2,
+        0.1,
+        assert_final_metric=0.1 * import_rate,
+        assert_final_soc=5 - (0.1 / 0.8) * 23,  # For AC Coupled PV arrives as AC
+        with_battery=True,
+        battery_size=10,
+        charge_window_best=[{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": import_rate}],
+        charge_limit_best=[0.5],
+        battery_soc=5.0,
+        set_charge_freeze=True,
+        reserve=0.5,
+        inverter_loss=0.8,
+        hybrid=False,
+    )
+    if failed:
+        return failed
+
+    failed |= simple_scenario(
+        "hold_during discharge_pv6",
+        my_predbat,
+        0.2,
+        0.1,
+        assert_final_metric=0.1 * import_rate,
+        assert_final_soc=5 - ((0.2 / 0.8) - 0.1) * 23,  # For DC Coupled PV arrives as DC
         with_battery=True,
         battery_size=10,
         charge_window_best=[{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": import_rate}],

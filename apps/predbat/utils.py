@@ -260,7 +260,7 @@ def minute_data(
     """
     mdata = {}
     adata = {}
-    io_adjusted = None
+    io_adjusted = {}
     newest_state = 0
     prev_state = 0
     newest_age = 999999

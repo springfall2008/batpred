@@ -3,6 +3,7 @@ coverage
 matplotlib
 mcp
 pre-commit
+pyjwt
 pytz
 requests
 ruamel.yaml

@@ -25,6 +25,7 @@ batteryb
 beforeunload
 bierner
 calib
+Cantarell
 cexxxx
 ceyyyy
 chargedischarge
@@ -219,6 +220,7 @@ psum
 pvbat
 pvpower
 pwindow
+pyjwt
 pylint
 pyproject
 pytz
@@ -232,16 +234,19 @@ resetmidnight
 resultid
 resultmid
 rname
+Roboto
 rowspan
 rstart
 rtype
 ruamel
 saverestore
 searr
+Segoe
 selectattr
 Selfrun
 Selfuse
 semodbus
+Sergoe
 SFMB
 sigen
 sigenergy
