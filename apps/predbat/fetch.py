@@ -996,7 +996,7 @@ class Fetch:
                 else:
                     minute_mod = minute % (24 * 60)
 
-                if (minute_mod in rate_io) and rate_io[minute_mod]:
+                if rate_io and (minute_mod in rate_io) and rate_io[minute_mod]:
                     # Dont replicate Intelligent rates into the next day as it will be different
                     rate_offset = self.rate_max
                 elif minute_mod in rates:

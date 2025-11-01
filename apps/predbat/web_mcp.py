@@ -103,6 +103,9 @@ class PredbatMCPServer:
             app.router.add_get("/", self.html_mcp_get)
             app.router.add_post("/", self.html_mcp_post)
             
+            # Favicon
+            app.router.add_get("/favicon.ico", self.favicon)
+            
             # Add default route for any other paths (MUST BE LAST)
             app.router.add_route('*', '/{tail:.*}', self.default_route)
 
@@ -286,6 +289,7 @@ class PredbatMCPServer:
 
     async def handle_options(self, request):
         """Handle CORS preflight OPTIONS requests"""
+        self.log("MCP: CORS preflight OPTIONS request from {}".format(request.remote))
         response = web.Response(status=200)
         response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
@@ -364,6 +368,7 @@ class PredbatMCPServer:
         See: RFC 8414 - OAuth 2.0 Authorization Server Metadata
         """
         base_url = f"http://{request.host}"
+        self.log("MCP: OAuth MCP Metadata request from {}".format(request.remote))
         
         metadata = {
             "issuer": base_url,
@@ -389,6 +394,20 @@ class PredbatMCPServer:
         response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
         return response
+
+    async def favicon(self, request):
+        """Return a bat emoji as favicon"""
+        # Use SVG for a simple bat emoji favicon
+        self.log("MCP: Favicon request from {}".format(request.remote))
+        svg_content = '''<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <text y="85" font-size="85" font-family="Arial, sans-serif">🦇</text>
+</svg>'''
+        return web.Response(
+            text=svg_content,
+            content_type='image/svg+xml',
+            headers={'Cache-Control': 'public, max-age=86400'}  # Cache for 24 hours
+        )
 
     async def default_route(self, request):
         """Handle all unmatched routes with 404"""
@@ -980,6 +999,7 @@ class PredbatMCPServer:
         Handle GET requests to MCP endpoint - returns server info and available tools
         Supports both OAuth tokens and legacy Bearer token authentication
         """
+        self.log("MCP GET: Received request from {}".format(request.remote))
         if not self.mcp_server:
             return web.json_response({"success": False, "error": "MCP server is not available."}, status=503)
 
@@ -1064,7 +1084,7 @@ class PredbatMCPServer:
         Handle POST requests to MCP endpoint - executes tools via JSON-RPC 2.0
         Supports both OAuth tokens and legacy Bearer token authentication
         """
-        self.log("MCP POST: Received request")
+        self.log("MCP POST: Received request from {}".format(request.remote))
         if not self.mcp_server:
             return web.json_response({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": "MCP server is not available."}}, status=503)
 
