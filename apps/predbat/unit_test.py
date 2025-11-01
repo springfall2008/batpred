@@ -6188,7 +6188,7 @@ def run_model_tests(my_predbat):
         0.1,
         0,
         assert_final_metric=import_rate,
-        assert_final_soc=5-23*0.1,
+        assert_final_soc=5 - 23 * 0.1,
         with_battery=True,
         battery_size=10,
         charge_window_best=[{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": import_rate}],
@@ -6199,14 +6199,14 @@ def run_model_tests(my_predbat):
     )
     if failed:
         return failed
-    
+
     failed |= simple_scenario(
         "hold_during discharge2",
         my_predbat,
         0.1,
         0,
         assert_final_metric=import_rate,
-        assert_final_soc=5-23*0.1/0.8,
+        assert_final_soc=5 - 23 * 0.1 / 0.8,
         with_battery=True,
         battery_size=10,
         charge_window_best=[{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": import_rate}],
@@ -6218,7 +6218,7 @@ def run_model_tests(my_predbat):
     )
     if failed:
         return failed
-    
+
     failed |= simple_scenario(
         "hold_during discharge_pv1",
         my_predbat,
@@ -6243,7 +6243,7 @@ def run_model_tests(my_predbat):
         0.1,
         0.2,
         assert_final_metric=0,
-        assert_final_soc=5 + 0.1 *24,
+        assert_final_soc=5 + 0.1 * 24,
         with_battery=True,
         battery_size=10,
         charge_window_best=[{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": import_rate}],
@@ -6261,7 +6261,7 @@ def run_model_tests(my_predbat):
         0.1,
         0.2,
         assert_final_metric=0,
-        assert_final_soc=5 + 0.1*24, # For AC Coupled PV arrives as AC
+        assert_final_soc=5 + 0.1 * 24,  # For AC Coupled PV arrives as AC
         with_battery=True,
         battery_size=10,
         charge_window_best=[{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": import_rate}],
@@ -6281,7 +6281,7 @@ def run_model_tests(my_predbat):
         0.1,
         0.2,
         assert_final_metric=0,
-        assert_final_soc=5 + ((0.2 * 0.8) - 0.1) *24, # For DC Coupled PV arrives as DC
+        assert_final_soc=5 + ((0.2 * 0.8) - 0.1) * 24,  # For DC Coupled PV arrives as DC
         with_battery=True,
         battery_size=10,
         charge_window_best=[{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 120, "average": import_rate}],
@@ -6294,7 +6294,6 @@ def run_model_tests(my_predbat):
     )
     if failed:
         return failed
-
 
     failed |= simple_scenario(
         "load_bat_dc_pv",
@@ -9720,6 +9719,9 @@ def main():
         if args.perf_only:
             return failed
         
+    if not failed:
+        failed |= run_model_tests(my_predbat)
+
     if not failed:
         failed |= run_model_tests(my_predbat)
 
