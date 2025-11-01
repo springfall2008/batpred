@@ -1,8 +1,4 @@
 # Custom Dictionary Words
-pyjwt
-Sergoe
-Roboto
-Cantarell
 activepower
 adata
 adbase
@@ -29,6 +25,7 @@ batteryb
 beforeunload
 bierner
 calib
+Cantarell
 cexxxx
 ceyyyy
 chargedischarge
@@ -223,6 +220,7 @@ psum
 pvbat
 pvpower
 pwindow
+pyjwt
 pylint
 pyproject
 pytz
@@ -236,6 +234,7 @@ resetmidnight
 resultid
 resultmid
 rname
+Roboto
 rowspan
 rstart
 rtype
@@ -246,6 +245,7 @@ selectattr
 Selfrun
 Selfuse
 semodbus
+Sergoe
 SFMB
 sigen
 sigenergy
