@@ -87,13 +87,13 @@ class Execute:
                 # Span midnight allowed?
                 if not inverter.inv_can_span_midnight:
                     # Convert to datetime first to check if it actually crosses midnight
-                    charge_start_time_temp = self.midnight_utc + timedelta(minutes=minutes_start)
-                    charge_end_time_temp = self.midnight_utc + timedelta(minutes=minutes_end)
+                    charge_start_datetime = self.midnight_utc + timedelta(minutes=minutes_start)
+                    charge_end_datetime = self.midnight_utc + timedelta(minutes=minutes_end)
 
                     # Only cap if the dates are different (actually crossing midnight)
-                    if charge_start_time_temp.date() != charge_end_time_temp.date():
+                    if charge_start_datetime.date() != charge_end_datetime.date():
                         # Cap to end of start date (23:59 on the same day as start)
-                        end_of_start_date = charge_start_time_temp.replace(hour=23, minute=59, second=0, microsecond=0)
+                        end_of_start_date = charge_start_datetime.replace(hour=23, minute=59, second=0, microsecond=0)
                         minutes_end = int((end_of_start_date - self.midnight_utc).total_seconds() / 60)
 
                 # Are we currently in the export window?
@@ -295,13 +295,13 @@ class Execute:
                 # Span midnight allowed?
                 if not inverter.inv_can_span_midnight:
                     # Convert to datetime first to check if it actually crosses midnight
-                    discharge_start_time_temp = self.midnight_utc + timedelta(minutes=minutes_start)
-                    discharge_end_time_temp = self.midnight_utc + timedelta(minutes=minutes_end)
+                    discharge_start_datetime = self.midnight_utc + timedelta(minutes=minutes_start)
+                    discharge_end_datetime = self.midnight_utc + timedelta(minutes=minutes_end)
 
                     # Only cap if the dates are different (actually crossing midnight)
-                    if discharge_start_time_temp.date() != discharge_end_time_temp.date():
+                    if discharge_start_datetime.date() != discharge_end_datetime.date():
                         # Cap to end of start date (23:59 on the same day as start)
-                        end_of_start_date = discharge_start_time_temp.replace(hour=23, minute=59, second=0, microsecond=0)
+                        end_of_start_date = discharge_start_datetime.replace(hour=23, minute=59, second=0, microsecond=0)
                         minutes_end = int((end_of_start_date - self.midnight_utc).total_seconds() / 60)
                     export_adjust = 0
 
