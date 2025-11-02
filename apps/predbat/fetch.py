@@ -648,7 +648,8 @@ class Fetch:
                 if size:
                     self.car_charging_battery_size[0] = size
                 if rate:
-                    self.car_charging_rate[0] = rate
+                    # Take the max as Octopus over reports
+                    self.car_charging_rate[0] = max(rate, self.car_charging_rate[0])
 
                 # Get car charging limit again from car based on new battery size
                 self.car_charging_limit[0] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0)
