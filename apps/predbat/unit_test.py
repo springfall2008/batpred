@@ -3570,7 +3570,7 @@ def run_execute_tests(my_predbat):
     charge_window_best5 = [{"start": my_predbat.minutes_now - 24 * 60, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best6 = [{"start": my_predbat.minutes_now + 8 * 60, "end": my_predbat.minutes_now + 60 + 8 * 60, "average": 1}]
     charge_window_best7 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
-    charge_window_best7b = [{"start": 24*60-5, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
+    charge_window_best7b = [{"start": 24 * 60 - 5, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
     charge_window_best7c = [{"start": 0, "end": 11 * 60, "average": 1}]
     charge_window_best8 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
     charge_window_best9 = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 1}]
@@ -4326,7 +4326,7 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=24 * 60 - 1,
-        inverter_charge_time_minutes_start = 30,
+        inverter_charge_time_minutes_start=30,
     )
     failed |= run_execute_test(
         my_predbat,
@@ -4337,10 +4337,10 @@ def run_execute_tests(my_predbat):
         set_charge_window=True,
         set_export_window=True,
         assert_status="Charging",
-        assert_charge_start_time_minutes=24*60-30,
+        assert_charge_start_time_minutes=24 * 60 - 30,
         assert_charge_end_time_minutes=24 * 60 - 1,
-        inverter_charge_time_minutes_start = 30,
-        minutes_now=24*60-5,
+        inverter_charge_time_minutes_start=30,
+        minutes_now=24 * 60 - 5,
     )
     failed |= run_execute_test(
         my_predbat,
@@ -4352,8 +4352,8 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=0,
-        assert_charge_end_time_minutes=11*60,
-        inverter_charge_time_minutes_start=12*60,
+        assert_charge_end_time_minutes=11 * 60,
+        inverter_charge_time_minutes_start=12 * 60,
         minutes_now=0,
     )
 

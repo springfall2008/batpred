@@ -2415,7 +2415,6 @@ class Inverter:
             if self.inv_time_button_press:
                 self.press_and_poll_button()
 
-
     def press_and_poll_button(self):
         """
         Press charge/discharge update button(s) for the inverter.
