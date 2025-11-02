@@ -637,6 +637,14 @@ class Fetch:
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
                 rate = self.get_state_wrapper(entity_id=entity_id, attribute="charge_point_power_in_kw")
+                try:
+                    size = float(size)
+                except (ValueError, TypeError):
+                    size = None
+                try:
+                    rate = float(rate)
+                except (ValueError, TypeError):
+                    rate = None
                 if size:
                     self.car_charging_battery_size[0] = size
                 if rate:
