@@ -65,7 +65,7 @@ class PredbatMCPServer:
 
         self.jwt_secret = hashlib.sha256(f"jwt_signing_key_{self.mcp_secret}".encode()).hexdigest()
         self.jwt_algorithm = "HS256"
-        self.access_token_lifetime = timedelta(hours=1)
+        self.access_token_lifetime = timedelta(hours=24)
         self.authorization_code_lifetime = timedelta(minutes=10)
 
         # Authorization codes storage (code -> user/client info)

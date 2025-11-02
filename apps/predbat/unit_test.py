@@ -3069,6 +3069,7 @@ def run_execute_test(
     assert_discharge_start_time_minutes=-1,
     assert_discharge_end_time_minutes=-1,
     inverter_charge_time_minutes_start=-1,
+    inverter_charge_time_minutes_end=-1,
     assert_charge_rate=None,
     assert_discharge_rate=None,
     assert_reserve=0,
@@ -3093,6 +3094,7 @@ def run_execute_test(
     battery_temperature=20,
 ):
     print("Run scenario {}".format(name))
+    my_predbat.log("Run scenario {}".format(name))
     failed = False
     my_predbat.set_read_only = read_only
     my_predbat.car_charging_slots = [car_slot]
@@ -3122,6 +3124,7 @@ def run_execute_test(
     my_predbat.set_reserve_enable = set_reserve_enable
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
+        inverter.charge_end_time_minutes = inverter_charge_time_minutes_end
         if soc_kw_array:
             inverter.soc_kw = soc_kw_array[inverter.id]
         else:
@@ -3518,7 +3521,7 @@ def run_test_web_if(my_predbat):
     ha = my_predbat.ha_interface
 
     # Fetch page from 127.0.0.1:5052
-    for page in ["/", "/dash", "/plan", "/config", "/apps", "/charts", "/compare", "/log", "/config", "/entity"]:
+    for page in ["/", "/dash", "/plan", "/config", "/apps", "/charts", "/compare", "/log", "/entity", "/components", "/browse"]:
         print("Fetch page {}".format(page))
         address = "http://127.0.0.1:5052" + page
         res = requests.get(address)
@@ -3567,6 +3570,8 @@ def run_execute_tests(my_predbat):
     charge_window_best5 = [{"start": my_predbat.minutes_now - 24 * 60, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best6 = [{"start": my_predbat.minutes_now + 8 * 60, "end": my_predbat.minutes_now + 60 + 8 * 60, "average": 1}]
     charge_window_best7 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
+    charge_window_best7b = [{"start": 24*60-5, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
+    charge_window_best7c = [{"start": 0, "end": 11 * 60, "average": 1}]
     charge_window_best8 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
     charge_window_best9 = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 1}]
     charge_window_best_short = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 15, "average": 1}]
@@ -4312,7 +4317,7 @@ def run_execute_tests(my_predbat):
 
     failed |= run_execute_test(
         my_predbat,
-        "charge_midnight2",
+        "charge_midnight2a",
         charge_window_best=charge_window_best7,
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
@@ -4321,7 +4326,37 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=24 * 60 - 1,
+        inverter_charge_time_minutes_start = 30,
     )
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_midnight2b",
+        charge_window_best=charge_window_best7b,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=24*60-30,
+        assert_charge_end_time_minutes=24 * 60 - 1,
+        inverter_charge_time_minutes_start = 30,
+        minutes_now=24*60-5,
+    )
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_midnight2c",
+        charge_window_best=charge_window_best7c,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=0,
+        assert_charge_end_time_minutes=11*60,
+        inverter_charge_time_minutes_start=12*60,
+        minutes_now=0,
+    )
+
     for inverter in my_predbat.inverters:
         inverter.inv_can_span_midnight = True
     if failed:
