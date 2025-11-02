@@ -1,7 +1,7 @@
 # Note that you will need to install the W/kW conversion automations
 # from https://github.com/TonyHoyle/foxess_predbat - place the
 # predbatt.yaml file from that repository into your HA configuration
-# directory, and edit the HA configuration.yaml as show in the README.
+# directory, and edit the HA configuration.yaml as shown in the README.
 
 pred_bat:
   module: predbat

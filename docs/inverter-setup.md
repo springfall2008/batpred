@@ -1,6 +1,6 @@
 # Inverter setup
 
-PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other inverter models:
+PredBat was originally written for GivEnergy inverters using the GivTCP integration but has been extended to many other inverter models:
 
    | Name                          | Integration     | Template |
    | :---------------------------- | :------------- | :------------ |
@@ -19,6 +19,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | [LuxPower](#lux-power) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml)|
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
+   | [Tesla Powerwall](#tesla-powerwall) | [Teslemetry](https://teslemetry.com/) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -26,7 +27,7 @@ Additionally you can create a [custom inverter definition for Predbat](#i-want-t
 Once you get everything working please share the configuration as a github issue so it can be incorporated into the predbat documentation.
 
 NB: By default the apps.yaml template for GivTCP is installed with Predbat.
-If you are using a different inverter then you will need to copy the appropriate apps.yaml template from the above list and use it to **replace the GivTCP apps.yaml** - if
+If you are using a different inverter then you will need to copy the appropriate `apps.yaml` template from the above list and use it to **replace the GivTCP apps.yaml** - if
 you copy but don't replace the standard template then Predbat will not function correctly.
 
 ## GivEnergy with GivTCP
@@ -159,7 +160,7 @@ Ensure the correct entity IDs are used for your specific inverter setup. These e
 
 Use the template configuration from: [solax.sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml)
 
-- Set **solax_modbus_new** in apps.yaml to True if you have integration version 2024.03.2 or greater
+- Set **solax_modbus_new** in `apps.yaml` to True if you have integration version 2024.03.2 or greater
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 
@@ -171,7 +172,7 @@ For this integration, the key elements are:
 - Software - [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) - MQTT integration
 - Home Assistant configuration - [sofar_inverter.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yaml) (in templates directory),
 defines the custom HA entities and should be added to HA's `configuration.yaml`. This is the default Sofar HA configuration with a couple of additional inputs to support battery capacity.
-- Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory). This file should be copied to apps.yaml
+- Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory). This file should be copied over the top of your `apps.yaml` and edited for your installation
 
 - Please note that the inverter needs to be put into "Passive Mode" for the sofar2mqtt to control the inverter.
 - This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%
@@ -183,21 +184,21 @@ Please see this ticket in Github for ongoing discussions: <https://github.com/sp
 
 The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684>
 
-- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> and modify them for your system
+- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> over the top of your `apps.yaml`, and modify it for your system
 - Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which may be 12%
 
 ## SolarEdge Inverters
 
 The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181>
 
-- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> and modify them for your system
-- The default entity name prefix for the integration is 'solaredge' but if you have changed this on installation then you will need to amend the apps.yaml template and the template sensors to match your new prefix
+- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> over the top of your `apps.yaml` and modify it for your system
+- The default entity name prefix for the integration is 'solaredge' but if you have changed this on installation then you will need to amend the `apps.yaml` template and the template sensors to match your new prefix
 - Ensure that **number.solaredge_i1_storage_command_timeout** is set to a reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled
 - Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
 and **switch.solaredge_i1_advanced_power_control** must be on.
 
-- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template within your Home Assistant `configuration.yaml`.
-Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in apps.yaml if you can't get it to work
+- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template entities within your Home Assistant `configuration.yaml`.
+Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in `apps.yaml` if you can't get it to work
 
 ```yaml
 template:
@@ -327,23 +328,23 @@ And add the following additional template sensors to configuration.yaml:
 This is an experimental system, please discuss it on the ticket: <https://github.com/springfall2008/batpred/issues/905>
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
-- Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit
+- Now copy the template `givenergy_cloud.yaml` from templates over the top of your `apps.yaml` and edit
     - Set geserial to your inverter serial number
 - Make sure that the 'discharge down to' registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled in the portal (if you have them)
 
 ## GivEnergy with EMS
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
-- Now copy the template givenergy_ems.yaml from templates into your apps.yaml and edit
+- Now copy the template `givenergy_ems.yaml` from templates over the top of your `apps.yaml` and edit
     - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
     - Set geseriale to the EMS inverter serial number (look in HA for the entity names)
 - Turn off charge, export and discharge slots 2, 3 and 4 as Predbat will only use slot 1 - set the start and end times for these to 00:00
 
 ## GivEnergy/Octopus Cloud Direct - No Home Assistant
 
-- Take the template and enter your GivEnergy API key directly into apps.yaml
-- Set your Octopus API key in apps.yaml
-- Set your Solcast API key in apps.yaml
+- Take the template and enter your GivEnergy API key directly into `apps.yaml`
+- Set your Octopus API key in `apps.yaml`
+- Set your Solcast API key in `apps.yaml`
 - Review any other configuration settings
 
 Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.
@@ -369,7 +370,7 @@ Try the template for auto-integration.
 
 This requires the LuxPython component which integrates with your Lux Power inverter
 
-- Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required
+- Copy the template `luxpower.yaml` from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required
 - LuxPower does not have a SoC max entity in kWh and the SoC percentage entity never reports the battery reaching 100%, so create the following template helper sensors:
 
 ```text
@@ -401,11 +402,11 @@ state class: Measurement
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
 
-Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates into your apps.yaml and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
+Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
 
 ## Sunsynk
 
-- Copy the Sunsynk apps.yaml template and edit for your system.
+- Copy the Sunsynk template over the top of your `apps.yaml`, and edit for your system.
 - Create the following Home Assistant automations:
 
 ```yaml
@@ -498,7 +499,7 @@ action:
 mode: single
 ```
 
-- Create the following templates sensors in your configuration.yaml:
+- Create the following templates sensors in your `configuration.yaml`:
 
 ```yaml
 template:
@@ -537,9 +538,9 @@ template:
 To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to follow the steps below:
 
 - make sure the inverter is already integrated into Home Assistant. Here is a ([repo](https://github.com/TypQxQ/Sigenergy-Local-Modbus)) with full integration (this is the Python version of the Sigenergy Home Assistant integration).
-- Copy the template [sigenergy_sigenstor.yaml](/templates/sigenergy_sigenstor.yaml) template over your apps.yaml and edit for your system.
+- Copy the template [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) template over your `apps.yaml`, and edit for your system.
 
-The following additions are needed to facilitate integration with Predbat and need to put put in Home Assistant `configuration.yaml` or a package yaml:
+The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or a package yaml:
 
 ```yaml
     input_select:
@@ -678,6 +679,360 @@ The following additions are needed to facilitate integration with Predbat and ne
         step: 1
         mode: box
         unit_of_measurement: W
+```
+
+## Tesla Powerwall
+
+Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla) which uses the [Teslemetry subscription service](https://teslemetry.com/)
+to access Tesla fleet API's in Home Assistant. Ed's setup only covered Predbat controlling charging the Powerwall, the below (thanks @Slee2112) covers both charging and discharging (exporting).
+
+- Subscribe to Teslemetry, then install and configure the Teslemetry integration in Home Assistant
+- Copy the template [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) template over the top of your `apps.yaml`, and edit for your system
+
+Exporting with Powerwall is tricky, as there is no built in button as such to do it, you have to trick the Powerwall to export by changing the tariff options using the Tesla API.
+In order to do this you firstly need to create 8 input_text helpers to hold the Tesla access and refresh security tokens. These can be created via the HA UI, or added to `configuration.yaml`:
+
+```yaml
+input_text:
+  tesla_refresh_token_part1:
+    name: "Tesla Refresh Token - Part 1"
+    max: 255
+    mode: password
+
+  tesla_refresh_token_part2:
+    name: "Tesla Refresh Token - Part 2"
+    max: 255
+    mode: password
+
+  tesla_refresh_token_part3:
+    name: "Tesla Refresh Token - Part 3"
+    max: 255
+    mode: password
+
+  tesla_refresh_token_part4:
+    name: "Tesla Refresh Token - Part 4"
+    max: 255
+    mode: password
+
+  tesla_access_token_part1:
+    name: "Tesla Access Token - Part 1"
+    max: 255
+    mode: password
+
+  tesla_access_token_part2:
+    name: "Tesla Access Token - Part 2"
+    max: 255
+    mode: password
+
+  tesla_access_token_part3:
+    name: "Tesla Access Token - Part 3"
+    max: 255
+    mode: password
+
+  tesla_access_token_part4:
+    name: "Tesla Access Token - Part 4"
+    max: 255
+    mode: password
+```
+
+- In `configuration.yaml` add the following line:
+
+```yaml
+rest_command: !rest_command.yaml
+```
+
+- In the /config directory, create a `rest_command.yaml` file containing the following 3 REST commands.<BR>
+The first REST command automatically regenerate access and refresh tokens for using the Tesla API, the second is to set a custom export rate tariff to force the Powerwall to export,
+and the third is to return the Powerwall to the Octopus IOG tariff.  If you are on a different tariff you will need to customise the third REST to your tariff details.<BR>
+Replace '123456789123456789' in the REST commands with your own Tesla Site ID.
+
+```yaml
+tesla_refresh_token:
+  url: "https://auth.tesla.com/oauth2/v3/token"
+  method: POST
+  content_type: "application/x-www-form-urlencoded"
+  payload: >-
+    "grant_type=refresh_token&client_id=ownerapi&refresh_token={{ (states('input_text.tesla_refresh_token_part1') or '') + (states('input_text.tesla_refresh_token_part2') or '') + (states('input_text.tesla_refresh_token_part3') or '') +
+    (states('input_text.tesla_refresh_token_part4') or '') }}&scope=openid%20email%20offline_access"
+
+powerwall_force_export_now:
+  url: "https://owner-api.teslamotors.com/api/1/energy_sites/123456789123456789/time_of_use_settings"
+  method: POST
+  headers:
+    Authorization: !secret tesla_auth_token
+    Content-Type: application/json
+  payload: >
+    {% set now = now() %}
+    {% set minute = now.minute %}
+    {% set start = now.replace(minute=0) if minute < 60 else now.replace(minute=60) %}
+    {% set end = start + timedelta(minutes=60) %}
+    {
+      "tou_settings": {
+        "tariff_content_v2": {
+          "version": 1,
+          "utility": "Octopus Energy",
+          "code": "OCTO-IOG-CUSTOM",
+          "name": "Octopus IOG (Force Export Now)",
+          "currency": "GBP",
+          "monthly_minimum_bill": 0,
+          "min_applicable_demand": 0,
+          "max_applicable_demand": 0,
+          "monthly_charges": 0,
+          "daily_charges": [
+            { "name": "Charge", "amount": 0 }
+          ],
+          "daily_demand_charges": {},
+          "demand_charges": {
+            "ALL": { "rates": { "ALL": 0 } },
+            "AllYear": { "rates": {} }
+          },
+          "energy_charges": {
+            "ALL": { "rates": { "ALL": 0 } },
+            "AllYear": {
+              "rates": {
+                "SUPER_OFF_PEAK": 0.07,
+                "ON_PEAK": 0.31
+              }
+            }
+          },
+          "seasons": {
+            "AllYear": {
+              "fromMonth": 1,
+              "fromDay": 1,
+              "toMonth": 12,
+              "toDay": 31,
+              "tou_periods": {
+                "SUPER_OFF_PEAK": {
+                  "periods": [
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": {{ start.hour }}, "toMinute": {{ start.minute }} },
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ end.hour }}, "fromMinute": {{ end.minute }}, "toHour": 0, "toMinute": 0 }
+                  ]
+                },
+                "ON_PEAK": {
+                  "periods": [
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ start.hour }}, "fromMinute": {{ start.minute }}, "toHour": {{ end.hour }}, "toMinute": {{ end.minute }} }
+                  ]
+                }
+              }
+            }
+          },
+          "sell_tariff": {
+            "min_applicable_demand": 0,
+            "max_applicable_demand": 0,
+            "monthly_minimum_bill": 0,
+            "monthly_charges": 0,
+            "utility": "Octopus Energy",
+            "daily_charges": [
+              { "name": "Charge", "amount": 0 }
+            ],
+            "demand_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": { "rates": {} }
+            },
+            "energy_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": {
+                "rates": {
+                  "SUPER_OFF_PEAK": 0.07,
+                  "ON_PEAK": 0.30
+                }
+              }
+            },
+            "seasons": {
+              "AllYear": {
+                "fromMonth": 1,
+                "fromDay": 1,
+                "toMonth": 12,
+                "toDay": 31,
+                "tou_periods": {
+                  "SUPER_OFF_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": {{ start.hour }}, "toMinute": {{ start.minute }} },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ end.hour }}, "fromMinute": {{ end.minute }}, "toHour": 0, "toMinute": 0 }
+                    ]
+                  },
+                  "ON_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ start.hour }}, "fromMinute": {{ start.minute }}, "toHour": {{ end.hour }}, "toMinute": {{ end.minute }} }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+powerwall_api_set_iog_custom_tariff:
+  url: "https://owner-api.teslamotors.com/api/1/energy_sites/123456789123456789/time_of_use_settings"
+  method: POST
+  headers:
+    Authorization: !secret tesla_auth_token
+    Content-Type: application/json
+  payload: >
+    {
+      "tou_settings": {
+        "tariff_content_v2": {
+          "version": 1,
+          "monthly_minimum_bill": 0,
+          "min_applicable_demand": 0,
+          "max_applicable_demand": 0,
+          "monthly_charges": 0,
+          "utility": "Octopus Energy",
+          "code": "OCTO-IOG-CUSTOM",
+          "name": "Octopus IOG (Custom-restored)",
+          "currency": "GBP",
+          "daily_charges": [
+            { "name": "Charge", "amount": 0 }
+          ],
+          "daily_demand_charges": {},
+          "demand_charges": {
+            "ALL": { "rates": { "ALL": 0 } },
+            "AllYear": { "rates": {} }
+          },
+          "energy_charges": {
+            "ALL": { "rates": { "ALL": 0 } },
+            "AllYear": {
+              "rates": {
+                "SUPER_OFF_PEAK": 0.07,
+                "ON_PEAK": 0.31
+              }
+            }
+          },
+          "seasons": {
+            "AllYear": {
+              "fromMonth": 1,
+              "fromDay": 1,
+              "toMonth": 12,
+              "toDay": 31,
+              "tou_periods": {
+                "SUPER_OFF_PEAK": {
+                  "periods": [
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 2, "toMinute": 0 },
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 3, "fromMinute": 0, "toHour": 5, "toMinute": 30 },
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 0 }
+                  ]
+                },
+                "ON_PEAK": {
+                  "periods": [
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 2, "fromMinute": 0, "toHour": 3, "toMinute": 0 },
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 5, "fromMinute": 30, "toHour": 16, "toMinute": 0 },
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 19, "fromMinute": 0, "toHour": 23, "toMinute": 30 }
+                  ]
+                }
+              }
+            }
+          },
+          "sell_tariff": {
+            "min_applicable_demand": 0,
+            "max_applicable_demand": 0,
+            "monthly_minimum_bill": 0,
+            "monthly_charges": 0,
+            "utility": "Octopus Energy",
+            "daily_charges": [
+              { "name": "Charge", "amount": 0 }
+            ],
+            "demand_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": { "rates": {} }
+            },
+            "energy_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": {
+                "rates": {
+                  "SUPER_OFF_PEAK": 0.07,
+                  "ON_PEAK": 0.22
+                }
+              }
+            },
+            "seasons": {
+              "AllYear": {
+                "fromMonth": 1,
+                "fromDay": 1,
+                "toMonth": 12,
+                "toDay": 31,
+                "tou_periods": {
+                  "SUPER_OFF_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 2, "toMinute": 0 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 3, "fromMinute": 0, "toHour": 5, "toMinute": 30 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 0 }
+                    ]
+                  },
+                  "ON_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 2, "fromMinute": 0, "toHour": 3, "toMinute": 0 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 5, "fromMinute": 30, "toHour": 16, "toMinute": 0 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 19, "fromMinute": 0, "toHour": 23, "toMinute": 30 }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+```
+
+- Create the following automation using the HA UI or by adding to `configuration.yaml`, the automation triggers an automatic refresh of the access token every 8 hours:
+
+```yaml
+automation:
+  alias: "Refresh Tesla Access Token"
+  description: "Refresh Tesla access token every 8 hours"
+  trigger:
+    platform: time_pattern
+    hours: "/8"
+  action:
+    - service: rest_command.tesla_refresh_token
+      response_variable: tesla_response
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part1
+      data:
+        value: "{{ tesla_response.content.access_token[0:250] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part2
+      data:
+       value: "{{ tesla_response.content.access_token[250:500] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part3
+      data:
+        value: "{{ tesla_response.content.access_token[500:750] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part4
+      data:
+        value: "{{ tesla_response.content.access_token[750:] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_refresh_token_part1
+      data:
+        value: "{{ tesla_response.content.refresh_token[0:250] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_refresh_token_part2
+      data:
+        value: "{{ tesla_response.content.refresh_token[250:500] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_refresh_token_part3
+      data:
+        value: "{{ tesla_response.content.refresh_token[500:750] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_refresh_token_part4
+      data:
+        value: "{{ tesla_response.content.refresh_token[750:] }}"
+    - service: persistent_notification.create
+      data:
+        title: "Tesla Tokens Updated"
+        message: "Access and refresh tokens have been successfully updated"
+      notification_id: "tesla_token_update"
 ```
 
 ## I want to add an unsupported inverter to Predbat

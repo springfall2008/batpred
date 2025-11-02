@@ -200,6 +200,7 @@ onchange
 oncharge
 oninput
 openweathermap
+ownerapi
 pdata
 pdetails
 perc
@@ -208,6 +209,7 @@ pitem
 pkwh
 postdata
 powerline
+Powerwall
 ppdetails
 ppkwh
 Pred
@@ -246,6 +248,7 @@ SFMB
 sigen
 sigenergy
 sigenstor
+Slee
 socb
 socs
 sofar
@@ -268,6 +271,7 @@ sunsynk
 syscmd
 tabindex
 tasmota
+Teslemetry
 tdata
 tdiff
 temperation
