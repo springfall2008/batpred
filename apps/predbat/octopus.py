@@ -789,8 +789,9 @@ class OctopusAPI:
         self.base.args["octopus_saving_session"] = self.get_entity_name("binary_sensor", "saving_session")
         self.base.args["octopus_saving_session_join"] = self.get_entity_name("select", "saving_session_join")
         for tariff in tariffs:
-            self.base.args["metric_octopus_{}_rates".format(tariff)] = self.get_entity_name("sensor", tariff + "_rates")
-            self.base.args["metric_octopus_{}_standing".format(tariff)] = self.get_entity_name("sensor", tariff + "_standing")
+            self.base.args["metric_octopus_{}".format(tariff)] = self.get_entity_name("sensor", tariff + "_rates")
+            if tariff == "import":
+                self.base.args["metric_standing_charge".format(tariff)] = self.get_entity_name("sensor", tariff + "_standing")
         device = self.get_intelligent_device()
         if device:
             self.base.args["octopus_intelligent_slot"] = self.get_entity_name("binary_sensor", "intelligent_dispatch")
