@@ -962,9 +962,13 @@ class OctopusAPI:
                 if rate_value is not None:
                     start_time = time_now.strftime(TIME_FORMAT)
                     end_time = (time_now + timedelta(minutes=30)).strftime(TIME_FORMAT)
-                    rates_stamp.append({"start": start_time, "end": end_time, "value_inc_vat": rate_value})
+                    rates_stamp.append({"start": start_time, "end": end_time, "value_inc_vat": dp2(rate_value / 100)})
             rate_now = rates.get(self.now_utc.minute + self.now_utc.hour * 60, None)
+            if rate_now:
+                rate_now = dp2(rate_now / 100)
             standing_now = standing.get(self.now_utc.minute + self.now_utc.hour * 60, None)
+            if standing_now:
+                standing_now = dp2(standing_now / 100)
 
             self.base.dashboard_item(
                 self.get_entity_name("sensor", tariff + "_rates"),
