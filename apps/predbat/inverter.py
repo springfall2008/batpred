@@ -1985,8 +1985,9 @@ class Inverter:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
             self.log("Inverter {} Turning on scheduled export".format(self.id))
 
-        if ((new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable)) and self.inv_time_button_press:
-            self.press_and_poll_button()
+        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable):
+            if self.inv_time_button_press:
+                self.press_and_poll_button()
 
         # Force export, turn it on after we change the window
         if force_export:
@@ -2053,6 +2054,10 @@ class Inverter:
         # Reset charge window to midnight if there is no charge enable time
         if not self.inv_has_charge_enable_time:
             self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
+        else:
+            # Press button if needed
+            if self.inv_time_button_press:
+                self.press_and_poll_button()
 
         # Updated cached status to disabled
         self.charge_enable_time = False
@@ -2306,6 +2311,11 @@ class Inverter:
             old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
         else:
             self.log("Warn: Inverter {} unable read charge window as neither REST or discharge_start_time".format(self.id))
+            old_charge_schedule_enable = "off"
+
+        # Normalize old charge schedule enable
+        if old_charge_schedule_enable in ["off", "disable"]:
+            old_charge_schedule_enable = "off"
 
         # Apply clock skew
         charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
@@ -2379,7 +2389,7 @@ class Inverter:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
 
-        if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable" or have_disabled:
+        if old_charge_schedule_enable == "off" or have_disabled:
             # Enable scheduled charge if not turned on
             if self.rest_data:
                 self.rest_enableChargeSchedule(True)
@@ -2391,19 +2401,20 @@ class Inverter:
             else:
                 self.log("Warn: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
 
-            if new_start != old_start or new_end != old_end or (self.inv_charge_time_format in ["H M", "H:M-H:M"]):
-                # For Solis inverters and fox we also have to press the update_charge_discharge button to send the times to the inverter
-                if self.inv_time_button_press:
-                    self.press_and_poll_button()
-
             # Only notify if it's a real change and not a temporary one
-            if (old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable") and self.base.set_inverter_notify:
+            if old_charge_schedule_enable == "off" and self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Enabling scheduled charging at {}".format(self.id, self.base.time_now_str()))
 
             self.charge_enable_time = True
 
-            if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable":
+            if old_charge_schedule_enable == "off":
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
+
+        if (new_start != old_start) or (new_end != old_end) or (old_charge_schedule_enable == "off"):
+            # For Solis inverters and fox we also have to press the update_charge_discharge button to send the times to the inverter
+            if self.inv_time_button_press:
+                self.press_and_poll_button()
+
 
     def press_and_poll_button(self):
         """
