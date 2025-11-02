@@ -2051,13 +2051,13 @@ class Inverter:
 
             self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
 
-        # Reset charge window to midnight if there is no charge enable time
-        if not self.inv_has_charge_enable_time:
-            self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
-        else:
-            # Press button if needed
-            if self.inv_time_button_press:
-                self.press_and_poll_button()
+            # Reset charge window to midnight if there is no charge enable time
+            if not self.inv_has_charge_enable_time:
+                self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
+            else:
+                # Press button if needed
+                if self.inv_time_button_press:
+                    self.press_and_poll_button()
 
         # Updated cached status to disabled
         self.charge_enable_time = False
