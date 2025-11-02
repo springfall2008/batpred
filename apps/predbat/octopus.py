@@ -8,7 +8,7 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, minute_data
+from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 import aiohttp
 import asyncio
 import json
@@ -789,8 +789,9 @@ class OctopusAPI:
         self.base.args["octopus_saving_session"] = self.get_entity_name("binary_sensor", "saving_session")
         self.base.args["octopus_saving_session_join"] = self.get_entity_name("select", "saving_session_join")
         for tariff in tariffs:
-            self.base.args["metric_octopus_{}_rates".format(tariff)] = self.get_entity_name("sensor", tariff + "_rates")
-            self.base.args["metric_octopus_{}_standing".format(tariff)] = self.get_entity_name("sensor", tariff + "_standing")
+            self.base.args["metric_octopus_{}".format(tariff)] = self.get_entity_name("sensor", tariff + "_rates")
+            if tariff == "import":
+                self.base.args["metric_standing_charge"] = self.get_entity_name("sensor", tariff + "_standing")
         device = self.get_intelligent_device()
         if device:
             self.base.args["octopus_intelligent_slot"] = self.get_entity_name("binary_sensor", "intelligent_dispatch")
@@ -961,9 +962,13 @@ class OctopusAPI:
                 if rate_value is not None:
                     start_time = time_now.strftime(TIME_FORMAT)
                     end_time = (time_now + timedelta(minutes=30)).strftime(TIME_FORMAT)
-                    rates_stamp.append({"start": start_time, "end": end_time, "value_inc_vat": rate_value})
+                    rates_stamp.append({"start": start_time, "end": end_time, "value_inc_vat": dp4(rate_value / 100)})
             rate_now = rates.get(self.now_utc.minute + self.now_utc.hour * 60, None)
+            if rate_now:
+                rate_now = dp4(rate_now / 100)
             standing_now = standing.get(self.now_utc.minute + self.now_utc.hour * 60, None)
+            if standing_now:
+                standing_now = dp4(standing_now / 100)
 
             self.base.dashboard_item(
                 self.get_entity_name("sensor", tariff + "_rates"),
