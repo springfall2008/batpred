@@ -863,7 +863,7 @@ class SolarAPI:
         # Use the timezone-aware time values from base to ensure forecast times align with user's local timezone
         self.now_utc = self.base.now_utc
         self.midnight_utc = self.base.midnight_utc
-        self.minutes_now = int((self.now_utc - self.midnight_utc).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
+        self.minutes_now = int((self.now_utc - self.midnight_utc).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
 
         if self.forecast_solar:
             self.log("Obtaining solar forecast from Forecast Solar API")
