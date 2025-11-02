@@ -527,7 +527,9 @@ class DummyRestAPI:
         return commands
 
 
-def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, charge_start_time, charge_end_time, minutes_now, short=False, has_inverter_time_button_press=False, expect_inverter_time_button_press=False):
+def test_adjust_charge_window(
+    test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, charge_start_time, charge_end_time, minutes_now, short=False, has_inverter_time_button_press=False, expect_inverter_time_button_press=False
+):
     """
     test:
         inv.adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
@@ -540,7 +542,7 @@ def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_
     ha.dummy_items["select.charge_start_time"] = prev_charge_start_time[:5] if short else prev_charge_start_time
     ha.dummy_items["select.charge_end_time"] = prev_charge_end_time[:5] if short else prev_charge_end_time
     ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
-    ha.dummy_items['switch.inverter_button'] = 'off'
+    ha.dummy_items["switch.inverter_button"] = "off"
     charge_start_time_tm = datetime.strptime(charge_start_time, "%H:%M:%S")
     charge_end_time_tm = datetime.strptime(charge_end_time, "%H:%M:%S")
 
@@ -562,8 +564,8 @@ def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_
     if ha.get_state("switch.scheduled_charge_enable") != "on":
         print("ERROR: Charge enable should be on got {}".format(ha.get_state("switch.scheduled_charge_enable")))
         failed = True
-    if ha.get_state('switch.inverter_button') != ('on' if expect_inverter_time_button_press else 'off'):
-        print("ERROR: Inverter time button press should be {} got {}".format('on' if expect_inverter_time_button_press else 'off', ha.get_state('switch.inverter_button')))
+    if ha.get_state("switch.inverter_button") != ("on" if expect_inverter_time_button_press else "off"):
+        print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
 
     # REST Mode
     inv.rest_api = "dummy"
@@ -677,7 +679,7 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     ha.dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = prev_force_export
     ha.dummy_items["number.discharge_target_soc"] = prev_discharge_target
     ha.dummy_items["select.inverter_mode"] = prev_mode
-    ha.dummy_items['switch.inverter_button'] = 'off'
+    ha.dummy_items["switch.inverter_button"] = "off"
 
     new_start_timestamp = datetime.strptime(new_start, "%H:%M:%S")
     new_end_timestamp = datetime.strptime(new_end, "%H:%M:%S")
@@ -698,8 +700,8 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     if ha.get_state("select.inverter_mode") != new_mode:
         print("ERROR: Inverter mode should be {} got {}".format(new_mode, ha.get_state("select.inverter_mode")))
         failed = True
-    if ha.get_state('switch.inverter_button') != ('on' if expect_inv_time_button_press else 'off'):
-        print("ERROR: Inverter button press should be {} got {}".format('on' if expect_inv_time_button_press else 'off', ha.get_state('switch.inverter_button')))
+    if ha.get_state("switch.inverter_button") != ("on" if expect_inv_time_button_press else "off"):
+        print("ERROR: Inverter button press should be {} got {}".format("on" if expect_inv_time_button_press else "off", ha.get_state("switch.inverter_button")))
         failed = True
 
     print("Test: {} - REST".format(test_name))
@@ -1201,7 +1203,7 @@ def test_inverter_update(
     dummy_items["number.discharge_target_soc"] = 4
     dummy_items["sensor.battery_capacity"] = expect_battery_capacity
     dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = "on" if expect_discharge_enable else "off"
-    dummy_items['switch.inverter_button'] = 'off'
+    dummy_items["switch.inverter_button"] = "off"
     print("sensor.predbat_GE_0_scheduled_discharge_enable = {}".format(dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"]))
     if not has_discharge_enable_time:
         dummy_items["switch.scheduled_discharge_enable"] = "n/a"
