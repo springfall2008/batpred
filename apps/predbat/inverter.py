@@ -2389,8 +2389,8 @@ class Inverter:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
 
-        if old_charge_schedule_enable == "off" or have_disabled:
-            # Enable scheduled charge if not turned on
+        if (old_charge_schedule_enable == "off" or have_disabled) and (new_start != new_end):
+            # Enable scheduled charge if not turned on, unless the start and end are the same (disabled)
             if self.rest_data:
                 self.rest_enableChargeSchedule(True)
             elif "scheduled_charge_enable" in self.base.args:

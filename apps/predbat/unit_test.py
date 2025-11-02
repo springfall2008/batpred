@@ -527,6 +527,69 @@ class DummyRestAPI:
         return commands
 
 
+def test_disable_charge_window(
+    test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=False, expect_inverter_time_button_press=False
+):
+    """
+    Test the disable charge window function
+    """
+    failed = False
+    print("Test: {} has_charge_enable_time={} has_inverter_time_button_press={} prev_enable_charge={}".format(test_name, has_charge_enable_time, has_inverter_time_button_press, prev_enable_charge))
+
+    inv.rest_data = None
+    inv.inv_time_button_press = has_inverter_time_button_press
+    inv.inv_has_charge_enable_time = has_charge_enable_time
+    ha.dummy_items["select.charge_start_time"] = prev_charge_start_time
+    ha.dummy_items["select.charge_end_time"] = prev_charge_end_time
+    ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
+    ha.dummy_items["switch.inverter_button"] = "off"
+
+    inv.disable_charge_window()
+
+    if not has_charge_enable_time and ha.get_state("select.charge_start_time") != "00:00:00":
+        print("ERROR: Charge start time should be 00:00:00 got {}".format(ha.get_state("select.charge_start_time")))
+        failed = True
+    if not has_charge_enable_time and ha.get_state("select.charge_end_time") != "00:00:00":
+        print("ERROR: Charge end time should be 00:00:00 got {}".format(ha.get_state("select.charge_end_time")))
+        failed = True
+    if ha.get_state("switch.scheduled_charge_enable") != "off":
+        print("ERROR: Charge enable should be off got {}".format(ha.get_state("switch.scheduled_charge_enable")))
+        failed = True
+    if ha.get_state("switch.inverter_button") != ("on" if expect_inverter_time_button_press else "off"):
+        print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
+
+    # REST Mode
+    inv.rest_api = "dummy"
+    inv.rest_data = {}
+    inv.rest_data["Timeslots"] = {}
+    inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] = prev_charge_start_time
+    inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] = prev_charge_end_time
+    inv.rest_data["Control"] = {}
+    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "enable" if prev_enable_charge else "disabled"
+    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+    dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = "00:00:00"
+    dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = "00:00:00"
+    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "disabled"
+
+    print("REST Mode")
+    inv.disable_charge_window()
+    print("After disable charge window")
+    rest_command = dummy_rest.get_commands()
+    charge_start_time = "00:00:00"
+    charge_end_time = "00:00:00"
+    if (prev_charge_start_time != charge_start_time or prev_charge_end_time != charge_end_time) and not has_charge_enable_time:
+        expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
+    else:
+        expect_data = []
+    if prev_enable_charge and has_charge_enable_time:
+        expect_data.append(["dummy/enableChargeSchedule", {"state": "disable"}])
+
+    if json.dumps(expect_data) != json.dumps(rest_command):
+        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+        failed = True
+    return failed
+
+
 def test_adjust_charge_window(
     test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, charge_start_time, charge_end_time, minutes_now, short=False, has_inverter_time_button_press=False, expect_inverter_time_button_press=False
 ):
@@ -574,11 +637,11 @@ def test_adjust_charge_window(
     inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] = prev_charge_start_time
     inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] = prev_charge_end_time
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "on" if prev_enable_charge else "off"
+    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "enable" if prev_enable_charge else "disable"
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = charge_start_time
     dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = charge_end_time
-    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = True
+    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "enable"
 
     inv.adjust_charge_window(charge_start_time_tm, charge_end_time_tm, minutes_now)
     rest_command = dummy_rest.get_commands()
@@ -2333,7 +2396,7 @@ def run_inverter_tests():
     if failed:
         return failed
 
-    failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "00:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
+    failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "00:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
     failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "23:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "23:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window4", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "01:12:00", "23:12:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
@@ -2341,6 +2404,19 @@ def run_inverter_tests():
     failed |= test_adjust_charge_window("adjust_charge_window6", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", True, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
     failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", False, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    if failed:
+        return failed
+    
+    failed |= test_disable_charge_window("disable_charge_window1", ha, inv, dummy_rest, "01:12:00", "23:12:00", True, my_predbat.minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    if failed:
+        return failed
+    failed |= test_disable_charge_window("disable_charge_window2", ha, inv, dummy_rest, "01:12:00", "23:12:00", False, my_predbat.minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
+    if failed:
+        return failed
+    failed |= test_disable_charge_window("disable_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, my_predbat.minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    if failed:
+        return failed
+    failed |= test_disable_charge_window("disable_charge_window4", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, my_predbat.minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
     if failed:
         return failed
 
