@@ -527,9 +527,7 @@ class DummyRestAPI:
         return commands
 
 
-def test_disable_charge_window(
-    test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=False, expect_inverter_time_button_press=False
-):
+def test_disable_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=False, expect_inverter_time_button_press=False):
     """
     Test the disable charge window function
     """
@@ -2406,7 +2404,7 @@ def run_inverter_tests():
     failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", False, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     if failed:
         return failed
-    
+
     failed |= test_disable_charge_window("disable_charge_window1", ha, inv, dummy_rest, "01:12:00", "23:12:00", True, my_predbat.minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     if failed:
         return failed
