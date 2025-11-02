@@ -8,7 +8,7 @@ import requests
 import re
 from datetime import datetime, timedelta, timezone
 from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2, minute_data
+from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 import aiohttp
 import asyncio
 import json
