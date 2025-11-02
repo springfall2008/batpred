@@ -527,7 +527,70 @@ class DummyRestAPI:
         return commands
 
 
-def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, charge_start_time, charge_end_time, minutes_now, short=False):
+def test_disable_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=False, expect_inverter_time_button_press=False):
+    """
+    Test the disable charge window function
+    """
+    failed = False
+    print("Test: {} has_charge_enable_time={} has_inverter_time_button_press={} prev_enable_charge={}".format(test_name, has_charge_enable_time, has_inverter_time_button_press, prev_enable_charge))
+
+    inv.rest_data = None
+    inv.inv_time_button_press = has_inverter_time_button_press
+    inv.inv_has_charge_enable_time = has_charge_enable_time
+    ha.dummy_items["select.charge_start_time"] = prev_charge_start_time
+    ha.dummy_items["select.charge_end_time"] = prev_charge_end_time
+    ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
+    ha.dummy_items["switch.inverter_button"] = "off"
+
+    inv.disable_charge_window()
+
+    if not has_charge_enable_time and ha.get_state("select.charge_start_time") != "00:00:00":
+        print("ERROR: Charge start time should be 00:00:00 got {}".format(ha.get_state("select.charge_start_time")))
+        failed = True
+    if not has_charge_enable_time and ha.get_state("select.charge_end_time") != "00:00:00":
+        print("ERROR: Charge end time should be 00:00:00 got {}".format(ha.get_state("select.charge_end_time")))
+        failed = True
+    if ha.get_state("switch.scheduled_charge_enable") != "off":
+        print("ERROR: Charge enable should be off got {}".format(ha.get_state("switch.scheduled_charge_enable")))
+        failed = True
+    if ha.get_state("switch.inverter_button") != ("on" if expect_inverter_time_button_press else "off"):
+        print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
+
+    # REST Mode
+    inv.rest_api = "dummy"
+    inv.rest_data = {}
+    inv.rest_data["Timeslots"] = {}
+    inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] = prev_charge_start_time
+    inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] = prev_charge_end_time
+    inv.rest_data["Control"] = {}
+    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "enable" if prev_enable_charge else "disabled"
+    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+    dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = "00:00:00"
+    dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = "00:00:00"
+    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "disabled"
+
+    print("REST Mode")
+    inv.disable_charge_window()
+    print("After disable charge window")
+    rest_command = dummy_rest.get_commands()
+    charge_start_time = "00:00:00"
+    charge_end_time = "00:00:00"
+    if (prev_charge_start_time != charge_start_time or prev_charge_end_time != charge_end_time) and not has_charge_enable_time:
+        expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
+    else:
+        expect_data = []
+    if prev_enable_charge and has_charge_enable_time:
+        expect_data.append(["dummy/enableChargeSchedule", {"state": "disable"}])
+
+    if json.dumps(expect_data) != json.dumps(rest_command):
+        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+        failed = True
+    return failed
+
+
+def test_adjust_charge_window(
+    test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, charge_start_time, charge_end_time, minutes_now, short=False, has_inverter_time_button_press=False, expect_inverter_time_button_press=False
+):
     """
     test:
         inv.adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
@@ -536,9 +599,11 @@ def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_
     print("Test: {}".format(test_name))
 
     inv.rest_data = None
+    inv.has_inverter_time_button_press = has_inverter_time_button_press
     ha.dummy_items["select.charge_start_time"] = prev_charge_start_time[:5] if short else prev_charge_start_time
     ha.dummy_items["select.charge_end_time"] = prev_charge_end_time[:5] if short else prev_charge_end_time
     ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
+    ha.dummy_items["switch.inverter_button"] = "off"
     charge_start_time_tm = datetime.strptime(charge_start_time, "%H:%M:%S")
     charge_end_time_tm = datetime.strptime(charge_end_time, "%H:%M:%S")
 
@@ -560,6 +625,8 @@ def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_
     if ha.get_state("switch.scheduled_charge_enable") != "on":
         print("ERROR: Charge enable should be on got {}".format(ha.get_state("switch.scheduled_charge_enable")))
         failed = True
+    if ha.get_state("switch.inverter_button") != ("on" if expect_inverter_time_button_press else "off"):
+        print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
 
     # REST Mode
     inv.rest_api = "dummy"
@@ -568,11 +635,11 @@ def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_
     inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] = prev_charge_start_time
     inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] = prev_charge_end_time
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "on" if prev_enable_charge else "off"
+    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "enable" if prev_enable_charge else "disable"
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = charge_start_time
     dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = charge_end_time
-    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = True
+    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "enable"
 
     inv.adjust_charge_window(charge_start_time_tm, charge_end_time_tm, minutes_now)
     rest_command = dummy_rest.get_commands()
@@ -632,7 +699,7 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
     return failed
 
 
-def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_end, prev_force_export, prev_discharge_target, new_start, new_end, new_force_export):
+def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_end, prev_force_export, prev_discharge_target, new_start, new_end, new_force_export, has_inv_time_button_press=False, expect_inv_time_button_press=False):
     """
     Test
        inv.adjust_reserve(self, reserve):
@@ -657,6 +724,7 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     inv.inv_has_charge_enable_time = False
     inv.ge_inverter_mode = True
     inv.rest_v3 = True
+    inv.inv_time_button_press = has_inv_time_button_press
 
     if inv.ge_inverter_mode and not new_force_export:
         expect_start = prev_start
@@ -672,6 +740,7 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     ha.dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = prev_force_export
     ha.dummy_items["number.discharge_target_soc"] = prev_discharge_target
     ha.dummy_items["select.inverter_mode"] = prev_mode
+    ha.dummy_items["switch.inverter_button"] = "off"
 
     new_start_timestamp = datetime.strptime(new_start, "%H:%M:%S")
     new_end_timestamp = datetime.strptime(new_end, "%H:%M:%S")
@@ -691,6 +760,9 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
         failed = True
     if ha.get_state("select.inverter_mode") != new_mode:
         print("ERROR: Inverter mode should be {} got {}".format(new_mode, ha.get_state("select.inverter_mode")))
+        failed = True
+    if ha.get_state("switch.inverter_button") != ("on" if expect_inv_time_button_press else "off"):
+        print("ERROR: Inverter button press should be {} got {}".format("on" if expect_inv_time_button_press else "off", ha.get_state("switch.inverter_button")))
         failed = True
 
     print("Test: {} - REST".format(test_name))
@@ -1192,6 +1264,7 @@ def test_inverter_update(
     dummy_items["number.discharge_target_soc"] = 4
     dummy_items["sensor.battery_capacity"] = expect_battery_capacity
     dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = "on" if expect_discharge_enable else "off"
+    dummy_items["switch.inverter_button"] = "off"
     print("sensor.predbat_GE_0_scheduled_discharge_enable = {}".format(dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"]))
     if not has_discharge_enable_time:
         dummy_items["switch.scheduled_discharge_enable"] = "n/a"
@@ -2060,11 +2133,13 @@ def run_inverter_tests():
         "select.discharge_end_time": "04:44:00",
         "sensor.predbat_GE_0_scheduled_discharge_enable": "off",
         "number.discharge_target_soc": 4,
+        "switch.inverter_button": False,
     }
     my_predbat.ha_interface.dummy_items = dummy_items
     my_predbat.args["auto_restart"] = [{"service": "switch/turn_on", "entity_id": "switch.restart"}]
     my_predbat.args["givtcp_rest"] = None
     my_predbat.args["inverter_type"] = ["GE"]
+    my_predbat.args["schedule_write_button"] = "switch.inverter_button"
     for entity_id in dummy_items.keys():
         arg_name = entity_id.split(".")[1]
         my_predbat.args[arg_name] = entity_id
@@ -2252,19 +2327,28 @@ def run_inverter_tests():
     inv.update_status(my_predbat.minutes_now)
     my_predbat.inv = inv
 
-    failed |= test_adjust_force_export("adjust_force_export1", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 4, "11:00:00", "11:30:00", False)
+    failed |= test_adjust_force_export("adjust_force_export1", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 4, "11:00:00", "11:30:00", False, has_inv_time_button_press=True, expect_inv_time_button_press=True)
     if failed:
         return failed
-    failed |= test_adjust_force_export("adjust_force_export2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 4, "11:00:00", "11:30:00", True)
+    failed |= test_adjust_force_export("adjust_force_export2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 4, "11:00:00", "11:30:00", True, has_inv_time_button_press=True, expect_inv_time_button_press=True)
     if failed:
         return failed
-    failed |= test_adjust_force_export("adjust_force_export3", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 10, "11:00:00", "11:30:00", True)
+    failed |= test_adjust_force_export("adjust_force_export3", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 10, "11:00:00", "11:30:00", True, has_inv_time_button_press=True, expect_inv_time_button_press=True)
     if failed:
         return failed
-    failed |= test_adjust_force_export("adjust_force_export4", ha, inv, dummy_rest, "00:11:00", "01:12:12", True, 10, "11:00:00", "11:30:00", True)
+    failed |= test_adjust_force_export("adjust_force_export4", ha, inv, dummy_rest, "00:11:00", "01:12:12", True, 10, "11:00:00", "11:30:00", True, has_inv_time_button_press=True, expect_inv_time_button_press=True)
     if failed:
         return failed
-    failed |= test_adjust_force_export("adjust_force_export5", ha, inv, dummy_rest, "00:11:00", "01:12:12", True, 4, "11:00:00", "11:30:00", False)
+    failed |= test_adjust_force_export("adjust_force_export5", ha, inv, dummy_rest, "00:11:00", "01:12:12", True, 4, "11:00:00", "11:30:00", False, has_inv_time_button_press=True, expect_inv_time_button_press=True)
+    if failed:
+        return failed
+    failed |= test_adjust_force_export("adjust_force_export6", ha, inv, dummy_rest, "11:00:00", "11:30:00", True, 4, "11:00:00", "11:30:00", True, has_inv_time_button_press=True, expect_inv_time_button_press=False)
+    if failed:
+        return failed
+    failed |= test_adjust_force_export("adjust_force_export7", ha, inv, dummy_rest, "11:00:00", "11:30:00", True, 4, "11:00:00", "11:30:00", False, has_inv_time_button_press=True, expect_inv_time_button_press=True)
+    if failed:
+        return failed
+    failed |= test_adjust_force_export("adjust_force_export8", ha, inv, dummy_rest, "11:00:00", "11:30:00", False, 4, "11:00:00", "11:30:00", True, has_inv_time_button_press=True, expect_inv_time_button_press=True)
     if failed:
         return failed
 
@@ -2310,12 +2394,27 @@ def run_inverter_tests():
     if failed:
         return failed
 
-    failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "00:00:00", my_predbat.minutes_now)
-    failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "23:00:00", my_predbat.minutes_now)
-    failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "23:00:00", my_predbat.minutes_now)
-    failed |= test_adjust_charge_window("adjust_charge_window4", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "01:12:00", "23:12:00", my_predbat.minutes_now)
-    failed |= test_adjust_charge_window("adjust_charge_window5", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now)
-    failed |= test_adjust_charge_window("adjust_charge_window6", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now, short=True)
+    failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "00:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
+    failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "23:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "23:00:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    failed |= test_adjust_charge_window("adjust_charge_window4", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "01:12:00", "23:12:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    failed |= test_adjust_charge_window("adjust_charge_window5", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    failed |= test_adjust_charge_window("adjust_charge_window6", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", True, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
+    failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", False, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    if failed:
+        return failed
+
+    failed |= test_disable_charge_window("disable_charge_window1", ha, inv, dummy_rest, "01:12:00", "23:12:00", True, my_predbat.minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    if failed:
+        return failed
+    failed |= test_disable_charge_window("disable_charge_window2", ha, inv, dummy_rest, "01:12:00", "23:12:00", False, my_predbat.minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
+    if failed:
+        return failed
+    failed |= test_disable_charge_window("disable_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, my_predbat.minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+    if failed:
+        return failed
+    failed |= test_disable_charge_window("disable_charge_window4", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, my_predbat.minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
     if failed:
         return failed
 
@@ -3069,6 +3168,7 @@ def run_execute_test(
     assert_discharge_start_time_minutes=-1,
     assert_discharge_end_time_minutes=-1,
     inverter_charge_time_minutes_start=-1,
+    inverter_charge_time_minutes_end=-1,
     assert_charge_rate=None,
     assert_discharge_rate=None,
     assert_reserve=0,
@@ -3091,8 +3191,10 @@ def run_execute_test(
     reserve_max=100,
     car_soc=0,
     battery_temperature=20,
+    assert_button_push=False,
 ):
     print("Run scenario {}".format(name))
+    my_predbat.log("Run scenario {}".format(name))
     failed = False
     my_predbat.set_read_only = read_only
     my_predbat.car_charging_slots = [car_slot]
@@ -3122,6 +3224,7 @@ def run_execute_test(
     my_predbat.set_reserve_enable = set_reserve_enable
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
+        inverter.charge_end_time_minutes = inverter_charge_time_minutes_end
         if soc_kw_array:
             inverter.soc_kw = soc_kw_array[inverter.id]
         else:
@@ -3518,7 +3621,7 @@ def run_test_web_if(my_predbat):
     ha = my_predbat.ha_interface
 
     # Fetch page from 127.0.0.1:5052
-    for page in ["/", "/dash", "/plan", "/config", "/apps", "/charts", "/compare", "/log", "/config", "/entity"]:
+    for page in ["/", "/dash", "/plan", "/config", "/apps", "/charts", "/compare", "/log", "/entity", "/components", "/browse"]:
         print("Fetch page {}".format(page))
         address = "http://127.0.0.1:5052" + page
         res = requests.get(address)
@@ -3567,6 +3670,8 @@ def run_execute_tests(my_predbat):
     charge_window_best5 = [{"start": my_predbat.minutes_now - 24 * 60, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best6 = [{"start": my_predbat.minutes_now + 8 * 60, "end": my_predbat.minutes_now + 60 + 8 * 60, "average": 1}]
     charge_window_best7 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
+    charge_window_best7b = [{"start": 24 * 60 - 5, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
+    charge_window_best7c = [{"start": 0, "end": 11 * 60, "average": 1}]
     charge_window_best8 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
     charge_window_best9 = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 1}]
     charge_window_best_short = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 15, "average": 1}]
@@ -4312,7 +4417,7 @@ def run_execute_tests(my_predbat):
 
     failed |= run_execute_test(
         my_predbat,
-        "charge_midnight2",
+        "charge_midnight2a",
         charge_window_best=charge_window_best7,
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
@@ -4321,7 +4426,37 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=24 * 60 - 1,
+        inverter_charge_time_minutes_start=30,
     )
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_midnight2b",
+        charge_window_best=charge_window_best7b,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=24 * 60 - 30,
+        assert_charge_end_time_minutes=24 * 60 - 1,
+        inverter_charge_time_minutes_start=30,
+        minutes_now=24 * 60 - 5,
+    )
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_midnight2c",
+        charge_window_best=charge_window_best7c,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=0,
+        assert_charge_end_time_minutes=11 * 60,
+        inverter_charge_time_minutes_start=12 * 60,
+        minutes_now=0,
+    )
+
     for inverter in my_predbat.inverters:
         inverter.inv_can_span_midnight = True
     if failed:
@@ -9781,6 +9916,10 @@ def main():
 
     if not failed:
         failed |= run_model_tests(my_predbat)
+    if not failed:
+        failed |= run_inverter_tests()
+    if not failed:
+        failed |= run_execute_tests(my_predbat)
 
     if not failed:
         failed |= test_previous_days_modal_filter(my_predbat)
@@ -9818,15 +9957,11 @@ def main():
     if not failed:
         failed |= test_alert_feed(my_predbat)
     if not failed:
-        failed |= run_inverter_tests()
-    if not failed:
         failed |= run_iboost_smart_tests(my_predbat)
     if not failed:
         failed |= run_car_charging_smart_tests(my_predbat)
     if not failed:
         failed |= run_intersect_window_tests(my_predbat)
-    if not failed:
-        failed |= run_execute_tests(my_predbat)
     if not failed:
         failed |= run_inverter_multi_tests(my_predbat)
     if not failed:
