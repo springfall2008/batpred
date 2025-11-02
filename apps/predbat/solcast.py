@@ -860,8 +860,9 @@ class SolarAPI:
         create_pv10 = False
         max_kwh = 9999
 
-        self.now_utc = datetime.now(timezone.utc)
-        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Use the timezone-aware time values from base to ensure forecast times align with user's local timezone
+        self.now_utc = self.base.now_utc
+        self.midnight_utc = self.base.midnight_utc
         self.minutes_now = int((self.now_utc - self.midnight_utc).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
 
         if self.forecast_solar:
