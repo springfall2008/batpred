@@ -24,9 +24,6 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  # Replace this with the total PV energy generated today from your inverter
-  pv_today: sensor.my_home_solar_generated
-
   # Misc
   charge_control_immediate: False
 
@@ -38,8 +35,8 @@ pred_bat:
     output_charge_control: "none"
     has_charge_enable_time: False
     has_discharge_enable_time: False
-    has_target_soc: False       
-    # While the Powerwall does have a reserve SoC, we don't need to 
+    has_target_soc: False
+    # While the Powerwall does have a reserve SoC, we don't need to
     # leverage it for controlling charge/discharge
     has_reserve_soc: False
     has_ge_inverter_mode: False
@@ -59,7 +56,7 @@ pred_bat:
   battery_power:
     - sensor.my_home_battery_power
   battery_power_invert:
-    - False 
+    - False
 
   pv_power:
     - sensor.my_home_solar_power
@@ -69,9 +66,8 @@ pred_bat:
 
   grid_power:
     - sensor.my_home_grid_power
-
   grid_power_invert:
-    - True 
+    - True
 
   inverter_reserve_max: 80 #Anything between 80-100 will always be treated as 100
 
@@ -79,9 +75,12 @@ pred_bat:
   load_today:
     - sensor.my_home_home_usage
   import_today:
-    - sensor.my_home_grid_imported   
+    - sensor.my_home_grid_imported
   export_today:
-    - sensor.my_home_grid_exported 
+    - sensor.my_home_grid_exported
+
+  # Replace this with the total PV energy generated today from your inverter
+  pv_today: sensor.my_home_solar_generated
 
   # ---- State of charge ----
   soc_percent:
@@ -98,7 +97,7 @@ pred_bat:
   # --- Predbat service hooks (Tesla / Teslemetry) ---
   # These hooks are called when Predbat wants to change the current
   # state of charge/discharge. They can tie-in to other HA entities.
-  # 
+  #
   # Tesla PW Operation modes can be one of:
   # ['self_consumption','autonomous','backup']
   #
@@ -114,10 +113,9 @@ pred_bat:
     - service: number.set_value
       entity_id: number.my_home_backup_reserve
       value: "100"
-  charge_hold_service:
-    - service: number.set_value
-      entity_id: number.my_home_backup_reserve
-      value: "{{ states('sensor.my_home_percentage_charged') | float }}"
+    - service: select.select_option
+      entity_id: select.my_home_operation_mode
+      option: "backup"
       repeat: True
   charge_stop_service:
     - service: select.select_option
@@ -134,6 +132,10 @@ pred_bat:
     - service: select.select_option
       entity_id: select.my_home_allow_export
       option: "battery_ok"
+      repeat: True
+    - service: select.select_option
+      entity_id: select.my_home_operation_mode
+      option: "autonomous"
       repeat: True
   discharge_stop_service:
     - service: rest_command.powerwall_api_set_iog_custom_tariff

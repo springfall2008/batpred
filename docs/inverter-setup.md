@@ -690,7 +690,10 @@ to access Tesla fleet API's in Home Assistant. Ed's setup only covered Predbat c
 - Copy the template [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) template over the top of your `apps.yaml`, and edit for your system
 
 Exporting with Powerwall is tricky, as there is no built in button as such to do it, you have to trick the Powerwall to export by changing the tariff options using the Tesla API.
-In order to do this you firstly need to create 8 input_text helpers to hold the Tesla access and refresh security tokens. These can be created via the HA UI, or added to `configuration.yaml`:
+
+In order to do this you firstly need to create an API refresh token.
+
+- Create 8 input_text helpers to hold the Tesla access and refresh security tokens and your Tesla site id. These can be created via the HA UI, or added to `configuration.yaml`:
 
 ```yaml
 input_text:
@@ -733,250 +736,19 @@ input_text:
     name: "Tesla Access Token - Part 4"
     max: 255
     mode: password
+
+  tesla_energy_site_id:
+    name: "Tesla Energy Site ID"
+    unit_of_measurement: ""
+    icon: mdi:lightning-bolt-outline
 ```
 
-- In `configuration.yaml` add the following line:
+- Use the [Access Token Generator for Tesla](https://chromewebstore.google.com/detail/access-token-generator-fo/djpjpanpjaimfjalnpkppkjiedmgpjpe?hl=en) to create a token
 
-```yaml
-rest_command: !rest_command.yaml
-```
+- This token needs to be copied, and then split into 4 parts (up to 255 characters long), so each part can be copied into the "refresh" input helpers
 
-- In the /config directory, create a `rest_command.yaml` file containing the following 3 REST commands.<BR>
-The first REST command automatically regenerate access and refresh tokens for using the Tesla API, the second is to set a custom export rate tariff to force the Powerwall to export,
-and the third is to return the Powerwall to the Octopus IOG tariff.  If you are on a different tariff you will need to customise the third REST to your tariff details.<BR>
-Replace '123456789123456789' in the REST commands with your own Tesla Site ID.
-
-```yaml
-tesla_refresh_token:
-  url: "https://auth.tesla.com/oauth2/v3/token"
-  method: POST
-  content_type: "application/x-www-form-urlencoded"
-  payload: >-
-    "grant_type=refresh_token&client_id=ownerapi&refresh_token={{ (states('input_text.tesla_refresh_token_part1') or '') + (states('input_text.tesla_refresh_token_part2') or '') + (states('input_text.tesla_refresh_token_part3') or '') +
-    (states('input_text.tesla_refresh_token_part4') or '') }}&scope=openid%20email%20offline_access"
-
-powerwall_force_export_now:
-  url: "https://owner-api.teslamotors.com/api/1/energy_sites/123456789123456789/time_of_use_settings"
-  method: POST
-  headers:
-    Authorization: !secret tesla_auth_token
-    Content-Type: application/json
-  payload: >
-    {% set now = now() %}
-    {% set minute = now.minute %}
-    {% set start = now.replace(minute=0) if minute < 60 else now.replace(minute=60) %}
-    {% set end = start + timedelta(minutes=60) %}
-    {
-      "tou_settings": {
-        "tariff_content_v2": {
-          "version": 1,
-          "utility": "Octopus Energy",
-          "code": "OCTO-IOG-CUSTOM",
-          "name": "Octopus IOG (Force Export Now)",
-          "currency": "GBP",
-          "monthly_minimum_bill": 0,
-          "min_applicable_demand": 0,
-          "max_applicable_demand": 0,
-          "monthly_charges": 0,
-          "daily_charges": [
-            { "name": "Charge", "amount": 0 }
-          ],
-          "daily_demand_charges": {},
-          "demand_charges": {
-            "ALL": { "rates": { "ALL": 0 } },
-            "AllYear": { "rates": {} }
-          },
-          "energy_charges": {
-            "ALL": { "rates": { "ALL": 0 } },
-            "AllYear": {
-              "rates": {
-                "SUPER_OFF_PEAK": 0.07,
-                "ON_PEAK": 0.31
-              }
-            }
-          },
-          "seasons": {
-            "AllYear": {
-              "fromMonth": 1,
-              "fromDay": 1,
-              "toMonth": 12,
-              "toDay": 31,
-              "tou_periods": {
-                "SUPER_OFF_PEAK": {
-                  "periods": [
-                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": {{ start.hour }}, "toMinute": {{ start.minute }} },
-                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ end.hour }}, "fromMinute": {{ end.minute }}, "toHour": 0, "toMinute": 0 }
-                  ]
-                },
-                "ON_PEAK": {
-                  "periods": [
-                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ start.hour }}, "fromMinute": {{ start.minute }}, "toHour": {{ end.hour }}, "toMinute": {{ end.minute }} }
-                  ]
-                }
-              }
-            }
-          },
-          "sell_tariff": {
-            "min_applicable_demand": 0,
-            "max_applicable_demand": 0,
-            "monthly_minimum_bill": 0,
-            "monthly_charges": 0,
-            "utility": "Octopus Energy",
-            "daily_charges": [
-              { "name": "Charge", "amount": 0 }
-            ],
-            "demand_charges": {
-              "ALL": { "rates": { "ALL": 0 } },
-              "AllYear": { "rates": {} }
-            },
-            "energy_charges": {
-              "ALL": { "rates": { "ALL": 0 } },
-              "AllYear": {
-                "rates": {
-                  "SUPER_OFF_PEAK": 0.07,
-                  "ON_PEAK": 0.30
-                }
-              }
-            },
-            "seasons": {
-              "AllYear": {
-                "fromMonth": 1,
-                "fromDay": 1,
-                "toMonth": 12,
-                "toDay": 31,
-                "tou_periods": {
-                  "SUPER_OFF_PEAK": {
-                    "periods": [
-                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": {{ start.hour }}, "toMinute": {{ start.minute }} },
-                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ end.hour }}, "fromMinute": {{ end.minute }}, "toHour": 0, "toMinute": 0 }
-                    ]
-                  },
-                  "ON_PEAK": {
-                    "periods": [
-                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ start.hour }}, "fromMinute": {{ start.minute }}, "toHour": {{ end.hour }}, "toMinute": {{ end.minute }} }
-                    ]
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-powerwall_api_set_iog_custom_tariff:
-  url: "https://owner-api.teslamotors.com/api/1/energy_sites/123456789123456789/time_of_use_settings"
-  method: POST
-  headers:
-    Authorization: !secret tesla_auth_token
-    Content-Type: application/json
-  payload: >
-    {
-      "tou_settings": {
-        "tariff_content_v2": {
-          "version": 1,
-          "monthly_minimum_bill": 0,
-          "min_applicable_demand": 0,
-          "max_applicable_demand": 0,
-          "monthly_charges": 0,
-          "utility": "Octopus Energy",
-          "code": "OCTO-IOG-CUSTOM",
-          "name": "Octopus IOG (Custom-restored)",
-          "currency": "GBP",
-          "daily_charges": [
-            { "name": "Charge", "amount": 0 }
-          ],
-          "daily_demand_charges": {},
-          "demand_charges": {
-            "ALL": { "rates": { "ALL": 0 } },
-            "AllYear": { "rates": {} }
-          },
-          "energy_charges": {
-            "ALL": { "rates": { "ALL": 0 } },
-            "AllYear": {
-              "rates": {
-                "SUPER_OFF_PEAK": 0.07,
-                "ON_PEAK": 0.31
-              }
-            }
-          },
-          "seasons": {
-            "AllYear": {
-              "fromMonth": 1,
-              "fromDay": 1,
-              "toMonth": 12,
-              "toDay": 31,
-              "tou_periods": {
-                "SUPER_OFF_PEAK": {
-                  "periods": [
-                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 2, "toMinute": 0 },
-                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 3, "fromMinute": 0, "toHour": 5, "toMinute": 30 },
-                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 0 }
-                  ]
-                },
-                "ON_PEAK": {
-                  "periods": [
-                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 2, "fromMinute": 0, "toHour": 3, "toMinute": 0 },
-                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 5, "fromMinute": 30, "toHour": 16, "toMinute": 0 },
-                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 19, "fromMinute": 0, "toHour": 23, "toMinute": 30 }
-                  ]
-                }
-              }
-            }
-          },
-          "sell_tariff": {
-            "min_applicable_demand": 0,
-            "max_applicable_demand": 0,
-            "monthly_minimum_bill": 0,
-            "monthly_charges": 0,
-            "utility": "Octopus Energy",
-            "daily_charges": [
-              { "name": "Charge", "amount": 0 }
-            ],
-            "demand_charges": {
-              "ALL": { "rates": { "ALL": 0 } },
-              "AllYear": { "rates": {} }
-            },
-            "energy_charges": {
-              "ALL": { "rates": { "ALL": 0 } },
-              "AllYear": {
-                "rates": {
-                  "SUPER_OFF_PEAK": 0.07,
-                  "ON_PEAK": 0.22
-                }
-              }
-            },
-            "seasons": {
-              "AllYear": {
-                "fromMonth": 1,
-                "fromDay": 1,
-                "toMonth": 12,
-                "toDay": 31,
-                "tou_periods": {
-                  "SUPER_OFF_PEAK": {
-                    "periods": [
-                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 2, "toMinute": 0 },
-                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 3, "fromMinute": 0, "toHour": 5, "toMinute": 30 },
-                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 0 }
-                    ]
-                  },
-                  "ON_PEAK": {
-                    "periods": [
-                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 2, "fromMinute": 0, "toHour": 3, "toMinute": 0 },
-                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 5, "fromMinute": 30, "toHour": 16, "toMinute": 0 },
-                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 19, "fromMinute": 0, "toHour": 23, "toMinute": 30 }
-                    ]
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-```
-
-- Create the following automation using the HA UI or by adding to `configuration.yaml`, the automation triggers an automatic refresh of the access token every 8 hours:
+- An automation then uses the refresh token to generate an access token valid for 8 hours, and a new refresh token than is valid for ~30 days.<BR>
+Create the following automation using the HA UI or by adding to `configuration.yaml`, the automation triggers an automatic refresh of the access token every 8 hours:
 
 ```yaml
 automation:
@@ -1034,6 +806,292 @@ automation:
         message: "Access and refresh tokens have been successfully updated"
       notification_id: "tesla_token_update"
 ```
+
+- An automation executes every time HA starts and every midnight to populate the Tesla site id input_helper.
+Create the following automation using the HA UI or by adding to `configuration.yaml`:
+
+```yaml
+automation:
+  - alias: "Update Tesla Energy Site ID"
+    trigger:
+      - platform: homeassistant
+        event: start
+      - platform: time
+        at: "00:00:00"
+    action:
+      - service: rest_command.tesla_api_get_products
+        response_variable: products_response
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.tesla_energy_site_id
+        data:
+          value: "{{ products_response.content.response[0].energy_site_id 
+```
+
+- A number of REST commands are required to communicate to the Tesla API's. In `configuration.yaml` add the following line:
+
+```yaml
+rest_command: !rest_command.yaml
+```
+
+- In the /config directory, create a `rest_command.yaml` file containing the following REST commands:
+
+    - tesla_refresh_token - automatically regenerates access and refresh tokens,
+    - tesla_api_get_products - used to retrieve your Tesla site id,
+    - tesla_api_get_current_tariff - retrieves your current Tariff information from the Powerwall,
+    - tesla_api_set_export_now_tariff - sets a custom export rate tariff to force the Powerwall to export,
+    - tesla_api_set_iog_custom_tariff - returns the Powerwall to the Octopus IOG tariff.  If you are on a different tariff you will need to customise the REST payload to your tariff details
+
+```yaml
+tesla_refresh_token:
+  url: "https://auth.tesla.com/oauth2/v3/token"
+  method: POST
+  content_type: "application/x-www-form-urlencoded"
+  payload: >-
+    "grant_type=refresh_token&client_id=ownerapi&refresh_token={{ (states('input_text.tesla_refresh_token_part1') or '') + (states('input_text.tesla_refresh_token_part2') or '') +
+    (states('input_text.tesla_refresh_token_part3') or '') + (states('input_text.tesla_refresh_token_part4') or '') }}&scope=openid%20email%20offline_access"
+
+tesla_api_get_products:
+  url: "https://owner-api.teslamotors.com/api/1/products"
+  method: GET
+  headers:
+    Authorization: >-
+      "Bearer {{ (states('input_text.tesla_access_token_part1') or '') + (states('input_text.tesla_access_token_part2') or '') + (states('input_text.tesla_access_token_part3') or '') + (states('input_text.tesla_access_token_part4') or '') }}"
+
+tesla_api_get_current_tariff:
+  url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
+  method: GET
+  headers:
+    Authorization: >-
+      "Bearer {{ (states('input_text.tesla_access_token_part1') or '') + (states('input_text.tesla_access_token_part2') or '') + (states('input_text.tesla_access_token_part3') or '') + (states('input_text.tesla_access_token_part4') or '') }}"
+
+tesla_api_set_export_now_tariff:
+  url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+  method: POST
+  headers:
+    Authorization: >-
+      "Bearer {{ (states('input_text.tesla_access_token_part1') or '') + (states('input_text.tesla_access_token_part2') or '') + (states('input_text.tesla_access_token_part3') or '') + (states('input_text.tesla_access_token_part4') or '') }}"
+    Content-Type: application/json
+  payload: >
+    {% set now = now() %}
+    {% set minute = now.minute %}
+    {% set start = now.replace(minute=0) if minute < 30 else now.replace(minute=30) %}
+    {% set end = start + timedelta(minutes=60) %}
+    {% set ns = namespace(super_off_peak_periods=[]) %}
+    {% if start.hour > 0 %}
+      {% set ns.super_off_peak_periods = ns.super_off_peak_periods + [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": start.hour, "toMinute": start.minute}] %}
+    {% endif %}
+    {% if end.hour > 0 %}
+      {% set ns.super_off_peak_periods = ns.super_off_peak_periods + [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": end.hour, "fromMinute": end.minute, "toHour": 0, "toMinute": 0}] %}
+    {% endif %}
+    {
+      "tou_settings": {
+        "tariff_content_v2": {
+          "version": 1,
+          "utility": "Octopus Energy",
+          "code": "OCTO-IOG-CUSTOM",
+          "name": "Octopus IOG (Force Export Now)",
+          "currency": "GBP",
+          "monthly_minimum_bill": 0,
+          "min_applicable_demand": 0,
+          "max_applicable_demand": 0,
+          "monthly_charges": 0,
+          "daily_charges": [
+            { "name": "Charge", "amount": 0 }
+          ],
+          "daily_demand_charges": {},
+          "demand_charges": {
+            "ALL": { "rates": { "ALL": 0 } },
+            "AllYear": { "rates": {} }
+          },
+          "energy_charges": {
+            "ALL": { "rates": { "ALL": 0 } },
+            "AllYear": {
+              "rates": {
+                "SUPER_OFF_PEAK": 0.07,
+                "ON_PEAK": 0.31
+              }
+            }
+          },
+          "seasons": {
+            "AllYear": {
+              "fromMonth": 1,
+              "fromDay": 1,
+              "toMonth": 12,
+              "toDay": 31,
+              "tou_periods": {
+                "SUPER_OFF_PEAK": {
+                  "periods": {{ ns.super_off_peak_periods | tojson }}
+                },
+                "ON_PEAK": {
+                  "periods": [
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ start.hour }}, "fromMinute": {{ start.minute }}, "toHour": {{ end.hour }}, "toMinute": {{ end.minute }} }
+                  ]
+                }
+              }
+            }
+          },
+          "sell_tariff": {
+            "min_applicable_demand": 0,
+            "max_applicable_demand": 0,
+            "monthly_minimum_bill": 0,
+            "monthly_charges": 0,
+            "utility": "Octopus Energy",
+            "daily_charges": [
+              { "name": "Charge", "amount": 0 }
+            ],
+            "demand_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": { "rates": {} }
+            },
+            "energy_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": {
+                "rates": {
+                  "SUPER_OFF_PEAK": 0.07,
+                  "ON_PEAK": 0.30
+                }
+              }
+            },
+            "seasons": {
+              "AllYear": {
+                "fromMonth": 1,
+                "fromDay": 1,
+                "toMonth": 12,
+                "toDay": 31,
+                "tou_periods": {
+                  "SUPER_OFF_PEAK": {
+                    "periods": {{ ns.super_off_peak_periods | tojson }}
+                  },
+                  "ON_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ start.hour }}, "fromMinute": {{ start.minute }}, "toHour": {{ end.hour }}, "toMinute": {{ end.minute }} }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+tesla_api_set_iog_custom_tariff:
+  url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+  method: POST
+  headers:
+    Authorization: >-
+      "Bearer {{ (states('input_text.tesla_access_token_part1') or '') + (states('input_text.tesla_access_token_part2') or '') + (states('input_text.tesla_access_token_part3') or '') + (states('input_text.tesla_access_token_part4') or '') }}"
+    Content-Type: application/json
+  payload: >
+    {
+      "tou_settings": {
+        "tariff_content_v2": {
+          "version": 1,
+          "monthly_minimum_bill": 0,
+          "min_applicable_demand": 0,
+          "max_applicable_demand": 0,
+          "monthly_charges": 0,
+          "utility": "Octopus Energy",
+          "code": "OCTO-IOG-CUSTOM",
+          "name": "Octopus IOG (Custom-restored)",
+          "currency": "GBP",
+          "daily_charges": [
+            { "name": "Charge", "amount": 0 }
+          ],
+          "daily_demand_charges": {},
+          "demand_charges": {
+            "ALL": { "rates": { "ALL": 0 } },
+            "AllYear": { "rates": {} }
+          },
+          "energy_charges": {
+            "ALL": { "rates": { "ALL": 0 } },
+            "AllYear": {
+              "rates": {
+                "SUPER_OFF_PEAK": 0.07,
+                "PARTIAL_PEAK": 0.31,
+                "ON_PEAK": 0.31
+              }
+            }
+          },
+          "seasons": {
+            "AllYear": {
+              "fromMonth": 1,
+              "fromDay": 1,
+              "toMonth": 12,
+              "toDay": 31,
+              "tou_periods": {
+                "SUPER_OFF_PEAK": {
+                  "periods": [
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 5, "toMinute": 30 },
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 0 }
+                  ]
+                },
+                "ON_PEAK": {
+                  "periods": [
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 2, "fromMinute": 0, "toHour": 3, "toMinute": 0 },
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 5, "fromMinute": 30, "toHour": 16, "toMinute": 0 },
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 16, "fromMinute": 0, "toHour": 19, "toMinute": 0 },
+                    { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 19, "fromMinute": 0, "toHour": 23, "toMinute": 30 }
+                  ]
+                }
+              }
+            }
+          },
+          "sell_tariff": {
+            "min_applicable_demand": 0,
+            "max_applicable_demand": 0,
+            "monthly_minimum_bill": 0,
+            "monthly_charges": 0,
+            "utility": "Octopus Energy",
+            "daily_charges": [
+              { "name": "Charge", "amount": 0 }
+            ],
+            "demand_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": { "rates": {} }
+            },
+            "energy_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": {
+                "rates": {
+                  "SUPER_OFF_PEAK": 0.07,
+                  "PARTIAL_PEAK": 0.30,
+                  "ON_PEAK": 0.22
+                }
+              }
+            },
+            "seasons": {
+              "AllYear": {
+                "fromMonth": 1,
+                "fromDay": 1,
+                "toMonth": 12,
+                "toDay": 31,
+                "tou_periods": {
+                  "SUPER_OFF_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 5, "toMinute": 30 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 0 }
+                    ]
+                  },
+                  "ON_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 2, "fromMinute": 0, "toHour": 3, "toMinute": 0 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 5, "fromMinute": 30, "toHour": 16, "toMinute": 0 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 16, "fromMinute": 0, "toHour": 19, "toMinute": 0 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 19, "fromMinute": 0, "toHour": 23, "toMinute": 30 }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+```
+
+- Manually run the two automations to ensure the helper input_texts are all pre-populated before use.
 
 ## I want to add an unsupported inverter to Predbat
 
