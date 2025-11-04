@@ -158,9 +158,216 @@ Ensure the correct entity IDs are used for your specific inverter setup. These e
 
 ## Solax Gen4 Inverters
 
-Use the template configuration from: [solax.sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml)
+The Predbat Solax configuration can either either use the Mode1 remote control or the newer Mode8 option. Both should work with the SolaX Gen 4, 5 or 6 inverters.  Thanks @TCWORLD for this configuration.
 
-- Set **solax_modbus_new** in `apps.yaml` to True if you have integration version 2024.03.2 or greater
+- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/solax_sx4.yaml> over the top of your `apps.yaml`, and modify it for your system
+- Set **solax_modbus_new** in your `apps.yaml` to True if you have integration version 2024.03.2 or greater
+- Install and configure the Solax Modbus integration in Home Assistant and confirm that it is connected to your inverter
+- To use Mode 1 remote control, create and save the following automation script (Settings/Automations/Scripts) which will act as the interface between Predbat and the Solax Modbus integration.<BR>
+You can change the limits for the power field if you have a larger inverter, it doesn't matter if this limit is larger than the inverter can handle as the value gets clipped to the inverter limits by the Solax Modbus integration:
+
+```yaml
+alias: SolaX Remote Control
+description: ""
+fields:
+  power:
+    selector:
+      number:
+        min: 0
+        max: 6600
+    default: 0
+  operation:
+    selector:
+      select:
+        multiple: false
+        options:
+          - Disabled
+          - Force Charge
+          - Force Discharge
+          - Freeze Charge
+          - Freeze Discharge
+    default: Disabled
+    required: false
+  duration:
+    selector:
+      number:
+        min: 300
+        max: 86400
+    default: 28800
+    required: false
+sequence:
+  - variables:
+      defaultPower: "{{ 200 }}"
+      mode: |-
+        {% set map = { 
+           'Disabled': 'Disabled',
+           'Force Charge': 'Enabled Battery Control',
+           'Force Discharge': 'Enabled Battery Control',
+           'Freeze Charge': 'Enabled No Discharge',
+           'Freeze Discharge': 'Enabled Feedin Priority'} %}
+        {{ map.get( operation, 'Disabled' ) }}
+      activeP: >-
+        {% set chargePower = (power | int(defaultPower)) if power is defined else
+        defaultPower %}
+
+        {% set dischargePower = (0 - chargePower) %}
+
+        {% set map = { 
+           'Disabled': 0,
+           'Force Charge': chargePower,
+           'Force Discharge': dischargePower,
+           'Freeze Charge': 0,
+           'Freeze Discharge': 0} %}
+        {{ map.get( operation, 0 ) }}
+  - action: number.set_value
+    data:
+      value: "{{ activeP }}"
+    target:
+      entity_id: number.solax_remotecontrol_active_power
+  - action: number.set_value
+    data:
+      value: "60"
+    target:
+      entity_id: number.solax_remotecontrol_duration
+  - action: number.set_value
+    data:
+      value: "{{ duration if duration is defined else 28800 }}"
+    target:
+      entity_id: number.solax_remotecontrol_autorepeat_duration
+  - action: select.select_option
+    data:
+      option: "{{ mode if mode is defined else Disabled }}"
+    target:
+      entity_id: select.solax_remotecontrol_power_control
+  - action: button.press
+    data: {}
+    target:
+      entity_id: button.solax_remotecontrol_trigger
+mode: queued
+max: 10
+```
+
+- To use Mode 1 remote control, ensure the following entities are enabled:
+
+    - number.solax_remotecontrol_active_power
+    - number.solax_remotecontrol_duration
+    - number.solax_remotecontrol_autorepeat_duration
+    - select.solax_remotecontrol_power_control
+    - button.solax_remotecontrol_trigger
+
+- To use Mode 8 power control API (Gen 4 or newer inverter) which has direct control over the battery charge/discharge rate, and can directly set the battery (dis)charge rate without limiting any PV generation,
+create and save the following automation script (Settings/Automations/Scripts) which will act as the interface between Predbat and the Solax Modbus integration.<BR>
+In the script, change 'maxPvPower: "{{ 12000 }}"' to a value larger than your PV array size so the script doesn't limit PV generation.<BR>
+Change 'max: 6600' - to a value larger than the maximum charge/discharge power for your battery (doesn't matter if higher).<BR>
+Note: Mode8 requires version 2025.10.7 or newer of the SolaX Modbus integration as there are some necessary Mode 8 improvements added:
+
+```yaml
+fields:
+  power:
+    selector:
+      number:
+        min: 0
+        max: 6600
+    default: 0
+  operation:
+    selector:
+      select:
+        multiple: false
+        options:
+          - Disabled
+          - Force Charge
+          - Force Discharge
+          - Freeze Charge
+          - Freeze Discharge
+    default: Disabled
+    required: false
+  duration:
+    selector:
+      number:
+        min: 60
+        max: 86400
+    default: 28800
+sequence:
+  - variables:
+      maxPvPower: "{{ 12000 }}"
+      defaultPower: "{{ 200 }}"
+      mode: |-
+        {% set map = { 
+           'Disabled': 'Disabled',
+           'Force Charge': 'Mode 8 - PV and BAT control - Duration',
+           'Force Discharge': 'Mode 8 - PV and BAT control - Duration',
+           'Freeze Charge': 'Enabled No Discharge',
+           'Freeze Discharge': 'Export-First Battery Limit'} %}
+        {{ map.get( operation, 'Disabled' ) }}
+      activeP: >-
+        {% set dischargePower = (power | int(defaultPower)) if power is defined
+        else defaultPower %} {% set chargePower = (0 - dischargePower) %} {% set map
+        = { 
+           'Disabled': 0,
+           'Force Charge': chargePower,
+           'Force Discharge': dischargePower,
+           'Freeze Charge': 0,
+           'Freeze Discharge': 0} %}
+        {{ map.get( operation, 0 ) }}
+  - action: number.set_value
+    data:
+      value: "{{ activeP }}"
+    target:
+      entity_id: number.solax_remotecontrol_push_mode_power_8_9
+  - action: number.set_value
+    data:
+      value: "{{ maxPvPower }}"
+    target:
+      entity_id: number.solax_remotecontrol_pv_power_limit
+  - action: number.set_value
+    data:
+      value: "30"
+    target:
+      entity_id: number.solax_remotecontrol_duration
+  - action: number.set_value
+    data:
+      value: "300"
+    target:
+      entity_id: number.solax_remotecontrol_timeout
+  - action: number.set_value
+    data:
+      value: "{{ duration if duration is defined else 28800 }}"
+    target:
+      entity_id: number.solax_remotecontrol_autorepeat_duration
+  - action: select.select_option
+    data:
+      option: VPP Off
+    target:
+      entity_id: select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
+  - action: select.select_option
+    data:
+      option: "{{ mode if mode is defined else Disabled }}"
+    target:
+      entity_id: select.solax_remotecontrol_power_control_mode
+  - action: button.press
+    data: {}
+    enabled: true
+    target:
+      entity_id: button.solax_powercontrolmode8_trigger
+mode: queued
+max: 10
+```
+
+- To use Mode 8 power control, ensure the following entities are enabled:
+
+    - number.solax_remotecontrol_push_mode_power_8_9
+    - number.solax_remotecontrol_pv_power_limit
+    - number.solax_remotecontrol_duration
+    - number.solax_remotecontrol_timeout
+    - number.solax_remotecontrol_autorepeat_duration
+    - select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
+    - select.solax_remotecontrol_power_control_mode
+    - button.solax_powercontrolmode8_trigger
+
+- Predbat needs a Todays House Load sensor, this can be created from inverter supplied information by creating two custom helper entities:
+    - Create a helper entity of type 'Integral', set the Name to 'Todays House Load Integral', Metric Prefix to 'k (kilo)', Time unit to 'Hours', Input sensor to 'House Load', Integration method to 'Trapezoidal', Precision to '2'
+    and Max sub-interval to '0:05:00'
+    - Create a helper entity of type 'Utility Meter', set the Name to 'Todays House Load', Input sensor to 'Todays House Load Integral' (that you just created) and Meter Reset Cycle to 'Daily'
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 

@@ -24,29 +24,145 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  #
-  # Sensors, currently more than one can be specified and they will be summed up automatically
-  # however if you have two inverters only set one of them as they will both read the same.
-  #
+  # Solax Inverter Configuration
+  solax_modbus_new: true
 
-  inverter_type: "SX4"
   num_inverters: 1
-  #
-  # Controls/status - must by 1 per inverter
-  #
+
+  inverter_type: SOLAX
+  inverter:
+    name: "Solax Gen5 (Modbus Power Control)"
+    has_rest_api: False
+    has_mqtt_api: False
+    has_service_api: True
+    output_charge_control: "power"
+    charge_control_immediate: True
+    has_charge_enable_time: False
+    has_discharge_enable_time: False
+    has_target_soc: False
+    has_reserve_soc: False
+    has_timed_pause: False
+    charge_time_format: "S"
+    charge_time_entity_is_option: False
+    soc_units: "%"
+    num_load_entities: 1
+    has_ge_inverter_mode: False
+    time_button_press: True
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    write_and_poll_sleep: 4
+    has_time_window: False
+    support_charge_freeze: True
+    support_discharge_freeze: True
+    has_idle_time: False
+    can_span_midnight: True
+    charge_discharge_with_rate: True
+    target_soc_used_for_discharge: False
 
   # Set to the maximum rate your inverter can charge your battery at (in Watts)
   battery_rate_max:
-    - 5000
+    - 6000
 
-  # Battery capacity in kWh
+  # Set your battery capacity in kWh  
   soc_max:
-    - 11.6
+    - 10.2
 
-  # Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
+  # Inverter max AC limit (one per inverter)
+  # If you have a second inverter for PV only please add the two values together
+  inverter_limit: 
+    - 6000
+
+  # Export limit is a software limit set on your inverter that prevents exporting above a given level
+  # When enabled Predbat will model this limit
+  # export_limit:
+  #  - 3680
 
   load_today:
-    - sensor.energy_house_load_today
+    - sensor.todays_house_load
+
+  import_today:
+    - sensor.solax_today_s_import_energy
+
+  export_today:
+    - sensor.solax_today_s_export_energy
+
+  pv_today:
+    - sensor.solax_today_s_solar_energy
+
+  inverter_time:
+    - sensor.solax_rtc
+
+  battery_power:
+    - sensor.solax_battery_power_charge
+
+  battery_power_invert:
+    - true
+
+  pv_power:
+    - sensor.solax_pv_power_total
+
+  grid_power:
+    - sensor.solax_measured_power
+
+  grid_power_invert:
+    - false
+
+  load_power:
+    - sensor.solax_house_load
+
+  soc_percent:
+    - sensor.solax_battery_1_capacity_charge # for mode 1 control
+  # - sensor.solax_inverter_battery_capacity # for mode 8 control
+
+  reserve:
+    - number.solax_backup_discharge_min_soc
+
+  battery_min_soc:
+    - number.solax_selfuse_discharge_min_soc
+
+  battery_temperature:
+    - sensor.solax_battery_1_temperature
+
+  battery_voltage:
+    - sensor.solax_battery_1_voltage_charge
+
+  charge_discharge_update_button:
+    - button.solax_battery_awaken
+
+  energy_control_switch:
+    - select.solax_remotecontrol_power_control
+  
+  # Services for start/stop/freeze charge and discharge
+  #
+  # Predbat calls the supplied Solax automation script to set the appropriate inverter controls directly.
+  #
+  # If you are using Mode 8 control, change the ALL the service names to 'script.solax_remote_control_mode_8'
+  charge_start_service:
+    - service: script.solax_remote_control
+      power: "{power}"
+      operation: "Force Charge"
+
+  discharge_start_service:
+    - service: script.solax_remote_control
+      power: "{power}"
+      operation: "Force Discharge"
+
+  charge_stop_service: # used also as discharge_stop_service
+    - service: script.solax_remote_control
+      operation: "Disabled"
+
+  charge_freeze_service:
+    - service: script.solax_remote_control
+      operation: "Freeze Charge"
+
+  discharge_freeze_service:
+    - service: script.solax_remote_control
+      operation: "Freeze Discharge"
+
+
+###### old config:
+  inverter_type: "SX4" 
+
+  # Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
   import_today:
     - sensor.solaxmodbus_today_s_import_energy
   export_today:
@@ -82,61 +198,10 @@ pred_bat:
   battery_min_soc:
     - sensor.solaxmodbus_feedin_discharge_min_soc
 
-  # With the Solax integration we need to press a button to send the time to
-  charge_discharge_update_button:
-    - button.solis_update_charge_discharge_times
-
-  #timed_charge_current:
-  #  - number.solis_timed_charge_current
-  #charge_start_hour:
-  #  - number.solis_timed_charge_start_hours
-  #charge_start_minute:
-  #  - number.solis_timed_charge_start_minutes
-  #charge_end_hour:
-  #  - number.solis_timed_charge_end_hours
-  #charge_end_minute:
-  #  - number.solis_timed_charge_end_minutes
-
-
-  #timed_discharge_current:
-  #  - number.solis_timed_discharge_current
-
-  #discharge_start_hour:
-  #  - number.solis_timed_discharge_start_hours
-  #discharge_start_minute:
-  #  - number.solis_timed_discharge_start_minutes
-  #discharge_end_hour:
-  #  - number.solis_timed_discharge_end_hours
-  #discharge_end_minute:
-  #  - number.solis_timed_discharge_end_minutes
-
-
   energy_control_switch:
     - select.solaxmodbus_remotecontrol_power_control
+#### end of old config
 
-  # Service for start/stop
-  charge_start_service:
-    service: select.select_option
-    entity_id: select.solax_manual_mode_select
-    option: "Force Charge"
-  charge_stop_service:
-    service: select.select_option
-    entity_id: select.solax_manual_mode_select
-    option: "Stop Charge and Discharge"
-  discharge_start_service:
-    service: select.select_option
-    entity_id: select.solax_manual_mode_select
-    option: "Force Discharge"
-
-  # Inverter max AC limit (one per inverter)
-  # If you have a second inverter for PV only please add the two values together
-  inverter_limit: 5000
-
-  # Export limit is a software limit set on your inverter that prevents exporting above a given level
-  # When enabled Predbat will model this limit
-  #export_limit:
-  #  - 3600
-  #  - 3600
   #
   # The maximum rate the inverter can charge and discharge the battery can be overwritten, this will change
   # the register programming and thus cap the max rates. The default is to use the maximum supported rates (recommended)
@@ -145,7 +210,6 @@ pred_bat:
   #  - 2000
   #inverter_limit_discharge:
   #  - 2600
-
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
   # The value can be set here in watts to model this (doesn't change operation)

@@ -208,6 +208,7 @@ percnt
 pitem
 pkwh
 postdata
+powercontrolmode
 powerline
 Powerwall
 ppdetails
@@ -271,6 +272,7 @@ sunsynk
 syscmd
 tabindex
 tasmota
+TCWORLD
 Teslemetry
 tdata
 tdiff
