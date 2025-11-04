@@ -1268,7 +1268,8 @@ class UserInterface:
         """
         rate_overrides_minutes = {}
         rate_overrides = []
-        minutes_now = int(self.minutes_now / 30) * 30
+        plan_interval = self.get_arg("plan_interval_minutes", 30)
+        minutes_now = int(self.minutes_now / plan_interval) * plan_interval
         manual_rate_max = 18 * 60
 
         # Deconstruct the value into a list of minutes
@@ -1308,7 +1309,7 @@ class UserInterface:
                     minutes += 24 * 60
                 if (minutes - minutes_now) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
-                    for minute in range(minutes, minutes + 30):
+                    for minute in range(minutes, minutes + plan_interval):
                         rate_overrides_minutes[minute] = rate_value
 
         # Reconstruct the list in order based on minutes
@@ -1323,11 +1324,11 @@ class UserInterface:
 
         # Create the new dropdown
         time_values = []
-        for minute in range(minutes_now, minutes_now + manual_rate_max, 30):
+        for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
             if minute in rate_overrides_minutes:
                 rate_value = rate_overrides_minutes[minute]
-                minute_str = "{}={}".format(minute_str, rate_value)
+                minute_str = f"{minute_str}={rate_value}"
                 minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)
 
@@ -1346,7 +1347,8 @@ class UserInterface:
         Update manual times sensor
         """
         time_overrides = []
-        minutes_now = int(self.minutes_now / 30) * 30
+        plan_interval = self.get_arg("plan_interval_minutes", 30)
+        minutes_now = int(self.minutes_now / plan_interval) * plan_interval
         manual_time_max = 18 * 60
 
         # Deconstruct the value into a list of minutes
@@ -1388,7 +1390,7 @@ class UserInterface:
 
         # Create the new dropdown
         time_values = []
-        for minute in range(minutes_now, minutes_now + manual_time_max, 30):
+        for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
             if minute in time_overrides:
                 minute_str = "[" + minute_str + "]"

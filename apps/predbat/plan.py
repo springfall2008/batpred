@@ -36,6 +36,7 @@ class DummyThread:
 
 
 class Plan:
+
     def dynamic_load(self):
         """
         Adjust load prediction based on current load
@@ -78,9 +79,9 @@ class Plan:
         self.dynamic_load_baseline = {}
         if self.metric_dynamic_load_adjust:
             minutes_now = self.minutes_now
-            minutes_end_slot = int((self.minutes_now + 30) / 30) * 30
+            minutes_end_slot = int((self.minutes_now + self.plan_interval_minutes) / self.plan_interval_minutes) * self.plan_interval_minutes
             # When dynamic load is enabled we try can do two things
-            # 1. Increase the load prediction in the current 30 minute period to match the actual load (if the load is higher than expected)
+            # 1. Increase the load prediction in the current self.plan_interval_minutes minute period to match the actual load (if the load is higher than expected)
             # 2. If the load is low and car charging is predicted then cancel off future car slots
             # Note never do this just after midnight due to the load sensor reset
             if self.load_last_status == "low" and self.minutes_now > 5:
@@ -218,7 +219,7 @@ class Plan:
             best_soc_min = self.reserve
         step = PREDICT_STEP
         if fast:
-            step = 30
+            step = self.plan_interval_minutes
         if tried_list is None:
             tried_list = {}
 
@@ -534,8 +535,9 @@ class Plan:
 
     def scenario_summary_title(self, record_time):
         txt = ""
-        minute_start = self.minutes_now - self.minutes_now % 30
-        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, 30):
+        plan_interval_minutes = self.plan_interval_minutes
+        minute_start = self.minutes_now - self.minutes_now % plan_interval_minutes
+        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, plan_interval_minutes):
             this_minute_absolute = max(minute_absolute, self.minutes_now)
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * this_minute_absolute)
             dstamp = minute_timestamp.strftime(TIME_FORMAT)
@@ -549,8 +551,9 @@ class Plan:
 
     def scenario_summary(self, record_time, datap):
         txt = ""
-        minute_start = self.minutes_now - self.minutes_now % 30
-        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, 30):
+        plan_interval_minutes = self.plan_interval_minutes
+        minute_start = self.minutes_now - self.minutes_now % plan_interval_minutes
+        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, plan_interval_minutes):
             this_minute_absolute = max(minute_absolute, self.minutes_now)
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * this_minute_absolute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
@@ -568,17 +571,18 @@ class Plan:
 
     def scenario_summary_state(self, record_time):
         txt = ""
-        minute_start = self.minutes_now - self.minutes_now % 30
-        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, 30):
+        plan_interval_minutes = self.plan_interval_minutes
+        minute_start = self.minutes_now - self.minutes_now % plan_interval_minutes
+        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, plan_interval_minutes):
             minute_relative_start = max(minute_absolute - self.minutes_now, 0)
-            minute_relative_end = minute_relative_start + 30
+            minute_relative_end = minute_relative_start + plan_interval_minutes
             this_minute_absolute = max(minute_absolute, self.minutes_now)
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * this_minute_absolute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             value = ""
 
             charge_window_n = -1
-            for try_minute in range(this_minute_absolute, minute_absolute + 30, 5):
+            for try_minute in range(this_minute_absolute, minute_absolute + plan_interval_minutes, 5):
                 charge_window_n = self.in_charge_window(self.charge_window_best, try_minute)
                 if charge_window_n >= 0 and self.charge_limit_best[charge_window_n] == 0:
                     charge_window_n = -1
@@ -586,7 +590,7 @@ class Plan:
                     break
 
             export_window_n = -1
-            for try_minute in range(this_minute_absolute, minute_absolute + 30, 5):
+            for try_minute in range(this_minute_absolute, minute_absolute + plan_interval_minutes, 5):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
                 if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100.0:
                     export_window_n = -1
@@ -1231,9 +1235,9 @@ class Plan:
             start = charge_window[window_n]["start"]
             end = charge_window[window_n]["end"]
             window_size = end - start
-            if window_size <= 30:
+            if window_size <= self.plan_interval_minutes:
                 best_soc_step = best_soc_step * 2
-            min_improvement_scaled = self.metric_min_improvement * window_size / 30.0
+            min_improvement_scaled = self.metric_min_improvement * window_size / float(self.plan_interval_minutes)
 
         # Start the loop at the max soc setting
         if self.best_soc_max > 0:
@@ -1674,7 +1678,7 @@ class Plan:
             elif all_n:
                 min_improvement_scaled = self.metric_min_improvement_export * rate_scale * len(all_n)
             else:
-                min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / 30.0
+                min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / float(self.plan_interval_minutes)
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
             if ((metric + min_improvement_scaled) <= off_metric) and (metric <= best_metric):
@@ -3905,21 +3909,21 @@ class Plan:
         iboost_today = self.iboost_today
         iboost_max = self.iboost_max_energy
         iboost_power = self.iboost_max_power * 60
-        iboost_min_length = max(int((self.iboost_smart_min_length + 29) / 30) * 30, 30)
+        iboost_min_length = max(int((self.iboost_smart_min_length + self.plan_interval_minutes - 1) / self.plan_interval_minutes) * self.plan_interval_minutes, self.plan_interval_minutes)
 
         self.log("Create iBoost smart plan, max {} kWh, power {} kW, min length {} minutes".format(iboost_max, iboost_power, iboost_min_length))
 
         low_rates = []
-        start_minute = int(self.minutes_now / 30) * 30
-        for minute in range(start_minute, start_minute + self.forecast_minutes, 30):
+        start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
+        for minute in range(start_minute, start_minute + self.forecast_minutes, self.plan_interval_minutes):
             import_rate = 0
             export_rate = 0
             slot_length = 0
             slot_count = 0
-            for slot_start in range(minute, minute + iboost_min_length, 30):
+            for slot_start in range(minute, minute + iboost_min_length, self.plan_interval_minutes):
                 import_rate += self.rate_import.get(minute, self.rate_min)
                 export_rate += self.rate_export.get(minute, 0)
-                slot_length += 30
+                slot_length += self.plan_interval_minutes
                 slot_count += 1
             if slot_count:
                 low_rates.append({"start": minute, "end": minute + slot_length, "average": import_rate / slot_count, "export": export_rate / slot_count})
@@ -3954,8 +3958,8 @@ class Plan:
                 if slot_start < slot_end:
                     rate_okay = True
 
-                    for start in range(slot_start, slot_end, 30):
-                        end = min(start + 30, slot_end)
+                    for start in range(slot_start, slot_end, self.plan_interval_minutes):
+                        end = min(start + self.plan_interval_minutes, slot_end)
 
                         # Avoid duplicate slots
                         if minute in used_slots:
@@ -4038,8 +4042,8 @@ class Plan:
         # Car charging now override
         extra_slot = {}
         if self.car_charging_now[car_n]:
-            start = int(self.minutes_now / 30) * 30
-            end = start + 30
+            start = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
+            end = start + self.plan_interval_minutes
             extra_slot["start"] = start
             extra_slot["end"] = end
             extra_slot["average"] = self.rate_import.get(start, self.rate_min)
@@ -4114,7 +4118,7 @@ class Plan:
 
     def car_charge_slot_kwh(self, minute_start, minute_end):
         """
-        Work out car charging amount in KWh for given 30-minute slot
+        Work out car charging amount in KWh for given self.plan_interval_minutes-minute slot
         """
         car_charging_kwh = 0.0
         if self.num_cars > 0:

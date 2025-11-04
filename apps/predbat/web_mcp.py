@@ -1037,7 +1037,8 @@ class MCPServerWrapper:
             action = action.replace(" ", "_")
 
             now_utc = self.base.now_utc
-            override_time = get_override_time_from_string(now_utc, time_str)
+            plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
+            override_time = get_override_time_from_string(now_utc, time_str, plan_interval_minutes)
             if not override_time:
                 return {"success": False, "error": "Invalid time format. Use 'Day HH:MM' format e.g. Sat 14:30", "data": None}
 

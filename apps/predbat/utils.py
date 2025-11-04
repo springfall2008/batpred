@@ -121,7 +121,7 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
     return results
 
 
-def get_override_time_from_string(now_utc, time_str):
+def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     """
     Convert a time string like "Sun 13:00" into a datetime object
     """
@@ -143,11 +143,9 @@ def get_override_time_from_string(now_utc, time_str):
         add_days += 7
     override_time += timedelta(days=add_days)
 
-    # Ensure minutes are either 0 or 30
-    if override_time.minute >= 30:
-        override_time = override_time.replace(minute=30)
-    else:
-        override_time = override_time.replace(minute=0)
+    # Ensure minutes are rounded down to the nearest plan_interval_minutes (e.g., 15 or 10)
+    minute = (override_time.minute // plan_interval_minutes) * plan_interval_minutes
+    override_time = override_time.replace(minute=minute)
     return override_time
 
 

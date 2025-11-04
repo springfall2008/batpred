@@ -1359,7 +1359,8 @@ var options = {
             dropdown_counter += 1
 
             now_utc = self.base.now_utc
-            time_stamp = get_override_time_from_string(now_utc, time_text)
+            plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
+            time_stamp = get_override_time_from_string(now_utc, time_text, plan_interval_minutes)
             if time_stamp is None:
                 return match.group(0)
 
@@ -1821,7 +1822,8 @@ var options = {
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
             hist = self.base.soc_kwh_history
-            for minute in range(0, self.base.minutes_now, 30):
+            plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
+            for minute in range(0, self.base.minutes_now, plan_interval_minutes):
                 minute_timestamp = self.base.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 soc_kw_h0[stamp] = hist.get(self.base.minutes_now - minute, 0)
@@ -2802,7 +2804,8 @@ var options = {
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
 
             now_utc = self.base.now_utc
-            override_time = get_override_time_from_string(now_utc, time_str)
+            plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
+            override_time = get_override_time_from_string(now_utc, time_str, plan_interval_minutes)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
             if minutes_from_now >= 17 * 60:
@@ -2862,7 +2865,8 @@ var options = {
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
 
             now_utc = self.base.now_utc
-            override_time = get_override_time_from_string(now_utc, time_str)
+            plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
+            override_time = get_override_time_from_string(now_utc, time_str, plan_interval_minutes)
             if not override_time:
                 return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 

@@ -16,6 +16,7 @@ from prediction import Prediction
 
 
 class Output:
+
     def publish_car_plan(self):
         """
         Publish the car charging plan
@@ -766,10 +767,10 @@ class Output:
 
     def get_pv_forecast_slots(self, pv_forecast_minute_step):
         pv_forecast_slots = []
-
-        for minute_relative in range(0, self.forecast_minutes, 30):
+        plan_interval_minutes = self.plan_interval_minutes
+        for minute_relative in range(0, self.forecast_minutes, plan_interval_minutes):
             minute_relative_start = minute_relative
-            minute_relative_slot_end = minute_relative + 30
+            minute_relative_slot_end = minute_relative + plan_interval_minutes
 
             pv_forecast = 0.0
             for offset in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP):
@@ -948,7 +949,9 @@ class Output:
         html += "<table>"
         html += "<tr>"
         html += self.get_html_plan_header(plan_debug)
-        minute_now_align = int(self.minutes_now / 30) * 30
+        # Use plan_interval_minutes instead of hardcoded 30
+        plan_interval_minutes = self.plan_interval_minutes
+        minute_now_align = int(self.minutes_now / plan_interval_minutes) * plan_interval_minutes
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
         rowspan = 0
         in_span = False
@@ -986,11 +989,11 @@ class Output:
         raw_plan["carbon_enable"] = self.carbon_enable
 
         rate_start = self.midnight_utc
-        for minute in range(minute_now_align, end_plan, 30):
+        for minute in range(minute_now_align, end_plan, plan_interval_minutes):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
             minute_start = minute_relative_start + self.minutes_now
-            minute_relative_end = minute_relative + 30
+            minute_relative_end = minute_relative + plan_interval_minutes
             minute_end = minute_relative_end + self.minutes_now
             minute_relative_slot_end = minute_relative_end
             minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
@@ -1001,7 +1004,7 @@ class Output:
             charge_window_n = -1
             export_window_n = -1
             in_alert = True if self.alert_active_keep.get(minute, 0) > 0 else False
-            periods_left = int((end_plan - minute + 29) / 30)
+            periods_left = int((end_plan - minute + plan_interval_minutes - 1) / plan_interval_minutes)
 
             show_limit = ""
 
@@ -1037,7 +1040,7 @@ class Output:
                 if discharge_intersect >= 0:
                     charge_end_minute = min(charge_end_minute, self.export_window_best[discharge_intersect]["start"])
 
-                rowspan = min(int((charge_end_minute - minute) / 30), periods_left)
+                rowspan = min(int((charge_end_minute - minute) / plan_interval_minutes), periods_left)
                 if rowspan > 1 and (export_window_n < 0):
                     in_span = True
                     start_span = True
@@ -1047,7 +1050,7 @@ class Output:
 
             if export_window_n >= 0 and not in_span:
                 export_end_minute = self.export_window_best[export_window_n]["end"]
-                rowspan = min(int((export_end_minute - minute) / 30), periods_left)
+                rowspan = min(int((export_end_minute - minute) / plan_interval_minutes), periods_left)
                 start = self.export_window_best[export_window_n]["start"]
                 if start <= minute and rowspan > 1 and (charge_window_n < 0):
                     in_span = True
@@ -1572,7 +1575,8 @@ class Output:
         Create rates/time every 30 minutes
         """
         rates_time = {}
-        for minute in range(-24 * 60, self.minutes_now + self.forecast_minutes + 24 * 60, 30):
+        plan_interval_minutes = self.plan_interval_minutes
+        for minute in range(-24 * 60, self.minutes_now + self.forecast_minutes + 24 * 60, plan_interval_minutes):
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             rates_time[stamp] = dp2(rates[minute])

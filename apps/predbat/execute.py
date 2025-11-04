@@ -79,9 +79,10 @@ class Execute:
                     self.log("Include original charge start {}, keeping this instead of new start {}".format(self.time_abs_str(inverter.charge_start_time_minutes), self.time_abs_str(minutes_start)))
                     minutes_start = inverter.charge_start_time_minutes
 
+                plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
                 # Avoid having too long a period to configure as registers only support 24-hours
                 if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24 * 60):
-                    minutes_start = int(self.minutes_now / 30) * 30
+                    minutes_start = int(self.minutes_now / plan_interval_minutes) * plan_interval_minutes
                     self.log("Move on charge window start time to avoid wrap - new start {}".format(self.time_abs_str(minutes_start)))
 
                 # Span midnight allowed?
@@ -279,9 +280,10 @@ class Execute:
                             )
                         )
 
+                plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
                 # Avoid having too long a period to configure as registers only support 24-hours
                 if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24 * 60):
-                    minutes_start = int(self.minutes_now / 30) * 30
+                    minutes_start = int(self.minutes_now / plan_interval_minutes) * plan_interval_minutes
                     self.log("Move on export window start time to avoid wrap - new start {}".format(self.time_abs_str(minutes_start)))
 
                 export_adjust = 1
