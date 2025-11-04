@@ -19,7 +19,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | [LuxPower](#lux-power) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml)|
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
-   | [Tesla Powerwall](#tesla-powerwall) | [Teslemetry](https://teslemetry.com/) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
+   | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
@@ -683,10 +683,13 @@ The following additions are needed to facilitate integration with Predbat and ne
 
 ## Tesla Powerwall
 
-Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla) which uses the [Teslemetry subscription service](https://teslemetry.com/)
-to access Tesla fleet API's in Home Assistant. Ed's setup only covered Predbat controlling charging the Powerwall, the below (thanks @Slee2112) covers both charging and discharging (exporting).
+Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla).
+Ed's setup only covered Predbat controlling charging the Powerwall, the below configuration (thanks @Slee2112) covers both charging and discharging (exporting).
 
-- Subscribe to Teslemetry, then install and configure the Teslemetry integration in Home Assistant
+*Note:* This Predbat Tesla configuration has been developed with a Powerwall 3. It may require changes for older Powerwall models. Please raise a Github issue with details of any changes you find are required so the documentation can be updated.
+
+- The Predbat Tesla `apps.yaml` configuration was developed using the Tesla Fleet integration, and you can use this, or you can use the Teslemetry integration which provides easier access to Tesla API's, but requires a [Teslemetry subscription](https://teslemetry.com/)
+- Install and configure either the Tesla Fleet integration or Teslemetry integration in Home Assistant
 - Copy the template [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) template over the top of your `apps.yaml`, and edit for your system
 
 Exporting with Powerwall is tricky, as there is no built in button as such to do it, you have to trick the Powerwall to export by changing the tariff options using the Tesla API.
