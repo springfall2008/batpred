@@ -31,7 +31,7 @@ pred_bat:
 
   inverter_type: SOLAX
   inverter:
-    name: "Solax Gen5 (Modbus Power Control)"
+    name: "Solax Gen4+ (Modbus Power Control)"
     has_rest_api: False
     has_mqtt_api: False
     has_service_api: True
