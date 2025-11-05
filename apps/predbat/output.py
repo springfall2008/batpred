@@ -16,7 +16,6 @@ from prediction import Prediction
 
 
 class Output:
-
     def publish_car_plan(self):
         """
         Publish the car charging plan

@@ -36,7 +36,6 @@ class DummyThread:
 
 
 class Plan:
-
     def dynamic_load(self):
         """
         Adjust load prediction based on current load

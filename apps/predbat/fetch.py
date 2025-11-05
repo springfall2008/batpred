@@ -235,7 +235,7 @@ class Fetch:
             min_sum_day_idx = self.days_previous.index(min_sum_day)
             del self.days_previous[min_sum_day_idx]
             del self.days_previous_weight[min_sum_day_idx]
-        
+
         plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
         # Gap filling
         gap_size = max(self.get_arg("load_filter_threshold", plan_interval_minutes), 5)
