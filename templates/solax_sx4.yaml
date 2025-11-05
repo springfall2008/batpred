@@ -40,7 +40,7 @@ pred_bat:
     has_charge_enable_time: False
     has_discharge_enable_time: False
     has_target_soc: False
-    has_reserve_soc: False
+    has_reserve_soc: True
     has_timed_pause: False
     charge_time_format: "S"
     charge_time_entity_is_option: False
@@ -91,12 +91,6 @@ pred_bat:
   inverter_time:
     - re:(sensor.solax([a-z_]+|)_rtc)
 
-  battery_power:
-    - re:(sensor.solax([a-z_]+|)_battery_power_charge)
-
-  battery_power_invert:
-    - true
-
   pv_power:
     - re:(sensor.solax([a-z_]+|)_pv_power_total)
 
@@ -109,23 +103,30 @@ pred_bat:
   load_power:
     - re:(sensor.solax([a-z_]+|)_house_load)
 
+  # Set the reserve entity based upon which work mode the inverter is set to:
   reserve:
-    - re:(number.solax([a-z_]+|)_backup_discharge_min_soc)
-
-  battery_min_soc:
+  # for inverter work mode "Self Use Mode", set reserve to selfuse_discharge_min_soc 
     - re:(number.solax([a-z_]+|)_selfuse_discharge_min_soc)
+  # for inverter work mode "Backup Mode", set reserve to backup_discharge_min_soc
+  #  - re:(number.solax([a-z_]+|)_backup_discharge_min_soc)
 
-  # check, the old config had a different sensor name:
-  # battery_min_soc:
-  #  - sensor.solaxmodbus_feedin_discharge_min_soc
+  # battery_min_soc is not needed
+  #battery_min_soc:
+  #  - re:(number.solax([a-z_]+|)_selfuse_discharge_min_soc)
 
   # The Gen 5 inverters can have two batteries, with entity names 'battery_1_xxx' and 'battery_2_xxx'
-  # If you have a Gen 4 inverter with a single battery, the regular expressions should match the single battery entity names (without '_1;)
+  # If you have a Gen 4 inverter with a single battery, the regular expressions should match the single battery entity names (without '_1')
   soc_percent:
-    - re:(sensor.solax([a-z_]+|)_battery_capacity)
+    - re:(sensor.solax([a-z_]+|)(?<!chargeable)(?<!remaining)_battery_capacity)
 
   battery_temperature:
     - re:(sensor.solax([a-z_]+|)_battery(_1|)_temperature)
+
+  battery_power:
+    - re:(sensor.solax([a-z_]+|)_battery(_1|)_power_charge)
+
+  battery_power_invert:
+    - true
 
   # for inverter control in Watts (power), battery_voltage is not needed
   # battery_voltage:

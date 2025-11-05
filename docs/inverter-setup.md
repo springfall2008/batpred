@@ -123,22 +123,20 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 To run PredBat with Solis hybrid inverters, follow the following steps:
 
 1. Install PredBat as per the [Installation Summary](installation-summary.md)
-2. Ensure that you have the Solax Modbus integration running. There are a number of entities which this integration disables by default that you
-   will need to enable via the Home Assistant GUI:
+2. Ensure that you have the Solax Modbus integration running.
+There are a number of entities which this integration disables by default that you will need to enable via the Home Assistant GUI:
 
    | Name                          | Description     |
    | :---------------------------- | :-------------- |
    | `sensor.solisx_rtc`           | Real Time Clock |
    | `sensor.solisx_battery_power` | Battery Power   |
 
-4. Instead of `apps.yaml` use `ginlong_solis.yaml` from this Repo as your starting template.
-   The majority of settings should be correct but please check.
-   You will need to un-comment the `template` line to enable it. Save it to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
-   Set **solax_modbus_new** in apps.yaml to True if you have integration version 2024.03.2 or greater
+4. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/gilong_solis.yaml> over the top of your `apps.yaml`, and modify it for your system
+5. Set **solax_modbus_new** in `apps.yaml` to True if you have integration version 2024.03.2 or greater
 6. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
-   If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
-   this is not fully tested. In due course, these mode settings will be incorporated into the code.
-7. Your inverter will require a "button press" triggered by Predbat to update the schedules. Some Solis inverter integrations feature a combined charge/discharge update button, in which case a single entry of:
+If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that this is not fully tested.
+In due course, these mode settings will be incorporated into the code.
+7. Your inverter will require a "button press" triggered by Predbat to update the schedules. Some Solis inverter integrations feature a combined charge/discharge update button, in which case a single `apps.yaml` entry of:
 
 ```yaml
 charge_discharge_update_button:
@@ -160,8 +158,7 @@ Ensure the correct entity IDs are used for your specific inverter setup. These e
 
 The Predbat Solax configuration can either either use the Mode1 remote control or the newer Mode8 option. Both should work with the SolaX Gen 4, 5 or 6 inverters.  Thanks @TCWORLD for this configuration.
 
-- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/solax_sx4.yaml> over the top of your `apps.yaml`, and modify it for your system
-- Set **solax_modbus_new** in your `apps.yaml` to True if you have integration version 2024.03.2 or greater
+- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/solax_sx4.yaml> over the top of your `apps.yaml`, and modify it for your system and the work mode that your inverter is set to
 - Install and configure the Solax Modbus integration in Home Assistant and confirm that it is connected to your inverter
 - To use Mode 1 remote control, create and save the following automation script (Settings/Automations/Scripts) which will act as the interface between Predbat and the Solax Modbus integration.<BR>
 You can change the limits for the power field if you have a larger inverter, it doesn't matter if this limit is larger than the inverter can handle as the value gets clipped to the inverter limits by the Solax Modbus integration:
@@ -370,6 +367,8 @@ max: 10
     - Create a helper entity of type 'Integral', set the Name to 'Todays House Load Integral', Metric Prefix to 'k (kilo)', Time unit to 'Hours', Input sensor to 'House Load', Integration method to 'Trapezoidal', Precision to '2'
     and Max sub-interval to '0:05:00'
     - Create a helper entity of type 'Utility Meter', set the Name to 'Todays House Load', Input sensor to 'Todays House Load Integral' (that you just created) and Meter Reset Cycle to 'Daily'
+
+- When you first start Predbat, check the [Predbat log](output-data.md#predbat-logfile) to confirm that the correct sensor names are identified by the regular expressions in `apps.yaml`. Any non-matching expressions should be investigated and resolved
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 

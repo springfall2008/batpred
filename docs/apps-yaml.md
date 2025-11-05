@@ -595,6 +595,24 @@ or
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
+Some inverters require a "button press" to be triggered by Predbat to update the charge/discharge schedules in the inverter after the appropriate HA entities have been set.
+
+If your inverter features a combined charge/discharge update button, the **charge_discharge_update_button** can be set to the button name. e.g.:
+
+```yaml
+charge_discharge_update_button:
+  - button.solis_charge_discharge
+```
+
+If your inverter has separate buttons for setting charging and discharging schedules on the inverter, set both **charge_update_button** and **discharge_update_button**. e.g.:
+
+```yaml
+charge_update_button:
+  - button.solis_charge
+discharge_update_button:
+  - button.solis_discharge
+```
+
 *TIP:* Some older GivEnergy inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
 GivTCP does not recognise this and so still provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
 Predbat can report an error trying to set them, or they revert back to 00:00:00 after being changed by Predbat and there will also be errors setting these controls reported in the GivTCP log.<BR>
