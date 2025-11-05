@@ -49,10 +49,6 @@ This will only work correctly if **car_charging_planned** is set correctly in ap
 
 - Let the Octopus app control when your car charges.
 
-_TIP:_ If you have a Zappi EV charger then you have to set it to Eco+ mode for IOG to control it.
-If Predbat starts exporting your battery (e.g. prior to the IOG cheap overnight period) then the Zappi can treat the exported energy as excess solar and start charging the EV battery with it!<BR>
-To prevent this happening, in the Zappi configuration set the Export Margin to 8000W so that the Zappi will only charge the EV from excess solar when more than 8000W is being exported (which should never happen).
-
 ### Predbat-led charging
 
 Here Predbat plans and can initiate the car charging based on the upcoming low import rate slots

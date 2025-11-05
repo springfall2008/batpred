@@ -91,6 +91,9 @@ If there is a shortfall of generated solar power to meet the house load, the bat
 - **Hold exporting** - The plan was to force export but the minimum battery level was reached and thus the battery is kept in Demand mode.
 If the battery level again gets above the threshold it will be changed back to Export mode.
 
+- **Hold for car** and **Demand, Hold for car** - A car is charging (either Predbat-led or Octopus-led), the battery is in Demand mode,
+but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be set to On).
+
 - **Calibration** - The inverter is calibrating the batteries.
 On GivEnergy systems the battery state of charge (SoC) level has to be calibrated by performing a full battery discharge and then a full charge
 so that the voltage levels associated with empty and full SoC can be determined.

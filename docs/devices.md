@@ -28,6 +28,10 @@ Can be used both for the Car Charging Hold feature (to filter out previous car c
     - 're:sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 ```
 
+_TIP:_ The Zappi must be set to Eco+ mode for IOG to control it.
+If Predbat starts exporting your battery (e.g. prior to the IOG cheap overnight period) then the Zappi can treat the exported energy as excess solar and start charging the EV battery with it!<BR>
+To prevent this happening, in the Zappi configuration set the Export Margin to 8000W so that the Zappi will only charge the EV from excess solar when more than 8000W is being exported (which should never happen).
+
 ## Tesla
 
 <https://github.com/alandtse/tesla>

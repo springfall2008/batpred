@@ -398,8 +398,6 @@ The discussion ticket is here: <https://github.com/springfall2008/batpred/issues
 
 ## SolarEdge Inverters
 
-The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181>
-
 - Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> over the top of your `apps.yaml` and modify it for your system
 - The default entity name prefix for the integration is 'solaredge' but if you have changed this on installation then you will need to amend the `apps.yaml` template and the template sensors to match your new prefix
 - Ensure that **number.solaredge_i1_storage_command_timeout** is set to a reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled
@@ -407,7 +405,7 @@ The discussion ticket is here: <https://github.com/springfall2008/batpred/issues
 and **switch.solaredge_i1_advanced_power_control** must be on.
 
 - For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template entities within your Home Assistant `configuration.yaml`.
-Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in `apps.yaml` if you can't get it to work
+These sensors are not critical so you can just comment them out in `apps.yaml` if you can't get them to work:
 
 ```yaml
 template:
@@ -469,67 +467,68 @@ You will need to make a number of changes to the solaredge apps.yaml, replacing 
 
 - set charge_rate and discharge_rate to the SolarEdge inverter values, e.g. 5000
 
-And add the following additional template sensors to configuration.yaml:
+And add the following additional template sensors to `configuration.yaml` after the existing 'template:' line (from the earlier template sensor definitions):
 
 ```yaml
-    - sensor:
-      # Template sensor for Max Battery Charge rate
-      # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
-      # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
-      - name: "Calc Power - Batteries Max Charge Power"
-        unique_id: calc_power_batteries_max_charge_power
-        unit_of_measurement: "W"
-        device_class: "power"
-        state_class: "measurement"
-        state: >
-          {% set myB1 = float(states('sensor.solaredge_b1_max_charge_power'),0) %}
-          {% set myB2 = float(states('sensor.solaredge_b2_max_charge_power'),0) %}
-          {% set myB3 = float(states('sensor.solaredge_b3_max_charge_power'),0) %}
-          {% set myValue = ((myB1 + myB2 + myB3)) | int %}
-          {{ (myValue if (myValue) > 5000 else 5000) }}
+  - sensor:
+    # Template sensor for Max Battery Charge rate
+    # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
+    # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
+    # Remove all 'B3' entries if you only have two batteries, or follow the same pattern for adding 'B4', etc if you have more than 3 batteries 
+    - name: "Calc Power - Batteries Max Charge Power"
+      unique_id: calc_power_batteries_max_charge_power
+      unit_of_measurement: "W"
+      device_class: "power"
+      state_class: "measurement"
+      state: >
+        {% set myB1 = float(states('sensor.solaredge_b1_max_charge_power'),0) %}
+        {% set myB2 = float(states('sensor.solaredge_b2_max_charge_power'),0) %}
+        {% set myB3 = float(states('sensor.solaredge_b3_max_charge_power'),0) %}
+        {% set myValue = ((myB1 + myB2 + myB3)) | int %}
+        {{ (myValue if (myValue) > 5000 else 5000) }}
 
-      # Calculate Total Battery Power Value
-      - name: "Calc Power - Batteries DC Power"
-        unique_id: calc_power_batteries_dc_power
-        unit_of_measurement: "W"
-        device_class: "power"
-        state_class: "measurement"
-        state: >
-          {% set myB1 = float(states('sensor.solaredge_b1_dc_power'),0) %}
-          {% set myB2 = float(states('sensor.solaredge_b2_dc_power'),0) %}
-          {% set myB3 = float(states('sensor.solaredge_b3_dc_power'),0) %}
-          {% set myValue = ((myB1 + myB2 + myB3)) %}
-          {{ myValue }}
+    # Calculate Total Battery Power Value
+    - name: "Calc Power - Batteries DC Power"
+      unique_id: calc_power_batteries_dc_power
+      unit_of_measurement: "W"
+      device_class: "power"
+      state_class: "measurement"
+      state: >
+        {% set myB1 = float(states('sensor.solaredge_b1_dc_power'),0) %}
+        {% set myB2 = float(states('sensor.solaredge_b2_dc_power'),0) %}
+        {% set myB3 = float(states('sensor.solaredge_b3_dc_power'),0) %}
+        {% set myValue = ((myB1 + myB2 + myB3)) %}
+        {{ myValue }}
 
-      # Average state of charge across the batteries
-      - name: "Calc Battery All State"
-        unique_id: calc_battery_all_state
-        unit_of_measurement: "%"
-        state: >
-          {% set myB1 = float(states('sensor.solaredge_b1_state_of_energy'),0) %}
-          {% set myB2 = float(states('sensor.solaredge_b2_state_of_energy'),0) %}
-          {% set myB3 = float(states('sensor.solaredge_b3_state_of_energy'),0) %}
-          {% set myValue = ((myB1 + myB2 + myB3) / 3) | round(0) %}
-          {{ myValue }}
+    # Average state of charge across the batteries
+    - name: "Calc Battery All State"
+      unique_id: calc_battery_all_state
+      unit_of_measurement: "%"
+      state: >
+        {% set myB1 = float(states('sensor.solaredge_b1_state_of_energy'),0) %}
+        {% set myB2 = float(states('sensor.solaredge_b2_state_of_energy'),0) %}
+        {% set myB3 = float(states('sensor.solaredge_b3_state_of_energy'),0) %}
+        {% set myValue = ((myB1 + myB2 + myB3) / 3) | round(0) %}
+        {{ myValue }}
 
-      # Total Energy Stored in the Batteries
-      - name: "Calc Battery Total Capacity"
-        unique_id: calc_battery_total_capacity
-        unit_of_measurement: kWh
-        state: >
-          {% set myB1 = float(states('sensor.solaredge_b1_maximum_energy'),0) %}
-          {% set myB2 = float(states('sensor.solaredge_b2_maximum_energy'),0) %}
-          {% set myB3 = float(states('sensor.solaredge_b3_maximum_energy'),0) %}
-          {% set myValue = ((myB1 + myB2 + myB3)) %}
-          {{ myValue }}
+    # Total Energy Stored in the Batteries
+    - name: "Calc Battery Total Capacity"
+      unique_id: calc_battery_total_capacity
+      unit_of_measurement: kWh
+      state: >
+        {% set myB1 = float(states('sensor.solaredge_b1_maximum_energy'),0) %}
+        {% set myB2 = float(states('sensor.solaredge_b2_maximum_energy'),0) %}
+        {% set myB3 = float(states('sensor.solaredge_b3_maximum_energy'),0) %}
+        {% set myValue = ((myB1 + myB2 + myB3)) %}
+        {{ myValue }}
 
-      # Current Energy Stored in the Batteries
-      - name: "Calc Battery Current Capacity"
-        unique_id: calc_battery_current_capacity
-        unit_of_measurement: kWh
-        state: >
-          {% set myValue = (float(states('sensor.calc_battery_all_state'),0) / 100) * float(states('sensor.calc_battery_total_capacity'),0) %}
-          {{ myValue }}
+    # Current Energy Stored in the Batteries
+    - name: "Calc Battery Current Capacity"
+      unique_id: calc_battery_current_capacity
+      unit_of_measurement: kWh
+      state: >
+        {% set myValue = (float(states('sensor.calc_battery_all_state'),0) / 100) * float(states('sensor.calc_battery_total_capacity'),0) %}
+        {{ myValue }}
 ```
 
 ## GivEnergy with ge_cloud
