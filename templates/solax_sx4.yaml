@@ -110,7 +110,7 @@ pred_bat:
     - re:(sensor.solax([a-z_]+|)_house_load)
 
   reserve:
-    - re:(number.solax([a-z_]+|).solax_backup_discharge_min_soc)
+    - re:(number.solax([a-z_]+|)_backup_discharge_min_soc)
 
   battery_min_soc:
     - re:(number.solax([a-z_]+|)_selfuse_discharge_min_soc)
@@ -131,10 +131,10 @@ pred_bat:
   # battery_voltage:
   #   - re:(sensor.solax([a-z_]+|)_battery(_1|)_voltage_charge)
 
-  # don't believe either of these are required for custom Solax
-  #
-  # charge_discharge_update_button:
-  #   - button.solax_battery_awaken
+  charge_discharge_update_button:
+    - re:(button.solax([a-z_]+|)_battery_awaken)
+  
+  # don't believe this is required for custom Solax
   #
   # energy_control_switch:
   #   - select.solax_remotecontrol_power_control
