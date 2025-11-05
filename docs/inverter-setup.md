@@ -467,7 +467,7 @@ You will need to make a number of changes to the solaredge apps.yaml, replacing 
 
 - set charge_rate and discharge_rate to the SolarEdge inverter values, e.g. 5000
 
-And add the following additional template sensors to `configuration.yaml` after the existing 'template:' line (from the earlier template sensor definitions):
+- And add the following additional template sensors to `configuration.yaml` after the existing 'template:' line (from the earlier template sensor definitions):
 
 ```yaml
   - sensor:

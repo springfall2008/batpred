@@ -80,62 +80,70 @@ pred_bat:
     - sensor.todays_house_load
 
   import_today:
-    - sensor.solax_today_s_import_energy
+    - re:(sensor.solax([a-z_]+|)_today_s_import_energy)
 
   export_today:
-    - sensor.solax_today_s_export_energy
+    - re:(sensor.solax([a-z_]+|)_today_s_export_energy)
 
   pv_today:
-    - sensor.solax_today_s_solar_energy
+    - re:(sensor.solax([a-z_]+|)_today_s_solar_energy)
 
   inverter_time:
-    - sensor.solax_rtc
+    - re:(sensor.solax([a-z_]+|)_rtc)
 
   battery_power:
-    - sensor.solax_battery_power_charge
+    - re:(sensor.solax([a-z_]+|)_battery_power_charge)
 
   battery_power_invert:
     - true
 
   pv_power:
-    - sensor.solax_pv_power_total
+    - re:(sensor.solax([a-z_]+|)_pv_power_total)
 
   grid_power:
-    - sensor.solax_measured_power
+    - re:(sensor.solax([a-z_]+|)_measured_power)
 
   grid_power_invert:
     - false
 
   load_power:
-    - sensor.solax_house_load
-
-  soc_percent:
-    - sensor.solax_battery_1_capacity_charge # for mode 1 control
-  # - sensor.solax_inverter_battery_capacity # for mode 8 control
+    - re:(sensor.solax([a-z_]+|)_house_load)
 
   reserve:
-    - number.solax_backup_discharge_min_soc
+    - re:(number.solax([a-z_]+|).solax_backup_discharge_min_soc)
 
   battery_min_soc:
-    - number.solax_selfuse_discharge_min_soc
+    - re:(number.solax([a-z_]+|)_selfuse_discharge_min_soc)
+
+  # check, the old config had a different sensor name:
+  # battery_min_soc:
+  #  - sensor.solaxmodbus_feedin_discharge_min_soc
+
+  # The Gen 5 inverters can have two batteries, with entity names 'battery_1_xxx' and 'battery_2_xxx'
+  # If you have a Gen 4 inverter with a single battery, the regular expressions should match the single battery entity names (without '_1;)
+  soc_percent:
+    - re:(sensor.solax([a-z_]+|)_battery_capacity)
 
   battery_temperature:
-    - sensor.solax_battery_1_temperature
+    - re:(sensor.solax([a-z_]+|)_battery(_1|)_temperature)
 
-  battery_voltage:
-    - sensor.solax_battery_1_voltage_charge
+  # for inverter control in Watts (power), battery_voltage is not needed
+  # battery_voltage:
+  #   - re:(sensor.solax([a-z_]+|)_battery(_1|)_voltage_charge)
 
-  charge_discharge_update_button:
-    - button.solax_battery_awaken
-
-  energy_control_switch:
-    - select.solax_remotecontrol_power_control
+  # don't believe either of these are required for custom Solax
+  #
+  # charge_discharge_update_button:
+  #   - button.solax_battery_awaken
+  #
+  # energy_control_switch:
+  #   - select.solax_remotecontrol_power_control
   
   # Services for start/stop/freeze charge and discharge
   #
   # Predbat calls the supplied Solax automation script to set the appropriate inverter controls directly.
   #
-  # If you are using Mode 8 control, change the ALL the service names to 'script.solax_remote_control_mode_8'
+  # If you are using Mode 8 control, change the ALL the service calls to 'script.solax_remote_control_mode_8'
   charge_start_service:
     - service: script.solax_remote_control
       power: "{power}"
@@ -157,50 +165,6 @@ pred_bat:
   discharge_freeze_service:
     - service: script.solax_remote_control
       operation: "Freeze Discharge"
-
-
-###### old config:
-  inverter_type: "SX4" 
-
-  # Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
-  import_today:
-    - sensor.solaxmodbus_today_s_import_energy
-  export_today:
-    - sensor.solaxmodbus_today_s_export_energy
-  pv_today:
-    - sensor.solaxmodbus_today_s_solar_energy
-
-  battery_voltage:
-    - sensor.solaxmodbus_battery_voltage_charge
-
-  # This is disabled by default in the Solax integration so it must be manually enabled.
-  inverter_time:
-    - sensor.date_time
-
-  # This is disabled by default in the Solax integration so it must be manually enabled.
-  battery_power:
-    - sensor.solaxmodbus_battery_power_charge
-  pv_power:
-    - sensor.solaxmodbus_pv_power_total
-
-  # For Solis inverters we need to add the bypass (backup) load to the main house load. If not used the load_power_1 can be commented out
-  load_power:
-    - sensor.solaxmodbus_house_load
-  #load_power_1:
-  #  - sensor.solis_bypass_load
-
-  soc_percent:
-    - sensor.solaxmodbus_battery_capacity
-
-  reserve:
-    - number.solaxmodbus_backup_discharge_min_soc
-
-  battery_min_soc:
-    - sensor.solaxmodbus_feedin_discharge_min_soc
-
-  energy_control_switch:
-    - select.solaxmodbus_remotecontrol_power_control
-#### end of old config
 
   #
   # The maximum rate the inverter can charge and discharge the battery can be overwritten, this will change
