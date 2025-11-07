@@ -564,7 +564,7 @@ and only charging at the lowest import rate in the 24 hour period
 vs not having a PV and battery system at all and all house load being met from grid import
 
 Note: The savings using Predbat are calculated by default compared to having one fixed nightly charge slot set to charge at the lowest import rate with a target of 100%
-You can change the number of simulated charge slots in apps.yaml by setting **calculate_savings_max_charge_slots** to the number of slots to allow. 
+You can change the number of simulated charge slots in apps.yaml by setting **calculate_savings_max_charge_slots** to the number of slots to allow.
 If set to 0 then Demand (ECO) mode will be used as the baseline or if non-zero then the maximum number of slots can be set (e.g. 2).
 
 ## Solar forecast data
