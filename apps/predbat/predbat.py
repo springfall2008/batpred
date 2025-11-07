@@ -624,6 +624,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.config_root = "./"
         self.inverter_can_charge_during_export = True
         self.octopus_last_joined_try = None
+        self.plan_interval_minutes = self.args.get("plan_interval_minutes", 30)
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):

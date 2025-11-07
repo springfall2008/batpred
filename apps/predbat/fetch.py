@@ -95,7 +95,8 @@ class Fetch:
         values = {}
         cloud_diff = 0
 
-        for minute in range(0, self.forecast_minutes + 30, step):
+        plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
+        for minute in range(0, self.forecast_minutes + plan_interval_minutes, step):
             value = 0
             minute_absolute = minute + minutes_now
 
@@ -129,7 +130,7 @@ class Fetch:
                 for offset in range(step):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
             if load_adjust:
-                load_extra += load_adjust.get(minute_absolute, 0) * step / 30.0  # The kWh figure is for the 30 minute period in question so divide by 30 and times by step
+                load_extra += load_adjust.get(minute_absolute, 0) * step / float(plan_interval_minutes)  # The kWh figure is for the plan interval period, so divide by plan_interval_minutes and times by step
             load_extra = max(load_extra, -value)  # Don't allow going to negative load values
             values[minute] = dp4((value + load_extra) * scaling_dynamic * scale_today * scale_fixed)
 
@@ -235,8 +236,9 @@ class Fetch:
             del self.days_previous[min_sum_day_idx]
             del self.days_previous_weight[min_sum_day_idx]
 
+        plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
         # Gap filling
-        gap_size = max(self.get_arg("load_filter_threshold", 30), 5)
+        gap_size = max(self.get_arg("load_filter_threshold", plan_interval_minutes), 5)
         for days in days_list:
             use_days = max(min(days, self.load_minutes_age), 1)
             num_gaps = 0
@@ -1053,7 +1055,7 @@ class Fetch:
         rate_low_count = 0
         alternate_rate_boundary = False
         alt_rate_last = None
-        alt_rate_last = None
+        plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
 
         # Work out alternate rate threshold
         alt_rate_max = max(alt_rates.values()) if alt_rates else 0
@@ -1083,11 +1085,11 @@ class Fetch:
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (rate_low_start in self.manual_all_times or minute in self.manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
+                    if (rate_low_start in self.manual_all_times or minute in self.manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= plan_interval_minutes):
                         # Manual slot
                         rate_low_end = minute
                         break
-                    if find_high and (rate_low_start >= 0) and (((minute - rate_low_start) >= 60 * 24) or (((minute - rate_low_start) >= 30) and alternate_rate_boundary)):
+                    if find_high and (rate_low_start >= 0) and (((minute - rate_low_start) >= 60 * 24) or (((minute - rate_low_start) >= plan_interval_minutes) and alternate_rate_boundary)):
                         # Export slot can never be bigger than 4 hours
                         rate_low_end = minute
                         break
@@ -1733,8 +1735,9 @@ class Fetch:
         self.best_soc_max = self.get_arg("best_soc_max")
         self.best_soc_keep = self.get_arg("best_soc_keep")
         self.best_soc_keep_weight = self.get_arg("best_soc_keep_weight")
-        self.set_soc_minutes = 30
-        self.set_window_minutes = 30
+        plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
+        self.set_soc_minutes = plan_interval_minutes
+        self.set_window_minutes = plan_interval_minutes
         self.inverter_set_charge_before = self.get_arg("inverter_set_charge_before")
         if not self.inverter_set_charge_before:
             self.set_soc_minutes = 0
@@ -1748,8 +1751,8 @@ class Fetch:
         self.combine_rate_threshold = self.get_arg("combine_rate_threshold")
         self.combine_export_slots = self.get_arg("combine_export_slots")
         self.combine_charge_slots = self.get_arg("combine_charge_slots")
-        self.charge_slot_split = 30
-        self.export_slot_split = 30
+        self.charge_slot_split = plan_interval_minutes
+        self.export_slot_split = plan_interval_minutes
         self.calculate_best = True
         self.set_read_only = self.get_arg("set_read_only")
 

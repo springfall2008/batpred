@@ -956,12 +956,13 @@ class OctopusAPI:
             standing = self.get_octopus_rates_direct(tariff, standingCharge=True)
 
             rates_stamp = []
-            for minute in range(0, 60 * 24 * 2, 30):
+            plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
+            for minute in range(0, 60 * 24 * 2, plan_interval_minutes):
                 time_now = self.midnight_utc + timedelta(minutes=minute)
                 rate_value = rates.get(minute, None)
                 if rate_value is not None:
                     start_time = time_now.strftime(TIME_FORMAT)
-                    end_time = (time_now + timedelta(minutes=30)).strftime(TIME_FORMAT)
+                    end_time = (time_now + timedelta(minutes=plan_interval_minutes)).strftime(TIME_FORMAT)
                     rates_stamp.append({"start": start_time, "end": end_time, "value_inc_vat": dp4(rate_value / 100)})
             rate_now = rates.get(self.now_utc.minute + self.now_utc.hour * 60, None)
             if rate_now:
