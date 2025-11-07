@@ -678,10 +678,10 @@ class SolarAPI:
 
         days = 10
         pv_power_hist, pv_power_hist_days = history_attribute_to_minute_data(
-            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper(self.prefix + ".pv_power", self.local_tz, days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper(self.prefix + ".pv_power", days, required=False), self.local_tz), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
         )
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
-            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", self.local_tz, days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False), self.local_tz), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
         )
 
         hist_days = min(pv_power_hist_days, pv_forecast_hist_days)

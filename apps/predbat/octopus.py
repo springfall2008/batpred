@@ -869,7 +869,7 @@ class OctopusAPI:
                 return {}
             try:
                 data = r.json()
-                self.last_success_timestamp = datetime.now(self.local_tz)
+                self.last_success_timestamp = datetime.now(timezone.utc)
             except requests.exceptions.JSONDecodeError:
                 self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))

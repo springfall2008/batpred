@@ -37,6 +37,7 @@ class CarbonAPI:
         self.last_success_timestamp = None
         self.last_updated_timestamp = None
         self.carbon_data_points = []
+        self.local_tz = base.local_tz
 
     def wait_api_started(self):
         """
@@ -131,7 +132,7 @@ class CarbonAPI:
         Publish the latest carbon data to the system
         """
         value_now = "unknown"
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(self.local_tz)
         for point in self.carbon_data_points:
             from_time = datetime.strptime(point["from"], TIME_FORMAT_HA)
             to_time = datetime.strptime(point["to"], TIME_FORMAT_HA)
