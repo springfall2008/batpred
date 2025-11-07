@@ -1186,6 +1186,15 @@ The recommended setting is 200 for Gen 1 hybrids with this issue.
 Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set it to 100 if your inverter allows setting it to 100%.
 
+## Predbat savings baseline
+
+```yaml
+   calculate_savings_max_charge_slots: 1
+```
+
+You can change the number of simulated charge slots used as the baseline comparison for Predbat savings, the default is 1.
+If set to 0 then the baseline will be Demand (ECO) mode.
+
 ## Automatic restarts
 
 If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly.
