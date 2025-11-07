@@ -320,6 +320,7 @@ class OctopusAPI:
         self.api_key = api_key
         self.base = base
         self.log = base.log
+        self.local_tz = base.local_tz
         self.plan_interval_minutes = base.plan_interval_minutes
         self.api = OctopusEnergyApiClient(api_key, self.log)
         self.stop_api = False
@@ -401,7 +402,7 @@ class OctopusAPI:
             try:
                 # Update time every minute
                 self.now = datetime.now()
-                self.now_utc = datetime.now(timezone.utc).astimezone()
+                self.now_utc = datetime.now(self.local_tz)
                 count_minutes = self.now_utc.minute + self.now_utc.hour * 60
 
                 if first or (count_minutes % 30) == 0:
