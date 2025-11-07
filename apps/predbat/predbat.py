@@ -334,7 +334,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.text_plan = "Computing please wait..."
         self.prediction_cache_enable = True
         self.base_load = 0
-        self.plan_interval_minutes = self.args.get("plan_interval_minutes", 30)
+        self.plan_interval_minutes = 30
         self.db_manager = None
         self.plan_debug = False
         self.arg_errors = {}

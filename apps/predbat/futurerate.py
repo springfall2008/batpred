@@ -13,6 +13,7 @@ class FutureRate:
     def __init__(self, base):
         self.base = base
         self.record_status = base.record_status
+        self.plan_interval_minutes = base.plan_interval_minutes
         self.log = base.log
         self.get_arg = base.get_arg
         self.midnight = base.midnight
