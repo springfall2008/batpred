@@ -790,7 +790,7 @@ class SolarAPI:
             for offset in range(0, plan_interval_minutes, 1):
                 pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
             # Force timezone to UTC
-            pv_estimateCL[minute] = min(dp4(pv_value), max_kwh / 2)  # Clamp to max_kwh, divide max by 2 due to 30 minute slots
+            pv_estimateCL[minute] = min(dp4(pv_value), max_kwh / 2)  # Clamp to max_kwh, divide max by 2 due to plan_interval_minutes slots
             pv_estimate10[minute] = min(dp4(pv_value * worst_day_scaling), max_kwh / 2)
             pv_estimate90[minute] = min(dp4(pv_value * best_day_scaling), max_kwh / 2)
 
