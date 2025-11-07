@@ -148,7 +148,7 @@ class HAHistory:
 
         # Filter useless data from history data
         for entry in new_history_data:
-            if "attributes" in entry:
+            if entry.get("attributes"):
                 for attr in FILTER_ATTRIBUTES:
                     entry["attributes"].pop(attr, None)
             for entry_attr in FILTER_ENTRIES:
