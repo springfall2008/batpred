@@ -212,11 +212,10 @@ class FutureRate:
             item["to"] = time_date_end.strftime(TIME_FORMAT)
             item["rate_import"] = dp2(rate_import)
             item["rate_export"] = dp2(rate_export)
-            plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
 
             # Create intermediate 30 minute data points
             if prev_time_date_end == time_date_start and (minutes_end - minutes_start) == 60:
-                time_end_intermediate = time_date_start + timedelta(minutes=plan_interval_minutes)
+                time_end_intermediate = time_date_start + timedelta(minutes=self.plan_interval_minutes)
                 item["to"] = time_end_intermediate.strftime(TIME_FORMAT)
                 item["rate_import"] = dp2((rate_import + prev_rate_import) / 2)
                 item["rate_export"] = dp2((rate_export + prev_rate_export) / 2)

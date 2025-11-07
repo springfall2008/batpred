@@ -534,9 +534,8 @@ class Plan:
 
     def scenario_summary_title(self, record_time):
         txt = ""
-        plan_interval_minutes = self.plan_interval_minutes
-        minute_start = self.minutes_now - self.minutes_now % plan_interval_minutes
-        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, plan_interval_minutes):
+        minute_start = self.minutes_now - self.minutes_now % self.plan_interval_minutes
+        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, self.plan_interval_minutes):
             this_minute_absolute = max(minute_absolute, self.minutes_now)
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * this_minute_absolute)
             dstamp = minute_timestamp.strftime(TIME_FORMAT)
@@ -550,9 +549,8 @@ class Plan:
 
     def scenario_summary(self, record_time, datap):
         txt = ""
-        plan_interval_minutes = self.plan_interval_minutes
-        minute_start = self.minutes_now - self.minutes_now % plan_interval_minutes
-        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, plan_interval_minutes):
+        minute_start = self.minutes_now - self.minutes_now % self.plan_interval_minutes
+        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, self.plan_interval_minutes):
             this_minute_absolute = max(minute_absolute, self.minutes_now)
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * this_minute_absolute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
@@ -570,18 +568,17 @@ class Plan:
 
     def scenario_summary_state(self, record_time):
         txt = ""
-        plan_interval_minutes = self.plan_interval_minutes
-        minute_start = self.minutes_now - self.minutes_now % plan_interval_minutes
-        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, plan_interval_minutes):
+        minute_start = self.minutes_now - self.minutes_now % self.plan_interval_minutes
+        for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, self.plan_interval_minutes):
             minute_relative_start = max(minute_absolute - self.minutes_now, 0)
-            minute_relative_end = minute_relative_start + plan_interval_minutes
+            minute_relative_end = minute_relative_start + self.plan_interval_minutes
             this_minute_absolute = max(minute_absolute, self.minutes_now)
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * this_minute_absolute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             value = ""
 
             charge_window_n = -1
-            for try_minute in range(this_minute_absolute, minute_absolute + plan_interval_minutes, 5):
+            for try_minute in range(this_minute_absolute, minute_absolute + self.plan_interval_minutes, 5):
                 charge_window_n = self.in_charge_window(self.charge_window_best, try_minute)
                 if charge_window_n >= 0 and self.charge_limit_best[charge_window_n] == 0:
                     charge_window_n = -1
@@ -589,7 +586,7 @@ class Plan:
                     break
 
             export_window_n = -1
-            for try_minute in range(this_minute_absolute, minute_absolute + plan_interval_minutes, 5):
+            for try_minute in range(this_minute_absolute, minute_absolute + self.plan_interval_minutes, 5):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
                 if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100.0:
                     export_window_n = -1
