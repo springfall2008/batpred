@@ -949,6 +949,7 @@ class MCPServerWrapper:
         self.base = base
         self.log = log_func or print
         self.is_running = False
+        self.plan_interval_minutes = base.plan_interval_minutes
 
         if log_func:
             log_func("Creating HTTP MCP Server with Predbat integration")
@@ -1037,8 +1038,7 @@ class MCPServerWrapper:
             action = action.replace(" ", "_")
 
             now_utc = self.base.now_utc
-            plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
-            override_time = get_override_time_from_string(now_utc, time_str, plan_interval_minutes)
+            override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
             if not override_time:
                 return {"success": False, "error": "Invalid time format. Use 'Day HH:MM' format e.g. Sat 14:30", "data": None}
 

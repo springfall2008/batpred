@@ -179,6 +179,7 @@ class Prediction:
             self.inverter_can_charge_during_export = base.inverter_can_charge_during_export
             self.prediction_cache_enable = base.prediction_cache_enable
             self.prediction_cache = {}
+            self.plan_interval_minutes = base.plan_interval_minutes
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -1055,8 +1056,7 @@ class Prediction:
                 predict_battery_power[stamp] = round(battery_draw * (60 / step), 3)
                 predict_battery_cycle[stamp] = round(battery_cycle, 3)
                 # Use plan_interval_minutes instead of hardcoded 30 for scaling
-                plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
-                predict_pv_power[stamp] = round((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (plan_interval_minutes / step), 3)
+                predict_pv_power[stamp] = round((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (self.plan_interval_minutes / step), 3)
                 predict_grid_power[stamp] = round(diff * (60 / step), 3)
                 predict_load_power[stamp] = round(load_yesterday * (60 / step), 3)
                 if carbon_enable:

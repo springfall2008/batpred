@@ -58,16 +58,16 @@ class SolarAPI:
         self.forecast_solar_failures_total = 0
         self.config_root = base.config_root
         self.forecast_days = 4
+        self.local_tz = self.base.local_tz
+        self.plan_interval_minutes = base.plan_interval_minutes
 
     async def start(self):
         """
         Start the Solar API
         """
         seconds = 0
-        plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
         while not self.api_stop:
-            plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
-            if seconds % (plan_interval_minutes * 60) == 0:  # Every plan_interval_minutes
+            if seconds % (self.plan_interval_minutes * 60) == 0:  # Every plan_interval_minutes
                 try:
                     self.fetch_pv_forecast()
                 except Exception as e:
@@ -240,7 +240,6 @@ class SolarAPI:
 
         period_data = {}
         max_kwh = 0
-        plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
         for config in configs:
             lat = config.get("latitude", 51.5072)
             lon = config.get("longitude", -0.1276)
@@ -306,11 +305,11 @@ class SolarAPI:
 
                 period_start_stamp = period_end_stamp
 
-            for minute in range(0, days_data * 24 * 60, plan_interval_minutes):
+            for minute in range(0, days_data * 24 * 60, self.plan_interval_minutes):
                 pv50 = 0
-                for offset in range(0, plan_interval_minutes, 1):
+                for offset in range(0, self.plan_interval_minutes, 1):
                     pv50 += dp4(forecast_watt_data.get(minute + offset, 0) / 1000.0)
-                pv50 /= plan_interval_minutes
+                pv50 /= self.plan_interval_minutes
                 period_start_stamp = self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)
                 data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}
                 if period_start_stamp in period_data:
@@ -698,14 +697,12 @@ class SolarAPI:
         pv_forecast_by_slot_count = {}
         past_day_forecast = {}
         past_day_actual = {}
-        plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
-
         for minute in pv_power_hist:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
                 slot_abs = minute_absolute % (24 * 60)
-                slot = int(slot_abs / plan_interval_minutes) * plan_interval_minutes
+                slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
                 pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
                 pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
                 past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
@@ -718,7 +715,7 @@ class SolarAPI:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
                 slot_abs = minute_absolute % (24 * 60)
-                slot = int(slot_abs / plan_interval_minutes) * plan_interval_minutes
+                slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
                 pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute]
                 pv_forecast_by_slot_count[slot] = pv_forecast_by_slot_count.get(slot, 0) + 1
 
@@ -748,17 +745,17 @@ class SolarAPI:
                 pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_count[slot])
 
         total_production = 0
-        for slot in range(0, 24 * 60, plan_interval_minutes):
+        for slot in range(0, 24 * 60, self.plan_interval_minutes):
             total_production += pv_power_hist_by_slot.get(slot, 0)
 
         total_forecast = 0
-        for slot in range(0, 24 * 60, plan_interval_minutes):
+        for slot in range(0, 24 * 60, self.plan_interval_minutes):
             total_forecast += pv_forecast_by_slot.get(slot, 0)
 
         pv_distribution = {}
         forecast_distribution = {}
         slot_adjustment = {}
-        for slot in range(0, 24 * 60, plan_interval_minutes):
+        for slot in range(0, 24 * 60, self.plan_interval_minutes):
             pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0 else 0)
             forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
 
@@ -779,15 +776,15 @@ class SolarAPI:
         pv_forecast_minute_adjusted = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
             pv_value = pv_forecast_minute.get(minute, 0)
-            slot = (int(minute / plan_interval_minutes) * plan_interval_minutes) % (24 * 60)
+            slot = (int(minute / self.plan_interval_minutes) * self.plan_interval_minutes) % (24 * 60)
             pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(slot, 1.0)
 
         pv_estimateCL = {}
         pv_estimate10 = {}
         pv_estimate90 = {}
-        for minute in range(0, max(pv_forecast_minute.keys()) + 1, plan_interval_minutes):
+        for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
-            for offset in range(0, plan_interval_minutes, 1):
+            for offset in range(0, self.plan_interval_minutes, 1):
                 pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
             # Force timezone to UTC
             pv_estimateCL[minute] = min(dp4(pv_value), max_kwh / 2)  # Clamp to max_kwh, divide max by 2 due to plan_interval_minutes slots
@@ -798,7 +795,7 @@ class SolarAPI:
             period_start = entry.get("period_start", "")
             if period_start:
                 minutes_since_midnight = (datetime.strptime(period_start, TIME_FORMAT) - self.midnight_utc).total_seconds() / 60
-                slot = int(minutes_since_midnight / plan_interval_minutes) * plan_interval_minutes
+                slot = int(minutes_since_midnight / self.plan_interval_minutes) * self.plan_interval_minutes
                 calibrated = pv_estimateCL.get(slot, None)
                 calibrated10 = pv_estimate10.get(slot, None)
                 calibrated90 = pv_estimate90.get(slot, None)
@@ -832,7 +829,6 @@ class SolarAPI:
 
         prev_value = -1
         prev_value10 = -1
-        plan_interval_minutes = getattr(self.base, "plan_interval_minutes", 30)
 
         for minute in range(0, self.forecast_days * 24 * 60):
             current_value = dp4(pv_forecast_minute.get(minute, 0))
@@ -865,7 +861,7 @@ class SolarAPI:
         create_pv10 = False
         max_kwh = 9999
 
-        self.now_utc = datetime.now(timezone.utc)
+        self.now_utc = datetime.now(self.local_tz)
         self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.minutes_now = int((self.now_utc - self.midnight_utc).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
 
