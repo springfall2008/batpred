@@ -1571,7 +1571,7 @@ class Output:
     def publish_rates(self, rates, export, gas=False):
         """
         Publish the rates for charts
-        Create rates/time every 30 minutes
+        Create rates/time every plan_interval_minutes
         """
         rates_time = {}
         plan_interval_minutes = self.plan_interval_minutes
