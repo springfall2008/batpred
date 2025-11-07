@@ -12,7 +12,6 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta
-import pytz
 from utils import str2time, dp2, dp3, minute_data
 
 from config import TIME_FORMAT
