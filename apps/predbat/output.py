@@ -2606,12 +2606,21 @@ class Output:
         charge_window_best = []
         rate_low = min(past_rates.values())
         combine_charge = self.combine_charge_slots
-        self.combine_charge_slots = True
-        if min(past_rates.values()) != max(past_rates.values()):
-            charge_window_best, lowest, highest = self.rate_scan_window(past_rates, 5, rate_low, False, return_raw=True)
-        self.combine_charge_slots = combine_charge
+
+        # Find the best charge windows yesterday
+        if self.calculate_savings_max_charge_slots > 0:
+            self.combine_charge_slots = True
+            if min(past_rates.values()) != max(past_rates.values()):
+                charge_window_best, lowest, highest = self.rate_scan_window(past_rates, 5, rate_low, False, return_raw=True)
+            self.combine_charge_slots = combine_charge
+
+        # Cap charge window best at calculate_savings_max_charge_slots only
+        if self.calculate_savings_max_charge_slots > 0 and len(charge_window_best) > self.calculate_savings_max_charge_slots:
+            charge_window_best = charge_window_best[0:self.calculate_savings_max_charge_slots]
+
+        # Set to charge to 100% on the first low rate window
         charge_limit_best = [self.soc_max for c in range(len(charge_window_best))]
-        self.log("Yesterday basic charge window best: {} charge limit best: {}".format(charge_window_best, charge_limit_best))
+        self.log("Yesterday basic charge window best: {} charge limit best: {} based on max charge slots {}".format(charge_window_best, charge_limit_best, self.calculate_savings_max_charge_slots))
 
         # Get Cost yesterday
         cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
