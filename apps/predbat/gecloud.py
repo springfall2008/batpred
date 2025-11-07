@@ -1370,6 +1370,7 @@ class GECloudData:
         self.stop_cloud = False
         self.ge_url_cache = {}
         self.mdata = []
+        self.local_tz = base.local_tz
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -1422,7 +1423,7 @@ class GECloudData:
         while not self.stop_cloud and not self.base.fatal_error:
             try:
                 if seconds % (10 * 60) == 0:
-                    now_utc = datetime.now(timezone.utc)
+                    now_utc = datetime.now(self.local_tz)
                     await self.download_ge_data(now_utc)
 
             except Exception as e:

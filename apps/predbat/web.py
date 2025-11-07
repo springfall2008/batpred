@@ -64,6 +64,7 @@ class WebInterface:
         self.default_log = "warnings"
         self.api_started = False
         self.last_success_timestamp = None
+        self.local_tz = base.local_tz
 
         # Plugin registration system
         self.registered_endpoints = []
@@ -106,15 +107,15 @@ class WebInterface:
         Update the history data
         """
         self.log("Web interface history update")
-        self.pv_power_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7, required=False))
-        self.pv_forecast_hist = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False))
-        self.pv_forecast_histCL = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
-        self.cost_today_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
-        self.cost_hour_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
-        self.cost_yesterday_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+        self.pv_power_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7, required=False), self.local_tz)
+        self.pv_forecast_hist = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False), self.local_tz)
+        self.pv_forecast_histCL = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False), self.local_tz, attributes=True, state_key="nowCL")
+        self.cost_today_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False), self.local_tz)
+        self.cost_hour_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False), self.local_tz)
+        self.cost_yesterday_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), self.local_tz, daily=True, offset_days=-1, pounds=True)
 
         if self.base.num_cars > 0:
-            self.cost_yesterday_car_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            self.cost_yesterday_car_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), self.local_tz, daily=True, offset_days=-1, pounds=True)
             self.cost_yesterday_no_car = self.subtract_daily(self.cost_yesterday_hist, self.cost_yesterday_car_hist)
         else:
             self.cost_yesterday_no_car = self.cost_yesterday_hist
@@ -126,8 +127,8 @@ class WebInterface:
                 self.compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
-                    self.compare_hist[id]["cost"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
-                    self.compare_hist[id]["metric"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
+                    self.compare_hist[id]["cost"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), self.local_tz, daily=True, pounds=True)
+                    self.compare_hist[id]["metric"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), self.local_tz, state_key="metric", attributes=True, daily=True, pounds=True)
 
         self.last_success_timestamp = datetime.now(timezone.utc)
 
@@ -755,7 +756,7 @@ class WebInterface:
             text += '<div id="chart"></div>'
             now_str = self.base.now_utc.strftime(TIME_FORMAT)
             history = self.base.get_history_wrapper(entity, days, required=False, tracked=False)
-            history_chart = history_attribute(history)
+            history_chart = history_attribute(history, self.local_tz)
             series_data = []
             series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "3", "stroke_curve": "stepline"})
             text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)

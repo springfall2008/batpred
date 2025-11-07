@@ -132,6 +132,7 @@ class Inverter:
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
+        self.local_tz = self.base.local_tz
 
         self.reserve_max = 100
         self.battery_rate_max_raw = 0
@@ -382,8 +383,7 @@ class Inverter:
         # Check inverter time and confirm skew
         if self.inverter_time:
             # Fetch current time again as it may have changed since we run this inverter update
-            local_tz = pytz.timezone(self.base.get_arg("timezone", "Europe/London"))
-            now_utc = datetime.now(local_tz)
+            now_utc = datetime.now(self.local_tz)
 
             tdiff = self.inverter_time - now_utc
             tdiff = dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)

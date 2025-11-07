@@ -48,6 +48,7 @@ class SolarAPI:
         self.pv_forecast_d4 = pv_forecast_d4
         self.pv_scaling = pv_scaling
         self.base = base
+        self.local_tz = base.local_tz
         self.log = base.log
         self.api_started = False
         self.api_stop = False
@@ -677,10 +678,10 @@ class SolarAPI:
 
         days = 10
         pv_power_hist, pv_power_hist_days = history_attribute_to_minute_data(
-            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper(self.prefix + ".pv_power", self.local_tz, days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
         )
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
-            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", self.local_tz, days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
         )
 
         hist_days = min(pv_power_hist_days, pv_forecast_hist_days)
@@ -860,7 +861,7 @@ class SolarAPI:
         create_pv10 = False
         max_kwh = 9999
 
-        self.now_utc = datetime.now(timezone.utc)
+        self.now_utc = datetime.now(self.local_tz)
         self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.minutes_now = int((self.now_utc - self.midnight_utc).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
 

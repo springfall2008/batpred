@@ -81,7 +81,7 @@ class ChargeSlot:
         }
 
 
-def slot_list(data: Dict[str, Any]) -> List[ChargeSlot]:
+def slot_list(data: Dict[str, Any], local_tz: timezone) -> List[ChargeSlot]:
     """Get list of charge slots with energy delta summed for merged slots."""
     session_slots = data.get("allSessionSlots", [])
     if not session_slots:
@@ -90,8 +90,8 @@ def slot_list(data: Dict[str, Any]) -> List[ChargeSlot]:
     slots: List[ChargeSlot] = []
 
     for slot in session_slots:
-        start_time = datetime.datetime.fromtimestamp(slot["startTimeMs"] / 1000).replace(microsecond=0).astimezone()
-        end_time = datetime.datetime.fromtimestamp(slot["endTimeMs"] / 1000).replace(microsecond=0).astimezone()
+        start_time = datetime.datetime.fromtimestamp(slot["startTimeMs"] / 1000).replace(microsecond=0).astimezone(local_tz)
+        end_time = datetime.datetime.fromtimestamp(slot["endTimeMs"] / 1000).replace(microsecond=0).astimezone(local_tz)
 
         hours = (end_time - start_time).total_seconds() / 3600
         energy = round((slot["watts"] * hours) / 1000, 2)
@@ -170,12 +170,13 @@ class OhmeAPI:
         self.base = base
         self.log = base.log
         self.password = password
-        self.client = OhmeApiClient(email, password, self.log)
         self.api_started = False
         self.stop_api = False
         self.count_errors = 0
         self.queued_events = []
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
+        self.local_tz = self.base.local_tz
+        self.client = OhmeApiClient(email, password, self.log, self.local_tz)
 
     def wait_api_started(self):
         """
@@ -342,9 +343,9 @@ class OhmeAPI:
             end = slot.end
             energy = slot.energy
             is_completed = False
-            if end < datetime.datetime.now().astimezone():
+            if end < datetime.datetime.now(self.local_tz):
                 is_completed = True
-            if start <= datetime.datetime.now().astimezone() <= end:
+            if start <= datetime.datetime.now(self.local_tz) <= end:
                 slot_active = True
             dispatch = {"start": start.strftime(TIME_FORMAT_HA), "end": end.strftime(TIME_FORMAT_HA), "energy": -energy, "location": "AT_HOME"}
             if is_completed:
@@ -431,7 +432,7 @@ class OhmeAPI:
 class OhmeApiClient:
     """API client for Ohme EV chargers."""
 
-    def __init__(self, email: str, password: str, log):
+    def __init__(self, email: str, password: str, log, local_tz):
         if email is None or password is None:
             raise AuthException("Credentials not provided")
 
@@ -439,6 +440,7 @@ class OhmeApiClient:
         self.email = email
         self._password = password
         self.log = log
+        self.local_tz = local_tz
 
         # Charger and its capabilities
         self.device_info: dict[str, Any] = {}
@@ -674,13 +676,13 @@ class OhmeApiClient:
     @property
     def slots(self) -> list[ChargeSlot]:
         """Slot list."""
-        return slot_list(self._charge_session)
+        return slot_list(self._charge_session, self.local_tz)
 
     @property
     def next_slot_start(self) -> datetime.datetime | None:
         """Next slot start."""
         return min(
-            (slot.start for slot in self.slots if slot.start > datetime.datetime.now().astimezone()),
+            (slot.start for slot in self.slots if slot.start > datetime.datetime.now(self.local_tz)),
             default=None,
         )
 
@@ -688,7 +690,7 @@ class OhmeApiClient:
     def next_slot_end(self) -> datetime.datetime | None:
         """Next slot start."""
         return min(
-            (slot.end for slot in self.slots if slot.end > datetime.datetime.now().astimezone()),
+            (slot.end for slot in self.slots if slot.end > datetime.datetime.now(self.local_tz)),
             default=None,
         )
 

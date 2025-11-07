@@ -44,7 +44,7 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
     return results
 
 
-def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False):
+def history_attribute(history, local_tz, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False):
     """
     Get historical data for an attribute
     """
@@ -103,7 +103,7 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
         except (ValueError, TypeError):
             continue
 
-        day_stamp = last_updated_stamp.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        day_stamp = last_updated_stamp.astimezone(local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
         if offset_days:
             day_stamp += timedelta(days=offset_days)
 

@@ -337,6 +337,7 @@ class OctopusAPI:
         self.cache_path = self.base.config_root + "/cache"
         self.automatic = automatic
         self.commands = []
+        self.local_tz = self.base.local_tz
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -400,7 +401,7 @@ class OctopusAPI:
             try:
                 # Update time every minute
                 self.now = datetime.now()
-                self.now_utc = datetime.now(timezone.utc).astimezone()
+                self.now_utc = datetime.now(self.local_tz)
                 count_minutes = self.now_utc.minute + self.now_utc.hour * 60
 
                 if first or (count_minutes % 30) == 0:
@@ -868,7 +869,7 @@ class OctopusAPI:
                 return {}
             try:
                 data = r.json()
-                self.last_success_timestamp = datetime.now(timezone.utc)
+                self.last_success_timestamp = datetime.now(self.local_tz)
             except requests.exceptions.JSONDecodeError:
                 self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))

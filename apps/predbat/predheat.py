@@ -107,6 +107,7 @@ class PredHeat:
     def __init__(self, base):
         self.base = base
         self.log = base.log
+        self.local_tz = base.local_tz
         self.record_status = base.record_status
         self.get_arg = base.get_arg
         self.set_state = base.set_state_wrapper
@@ -519,8 +520,7 @@ class PredHeat:
         """
         self.had_errors = False
 
-        local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
-        now_utc = datetime.now(local_tz)
+        now_utc = datetime.now(self.local_tz)
         now = datetime.now()
         self.forecast_days = self.get_arg("forecast_days", 2, domain="predheat")
         self.forecast_minutes = self.forecast_days * 60 * 24
