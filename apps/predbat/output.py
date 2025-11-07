@@ -2616,7 +2616,7 @@ class Output:
 
         # Cap charge window best at calculate_savings_max_charge_slots only
         if self.calculate_savings_max_charge_slots > 0 and len(charge_window_best) > self.calculate_savings_max_charge_slots:
-            charge_window_best = charge_window_best[0:self.calculate_savings_max_charge_slots]
+            charge_window_best = charge_window_best[0 : self.calculate_savings_max_charge_slots]
 
         # Set to charge to 100% on the first low rate window
         charge_limit_best = [self.soc_max for c in range(len(charge_window_best))]
