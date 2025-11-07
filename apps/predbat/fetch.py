@@ -1055,7 +1055,6 @@ class Fetch:
         rate_low_count = 0
         alternate_rate_boundary = False
         alt_rate_last = None
-        alt_rate_last = None
         plan_interval_minutes = getattr(self, "plan_interval_minutes", 30)
 
         # Work out alternate rate threshold
