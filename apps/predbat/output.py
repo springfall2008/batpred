@@ -2657,7 +2657,7 @@ class Output:
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
         cost_yesterday_array = {}
         for minute in range(0, end_record):
-            cost_yesterday_array[minute] = cost_data.get(minutes_back + 24*60 - minute, 0.0)
+            cost_yesterday_array[minute] = cost_data.get(minutes_back + 24 * 60 - minute, 0.0)
 
         # Get battery level yesterday
         battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
@@ -2668,7 +2668,7 @@ class Output:
         battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
         battery_soc_yesterday_array = {}
         for minute in range(0, end_record):
-            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24*60 - minute, 0.0)
+            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute, 0.0)
 
         # Work out battery value yesterday
         overall_metric, battery_value_yesterday = self.compute_metric(end_record, battery_soc_yesterday, battery_soc_yesterday, cost_yesterday, cost_yesterday, 0, 0, 0, 0, 0, 0, 0, 0)
@@ -2797,7 +2797,7 @@ class Output:
             self.predict_soc_best = battery_soc_yesterday_array
             self.predict_metric_best = cost_yesterday_array
             self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record)
-            open("plan_yesterday_actual.html", "w").write(self.html_plan)            
+            open("plan_yesterday_actual.html", "w").write(self.html_plan)
             print("Wrote plan_yesterday_actual.html for actual yesterday plan")
 
             self.charge_limit_best = previous_charge_limit_best
@@ -2893,7 +2893,7 @@ class Output:
             self.charge_window_best = []
             self.plan_write_debug(True, "plan_yesterday_no_pv_bat.html", yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record)
             self.charge_limit_best = previous_charge_limit_best
-            self.charge_window_best = previous_charge_window_best        
+            self.charge_window_best = previous_charge_window_best
 
         # Save state
         self.dashboard_item(
