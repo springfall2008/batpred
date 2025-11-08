@@ -218,7 +218,7 @@ class Compare:
         self.fetch_config(tariff)
 
         if fetch_sensor:
-            self.pb.fetch_sensor_data()
+            self.pb.fetch_sensor_data(save=False)
 
         # Fetch rates
         try:

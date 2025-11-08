@@ -426,6 +426,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.dynamic_load_baseline = {}
         self.iboost_value_scaling = 1.0
         self.rate_import = {}
+        self.rate_import_no_io = {}
         self.rate_export = {}
         self.rate_gas = {}
         self.rate_slots = []
