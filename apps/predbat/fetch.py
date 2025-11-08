@@ -1615,7 +1615,7 @@ class Fetch:
 
         self.num_cars = self.get_arg("num_cars", 1)
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
-        self.calculate_savings_max_charge_slots = self.get_arg("calculate_savings_max_charge_slots", 5)
+        self.calculate_savings_max_charge_slots = self.get_arg("calculate_savings_max_charge_slots", 1)
 
         self.log("Configuration: forecast_hours {} num_cars {} debug enable is {} calculate_plan_every {}".format(forecast_hours, self.num_cars, self.debug_enable, self.calculate_plan_every))
 

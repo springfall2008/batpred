@@ -2591,6 +2591,7 @@ class Output:
         yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         minutes_back = self.minutes_now + 1
+        end_record = 24 * 60
 
         # Get yesterday's SOC
         try:
@@ -2614,9 +2615,23 @@ class Output:
                 charge_window_best, lowest, highest = self.rate_scan_window(past_rates, 5, rate_low, False, return_raw=True)
             self.combine_charge_slots = combine_charge
 
+        # We only have 24 hour for prediction so trim charge slots starting after midnight
+        charge_window_best = [c for c in charge_window_best if c["start"] < 24 * 60]
+
         # Cap charge window best at calculate_savings_max_charge_slots only
         if self.calculate_savings_max_charge_slots > 0 and len(charge_window_best) > self.calculate_savings_max_charge_slots:
-            charge_window_best = charge_window_best[0:self.calculate_savings_max_charge_slots]
+            keep_last = False
+            if len(charge_window_best) >= 2:
+                first_charge_slot = charge_window_best[0]
+                last_charge_slot = charge_window_best[-1]
+                # If first and last could be combined as the last is end of day and first is start of day then allow us to keep last
+                if first_charge_slot["start"] == 0 and last_charge_slot["end"] >= 24 * 60:
+                    keep_last = True
+
+            if keep_last:
+                charge_window_best = charge_window_best[0:self.calculate_savings_max_charge_slots] + [charge_window_best[-1]]
+            else:
+                charge_window_best = charge_window_best[0:self.calculate_savings_max_charge_slots]
 
         # Set to charge to 100% on the first low rate window
         charge_limit_best = [self.soc_max for c in range(len(charge_window_best))]
@@ -2625,12 +2640,24 @@ class Output:
         # Get Cost yesterday
         cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
         if not cost_today_data:
-            self.log("Warn: No cost_today data for yesterday")
+            self.log("Warn: Calculate yesterday: No cost_today data for yesterday")
             return
         cost_data, _ = minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_data_per_kwh, _ = minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
+
+        # Get battery level yesterday
+        battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
+        battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        if not battery_data:
+            self.log("Warn: Calculate yesterday: No soc_kw_h0 data for yesterday")
+            return
+        battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
+    
+        # Work out battery value yesterday
+        overall_metric, battery_value_yesterday = self.compute_metric(end_record, battery_soc_yesterday, battery_soc_yesterday, cost_yesterday, cost_yesterday, 0, 0, 0, 0, 0, 0, 0, 0)
+        cost_yesterday_adjusted = cost_yesterday - battery_value_yesterday
 
         cost_today_car_data = None
         if self.num_cars > 0:
@@ -2658,6 +2685,9 @@ class Output:
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
                 "p/kWh": dp2(cost_yesterday_per_kwh),
+                "final_soc": dp2(battery_soc_yesterday),
+                "battery_value": dp2(battery_value_yesterday),
+                "cost_yesterday_adjusted": dp2(cost_yesterday_adjusted),
             },
         )
         if self.num_cars > 0:
@@ -2717,7 +2747,7 @@ class Output:
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
         (
-            metric,
+            metric_baseline,
             import_kwh_battery,
             import_kwh_house,
             export_kwh,
@@ -2728,22 +2758,42 @@ class Output:
             metric_keep,
             final_iboost,
             final_carbon_g,
-        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=(24 * 60), save="yesterday")
+        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=end_record, save="yesterday")
         # Add back in standing charge which will be in the historical data also
-        metric += self.metric_standing_charge
+        metric_baseline += self.metric_standing_charge
+
+        # Add back in battery value
+        overall_metric, battery_value_baseline = self.compute_metric(end_record, final_soc, final_soc, metric_baseline, metric_baseline, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+        metric_baseline_adjusted = metric_baseline - battery_value_baseline
+
+        """
+        previous_charge_limit_best = self.charge_limit_best
+        previous_charge_window_best = self.charge_window_best
+        self.charge_limit_best = charge_limit_best
+        self.charge_window_best = charge_window_best
+        self.plan_write_debug(True, "plan_yesterday_baseline.html")
+        self.charge_limit_best = previous_charge_limit_best
+        self.charge_window_best = previous_charge_window_best
+        """
 
         # Work out savings
-        saving = metric - cost_yesterday
+        saving = metric_baseline - cost_yesterday
+        saving_adjusted = metric_baseline_adjusted - cost_yesterday_adjusted
+
         self.log(
-            "Yesterday: Predbat disabled was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} start_soc {} final_soc {}".format(
-                dp2(metric),
+            "Yesterday: Predbat disabled was {}p (adjusted {}p) vs {}p (adjusted {}p) saving {}p (adjusted {}p) with import {} export {} battery_cycle {} start_soc {} final_soc {} battery_value {}".format(
+                dp2(metric_baseline),
+                dp2(metric_baseline_adjusted),
                 dp2(cost_yesterday),
+                dp2(cost_yesterday_adjusted),
                 dp2(saving),
+                dp2(saving_adjusted),
                 dp2(import_kwh_house + import_kwh_battery),
                 dp2(export_kwh),
                 dp2(battery_cycle),
                 dp2(soc_yesterday),
                 dp2(final_soc),
+                dp2(battery_value_baseline),
             )
         )
         self.savings_today_predbat = saving
@@ -2754,15 +2804,20 @@ class Output:
         # Save state
         self.dashboard_item(
             self.prefix + ".savings_yesterday_predbat",
-            state=dp2(saving),
+            state=dp2(saving_adjusted),
             attributes={
                 "import": dp2(import_kwh_house + import_kwh_battery),
                 "export": dp2(export_kwh),
                 "battery_cycle": dp2(battery_cycle),
                 "soc_yesterday": dp2(soc_yesterday),
                 "final_soc": dp2(final_soc),
-                "actual_cost": dp2(cost_yesterday),
-                "predicted_cost": dp2(metric),
+                "actual_cost_real": dp2(cost_yesterday),
+                "actual_cost_adjusted": dp2(cost_yesterday_adjusted),
+                "predicted_cost_real": dp2(metric_baseline),
+                "predicted_cost_adjusted": dp2(metric_baseline_adjusted),
+                "saving_real": dp2(saving),
+                "saving_adjusted": dp2(saving_adjusted),
+                "battery_value": dp2(battery_value_baseline),
                 "friendly_name": "Predbat savings yesterday",
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
@@ -2775,25 +2830,48 @@ class Output:
         self.soc_max = 0
 
         self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step)
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction([], [], [], [], False, end_record=24 * 60)
+        metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction([], [], [], [], False, end_record=end_record)
         # Add back in standing charge which will be in the historical data also
-        metric += self.metric_standing_charge
+        metric_no_pvbat += self.metric_standing_charge
+
+        # Add back in battery value
+        overall_metric, battery_value_no_pvbat = self.compute_metric(end_record, final_soc, final_soc, metric_no_pvbat, metric_no_pvbat, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+        metric_no_pvbat_adjusted = metric_no_pvbat - battery_value_no_pvbat
 
         # Work out savings
-        saving = metric - cost_yesterday
-        self.savings_today_pvbat = saving
-        self.log("Yesterday: No Battery/PV system cost predicted was {}p vs real {}p saving {}p with import {} export {}".format(dp2(metric), dp2(cost_yesterday), dp2(saving), dp2(import_kwh_house + import_kwh_battery), dp2(export_kwh)))
+        saving_no_pvbat = metric_no_pvbat - cost_yesterday
+        saving_no_pvbat_adjusted = metric_no_pvbat_adjusted - cost_yesterday_adjusted
+        self.savings_today_pvbat = saving_no_pvbat
+        self.log(
+            "Yesterday: No Battery/PV system cost predicted was {}p (adjusted {}p) vs {}p (adjusted {}p) saving {}p (adjusted {}p) with import {} export {} battery_value {}".format(
+                dp2(metric_no_pvbat), 
+                dp2(metric_no_pvbat_adjusted),
+                dp2(cost_yesterday), 
+                dp2(cost_yesterday_adjusted),
+                dp2(saving_no_pvbat), 
+                dp2(saving_no_pvbat_adjusted), 
+                dp2(import_kwh_house + import_kwh_battery), 
+                dp2(export_kwh), 
+                dp2(battery_value_no_pvbat)
+            )
+        )
 
         # Save state
         self.dashboard_item(
             self.prefix + ".savings_yesterday_pvbat",
-            state=dp2(saving),
+            state=dp2(saving_no_pvbat_adjusted),
             attributes={
                 "import": dp2(import_kwh_house + import_kwh_battery),
                 "export": dp2(export_kwh),
                 "battery_cycle": dp2(battery_cycle),
-                "actual_cost": dp2(cost_yesterday),
-                "predicted_cost": dp2(metric),
+                "actual_cost_real": dp2(cost_yesterday),
+                "actual_cost_adjusted": dp2(cost_yesterday_adjusted),
+                "predicted_cost_real": dp2(metric_no_pvbat),
+                "predicted_cost_adjusted": dp2(metric_no_pvbat_adjusted),
+                "saving_real": dp2(saving_no_pvbat),
+                "saving_adjusted": dp2(saving_no_pvbat_adjusted),
+                "final_soc": dp2(final_soc),
+                "battery_value": dp2(battery_value_no_pvbat),
                 "friendly_name": "PV/Battery system savings yesterday",
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
