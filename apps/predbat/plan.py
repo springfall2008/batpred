@@ -2257,7 +2257,7 @@ class Plan:
 
         self.log("Tweak optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(best_metric), dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
 
-    def plan_write_debug(self, debug_mode, name, test=False):
+    def plan_write_debug(self, debug_mode, name, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, test=False):
         """
         Write debug plan to file
         """
@@ -2284,27 +2284,27 @@ class Plan:
                 self.export_window_best,
                 self.export_limits_best,
                 True,
-                end_record=self.end_record,
+                end_record=end_record,
                 save="best",
             )
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
-            self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+            self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record)
             open(name + "_10.html", "w").write(self.html_plan)
 
             best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
-                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, save="best"
+                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record, save="best"
             )
 
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
-            self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+            self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record)
             open(name, "w").write(self.html_plan)
             print("Wrote plan to {} - metric {} cost {} battery_value {} keep {} import {} (self {})".format(name, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency))
 
             if test:
                 best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
-                    self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, save="test"
+                    self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record, save="test"
                 )
 
             self.charge_window_best = orig_charge_window_best
@@ -2583,7 +2583,7 @@ class Plan:
             count += 1
         self.log("Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_carbon)))
 
-        self.plan_write_debug(debug_mode, "plan_pass2.html")
+        self.plan_write_debug(debug_mode, "plan_pass2.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
         return best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
 
     def optimise_detailed_pass(
@@ -2727,7 +2727,7 @@ class Plan:
                                 best_soc_min = n_soc_min
                                 best_soc_min_minute = n_soc_min_minute
                                 self.charge_limit_best[window_n] = best_soc
-                                self.plan_write_debug(debug_mode, "plan_{}_charge_{}.html".format(pass_type, window_n))
+                                self.plan_write_debug(debug_mode, "plan_{}_charge_{}.html".format(pass_type, window_n), self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
                                 if self.debug_enable:
                                     self.log(
@@ -2852,7 +2852,7 @@ class Plan:
                                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                                 self.export_window_best[window_n]["start"] = best_start
 
-                                self.plan_write_debug(debug_mode, "plan_{}_export_{}.html".format(pass_type, window_n))
+                                self.plan_write_debug(debug_mode, "plan_{}_export_{}.html".format(pass_type, window_n), self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
                                 if self.debug_enable:
                                     self.log(
@@ -2905,7 +2905,7 @@ class Plan:
         self.rate_best_cost_threshold_charge = best_price_charge
         self.rate_best_cost_threshold_export = best_price_export
 
-        self.plan_write_debug(debug_mode, "plan_main_first.html")
+        self.plan_write_debug(debug_mode, "plan_main_first.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
         return best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
 
     def optimise_levels_pass(self, best_metric, metric_keep, debug_mode=False):
@@ -2962,7 +2962,7 @@ class Plan:
                 quiet=False if debug_mode else True,
             )
 
-            self.plan_write_debug(debug_mode, "plan_pre_levels.html")
+            self.plan_write_debug(debug_mode, "plan_pre_levels.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
             if self.calculate_regions:
                 region_size = int(16 * 60)
@@ -3022,7 +3022,7 @@ class Plan:
                         if self.end_record + self.minutes_now - region - region_size < 0:
                             break
 
-                    self.plan_write_debug(debug_mode, "plan_levels_{}.html".format(region_size))
+                    self.plan_write_debug(debug_mode, "plan_levels_{}.html".format(region_size), self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
                     region_size = int(region_size / 2)
 
         best_price_charge, best_price_export, best_price_charge_level, best_price_export_level = self.find_price_levels(price_set, price_links, window_index, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best)
@@ -3037,7 +3037,7 @@ class Plan:
                 dp2(best_price_charge_level), dp2(best_price_export_level), dp2(best_price_charge), dp2(best_price_export), dp2(best_metric), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)
             )
         )
-        self.plan_write_debug(debug_mode, "plan_levels.html")
+        self.plan_write_debug(debug_mode, "plan_levels.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
         return best_price_charge, best_price_export, best_price_charge_level, best_price_export_level, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
 
     def optimise_all_windows(self, best_metric, metric_keep, debug_mode=False):
@@ -3058,7 +3058,7 @@ class Plan:
 
         # Swaps
         # self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode, drop=False)
-        # self.plan_write_debug(debug_mode, "plan_swap_levels.html")
+        # self.plan_write_debug(debug_mode, "plan_swap_levels.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
         # Perform detailed optimisation
         best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_detailed_pass(
@@ -3087,13 +3087,13 @@ class Plan:
 
         # Swaps
         self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
-        self.plan_write_debug(debug_mode, "plan_swap_final.html")
+        self.plan_write_debug(debug_mode, "plan_swap_final.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
         # Tweak plan
         if self.calculate_tweak_plan:
             self.tweak_plan(self.end_record, best_metric, metric_keep)
 
-        self.plan_write_debug(debug_mode, "plan_raw.html")
+        self.plan_write_debug(debug_mode, "plan_raw.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
         # Return
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
@@ -3218,7 +3218,7 @@ class Plan:
             import_kwh_h0 = pred.import_kwh_h0
             predict_export = pred.predict_export
 
-            if save == "best" or save == "compare":
+            if save == "best" or save == "compare" or save == "yesterday":
                 self.predict_soc_best = pred.predict_soc_best
                 self.predict_iboost_best = pred.predict_iboost_best
                 self.predict_metric_best = pred.predict_metric_best

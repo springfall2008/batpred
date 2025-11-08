@@ -1633,7 +1633,7 @@ class Output:
             )
         return rates
 
-    def today_cost(self, import_today, export_today, car_today, load_today):
+    def today_cost(self, import_today, export_today, car_today, load_today, save=True):
         """
         Work out energy costs today (approx)
         """
@@ -1679,11 +1679,12 @@ class Output:
         value_increase_hour = battery_change_hour * rate_forward * self.metric_battery_value_scaling
         value_increase_day = battery_change_midnight * rate_forward * self.metric_battery_value_scaling
 
-        self.log(
-            "Battery level now {} -1hr {} midnight {} battery value change hour {} day {} rate_forward {}".format(
-                dp2(battery_level_now), dp2(battery_level_hour), dp2(battery_level_midnight), dp2(value_increase_hour), dp2(value_increase_day), dp2(rate_forward)
+        if save:
+            self.log(
+                "Battery level now {} -1hr {} midnight {} battery value change hour {} day {} rate_forward {}".format(
+                    dp2(battery_level_now), dp2(battery_level_hour), dp2(battery_level_midnight), dp2(value_increase_hour), dp2(value_increase_day), dp2(rate_forward)
+                )
             )
-        )
 
         for minute_back in range(60):
             minute = self.minutes_now - minute_back
@@ -1720,20 +1721,21 @@ class Output:
                 hour_carbon_g += self.carbon_history.get(minute_back, 0) * energy_import
                 hour_carbon_g -= self.carbon_history.get(minute_back, 0) * energy_export
 
-        self.log(
-            "Hour energy {} import {} export {} car {} load {} cost {} import {} export {} car {} carbon {} kG".format(
-                dp2(hour_energy),
-                dp2(hour_energy_import),
-                dp2(hour_energy_export),
-                dp2(hour_energy_car),
-                dp2(hour_load),
-                dp2(hour_cost),
-                dp2(hour_cost_import),
-                dp2(hour_cost_export),
-                dp2(hour_cost_car),
-                dp2(hour_carbon_g / 1000.0),
+        if save:
+            self.log(
+                "Hour energy {} import {} export {} car {} load {} cost {} import {} export {} car {} carbon {} kG".format(
+                    dp2(hour_energy),
+                    dp2(hour_energy_import),
+                    dp2(hour_energy_export),
+                    dp2(hour_energy_car),
+                    dp2(hour_load),
+                    dp2(hour_cost),
+                    dp2(hour_cost_import),
+                    dp2(hour_cost_export),
+                    dp2(hour_cost_car),
+                    dp2(hour_carbon_g / 1000.0),
+                )
             )
-        )
 
         for minute in range(self.minutes_now):
             # Add in standing charge
@@ -1818,153 +1820,154 @@ class Output:
         load_cost_day = day_pkwh * day_load
         load_cost_hour = hour_pkwh * hour_load
 
-        self.dashboard_item(
-            self.prefix + ".cost_today",
-            state=dp2(day_cost),
-            attributes={
-                "results": self.filtered_times(day_cost_time),
-                "friendly_name": "Cost so far today (since midnight)",
-                "state_class": "measurement",
-                "unit_of_measurement": self.currency_symbols[1],
-                "icon": "mdi:currency-usd",
-                "energy": dp2(day_energy_total),
-                "energy_import": dp2(day_import),
-                "energy_export": dp2(day_export),
-                "energy_car": dp2(day_car),
-                "energy_load": dp2(day_load),
-                "cost_energy": dp2(day_cost_nosc),
-                "cost_load": dp2(load_cost_day),
-                "cost_import": dp2(day_cost_import),
-                "cost_export": dp2(day_cost_export),
-                "cost_car": dp2(day_cost_car),
-                "carbon": dp2(carbon_g / 1000.0),
-            },
-        )
-        self.dashboard_item(
-            self.prefix + ".ppkwh_today",
-            state=dp2(day_pkwh),
-            attributes={
-                "friendly_name": "Cost today in p/kWh",
-                "state_class": "measurement",
-                "unit_of_measurement": self.currency_symbols[1],
-                "icon": "mdi:currency-usd",
-                "p/kWh": dp2(day_pkwh),
-                "p/kWh_car": dp2(day_car_pkwh),
-                "p/kWh_import": dp2(day_import_pkwh),
-                "p/kWh_export": dp2(day_export_pkwh),
-                "p/kWh_load": dp2(day_load_pkwh),
-                "p/kWh_forward": dp2(rate_forward),
-                "battery_now": dp2(battery_level_now),
-                "battery_midnight": dp2(battery_level_midnight),
-                "battery_value_change": dp2(value_increase_day),
-            },
-        )
-        self.dashboard_item(
-            self.prefix + ".cost_hour",
-            state=dp2(hour_cost),
-            attributes={
-                "friendly_name": "Cost in last hour",
-                "state_class": "measurement",
-                "unit_of_measurement": self.currency_symbols[1],
-                "icon": "mdi:currency-usd",
-                "energy": dp2(hour_energy),
-                "energy_import": dp2(hour_energy_import),
-                "energy_export": dp2(hour_energy_export),
-                "energy_car": dp2(hour_energy_car),
-                "energy_load": dp2(hour_load),
-                "cost_energy": dp2(hour_cost),
-                "cost_import": dp2(hour_cost_import),
-                "cost_export": dp2(hour_cost_export),
-                "cost_car": dp2(hour_cost_car),
-                "cost_load": dp2(load_cost_hour),
-                "carbon": dp2(hour_carbon_g / 1000.0),
-            },
-        )
-        self.dashboard_item(
-            self.prefix + ".ppkwh_hour",
-            state=dp2(hour_pkwh),
-            attributes={
-                "friendly_name": "Cost in p/kWh",
-                "state_class": "measurement",
-                "unit_of_measurement": self.currency_symbols[1],
-                "icon": "mdi:currency-usd",
-                "p/kWh": dp2(hour_pkwh),
-                "p/kWh_car": dp2(hour_pkwh_car),
-                "p/kWh_import": dp2(hour_pkwh_import),
-                "p/kWh_export": dp2(hour_pkwh_export),
-                "p/kWh_load": dp2(hour_load_pkwh),
-                "p/kWh_forward": dp2(rate_forward),
-                "battery_now": dp2(battery_level_now),
-                "battery_hour": dp2(battery_level_hour),
-                "battery_value_change": dp2(value_increase_hour),
-            },
-        )
-        if self.num_cars > 0:
+        if save:
             self.dashboard_item(
-                self.prefix + ".cost_today_car",
-                state=dp2(day_cost_car),
+                self.prefix + ".cost_today",
+                state=dp2(day_cost),
                 attributes={
-                    "results": self.filtered_times(car_cost_time),
-                    "friendly_name": "Car cost so far today (approx)",
+                    "results": self.filtered_times(day_cost_time),
+                    "friendly_name": "Cost so far today (since midnight)",
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
                     "icon": "mdi:currency-usd",
-                    "energy": dp2(day_car),
-                    "p/kWh": dp2(day_car_pkwh),
+                    "energy": dp2(day_energy_total),
+                    "energy_import": dp2(day_import),
+                    "energy_export": dp2(day_export),
+                    "energy_car": dp2(day_car),
+                    "energy_load": dp2(day_load),
+                    "cost_energy": dp2(day_cost_nosc),
+                    "cost_load": dp2(load_cost_day),
+                    "cost_import": dp2(day_cost_import),
+                    "cost_export": dp2(day_cost_export),
+                    "cost_car": dp2(day_cost_car),
+                    "carbon": dp2(carbon_g / 1000.0),
                 },
             )
-        if self.carbon_enable:
             self.dashboard_item(
-                self.prefix + ".carbon_today",
-                state=dp2(carbon_g),
+                self.prefix + ".ppkwh_today",
+                state=dp2(day_pkwh),
                 attributes={
-                    "results": self.filtered_times(day_carbon_time),
-                    "friendly_name": "Carbon today so far",
+                    "friendly_name": "Cost today in p/kWh",
                     "state_class": "measurement",
-                    "unit_of_measurement": "g",
-                    "icon": "mdi:carbon-molecule",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:currency-usd",
+                    "p/kWh": dp2(day_pkwh),
+                    "p/kWh_car": dp2(day_car_pkwh),
+                    "p/kWh_import": dp2(day_import_pkwh),
+                    "p/kWh_export": dp2(day_export_pkwh),
+                    "p/kWh_load": dp2(day_load_pkwh),
+                    "p/kWh_forward": dp2(rate_forward),
+                    "battery_now": dp2(battery_level_now),
+                    "battery_midnight": dp2(battery_level_midnight),
+                    "battery_value_change": dp2(value_increase_day),
                 },
             )
-        self.dashboard_item(
-            self.prefix + ".cost_today_import",
-            state=dp2(day_cost_import),
-            attributes={
-                "results": self.filtered_times(day_cost_time_import),
-                "friendly_name": "Cost so far today import",
-                "state_class": "measurement",
-                "unit_of_measurement": self.currency_symbols[1],
-                "icon": "mdi:currency-usd",
-                "energy": dp2(day_import),
-                "p/kWh": dp2(day_import_pkwh),
-            },
-        )
-        self.dashboard_item(
-            self.prefix + ".cost_today_export",
-            state=dp2(day_cost_export),
-            attributes={
-                "results": self.filtered_times(day_cost_time_export),
-                "friendly_name": "Cost so far today export",
-                "state_class": "measurement",
-                "unit_of_measurement": self.currency_symbols[1],
-                "icon": "mdi:currency-usd",
-                "energy": dp2(day_export),
-                "p/kWh": dp2(day_export_pkwh),
-            },
-        )
-        self.log(
-            "Today's energy import {} kWh export {} kWh total {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
-                dp2(day_energy),
-                dp2(day_energy_export),
-                dp2(day_energy_total),
-                dp2(day_cost),
-                self.currency_symbols[1],
-                dp2(day_cost_import),
-                self.currency_symbols[1],
-                dp2(day_cost_export),
-                self.currency_symbols[1],
-                dp2(carbon_g / 1000.0),
+            self.dashboard_item(
+                self.prefix + ".cost_hour",
+                state=dp2(hour_cost),
+                attributes={
+                    "friendly_name": "Cost in last hour",
+                    "state_class": "measurement",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:currency-usd",
+                    "energy": dp2(hour_energy),
+                    "energy_import": dp2(hour_energy_import),
+                    "energy_export": dp2(hour_energy_export),
+                    "energy_car": dp2(hour_energy_car),
+                    "energy_load": dp2(hour_load),
+                    "cost_energy": dp2(hour_cost),
+                    "cost_import": dp2(hour_cost_import),
+                    "cost_export": dp2(hour_cost_export),
+                    "cost_car": dp2(hour_cost_car),
+                    "cost_load": dp2(load_cost_hour),
+                    "carbon": dp2(hour_carbon_g / 1000.0),
+                },
             )
-        )
+            self.dashboard_item(
+                self.prefix + ".ppkwh_hour",
+                state=dp2(hour_pkwh),
+                attributes={
+                    "friendly_name": "Cost in p/kWh",
+                    "state_class": "measurement",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:currency-usd",
+                    "p/kWh": dp2(hour_pkwh),
+                    "p/kWh_car": dp2(hour_pkwh_car),
+                    "p/kWh_import": dp2(hour_pkwh_import),
+                    "p/kWh_export": dp2(hour_pkwh_export),
+                    "p/kWh_load": dp2(hour_load_pkwh),
+                    "p/kWh_forward": dp2(rate_forward),
+                    "battery_now": dp2(battery_level_now),
+                    "battery_hour": dp2(battery_level_hour),
+                    "battery_value_change": dp2(value_increase_hour),
+                },
+            )
+            if self.num_cars > 0:
+                self.dashboard_item(
+                    self.prefix + ".cost_today_car",
+                    state=dp2(day_cost_car),
+                    attributes={
+                        "results": self.filtered_times(car_cost_time),
+                        "friendly_name": "Car cost so far today (approx)",
+                        "state_class": "measurement",
+                        "unit_of_measurement": self.currency_symbols[1],
+                        "icon": "mdi:currency-usd",
+                        "energy": dp2(day_car),
+                        "p/kWh": dp2(day_car_pkwh),
+                    },
+                )
+            if self.carbon_enable:
+                self.dashboard_item(
+                    self.prefix + ".carbon_today",
+                    state=dp2(carbon_g),
+                    attributes={
+                        "results": self.filtered_times(day_carbon_time),
+                        "friendly_name": "Carbon today so far",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "g",
+                        "icon": "mdi:carbon-molecule",
+                    },
+                )
+            self.dashboard_item(
+                self.prefix + ".cost_today_import",
+                state=dp2(day_cost_import),
+                attributes={
+                    "results": self.filtered_times(day_cost_time_import),
+                    "friendly_name": "Cost so far today import",
+                    "state_class": "measurement",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:currency-usd",
+                    "energy": dp2(day_import),
+                    "p/kWh": dp2(day_import_pkwh),
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".cost_today_export",
+                state=dp2(day_cost_export),
+                attributes={
+                    "results": self.filtered_times(day_cost_time_export),
+                    "friendly_name": "Cost so far today export",
+                    "state_class": "measurement",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:currency-usd",
+                    "energy": dp2(day_export),
+                    "p/kWh": dp2(day_export_pkwh),
+                },
+            )
+            self.log(
+                "Today's energy import {} kWh export {} kWh total {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
+                    dp2(day_energy),
+                    dp2(day_energy_export),
+                    dp2(day_energy_total),
+                    dp2(day_cost),
+                    self.currency_symbols[1],
+                    dp2(day_cost_import),
+                    self.currency_symbols[1],
+                    dp2(day_cost_export),
+                    self.currency_symbols[1],
+                    dp2(carbon_g / 1000.0),
+                )
+            )
         return day_cost, carbon_g
 
     def publish_export_limit(self, export_window, export_limits, best):
@@ -2338,7 +2341,7 @@ class Output:
         if had_errors:
             self.had_errors = True
 
-    def load_today_comparison(self, load_minutes, load_forecast, car_minutes, import_minutes, minutes_now, step=5):
+    def load_today_comparison(self, load_minutes, load_forecast, car_minutes, import_minutes, minutes_now, step=5, save=True):
         """
         Compare predicted vs actual load
         """
@@ -2430,28 +2433,29 @@ class Output:
             difference_cap = max(difference_cap, 0.5)
             difference_cap = min(difference_cap, 2.0)
 
-        self.log(
-            "Today's load divergence {} % in-day adjustment {} % damping {}x".format(
-                dp2(difference * 100.0),
-                dp2(difference_cap * 100.0),
-                self.metric_inday_adjust_damping,
+        if save:
+            self.log(
+                "Today's load divergence {} % in-day adjustment {} % damping {}x".format(
+                    dp2(difference * 100.0),
+                    dp2(difference_cap * 100.0),
+                    self.metric_inday_adjust_damping,
+                )
             )
-        )
-        self.log(
-            "Today's predicted so far {} kWh with {} kWh car/iBoost excluded and {} kWh import ignored and {} forecast extra.".format(
-                dp2(load_total_pred_now),
-                dp2(car_total_pred),
-                dp2(import_ignored_load_pred),
-                dp2(total_forecast_value_pred_now),
+            self.log(
+                "Today's predicted so far {} kWh with {} kWh car/iBoost excluded and {} kWh import ignored and {} forecast extra.".format(
+                    dp2(load_total_pred_now),
+                    dp2(car_total_pred),
+                    dp2(import_ignored_load_pred),
+                    dp2(total_forecast_value_pred_now),
+                )
             )
-        )
-        self.log(
-            "Today's actual load so far {} kWh with {} kWh Car/iBoost excluded and {} kWh import ignored.".format(
-                dp2(actual_total_now),
-                dp2(car_total_actual),
-                dp2(import_ignored_load_actual),
+            self.log(
+                "Today's actual load so far {} kWh with {} kWh Car/iBoost excluded and {} kWh import ignored.".format(
+                    dp2(actual_total_now),
+                    dp2(car_total_actual),
+                    dp2(import_ignored_load_actual),
+                )
             )
-        )
 
         # Create adjusted curve
         load_adjusted_stamp = {}
@@ -2464,48 +2468,50 @@ class Output:
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 load_adjusted_stamp[stamp] = dp3(load_adjusted)
 
-        self.dashboard_item(
-            self.prefix + ".load_inday_adjustment",
-            state=dp2(difference_cap * 100.0),
-            attributes={
-                "damping": self.metric_inday_adjust_damping,
-                "friendly_name": "Load in-day adjustment factor",
-                "state_class": "measurement",
-                "unit_of_measurement": "%",
-                "icon": "mdi:percent",
-            },
-        )
-        self.dashboard_item(
-            self.prefix + ".load_energy_actual",
-            state=dp3(actual_total_today),
-            attributes={
-                "results": self.filtered_times(load_actual_stamp),
-                "friendly_name": "Load energy actual (filtered)",
-                "state_class": "measurement",
-                "unit_of_measurement": "kWh",
-                "icon": "mdi:percent",
-            },
-        )
+        if save:
+            self.dashboard_item(
+                self.prefix + ".load_inday_adjustment",
+                state=dp2(difference_cap * 100.0),
+                attributes={
+                    "damping": self.metric_inday_adjust_damping,
+                    "friendly_name": "Load in-day adjustment factor",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "%",
+                    "icon": "mdi:percent",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".load_energy_actual",
+                state=dp3(actual_total_today),
+                attributes={
+                    "results": self.filtered_times(load_actual_stamp),
+                    "friendly_name": "Load energy actual (filtered)",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
+                    "icon": "mdi:percent",
+                },
+            )
         load_so_far = self.filtered_today(load_predict_stamp, stamp=self.now_utc)
         load_today = self.filtered_today(load_predict_stamp)
         load_today_remaining = None
         if (load_so_far is not None) and (load_today is not None):
             load_today_remaining = load_today - load_so_far
 
-        self.dashboard_item(
-            self.prefix + ".load_energy_predicted",
-            state=dp3(load_total_pred),
-            attributes={
-                "results": self.filtered_times(load_predict_stamp),
-                "today": dp2(load_today),
-                "today_so_far": dp2(load_so_far),
-                "today_remaining": dp2(load_today_remaining),
-                "friendly_name": "Load energy predicted (filtered)",
-                "state_class": "measurement",
-                "unit_of_measurement": "kWh",
-                "icon": "mdi:percent",
-            },
-        )
+        if save:
+            self.dashboard_item(
+                self.prefix + ".load_energy_predicted",
+                state=dp3(load_total_pred),
+                attributes={
+                    "results": self.filtered_times(load_predict_stamp),
+                    "today": dp2(load_today),
+                    "today_so_far": dp2(load_so_far),
+                    "today_remaining": dp2(load_today_remaining),
+                    "friendly_name": "Load energy predicted (filtered)",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
+                    "icon": "mdi:percent",
+                },
+            )
 
         load_so_far = self.filtered_today(load_adjusted_stamp, stamp=self.now_utc)
         load_today = self.filtered_today(load_adjusted_stamp)
@@ -2513,20 +2519,21 @@ class Output:
         if (load_so_far is not None) and (load_today is not None):
             load_today_remaining = load_today - load_so_far
 
-        self.dashboard_item(
-            self.prefix + ".load_energy_adjusted",
-            state=dp3(load_adjusted),
-            attributes={
-                "results": self.filtered_times(load_adjusted_stamp),
-                "today": dp2(load_today),
-                "today_so_far": dp2(load_so_far),
-                "today_remaining": dp2(load_today_remaining),
-                "friendly_name": "Load energy prediction adjusted",
-                "state_class": "measurement",
-                "unit_of_measurement": "kWh",
-                "icon": "mdi:percent",
-            },
-        )
+        if save:
+            self.dashboard_item(
+                self.prefix + ".load_energy_adjusted",
+                state=dp3(load_adjusted),
+                attributes={
+                    "results": self.filtered_times(load_adjusted_stamp),
+                    "today": dp2(load_today),
+                    "today_so_far": dp2(load_so_far),
+                    "today_remaining": dp2(load_today_remaining),
+                    "friendly_name": "Load energy prediction adjusted",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
+                    "icon": "mdi:percent",
+                },
+            )
 
         return difference_cap
 
@@ -2601,6 +2608,7 @@ class Output:
 
         # Shift rates back
         past_rates = self.history_to_future_rates(self.rate_import, 24 * 60)
+        past_rates_no_io = self.history_to_future_rates(self.rate_import_no_io, 24 * 60)
         past_rates_export = self.history_to_future_rates(self.rate_export, 24 * 60)
 
         # Assume user might charge at the lowest rate only, for fix tariff
@@ -2611,8 +2619,9 @@ class Output:
         # Find the best charge windows yesterday
         if self.calculate_savings_max_charge_slots > 0:
             self.combine_charge_slots = True
-            if min(past_rates.values()) != max(past_rates.values()):
-                charge_window_best, lowest, highest = self.rate_scan_window(past_rates, 5, rate_low, False, return_raw=True)
+            if min(past_rates_no_io.values()) != max(past_rates_no_io.values()):
+                # Use the Non-IO rates when finding charge windows as hardwired charge wouldn't account for this
+                charge_window_best, lowest, highest = self.rate_scan_window(past_rates_no_io, 5, rate_low, False, return_raw=True)
             self.combine_charge_slots = combine_charge
 
         # We only have 24 hour for prediction so trim charge slots starting after midnight
@@ -2646,6 +2655,9 @@ class Output:
         cost_data_per_kwh, _ = minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
+        cost_yesterday_array = {}
+        for minute in range(0, end_record):
+            cost_yesterday_array[minute] = cost_data.get(minutes_back + 24 * 60 - minute, 0.0)
 
         # Get battery level yesterday
         battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
@@ -2654,6 +2666,9 @@ class Output:
             return
         battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
+        battery_soc_yesterday_array = {}
+        for minute in range(0, end_record):
+            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute, 0.0)
 
         # Work out battery value yesterday
         overall_metric, battery_value_yesterday = self.compute_metric(end_record, battery_soc_yesterday, battery_soc_yesterday, cost_yesterday, cost_yesterday, 0, 0, 0, 0, 0, 0, 0, 0)
@@ -2769,15 +2784,24 @@ class Output:
         )
         metric_baseline_adjusted = metric_baseline - battery_value_baseline
 
-        """
-        previous_charge_limit_best = self.charge_limit_best
-        previous_charge_window_best = self.charge_window_best
-        self.charge_limit_best = charge_limit_best
-        self.charge_window_best = charge_window_best
-        self.plan_write_debug(True, "plan_yesterday_baseline.html")
-        self.charge_limit_best = previous_charge_limit_best
-        self.charge_window_best = previous_charge_window_best
-        """
+        if 0:
+            previous_charge_limit_best = self.charge_limit_best
+            previous_charge_window_best = self.charge_window_best
+            self.charge_limit_best = charge_limit_best
+            self.charge_window_best = charge_window_best
+            self.plan_write_debug(True, "plan_yesterday_baseline.html", yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record)
+
+            # Now try to show what really happened yesterday
+            self.charge_limit_best = []
+            self.charge_window_best = []
+            self.predict_soc_best = battery_soc_yesterday_array
+            self.predict_metric_best = cost_yesterday_array
+            self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record)
+            open("plan_yesterday_actual.html", "w").write(self.html_plan)
+            print("Wrote plan_yesterday_actual.html for actual yesterday plan")
+
+            self.charge_limit_best = previous_charge_limit_best
+            self.charge_window_best = previous_charge_window_best
 
         # Work out savings
         saving = metric_baseline - cost_yesterday
@@ -2811,16 +2835,17 @@ class Output:
             attributes={
                 "import": dp2(import_kwh_house + import_kwh_battery),
                 "export": dp2(export_kwh),
-                "battery_cycle": dp2(battery_cycle),
-                "soc_yesterday": dp2(soc_yesterday),
-                "final_soc": dp2(final_soc),
                 "actual_cost_real": dp2(cost_yesterday),
                 "actual_cost_adjusted": dp2(cost_yesterday_adjusted),
+                "actual_final_soc": dp2(battery_soc_yesterday),
+                "actual_battery_value": dp2(battery_value_yesterday),
+                "predicted_battery_cycle": dp2(battery_cycle),
                 "predicted_cost_real": dp2(metric_baseline),
                 "predicted_cost_adjusted": dp2(metric_baseline_adjusted),
+                "predicted_final_soc": dp2(soc_yesterday),
+                "predicted_battery_value": dp2(battery_value_baseline),
                 "saving_real": dp2(saving),
                 "saving_adjusted": dp2(saving_adjusted),
-                "battery_value": dp2(battery_value_baseline),
                 "friendly_name": "Predbat savings yesterday",
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
@@ -2861,6 +2886,15 @@ class Output:
             )
         )
 
+        if 0:
+            previous_charge_limit_best = self.charge_limit_best
+            previous_charge_window_best = self.charge_window_best
+            self.charge_limit_best = []
+            self.charge_window_best = []
+            self.plan_write_debug(True, "plan_yesterday_no_pv_bat.html", yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record)
+            self.charge_limit_best = previous_charge_limit_best
+            self.charge_window_best = previous_charge_window_best
+
         # Save state
         self.dashboard_item(
             self.prefix + ".savings_yesterday_pvbat",
@@ -2871,12 +2905,14 @@ class Output:
                 "battery_cycle": dp2(battery_cycle),
                 "actual_cost_real": dp2(cost_yesterday),
                 "actual_cost_adjusted": dp2(cost_yesterday_adjusted),
+                "actual_final_soc": dp2(battery_soc_yesterday),
+                "actual_battery_value": dp2(battery_value_yesterday),
                 "predicted_cost_real": dp2(metric_no_pvbat),
                 "predicted_cost_adjusted": dp2(metric_no_pvbat_adjusted),
+                "predicted_final_soc": dp2(final_soc),
+                "predicted_battery_value": dp2(battery_value_no_pvbat),
                 "saving_real": dp2(saving_no_pvbat),
                 "saving_adjusted": dp2(saving_no_pvbat_adjusted),
-                "final_soc": dp2(final_soc),
-                "battery_value": dp2(battery_value_no_pvbat),
                 "friendly_name": "PV/Battery system savings yesterday",
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],

@@ -430,7 +430,7 @@ class Fetch:
             age_days = 0
         return load_minutes, age_days
 
-    def fetch_sensor_data(self):
+    def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
         """
@@ -737,6 +737,7 @@ class Fetch:
         if self.rate_import:
             self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
+            self.rate_import_no_io = self.rate_import.copy()
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
@@ -744,6 +745,7 @@ class Fetch:
             self.rate_import = self.apply_manual_rates(self.rate_import, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
             self.rate_scan(self.rate_import, print=True)
         else:
+            self.rate_import_no_io = {}
             self.log("Warning: No import rate data provided")
             self.record_status(message="Error: No import rate data provided", had_errors=True)
 
@@ -834,7 +836,7 @@ class Fetch:
 
         # Work out cost today
         if self.import_today:
-            self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes)
+            self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes, save=save)
 
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
@@ -846,7 +848,7 @@ class Fetch:
 
         # Load today vs actual
         if self.load_minutes:
-            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
+            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save)
         else:
             self.load_inday_adjustment = 1.0
 

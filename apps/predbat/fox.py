@@ -847,9 +847,9 @@ class FoxAPI:
             msg = data.get("msg", "")
             if errno != 0:
                 self.failures_total += 1
-                if errno in [40400, 41200, 41203, 41935]:
-                    # Rate limiting so wait up to 10 seconds
-                    self.log("Info: Fox: Rate limiting detected, waiting...")
+                if errno in [40400, 41200, 41201, 41202, 41203, 41935]:
+                    # Rate limiting so wait up to 31 seconds
+                    self.log("Info: Fox: Rate limiting or comms issue detected, waiting...")
                     await asyncio.sleep(random.random() * 30 + 1)
                     return None, True
                 elif errno in [40402]:
