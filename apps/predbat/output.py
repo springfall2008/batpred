@@ -2649,10 +2649,10 @@ class Output:
 
         # Get battery level yesterday
         battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
-        battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-        if not battery_data:
+        if not battery_today_data:
             self.log("Warn: Calculate yesterday: No soc_kw_h0 data for yesterday")
             return
+        battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
 
         # Work out battery value yesterday
@@ -2845,7 +2845,7 @@ class Output:
         # Work out savings
         saving_no_pvbat = metric_no_pvbat - cost_yesterday
         saving_no_pvbat_adjusted = metric_no_pvbat_adjusted - cost_yesterday_adjusted
-        self.savings_today_pvbat = saving_no_pvbat
+        self.savings_today_pvbat = saving_no_pvbat_adjusted
         self.log(
             "Yesterday: No Battery/PV system cost predicted was {}p (adjusted {}p) vs {}p (adjusted {}p) saving {}p (adjusted {}p) with import {} export {} battery_value {}".format(
                 dp2(metric_no_pvbat),
