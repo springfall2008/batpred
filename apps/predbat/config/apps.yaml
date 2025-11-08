@@ -499,7 +499,7 @@ pred_bat:
   # Tariff comparison feature
   # Adjust this list to the tariffs you want to compare, include your current tariff also
   # Octopus region code (https://energy-stats.uk/dno-region-codes-explained/)
-  #octopus_region: "A"
+  #dno_region: "A"
   #compare_list:
   #  - id: 'current'
   #    name: 'Current Tariff'
