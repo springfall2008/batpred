@@ -2687,6 +2687,7 @@ class Output:
                 "p/kWh": dp2(cost_yesterday_per_kwh),
                 "final_soc": dp2(battery_soc_yesterday),
                 "battery_value": dp2(battery_value_yesterday),
+                "cost_yesterday_real": dp2(cost_yesterday),
                 "cost_yesterday_adjusted": dp2(cost_yesterday_adjusted),
             },
         )
