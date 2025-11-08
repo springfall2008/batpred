@@ -2629,9 +2629,9 @@ class Output:
                     keep_last = True
 
             if keep_last:
-                charge_window_best = charge_window_best[0:self.calculate_savings_max_charge_slots] + [charge_window_best[-1]]
+                charge_window_best = charge_window_best[0 : self.calculate_savings_max_charge_slots] + [charge_window_best[-1]]
             else:
-                charge_window_best = charge_window_best[0:self.calculate_savings_max_charge_slots]
+                charge_window_best = charge_window_best[0 : self.calculate_savings_max_charge_slots]
 
         # Set to charge to 100% on the first low rate window
         charge_limit_best = [self.soc_max for c in range(len(charge_window_best))]
@@ -2654,7 +2654,7 @@ class Output:
             self.log("Warn: Calculate yesterday: No soc_kw_h0 data for yesterday")
             return
         battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
-    
+
         # Work out battery value yesterday
         overall_metric, battery_value_yesterday = self.compute_metric(end_record, battery_soc_yesterday, battery_soc_yesterday, cost_yesterday, cost_yesterday, 0, 0, 0, 0, 0, 0, 0, 0)
         cost_yesterday_adjusted = cost_yesterday - battery_value_yesterday
@@ -2763,7 +2763,9 @@ class Output:
         metric_baseline += self.metric_standing_charge
 
         # Add back in battery value
-        overall_metric, battery_value_baseline = self.compute_metric(end_record, final_soc, final_soc, metric_baseline, metric_baseline, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+        overall_metric, battery_value_baseline = self.compute_metric(
+            end_record, final_soc, final_soc, metric_baseline, metric_baseline, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh
+        )
         metric_baseline_adjusted = metric_baseline - battery_value_baseline
 
         """
@@ -2835,7 +2837,9 @@ class Output:
         metric_no_pvbat += self.metric_standing_charge
 
         # Add back in battery value
-        overall_metric, battery_value_no_pvbat = self.compute_metric(end_record, final_soc, final_soc, metric_no_pvbat, metric_no_pvbat, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+        overall_metric, battery_value_no_pvbat = self.compute_metric(
+            end_record, final_soc, final_soc, metric_no_pvbat, metric_no_pvbat, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh
+        )
         metric_no_pvbat_adjusted = metric_no_pvbat - battery_value_no_pvbat
 
         # Work out savings
@@ -2844,15 +2848,15 @@ class Output:
         self.savings_today_pvbat = saving_no_pvbat
         self.log(
             "Yesterday: No Battery/PV system cost predicted was {}p (adjusted {}p) vs {}p (adjusted {}p) saving {}p (adjusted {}p) with import {} export {} battery_value {}".format(
-                dp2(metric_no_pvbat), 
+                dp2(metric_no_pvbat),
                 dp2(metric_no_pvbat_adjusted),
-                dp2(cost_yesterday), 
+                dp2(cost_yesterday),
                 dp2(cost_yesterday_adjusted),
-                dp2(saving_no_pvbat), 
-                dp2(saving_no_pvbat_adjusted), 
-                dp2(import_kwh_house + import_kwh_battery), 
-                dp2(export_kwh), 
-                dp2(battery_value_no_pvbat)
+                dp2(saving_no_pvbat),
+                dp2(saving_no_pvbat_adjusted),
+                dp2(import_kwh_house + import_kwh_battery),
+                dp2(export_kwh),
+                dp2(battery_value_no_pvbat),
             )
         )
 
