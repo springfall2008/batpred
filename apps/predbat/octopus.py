@@ -1257,7 +1257,7 @@ class OctopusAPI:
                                         elapsed_minutes = (completed_end_time - start_date_time).total_seconds() / 60
                                         # Used elapsed minutes as percentage of total_minutes to scale delta
                                         if total_minutes > 0 and delta is not None:
-                                            delta = dp4((delta * elapsed_minutes) / total_minutes)
+                                            delta = dp4((delta * (total_minutes - elapsed_minutes)) / total_minutes)
                                         else:
                                             delta = None
                                         dispatch["start"] = completed_end_time.strftime(DATE_TIME_STR_FORMAT)
