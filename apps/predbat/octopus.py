@@ -1194,7 +1194,7 @@ class OctopusAPI:
                                 end = plannedDispatch.get("end", None)
                                 delta = plannedDispatch.get("delta", None)
                                 meta = plannedDispatch.get("meta", {})
-                                try: 
+                                try:
                                     delta = dp4(float(delta))
                                 except (ValueError, TypeError):
                                     delta = None
