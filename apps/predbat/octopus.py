@@ -1204,19 +1204,29 @@ class OctopusAPI:
                                 if start and end:
                                     start_date_time = parse_date_time(start)
                                     end_date_time = parse_date_time(end)
+                                    minutes_now = (self.now_utc - self.midnight_utc).total_seconds() / 60
                                     if start_date_time and end_date_time and (start_date_time <= self.now_utc):
                                         # This slot has actually started, so move it to completed so its cached if withdrawn later
                                         # Make end be the end of this slot only and scale delta to the relative minutes
                                         start_minutes = (start_date_time - self.midnight_utc).total_seconds() / 60
+                                        # Only consider now onwards
+                                        start_minutes = max(minutes_now, start_minutes)
+
                                         # Align start_minutes to 30 minute slot
                                         start_minutes = (start_minutes // self.plan_interval_minutes) * self.plan_interval_minutes
+
+                                        # Work out end of this slot
                                         end_minutes = start_minutes + self.plan_interval_minutes
+
+                                        # End minutes to end of this slot only
                                         if end_date_time > self.now_utc:
-                                            end_minutes = max((self.now_utc - self.midnight_utc).total_seconds() / 60, end_minutes)
+                                            end_minutes = max(minutes_now, end_minutes)
+
                                         # Round up end minutes to the next slot
                                         end_minutes = ((end_minutes + self.plan_interval_minutes - 1) // self.plan_interval_minutes) * self.plan_interval_minutes
 
                                         # Work out slot end time
+                                        completed_start_time = self.midnight_utc + timedelta(minutes=start_minutes)
                                         completed_end_time = self.midnight_utc + timedelta(minutes=end_minutes)
                                         total_minutes = (end_date_time - start_date_time).total_seconds() / 60
                                         elapsed_minutes = (completed_end_time - start_date_time).total_seconds() / 60
@@ -1224,12 +1234,12 @@ class OctopusAPI:
                                             adjusted_delta = dp4((delta * elapsed_minutes) / total_minutes)
                                         else:
                                             adjusted_delta = delta
-                                        completed_dispatch = {"start": start, "end": completed_end_time.strftime(DATE_TIME_STR_FORMAT), "charge_in_kwh": adjusted_delta, "source": meta.get("source", None), "location": meta.get("location", None)}
+                                        completed_dispatch = {"start": completed_start_time.strftime(DATE_TIME_STR_FORMAT), "end": completed_end_time.strftime(DATE_TIME_STR_FORMAT), "charge_in_kwh": adjusted_delta, "source": meta.get("source", None), "location": meta.get("location", None)}
 
                                         # Check if the dispatch is already in the completed list, if its already there then don't add it again
                                         found = False
                                         for cached in completed:
-                                            if cached["start"] == start:
+                                            if cached["start"] == completed_start_time.strftime(DATE_TIME_STR_FORMAT):
                                                 cached.update(completed_dispatch)
                                                 found = True
                                                 break
