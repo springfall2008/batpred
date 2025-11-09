@@ -1215,7 +1215,7 @@ class OctopusAPI:
                                             end_minutes = max((self.now_utc - self.midnight_utc).total_seconds() / 60, end_minutes)
                                         # Round up end minutes to the next slot
                                         end_minutes = ((end_minutes + self.plan_interval_minutes - 1) // self.plan_interval_minutes) * self.plan_interval_minutes
-                                            
+
                                         # Work out slot end time
                                         completed_end_time = self.midnight_utc + timedelta(minutes=end_minutes)
                                         total_minutes = (end_date_time - start_date_time).total_seconds() / 60
@@ -1234,7 +1234,7 @@ class OctopusAPI:
                                                 found = True
                                                 break
                                         if not found:
-                                            completed.append(completed_dispatch)                                       
+                                            completed.append(completed_dispatch)
 
                                         # Now adjust the start to be only beyond the adjusted end time and scale delta accordingly
                                         if total_minutes > 0 and delta is not None:
