@@ -2793,7 +2793,7 @@ class Output:
             for minute in range(0, end_record, self.plan_interval_minutes):
                 minute_offset = minutes_now + end_record - minute - 15  # The -15 is to catch in the middle of the slot
                 status_value = predbat_status.get(minute_offset, "")
-                status_during_slot = None
+                status_during_slot = ""
                 for slot_minute in range(minute_offset, minute_offset + self.plan_interval_minutes):
                     slot_status = predbat_status.get(slot_minute, "").lower()
                     if "export" in slot_status:
