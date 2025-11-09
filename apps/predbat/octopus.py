@@ -1253,6 +1253,11 @@ class OctopusAPI:
                                 end = completedDispatch.get("end", None)
                                 delta = completedDispatch.get("delta", None)
                                 meta = completedDispatch.get("meta", {})
+                                try:
+                                    delta = dp4(float(delta))
+                                except (ValueError, TypeError):
+                                    delta = None
+
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
                                 # Check if the dispatch is already in the completed list, if its already there then don't add it again
                                 found = False
