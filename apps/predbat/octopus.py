@@ -1195,7 +1195,15 @@ class OctopusAPI:
                                 delta = plannedDispatch.get("delta", None)
                                 meta = plannedDispatch.get("meta", {})
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", None), "location": meta.get("location", None)}
-                                planned.append(dispatch)
+                                stored = False
+                                if start:
+                                    start_date_time = parse_date_time(start)
+                                    if start_date_time and (start_date_time <= self.now_utc):
+                                        # This slot has actually started, so move it to completed so its cached if withdrawn later
+                                        completedDispatches.append(plannedDispatch)
+                                        stored = True
+                                if not stored:
+                                    planned.append(dispatch)
                             for completedDispatch in completedDispatches:
                                 start = completedDispatch.get("start", None)
                                 end = completedDispatch.get("end", None)
@@ -1206,6 +1214,7 @@ class OctopusAPI:
                                 found = False
                                 for cached in completed:
                                     if cached["start"] == start:
+                                        cached.update(dispatch)
                                         found = True
                                         break
                                 if not found:
