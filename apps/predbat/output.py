@@ -2792,15 +2792,17 @@ class Output:
                     predbat_status[minute] = status.split(",")[0].strip()
             for minute in range(0, end_record, self.plan_interval_minutes):
                 minute_offset = minutes_now + end_record - minute
-                status_value = predbat_status.get(minute_offset, "")
                 status_during_slot = ""
-                for slot_minute in range(minute_offset, minute_offset + self.plan_interval_minutes):
+
+                # Searching for charge or export in this slot, ignore the first and last 5 minutes to avoid edge effects
+                for slot_minute in range(minute_offset - 5, minute_offset - self.plan_interval_minutes + 5, -1):
                     slot_status = predbat_status.get(slot_minute, "").lower()
                     if "export" in slot_status:
                         status_during_slot = slot_status
                         break
                     elif "charging" in slot_status:
                         status_during_slot = slot_status
+                        break
 
                 if "export" in status_during_slot:
                     # Assume exporting at this time
