@@ -2782,7 +2782,7 @@ class Output:
         self.predict_soc_best = battery_soc_yesterday_array
         self.predict_metric_best = cost_yesterday_array
 
-        # Fake charge/export windows base on previous predbat status
+        # Fake charge/export windows based on previous predbat status
         if predbat_status_data:
             predbat_status = minute_data_state(predbat_status_data[0], 2, now_utc_actual, "state", "last_updated")
             for minute in predbat_status:
