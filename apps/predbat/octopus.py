@@ -1237,7 +1237,6 @@ class OctopusAPI:
                                             completed.append(completed_dispatch)                                       
 
                                         # Now adjust the start to be only beyond the adjusted end time and scale delta accordingly
-                                        start_date_time = completed_end_time
                                         if total_minutes > 0 and delta is not None:
                                             delta = dp4(delta - adjusted_delta)
                                         else:
