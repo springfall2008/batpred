@@ -1210,8 +1210,14 @@ class OctopusAPI:
                                         start_minutes = (start_date_time - self.midnight_utc).total_seconds() / 60
                                         # Align start_minutes to 30 minute slot
                                         start_minutes = (start_minutes // self.plan_interval_minutes) * self.plan_interval_minutes
+                                        end_minutes = start_minutes + self.plan_interval_minutes
+                                        if end_date_time > self.now_utc:
+                                            end_minutes = max((self.now_utc - self.midnight_utc).total_seconds() / 60, end_minutes)
+                                        # Round up end minutes to the next slot
+                                        end_minutes = ((end_minutes + self.plan_interval_minutes - 1) // self.plan_interval_minutes) * self.plan_interval_minutes
+                                            
                                         # Work out slot end time
-                                        completed_end_time = self.midnight_utc + timedelta(minutes=start_minutes + self.plan_interval_minutes)
+                                        completed_end_time = self.midnight_utc + timedelta(minutes=end_minutes)
                                         total_minutes = (end_date_time - start_date_time).total_seconds() / 60
                                         elapsed_minutes = (completed_end_time - start_date_time).total_seconds() / 60
                                         if total_minutes > 0 and delta is not None:
@@ -1228,7 +1234,7 @@ class OctopusAPI:
                                                 found = True
                                                 break
                                         if not found:
-                                            completed.append(completed_dispatch)                                            
+                                            completed.append(completed_dispatch)                                       
 
                                         # Now adjust the start to be only beyond the adjusted end time and scale delta accordingly
                                         start_date_time = completed_end_time
