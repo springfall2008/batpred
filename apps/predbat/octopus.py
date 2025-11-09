@@ -1234,7 +1234,13 @@ class OctopusAPI:
                                             adjusted_delta = dp4((delta * elapsed_minutes) / total_minutes)
                                         else:
                                             adjusted_delta = delta
-                                        completed_dispatch = {"start": completed_start_time.strftime(DATE_TIME_STR_FORMAT), "end": completed_end_time.strftime(DATE_TIME_STR_FORMAT), "charge_in_kwh": adjusted_delta, "source": meta.get("source", None), "location": meta.get("location", None)}
+                                        completed_dispatch = {
+                                            "start": completed_start_time.strftime(DATE_TIME_STR_FORMAT),
+                                            "end": completed_end_time.strftime(DATE_TIME_STR_FORMAT),
+                                            "charge_in_kwh": adjusted_delta,
+                                            "source": meta.get("source", None),
+                                            "location": meta.get("location", None),
+                                        }
 
                                         # Check if the dispatch is already in the completed list, if its already there then don't add it again
                                         found = False
