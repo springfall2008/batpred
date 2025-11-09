@@ -2719,6 +2719,7 @@ class Output:
         iboost_enable = self.iboost_enable
         num_cars = self.num_cars
         plan_debug = self.plan_debug
+        carbon_enable = self.carbon_enable
 
         # Fake to yesterday state
         self.minutes_now = 0
@@ -2738,6 +2739,7 @@ class Output:
         self.iboost_enable = False
         self.num_cars = 0
         self.plan_debug = False
+        self.carbon_enable = False
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
@@ -2781,7 +2783,8 @@ class Output:
         self.export_window_best = []
         self.predict_soc_best = battery_soc_yesterday_array
         self.predict_metric_best = cost_yesterday_array
-        # Fake charge/export windows base on previous predbat status
+
+        # Fake charge/export windows based on previous predbat status
         if predbat_status_data:
             predbat_status = minute_data_state(predbat_status_data[0], 2, now_utc_actual, "state", "last_updated")
             for minute in predbat_status:
@@ -2790,28 +2793,42 @@ class Output:
                     # If there are multiple statuses take the first one
                     predbat_status[minute] = status.split(",")[0].strip()
             for minute in range(0, end_record, self.plan_interval_minutes):
-                minute_offset = minutes_now + end_record - minute - 15 # The -15 is to catch in the middle of the slot
-                status_value = predbat_status.get(minute_offset, "")
-                if "export" in status_value.lower():
+                minute_offset = minutes_now + end_record - minute
+                status_during_slot = ""
+
+                # Searching for charge or export in this slot, ignore the first and last 5 minutes to avoid edge effects
+                for slot_minute in range(minute_offset - 5, minute_offset - self.plan_interval_minutes + 5, -1):
+                    slot_status = predbat_status.get(slot_minute, "").lower()
+                    if "export" in slot_status:
+                        status_during_slot = slot_status
+                        break
+                    elif "charging" in slot_status:
+                        status_during_slot = slot_status
+                        break
+
+                if "export" in status_during_slot:
                     # Assume exporting at this time
                     self.export_window_best.append({"start": minute, "end": minute + self.plan_interval_minutes})
-                    if "freeze" in status_value.lower():
+                    if "freeze" in status_during_slot:
                         # Assume freeze export
                         self.export_limits_best.append(99.0)
                     else:
                         soc_was = battery_soc_yesterday_array.get(minute + self.plan_interval_minutes, 0.0)
                         soc_percent = calc_percent_limit(soc_was, self.soc_max)
                         self.export_limits_best.append(soc_percent)
-                elif "charging" in status_value.lower():
+                elif "charging" in status_during_slot:
                     # Assume charging at this time
                     self.charge_window_best.append({"start": minute, "end": minute + self.plan_interval_minutes})
-                    if "freeze" in status_value.lower():
+                    if "freeze" in status_during_slot:
                         # Assume freeze charge
                         self.charge_limit_best.append(self.reserve_percent)
                     else:
                         self.charge_limit_best.append(battery_soc_yesterday_array.get(minute + self.plan_interval_minutes, 0.0))
+
+        # Simulate yesterday with actual charge/export windows
         plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, publish=False)
 
+        # Restore state
         self.charge_limit_best = previous_charge_limit_best
         self.charge_window_best = previous_charge_window_best
         self.export_limits_best = previous_export_limits_best
@@ -2987,6 +3004,7 @@ class Output:
         self.iboost_enable = iboost_enable
         self.num_cars = num_cars
         self.plan_debug = plan_debug
+        self.carbon_enable = carbon_enable
 
     def publish_rate_and_threshold(self):
         """
@@ -3043,8 +3061,9 @@ class Output:
         Shift rates from the past into a future array
         """
         future_rates = {}
-        for minute in range(0, self.forecast_minutes):
-            future_rates[minute] = rates.get(minute - offset, 0.0)
+        if rates:
+            for minute in range(0, self.forecast_minutes):
+                future_rates[minute] = rates.get(minute - offset, 0.0)
         return future_rates
 
     def window_as_text(self, windows, percents, ignore_min=False, ignore_max=False):
