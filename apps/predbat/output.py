@@ -2791,7 +2791,7 @@ class Output:
                     # If there are multiple statuses take the first one
                     predbat_status[minute] = status.split(",")[0].strip()
             for minute in range(0, end_record, self.plan_interval_minutes):
-                minute_offset = minutes_now + end_record - minute - 15 # The -15 is to catch in the middle of the slot
+                minute_offset = minutes_now + end_record - minute - 15  # The -15 is to catch in the middle of the slot
                 status_value = predbat_status.get(minute_offset, "")
                 if "export" in status_value.lower():
                     # Assume exporting at this time

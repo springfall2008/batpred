@@ -1315,11 +1315,11 @@ var options = {
         Return the Predbat plan as an HTML page
         """
         self.default_page = "./plan"
-        
+
         # Get the view parameter from the request
         args = request.query
         view = args.get("view", "plan")  # Default to 'plan' view
-        
+
         text = self.get_header("Predbat Plan", refresh=30)
 
         if not self.base.dashboard_index:
@@ -1334,27 +1334,27 @@ var options = {
         </table>
         """
         text += get_plan_css()
-        
+
         # Add view switcher buttons
         text += '<div style="margin-bottom: 15px; display: flex; gap: 8px;">'
-        
+
         # Determine active button styling
-        plan_active = 'background-color: #4CAF50; color: white;' if view == 'plan' else 'background-color: #f0f0f0; color: black;'
-        yesterday_active = 'background-color: #4CAF50; color: white;' if view == 'yesterday' else 'background-color: #f0f0f0; color: black;'
-        baseline_active = 'background-color: #4CAF50; color: white;' if view == 'baseline' else 'background-color: #f0f0f0; color: black;'
-        
+        plan_active = "background-color: #4CAF50; color: white;" if view == "plan" else "background-color: #f0f0f0; color: black;"
+        yesterday_active = "background-color: #4CAF50; color: white;" if view == "yesterday" else "background-color: #f0f0f0; color: black;"
+        baseline_active = "background-color: #4CAF50; color: white;" if view == "baseline" else "background-color: #f0f0f0; color: black;"
+
         text += f'<a href="./plan?view=plan" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {plan_active}">Plan</a>'
         text += f'<a href="./plan?view=yesterday" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {yesterday_active}">Yesterday Actual</a>'
         text += f'<a href="./plan?view=baseline" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {baseline_active}">Yesterday Without Predbat</a>'
-        text += '</div>'
-        
+        text += "</div>"
+
         # Select the appropriate HTML plan based on the view
-        if view == 'yesterday':
+        if view == "yesterday":
             html_plan = self.base.savings_yesterday_plan if self.base.savings_yesterday_plan else "<p>No yesterday plan available</p>"
             # Don't process buttons for yesterday view - just display the plan
             text += html_plan + "</body></html>\n"
             return web.Response(content_type="text/html", text=text)
-        elif view == 'baseline':
+        elif view == "baseline":
             html_plan = self.base.savings_baseline_plan if self.base.savings_baseline_plan else "<p>No baseline plan available</p>"
             # Don't process buttons for baseline view - just display the plan
             text += html_plan + "</body></html>\n"
