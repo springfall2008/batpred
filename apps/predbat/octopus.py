@@ -1229,7 +1229,7 @@ class OctopusAPI:
                                         completed_start_time = self.midnight_utc + timedelta(minutes=start_minutes)
                                         completed_end_time = self.midnight_utc + timedelta(minutes=end_minutes)
                                         total_minutes = (end_date_time - start_date_time).total_seconds() / 60
-                                        elapsed_minutes = (completed_end_time - start_date_time).total_seconds() / 60
+                                        elapsed_minutes = (completed_end_time - completed_start_time).total_seconds() / 60
                                         if total_minutes > 0 and delta is not None:
                                             adjusted_delta = dp4((delta * elapsed_minutes) / total_minutes)
                                         else:
@@ -1247,8 +1247,11 @@ class OctopusAPI:
                                             completed.append(completed_dispatch)
 
                                         # Now adjust the start to be only beyond the adjusted end time and scale delta accordingly
+                                        # Work out minutes between original start and new start
+                                        elapsed_minutes = (completed_end_time - start_date_time).total_seconds() / 60
+                                        # Used elapsed minutes as percentage of total_minutes to scale delta
                                         if total_minutes > 0 and delta is not None:
-                                            delta = dp4(delta - adjusted_delta)
+                                            delta = dp4((delta * elapsed_minutes) / total_minutes)
                                         else:
                                             delta = None
                                         dispatch["start"] = completed_end_time.strftime(DATE_TIME_STR_FORMAT)
