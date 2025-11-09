@@ -1198,7 +1198,7 @@ class OctopusAPI:
                                 stored = False
                                 if start:
                                     start_date_time = parse_date_time(start)
-                                    if start_date_time <= self.now_utc:
+                                    if start_date_time and (start_date_time <= self.now_utc):
                                         # This slot has actually started, so move it to completed so its cached if withdrawn later
                                         completedDispatches.append(dispatch)
                                         stored = True
