@@ -1194,7 +1194,7 @@ class OctopusAPI:
                                 end = plannedDispatch.get("end", None)
                                 delta = plannedDispatch.get("delta", None)
                                 meta = plannedDispatch.get("meta", {})
-                                try: 
+                                try:
                                     delta = dp4(float(delta))
                                 except (ValueError, TypeError):
                                     delta = None
@@ -1228,7 +1228,7 @@ class OctopusAPI:
                                                 found = True
                                                 break
                                         if not found:
-                                            completed.append(completed_dispatch)                                            
+                                            completed.append(completed_dispatch)
 
                                         # Now adjust the start to be only beyond the adjusted end time and scale delta accordingly
                                         start_date_time = completed_end_time
