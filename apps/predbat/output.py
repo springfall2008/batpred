@@ -2791,7 +2791,7 @@ class Output:
                     # If there are multiple statuses take the first one
                     predbat_status[minute] = status.split(",")[0].strip()
             for minute in range(0, end_record, self.plan_interval_minutes):
-                minute_offset = minutes_now + end_record - minute - 15  # The -15 is to catch in the middle of the slot
+                minute_offset = minutes_now + end_record - minute
                 status_value = predbat_status.get(minute_offset, "")
                 status_during_slot = ""
                 for slot_minute in range(minute_offset, minute_offset + self.plan_interval_minutes):
