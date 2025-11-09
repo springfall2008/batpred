@@ -2781,6 +2781,7 @@ class Output:
         self.export_window_best = []
         self.predict_soc_best = battery_soc_yesterday_array
         self.predict_metric_best = cost_yesterday_array
+
         # Fake charge/export windows base on previous predbat status
         if predbat_status_data:
             predbat_status = minute_data_state(predbat_status_data[0], 2, now_utc_actual, "state", "last_updated")
@@ -2810,8 +2811,11 @@ class Output:
                         self.charge_limit_best.append(self.reserve_percent)
                     else:
                         self.charge_limit_best.append(battery_soc_yesterday_array.get(minute + self.plan_interval_minutes, 0.0))
+
+        # Simulate yesterday with actual charge/export windows
         plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, publish=False)
 
+        # Restore state
         self.charge_limit_best = previous_charge_limit_best
         self.charge_window_best = previous_charge_window_best
         self.export_limits_best = previous_export_limits_best
