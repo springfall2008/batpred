@@ -2719,6 +2719,7 @@ class Output:
         iboost_enable = self.iboost_enable
         num_cars = self.num_cars
         plan_debug = self.plan_debug
+        carbon_enable = self.carbon_enable
 
         # Fake to yesterday state
         self.minutes_now = 0
@@ -2738,6 +2739,7 @@ class Output:
         self.iboost_enable = False
         self.num_cars = 0
         self.plan_debug = False
+        self.carbon_enable = False
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
@@ -3002,6 +3004,7 @@ class Output:
         self.iboost_enable = iboost_enable
         self.num_cars = num_cars
         self.plan_debug = plan_debug
+        self.carbon_enable = carbon_enable
 
     def publish_rate_and_threshold(self):
         """
@@ -3058,8 +3061,9 @@ class Output:
         Shift rates from the past into a future array
         """
         future_rates = {}
-        for minute in range(0, self.forecast_minutes):
-            future_rates[minute] = rates.get(minute - offset, 0.0)
+        if rates:
+            for minute in range(0, self.forecast_minutes):
+                future_rates[minute] = rates.get(minute - offset, 0.0)
         return future_rates
 
     def window_as_text(self, windows, percents, ignore_min=False, ignore_max=False):
