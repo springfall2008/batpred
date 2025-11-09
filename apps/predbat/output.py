@@ -2793,20 +2793,29 @@ class Output:
             for minute in range(0, end_record, self.plan_interval_minutes):
                 minute_offset = minutes_now + end_record - minute - 15 # The -15 is to catch in the middle of the slot
                 status_value = predbat_status.get(minute_offset, "")
-                if "export" in status_value.lower():
+                status_during_slot = None
+                for slot_minute in range(minute_offset, minute_offset + self.plan_interval_minutes):
+                    slot_status = predbat_status.get(slot_minute, "").lower()
+                    if "export" in slot_status:
+                        status_during_slot = slot_status
+                        break
+                    elif "charging" in slot_status:
+                        status_during_slot = slot_status
+
+                if "export" in status_during_slot:
                     # Assume exporting at this time
                     self.export_window_best.append({"start": minute, "end": minute + self.plan_interval_minutes})
-                    if "freeze" in status_value.lower():
+                    if "freeze" in status_during_slot:
                         # Assume freeze export
                         self.export_limits_best.append(99.0)
                     else:
                         soc_was = battery_soc_yesterday_array.get(minute + self.plan_interval_minutes, 0.0)
                         soc_percent = calc_percent_limit(soc_was, self.soc_max)
                         self.export_limits_best.append(soc_percent)
-                elif "charging" in status_value.lower():
+                elif "charging" in status_during_slot:
                     # Assume charging at this time
                     self.charge_window_best.append({"start": minute, "end": minute + self.plan_interval_minutes})
-                    if "freeze" in status_value.lower():
+                    if "freeze" in status_during_slot:
                         # Assume freeze charge
                         self.charge_limit_best.append(self.reserve_percent)
                     else:
