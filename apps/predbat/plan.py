@@ -2289,8 +2289,10 @@ class Plan:
             )
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
-            self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record)
-            open(name + "_10.html", "w").write(self.html_plan)
+
+            if name:
+                html_data, json_data = self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, publish=False)
+                open(name + "_10.html", "w").write(html_data)
 
             best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record, save="best"
@@ -2298,9 +2300,11 @@ class Plan:
 
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
-            self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record)
-            open(name, "w").write(self.html_plan)
-            print("Wrote plan to {} - metric {} cost {} battery_value {} keep {} import {} (self {})".format(name, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency))
+            html_data, json_data = self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, publish=False)
+
+            if name:
+                open(name, "w").write(html_data)
+                print("Wrote plan to {} - metric {} cost {} battery_value {} keep {} import {} (self {})".format(name, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency))
 
             if test:
                 best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
@@ -2309,6 +2313,7 @@ class Plan:
 
             self.charge_window_best = orig_charge_window_best
             self.charge_limit_best = orig_charge_limit_best
+            return html_data, json_data
 
     def optimise_swap_export(self, record_charge_windows, record_export_windows, drop=False, debug_mode=False):
         """
