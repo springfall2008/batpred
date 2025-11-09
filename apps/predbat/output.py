@@ -2622,7 +2622,7 @@ class Output:
         # Find the best charge windows yesterday
         if self.calculate_savings_max_charge_slots > 0:
             self.combine_charge_slots = True
-            if min(past_rates_no_io.values()) != max(past_rates_no_io.values()):
+            if past_rates_no_io and (min(past_rates_no_io.values()) != max(past_rates_no_io.values())):
                 # Use the Non-IO rates when finding charge windows as hardwired charge wouldn't account for this
                 charge_window_best, lowest, highest = self.rate_scan_window(past_rates_no_io, 5, rate_low, False, return_raw=True)
             self.combine_charge_slots = combine_charge
