@@ -2660,7 +2660,7 @@ class Output:
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
         cost_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
-            cost_yesterday_array[minute] = cost_data.get(minutes_back + 24 * 60 - minute, 0.0)
+            cost_yesterday_array[minute] = cost_data.get(minutes_back + 24 * 60 - minute - 5, 0.0) # -5 gives 4 minutes into new data to allow for reset
 
         # Get battery level yesterday
         battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
@@ -2671,7 +2671,7 @@ class Output:
         battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
         battery_soc_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
-            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute, 0.0)
+            battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute - 5, 0.0) # -5 gives 4 minutes into new data to allow for reset
 
         # Get status history
         predbat_status_data = self.get_history_wrapper(entity_id=self.prefix + ".status", days=2, required=False)
