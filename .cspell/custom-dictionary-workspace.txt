@@ -217,6 +217,7 @@ Predbat
 predbatt
 Predheat
 psum
+pvenergytotal
 pvbat
 pvpower
 pwindow
