@@ -870,7 +870,7 @@ class SolarAPI:
             pv_forecast_data, max_kwh = self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
-        elif self.solcast_host:
+        elif self.solcast_host and self.solcast_api_key:
             self.log("Obtaining solar forecast from Solcast API")
             pv_forecast_data = self.download_solcast_data()
             divide_by = 30.0
