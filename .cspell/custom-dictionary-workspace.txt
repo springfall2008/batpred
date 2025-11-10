@@ -217,8 +217,8 @@ Predbat
 predbatt
 Predheat
 psum
-pvenergytotal
 pvbat
+pvenergytotal
 pvpower
 pwindow
 pyjwt
