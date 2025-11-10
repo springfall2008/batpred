@@ -1344,7 +1344,7 @@ var options = {
         baseline_active = "background-color: #4CAF50; color: white;" if view == "baseline" else "background-color: #f0f0f0; color: black;"
 
         text += f'<a href="./plan?view=plan" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {plan_active}">Plan</a>'
-        text += f'<a href="./plan?view=yesterday" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {yesterday_active}">Yesterday Actual</a>'
+        text += f'<a href="./plan?view=yesterday" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {yesterday_active}">History</a>'
         text += f'<a href="./plan?view=baseline" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {baseline_active}">Yesterday Without Predbat</a>'
         text += "</div>"
 
