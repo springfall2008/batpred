@@ -2610,9 +2610,9 @@ class Output:
             soc_yesterday = 0.0
 
         # Shift rates back
-        past_rates = self.history_to_future_rates(self.rate_import, 24 * 60)
-        past_rates_no_io = self.history_to_future_rates(self.rate_import_no_io, 24 * 60)
-        past_rates_export = self.history_to_future_rates(self.rate_export, 24 * 60)
+        past_rates = self.history_to_future_rates(self.rate_import, 24 * 60, end_record + self.minutes_now)
+        past_rates_no_io = self.history_to_future_rates(self.rate_import_no_io, 24 * 60, end_record + self.minutes_now)
+        past_rates_export = self.history_to_future_rates(self.rate_export, 24 * 60, end_record + self.minutes_now)
 
         # Assume user might charge at the lowest rate only, for fix tariff
         charge_window_best = []
@@ -2659,7 +2659,7 @@ class Output:
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
         cost_yesterday_array = {}
-        for minute in range(0, end_record):
+        for minute in range(0, end_record + self.minutes_now):
             cost_yesterday_array[minute] = cost_data.get(minutes_back + 24 * 60 - minute, 0.0)
 
         # Get battery level yesterday
@@ -2670,7 +2670,7 @@ class Output:
         battery_data, _ = minute_data(battery_today_data[0], 2, now_utc_actual, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
         battery_soc_yesterday_array = {}
-        for minute in range(0, end_record):
+        for minute in range(0, end_record + self.minutes_now):
             battery_soc_yesterday_array[minute] = battery_data.get(minutes_back + 24 * 60 - minute, 0.0)
 
         # Get status history
@@ -2720,6 +2720,8 @@ class Output:
         num_cars = self.num_cars
         plan_debug = self.plan_debug
         carbon_enable = self.carbon_enable
+        rate_import_replicated = self.rate_import_replicated
+        rate_export_replicated = self.rate_export_replicated
 
         # Fake to yesterday state
         self.minutes_now = 0
@@ -2728,7 +2730,7 @@ class Output:
         self.export_today_now = 0
         self.carbon_today_sofar = 0
         self.midnight_utc = self.midnight_utc - timedelta(days=1)
-        self.forecast_minutes = 24 * 60
+        self.forecast_minutes = end_record
         self.pv_today_now = 0
         self.soc_kw = soc_yesterday
         self.car_charging_hold = False
@@ -2740,6 +2742,8 @@ class Output:
         self.num_cars = 0
         self.plan_debug = False
         self.carbon_enable = False
+        self.rate_import_replicated = {}
+        self.rate_export_replicated = {}
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
@@ -2792,7 +2796,7 @@ class Output:
                 if "," in status:
                     # If there are multiple statuses take the first one
                     predbat_status[minute] = status.split(",")[0].strip()
-            for minute in range(0, end_record, self.plan_interval_minutes):
+            for minute in range(0, end_record + minutes_now, self.plan_interval_minutes):
                 minute_offset = minutes_now + end_record - minute
                 status_during_slot = ""
 
@@ -2826,7 +2830,9 @@ class Output:
                         self.charge_limit_best.append(battery_soc_yesterday_array.get(minute + self.plan_interval_minutes, 0.0))
 
         # Simulate yesterday with actual charge/export windows
-        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record, publish=False)
+        self.forecast_minutes = end_record + minutes_now
+        plan_html_yesterday, plan_json_yesterday = self.publish_html_plan(yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step, end_record + minutes_now, publish=False)
+        self.forecast_minutes = end_record
 
         # Restore state
         self.charge_limit_best = previous_charge_limit_best
@@ -3005,6 +3011,8 @@ class Output:
         self.num_cars = num_cars
         self.plan_debug = plan_debug
         self.carbon_enable = carbon_enable
+        self.rate_import_replicated = rate_import_replicated
+        self.rate_export_replicated = rate_export_replicated
 
     def publish_rate_and_threshold(self):
         """
@@ -3056,13 +3064,13 @@ class Output:
             opts += "metric_carbon({} p/Kg) ".format(self.carbon_metric)
         self.log("Calculate Best options: " + opts)
 
-    def history_to_future_rates(self, rates, offset):
+    def history_to_future_rates(self, rates, offset, end_record):
         """
         Shift rates from the past into a future array
         """
         future_rates = {}
         if rates:
-            for minute in range(0, self.forecast_minutes):
+            for minute in range(0, end_record):
                 future_rates[minute] = rates.get(minute - offset, 0.0)
         return future_rates
 
