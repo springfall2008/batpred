@@ -218,6 +218,7 @@ predbatt
 Predheat
 psum
 pvbat
+pvenergytotal
 pvpower
 pwindow
 pyjwt
