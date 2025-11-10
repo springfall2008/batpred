@@ -78,7 +78,7 @@ COMPONENT_LIST = {
         "name": "Solar API",
         "args": {
             "prefix": {"required": True, "config": "prefix"},
-            "solcast_host": {"required": False, "config": "solcast_host"},
+            "solcast_host": {"required": False, "config": "solcast_host", "default": "https://api.solcast.com.au/"},
             "solcast_api_key": {"required": False, "config": "solcast_api_key"},
             "solcast_sites": {"required": False, "config": "solcast_sites"},
             "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8},
