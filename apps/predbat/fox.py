@@ -1207,7 +1207,7 @@ class FoxAPI:
         self.base.args["load_today"] = [f"sensor.predbat_fox_{device}_loads" for device in batteries]
         self.base.args["import_today"] = [f"sensor.predbat_fox_{device}_gridconsumption" for device in batteries]
         self.base.args["export_today"] = [f"sensor.predbat_fox_{device}_feedin" for device in batteries]
-        self.base.args["pv_today"] = [f"sensor.predbat_fox_{device}_generation" for device in pvs]
+        self.base.args["pv_today"] = [f"sensor.predbat_fox_{device}_pvenergytotal" for device in pvs]
         self.base.args["battery_rate_max"] = [f"sensor.predbat_fox_{device}_battery_rate_max" for device in batteries]
         self.base.args["battery_power"] = [f"sensor.predbat_fox_{device}_invbatpower" for device in batteries]
         self.base.args["grid_power"] = [f"sensor.predbat_fox_{device}_gridconsumptionpower" for device in batteries]
