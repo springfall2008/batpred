@@ -2285,7 +2285,7 @@ class Plan:
                 self.export_limits_best,
                 True,
                 end_record=end_record,
-                save="best",
+                save="best10" if name else "yesterday10",
             )
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
@@ -2295,7 +2295,7 @@ class Plan:
                 open(name + "_10.html", "w").write(html_data)
 
             best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
-                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record, save="best"
+                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record, save="best" if name else "yesterday"
             )
 
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
@@ -3449,6 +3449,7 @@ class Plan:
                     )
 
             if save and save == "best":
+                self.log("Saving plan best values to HA entities")
                 self.dashboard_item(
                     self.prefix + ".best_battery_hours_left",
                     state=dp2(hours_left),
