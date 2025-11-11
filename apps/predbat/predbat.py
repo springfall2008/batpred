@@ -25,7 +25,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.27.12"
+THIS_VERSION = "v8.27.13"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py"]
@@ -346,12 +346,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.predheat = None
         self.predbat_mode = "Monitor"
         self.soc_kwh_history = {}
-        self.html_plan = "<body><h1>Please wait calculating...</h1></body>"
         self.unmatched_args = {}
         self.define_service_list()
         self.stop_thread = False
-        self.savings_yesterday_plan = None
-        self.savings_baseline_plan = None
 
         # Forecast.solar API request metrics for monitoring
         self.currency_symbols = self.args.get("currency_symbols", "£p")

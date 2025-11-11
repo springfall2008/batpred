@@ -65,6 +65,7 @@ class WebInterface:
         self.default_log = "warnings"
         self.api_started = False
         self.last_success_timestamp = None
+        self.prefix = base.prefix
 
         # Plugin registration system
         self.registered_endpoints = []
@@ -1350,22 +1351,20 @@ var options = {
 
         # Select the appropriate HTML plan based on the view
         if view == "yesterday":
-            html_plan = self.base.savings_yesterday_plan if self.base.savings_yesterday_plan else "<p>No yesterday plan available</p>"
+            html_plan = self.base.get_state_wrapper(entity_id = self.prefix + ".cost_yesterday", attribute="html", default="<p>No baseline plan available</p>")
             # Don't process buttons for yesterday view - just display the plan
             text += html_plan + "</body></html>\n"
             return web.Response(content_type="text/html", text=text)
         elif view == "baseline":
-            html_plan = self.base.savings_baseline_plan if self.base.savings_baseline_plan else "<p>No baseline plan available</p>"
+            html_plan = self.base.get_state_wrapper(entity_id = self.prefix + ".savings_yesterday_predbat", attribute="html", default="<p>No baseline plan available</p>")
             # Don't process buttons for baseline view - just display the plan
             text += html_plan + "</body></html>\n"
             return web.Response(content_type="text/html", text=text)
         else:
             # Default to plan view with editing capabilities
-            html_plan = self.base.html_plan
+            html_plan = self.base.get_state_wrapper(entity_id = self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
 
         # Process HTML table to add buttons to time cells (only for plan view)
-        html_plan = self.base.html_plan
-
         # Regular expression to find time cells in the table
         time_pattern = r"<td id=time.*?>((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2})</td>"
         import_pattern = r"<td id=import data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"

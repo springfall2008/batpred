@@ -1561,8 +1561,6 @@ class Output:
 
         if publish:
             self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"text": self.text_plan, "html": html, "raw": raw_plan, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
-            self.html_plan = html
-            self.raw_plan = raw_plan
 
         return html, raw_plan
 
@@ -2864,8 +2862,6 @@ class Output:
         self.savings_today_predbat_soc = final_soc
         self.savings_today_actual = cost_yesterday
         self.cost_yesterday_car = cost_yesterday_car
-        self.savings_yesterday_plan = plan_html_yesterday
-        self.savings_baseline_plan = plan_html_baseline
 
         # Save state
         self.dashboard_item(
