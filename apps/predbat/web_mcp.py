@@ -981,13 +981,13 @@ class MCPServerWrapper:
     async def _execute_get_plan(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_plan tool"""
         try:
+            raw_plan = self.base.get_state_wrapper(self.prefix + ".plan_html", attribute="raw", default=None)
             # Check if we have plan data available
-            if not hasattr(self.base, "raw_plan") or not self.base.raw_plan:
+            if not raw_plan:
                 return {"success": False, "error": "No plan data available", "data": None}
 
             # Return the complete plan data
-            return {"success": True, "error": None, "data": self.base.raw_plan, "timestamp": datetime.now().isoformat(), "description": "Current Predbat battery plan including forecasts, costs, and operational states"}
-
+            return {"success": True, "error": None, "data": raw_plan, "timestamp": datetime.now().isoformat(), "description": "Current Predbat battery plan including forecasts, costs, and operational states"}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving plan data: {str(e)}", "data": None}
 

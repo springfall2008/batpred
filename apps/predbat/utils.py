@@ -188,15 +188,16 @@ def minute_data_state(history, days, now, state_key, last_updated_key, prev_last
         minutes = int(timed.seconds / 60) + int(timed.days * 60 * 24)
 
         minute = minutes
-        while minute < minutes_to:
+        while minute <= minutes_to:
             mdata[minute] = last_state
             minute += 1
+        mdata[minutes] = state
 
         # Store previous state
         prev_last_updated_time = last_updated_time
         last_state = state
 
-        if minutes < newest_age:
+        if minutes <= newest_age:
             newest_age = minutes
             newest_state = state
 

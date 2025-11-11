@@ -134,11 +134,11 @@ class Inverter:
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
 
         self.reserve_max = 100
-        self.battery_rate_max_raw = 0
-        self.battery_rate_max_charge = 0
-        self.battery_rate_max_discharge = 0
-        self.battery_rate_max_charge_scaled = 0
-        self.battery_rate_max_discharge_scaled = 0
+        self.battery_rate_max_raw = 2600.0
+        self.battery_rate_max_charge = 2600.0 / MINUTE_WATT
+        self.battery_rate_max_discharge = 2600.0 / MINUTE_WATT
+        self.battery_rate_max_charge_scaled = 2600.0 / MINUTE_WATT
+        self.battery_rate_max_discharge_scaled = 2600.0 / MINUTE_WATT
         self.battery_temperature = 20
         self.battery_power = 0
         self.battery_voltage = 52.0
@@ -797,11 +797,7 @@ class Inverter:
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
         """
-        if "prefix" in self.base.args:
-            prefix = self.base.get_arg("prefix", indirect=False)
-        else:
-            prefix = "prefix"
-
+        prefix = self.base.prefix
         entity_id = f"sensor.{prefix}_{self.inverter_type}_{self.id}_{entity_name}"
 
         attributes = {

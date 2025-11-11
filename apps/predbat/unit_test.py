@@ -3528,9 +3528,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     # Pre-optimise all plan
     my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
     my_predbat.update_target_values()
-    my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
     filename = "plan_orig.html"
-    open(filename, "w").write(my_predbat.html_plan)
+    open(filename, "w").write(html_plan)
     print("Wrote plan to {} metric {}".format(filename, metric))
 
     ## Calculate the plan
@@ -3546,11 +3546,11 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     )
     my_predbat.log("Final plan soc_min {} final_soc {}".format(soc_min, soc))
 
-    my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
     filename = "plan_final.html"
-    open(filename, "w").write(my_predbat.html_plan)
+    open(filename, "w").write(html_plan)
     filename = "plan_final.json"
-    open(filename, "w").write(json.dumps(my_predbat.raw_plan, indent=2))
+    open(filename, "w").write(json.dumps(raw_plan, indent=2))
     print("Wrote plan to {} metric {}".format(filename, metric))
 
     # Expected
@@ -5750,8 +5750,8 @@ def run_optimise_all_windows(
         failed = True
 
     if failed:
-        my_predbat.publish_html_plan(my_predbat.pv_forecast_minute_step, my_predbat.pv_forecast_minute_step, my_predbat.load_minutes_step, my_predbat.load_minutes_step, end_record)
-        open("plan.html", "w").write(my_predbat.html_plan)
+        html_plan, raw_plan = my_predbat.publish_html_plan(my_predbat.pv_forecast_minute_step, my_predbat.pv_forecast_minute_step, my_predbat.load_minutes_step, my_predbat.load_minutes_step, end_record)
+        open("plan.html", "w").write(html_plan)
         print("Wrote plan to plan.html")
 
     return failed
@@ -6210,8 +6210,8 @@ def run_optimise_levels(
         failed = True
 
     if failed:
-        my_predbat.publish_html_plan(my_predbat.pv_forecast_minute_step, my_predbat.pv_forecast_minute_step, my_predbat.load_minutes_step, my_predbat.load_minutes_step, end_record)
-        open("plan.html", "w").write(my_predbat.html_plan)
+        html_plan, raw_plan = my_predbat.publish_html_plan(my_predbat.pv_forecast_minute_step, my_predbat.pv_forecast_minute_step, my_predbat.load_minutes_step, my_predbat.load_minutes_step, end_record)
+        open("plan.html", "w").write(html_plan)
         print("Wrote plan to plan.html")
 
         old_log = my_predbat.log
