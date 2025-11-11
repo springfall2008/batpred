@@ -1351,18 +1351,18 @@ var options = {
 
         # Select the appropriate HTML plan based on the view
         if view == "yesterday":
-            html_plan = self.base.get_state_wrapper(entity_id = self.prefix + ".cost_yesterday", attribute="html", default="<p>No baseline plan available</p>")
+            html_plan = self.base.get_state_wrapper(entity_id=self.prefix + ".cost_yesterday", attribute="html", default="<p>No baseline plan available</p>")
             # Don't process buttons for yesterday view - just display the plan
             text += html_plan + "</body></html>\n"
             return web.Response(content_type="text/html", text=text)
         elif view == "baseline":
-            html_plan = self.base.get_state_wrapper(entity_id = self.prefix + ".savings_yesterday_predbat", attribute="html", default="<p>No baseline plan available</p>")
+            html_plan = self.base.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="html", default="<p>No baseline plan available</p>")
             # Don't process buttons for baseline view - just display the plan
             text += html_plan + "</body></html>\n"
             return web.Response(content_type="text/html", text=text)
         else:
             # Default to plan view with editing capabilities
-            html_plan = self.base.get_state_wrapper(entity_id = self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
+            html_plan = self.base.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
 
         # Process HTML table to add buttons to time cells (only for plan view)
         # Regular expression to find time cells in the table
