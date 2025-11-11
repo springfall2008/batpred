@@ -58,6 +58,7 @@ class HAHistory:
         self.api_started = False
         self.api_stop = False
         self.last_success_timestamp = None
+        self.local_tz = self.base.local_tz
 
     def is_alive(self):
         return self.api_started
@@ -106,7 +107,7 @@ class HAHistory:
             if tracked:
                 self.add_entity(entity_id, days)
                 days = self.history_entities[entity_id]
-            history_data = ha_interface.get_history(entity_id, datetime.now(timezone.utc), days=days)
+            history_data = ha_interface.get_history(entity_id, datetime.now(self.local_tz), days=days)
             if history_data and len(history_data) > 0:
                 history_data = history_data[0]
                 if tracked:
@@ -194,7 +195,7 @@ class HAHistory:
             try:
                 if seconds % (2 * 60) == 0:
                     # Update history data every 2 minutes
-                    now = datetime.now(timezone.utc)
+                    now = datetime.now(self.local_tz)
                     for entity_id in list(self.history_entities.keys()):
                         # self.log("HAHistory: Updating history for {}".format(entity_id))
                         current_history_data = self.history_data.get(entity_id, None)
@@ -212,8 +213,7 @@ class HAHistory:
                 if seconds % (60 * 60) == 0:
                     # Prune history data every hour
                     self.log("Info: HAHistory: Pruning history data")
-                    now = datetime.now(timezone.utc)
-                    self.prune_history(now)
+                    self.prune_history(datetime.now(self.local_tz))
 
             except Exception as e:
                 self.log("Error: HAHistory exception in update loop: {}".format(e))

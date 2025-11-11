@@ -2285,7 +2285,7 @@ class Plan:
                 self.export_limits_best,
                 True,
                 end_record=end_record,
-                save="best10" if name else "",
+                save="best10" if name else "yesterday10",
             )
             self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
@@ -3449,6 +3449,7 @@ class Plan:
                     )
 
             if save and save == "best":
+                self.log("Saving plan best values to HA entities")
                 self.dashboard_item(
                     self.prefix + ".best_battery_hours_left",
                     state=dp2(hours_left),
