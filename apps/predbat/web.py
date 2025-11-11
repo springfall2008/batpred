@@ -1351,7 +1351,7 @@ var options = {
 
         # Select the appropriate HTML plan based on the view
         if view == "yesterday":
-            html_plan = self.base.get_state_wrapper(entity_id = self.prefix + ".cost_yesterday", attribute="html", default="<p>No baseline plan available</p>")
+            html_plan = self.base.get_state_wrapper(entity_id = self.prefix + ".cost_yesterday", attribute="html", default="<p>No yesterday plan available</p>")
             # Don't process buttons for yesterday view - just display the plan
             text += html_plan + "</body></html>\n"
             return web.Response(content_type="text/html", text=text)
@@ -1801,7 +1801,7 @@ var options = {
         return await self.html_file_load("apps.yaml")
 
     async def html_debug_plan(self, request):
-        html_plan = self.base.html_plan
+        html_plan = self.base.get_state_wrapper(entity_id = self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
         if not html_plan:
             html_plan = None
         return await self.html_file("predbat_plan.html", html_plan)
