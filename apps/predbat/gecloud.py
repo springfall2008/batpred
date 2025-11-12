@@ -1533,7 +1533,7 @@ class GECloudData:
             if this_time and last_time:
                 delta = this_time - last_time
                 if delta.total_seconds() < (5*60-1):
-                    # Trip to 5 minute data
+                    # Trim to 5 minute data
                     continue
             last_time = this_time
 
