@@ -1538,7 +1538,7 @@ class GECloudData:
 
             # Skip duplicate times (aligned to 5 minutes)
             if this_time == last_time:
-               continue
+                continue
             last_time = this_time
 
             new_data["last_updated"] = item["time"]
