@@ -1535,9 +1535,10 @@ class GECloudData:
             new_data["pv"] = item["total"]["solar"]
             mdata.append(new_data)
 
+        # Store metadata in RAM cache, keep data reference temporarily
         self.ge_url_cache[url] = {}
         self.ge_url_cache[url]["stamp"] = now_utc
-        self.ge_url_cache[url]["data"] = mdata
+        self.ge_url_cache[url]["data"] = mdata  # Temporary, will be cleared after fetch
         self.ge_url_cache[url]["next"] = url_next
         return mdata, url_next
 
@@ -1601,6 +1602,12 @@ class GECloudData:
                 pass
         self.oldest_data_time = last_updated_time
         self.mdata = mdata
+
+        # Memory optimization: Clear cached data from RAM now that we've accumulated everything
+        # This prevents duplicate storage - data is only in self.mdata and disk cache
+        for url_key in list(self.ge_url_cache.keys()):
+            if "data" in self.ge_url_cache[url_key]:
+                del self.ge_url_cache[url_key]["data"]
 
         # Save GE URL cache to disk for next time
         self.save_ge_cache()
