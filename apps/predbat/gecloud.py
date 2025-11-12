@@ -1526,8 +1526,17 @@ class GECloudData:
         else:
             url_next = None
 
+        last_time = None
         for item in darray:
             new_data = {}
+            this_time = str2time(item["time"])
+            if this_time and last_time:
+                delta = this_time - last_time
+                if delta.total_seconds() < (5*60-1):
+                    # Trip to 5 minute data
+                    continue
+            last_time = this_time
+
             new_data["last_updated"] = item["time"]
             new_data["consumption"] = item["total"]["consumption"]
             new_data["import"] = item["total"]["grid"]["import"]
