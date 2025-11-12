@@ -491,7 +491,7 @@ class Prediction:
         inverter_loss_recp = 1 / inverter_loss
 
         enable_standing_charge = save and (save in ["best", "base", "base10", "best10", "test"])
-        enable_save_stats = save and (save in ["best", "test", "compare"])
+        enable_save_stats = save and (save in ["best", "test", "compare", "yesterday"])
         car_enable = self.num_cars > 0
         inverter_limit = self.inverter_limit * step
         export_limit = self.export_limit * step
