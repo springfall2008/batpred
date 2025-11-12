@@ -125,7 +125,7 @@ class PredbatMCPServer:
             await runner.cleanup()
 
             if self.mcp_server:
-                self.mcp_server.stop()
+                await self.mcp_server.stop()
 
             self.api_started = False
             print("MCP interface stopped")

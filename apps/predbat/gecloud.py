@@ -1250,7 +1250,9 @@ class GECloudDirect:
             inverter = device.get("inverter", {})
             serial = inverter.get("serial", None)
             last_updated = inverter.get("last_updated", None)
-            model = inverter.get("info", {}).get("model", "").lower()
+            info = inverter.get("info", {})
+            model = info.get("model", "").lower()
+            battery = info.get("battery_type", {})
             batteries = inverter.get("connections", {}).get("batteries", [])
             if serial:
                 serial = serial.lower()
@@ -1260,6 +1262,10 @@ class GECloudDirect:
                     result["gateway"] = serial
                 elif batteries:
                     result["battery"].append(serial)
+                elif battery:
+                    result["battery"].append(serial)
+            else:
+                self.log("Warn: GECloud: Device without serial found: {}".format(device))
         return result
 
     async def async_get_inverter_status(self, serial):
