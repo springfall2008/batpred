@@ -58,6 +58,7 @@ class FoxAPI:
         self.fdpwr_max = {}
         self.fdsoc_min = {}
         self.last_success_timestamp = None
+        self.local_tz = base.local_tz
 
     def wait_api_started(self):
         """
@@ -546,7 +547,7 @@ class FoxAPI:
         ]
         """
         GET_DEVICE_PRODUCTION = "/op/v0/device/report/query"
-        year = datetime.now().year
+        year = datetime.now(self.local_tz).year
         variables = ["generation", "feedin", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal"]
         result = await self.request_get(GET_DEVICE_PRODUCTION, datain={"sn": deviceSN, "year": year, "dimension": "year", "variables": variables}, post=True)
         if result:
@@ -1076,9 +1077,19 @@ class FoxAPI:
             minute = orig_minute
         return hour, minute
 
+    def minutes_to_schedule_time(self, hour, minute, minutes_now):
+        total_minutes = hour * 60 + minute
+        if total_minutes < minutes_now:
+            total_minutes += 24 * 60
+        return total_minutes - minutes_now
+
     def validate_schedule(self, new_schedule):
         # Avoid more than one schedule as fox seems to error out, so take the first only
-        new_schedule = sorted(new_schedule, key=lambda x: (x["startHour"], x["startMinute"]))
+        # First should be the next upcoming schedule, starting now not the one closest to midnight
+        time_now = datetime.now(self.local_tz)
+        minutes_now = time_now.hour * 60 + time_now.minute            
+
+        new_schedule = sorted(new_schedule, key=lambda x: (self.minutes_to_schedule_time(x["startHour"], x["startMinute"], minutes_now)))
         if len(new_schedule):
             return [new_schedule[0]]
         else:
@@ -1250,13 +1261,14 @@ class MockBase:
     """Mock base class for testing"""
 
     def __init__(self):
-        pass
+        self.local_tz = datetime.now().astimezone().tzinfo
 
     def log(self, message):
         print(f"LOG: {message}")
 
     def dashboard_item(self, *args, **kwargs):
         print(f"DASHBOARD: {args}, {kwargs}")
+
 
 
 async def test_fox_api(api_key):
@@ -1300,17 +1312,19 @@ async def test_fox_api(api_key):
     new_slot2 = {}
     new_slot2["enable"] = 1
     new_slot2["workMode"] = "ForceCharge"
-    new_slot2["startHour"] = 00
+    new_slot2["startHour"] = 13
     new_slot2["startMinute"] = 00 
-    new_slot2["endHour"] = 00
+    new_slot2["endHour"] = 13
     new_slot2["endMinute"] = 30
     new_slot2["fdSoc"] = 100
     new_slot2["fdPwr"] = 8000
     new_slot2["minSocOnGrid"] = 100
 
 
-    new_schedule = fox_api.validate_schedule([new_slot])
+    new_schedule = fox_api.validate_schedule([new_slot2, new_slot])
     print("Validated schedule")
+    print(new_schedule)
+    return 0
 
     print("Sending: {}".format(new_schedule))
     res = await fox_api.set_scheduler(sn, new_schedule)
