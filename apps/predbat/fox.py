@@ -798,11 +798,13 @@ class FoxAPI:
         while retries < FOX_RETRIES:
             result, allow_retry = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
+                self.log("Fox: API Response successful for {} got {}".format(path, result))
                 return result
             if not allow_retry:
                 break
             retries += 1
             await asyncio.sleep(retries * random.random())
+        self.log("Fox: API Response failed after {} retries for {}".format(FOX_RETRIES, path))
         return result
 
     async def request_get_func(self, path, post=False, datain=None):
@@ -843,11 +845,12 @@ class FoxAPI:
         if response.status_code in [200, 201]:
             if data is None:
                 data = {}
+            print("Fox: API Response Data: {}".format(data))
             errno = data.get("errno", 0)
             msg = data.get("msg", "")
             if errno != 0:
                 self.failures_total += 1
-                if errno in [40400, 41200, 41201, 41202, 41203, 41935]:
+                if errno in [40400, 41200, 41201, 41202, 41203, 41935, 44098]:
                     # Rate limiting so wait up to 31 seconds
                     self.log("Info: Fox: Rate limiting or comms issue detected, waiting...")
                     await asyncio.sleep(random.random() * 30 + 1)
@@ -1073,6 +1076,14 @@ class FoxAPI:
             minute = orig_minute
         return hour, minute
 
+    def validate_schedule(self, new_schedule):
+        # Avoid more than one schedule as fox seems to error out, so take the first only
+        new_schedule = sorted(new_schedule, key=lambda x: (x["startHour"], x["startMinute"]))
+        if len(new_schedule):
+            return [new_schedule[0]]
+        else:
+            return new_schedule
+    
     async def write_battery_schedule_event(self, entity_id, value):
         """
         Handle battery schedule events
@@ -1170,6 +1181,7 @@ class FoxAPI:
                         {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": 100, "fdPwr": power, "minSocOnGrid": minSocOnGrid}
                     )
 
+        new_schedule = self.validate_schedule(new_schedule)
         self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
         result = await self.set_scheduler(serial, new_schedule)
         if result is not None:
@@ -1256,48 +1268,53 @@ async def test_fox_api(api_key):
     # Create a mock base object
     mock_base = MockBase()
 
-    sn = "60KE8020479C034"
+    sn = "60JH37203B3B015"
 
     # Create FoxAPI instance with a lambda that returns the API key
     fox_api = FoxAPI(api_key, False, mock_base)
-    # device_List = await fox_api.get_device_list()
-    # print(f"Device List: {device_List}")
+    #device_List = await fox_api.get_device_list()
+    #print(f"Device List: {device_List}")
     # await fox_api.start()
-    # res = await fox_api.get_device_settings(sn)
-    # res = await fox_api.get_battery_charging_time(sn)
-    # res = await fox_api.get_scheduler(sn)
+    #res = await fox_api.get_device_settings(sn)
+    #res = await fox_api.get_battery_charging_time(sn)
+    #res = await fox_api.get_scheduler(sn)
     # res = await fox_api.compute_schedule(sn)
     # res = await fox_api.publish_data()
-    res = await fox_api.set_device_setting(sn, "dummy", 42)
-    print(res)
+    #res = await fox_api.set_device_setting(sn, "dummy", 42)
+    #print(res)
 
-    """
-    groups = res.get('groups', [])
+    #res = await fox_api.get_scheduler(sn)
+    #groups = res.get('groups', [])
     # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
-    new_slot = groups[0].copy()
+    #new_slot = groups[0].copy()
+    new_slot = {}
     new_slot["enable"] = 1
-    new_slot["workMode"] = "ForceCharge"
+    new_slot["workMode"] = "ForceDischarge"
     new_slot["startHour"] = 23
     new_slot["startMinute"] = 30
     new_slot["endHour"] = 23
     new_slot["endMinute"] = 59
-    new_slot["fdSoc"] = 100
-    new_slot["fdPwr"] = 8000
-    new_slot2 = groups[1].copy()
+    new_slot["fdSoc"] = 10
+    new_slot["fdPwr"] = 10500
+    new_slot["minSocOnGrid"] = 10
+    new_slot2 = {}
     new_slot2["enable"] = 1
     new_slot2["workMode"] = "ForceCharge"
-    new_slot2["startHour"] = 0
-    new_slot2["startMinute"] = 00
-    new_slot2["endHour"] = 5
-    new_slot2["endMinute"] = 29
+    new_slot2["startHour"] = 00
+    new_slot2["startMinute"] = 00 
+    new_slot2["endHour"] = 00
+    new_slot2["endMinute"] = 30
     new_slot2["fdSoc"] = 100
     new_slot2["fdPwr"] = 8000
+    new_slot2["minSocOnGrid"] = 100
 
-    print("Sending: {}".format([new_slot, new_slot2]))
-    res = await fox_api.set_scheduler(sn, [new_slot, new_slot2])
+
+    new_schedule = fox_api.validate_schedule([new_slot])
+    print("Validated schedule")
+
+    print("Sending: {}".format(new_schedule))
+    res = await fox_api.set_scheduler(sn, new_schedule)
     print(res)
-    #await fox_api.start()
-    """
 
 
 def main():
