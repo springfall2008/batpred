@@ -1262,8 +1262,6 @@ class GECloudDirect:
                     result["gateway"] = serial
                 elif batteries:
                     result["battery"].append(serial)
-                elif battery:
-                    result["battery"].append(serial)
             else:
                 self.log("Warn: GECloud: Device without serial found: {}".format(device))
         return result
