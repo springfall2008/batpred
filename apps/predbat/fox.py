@@ -1083,7 +1083,7 @@ class FoxAPI:
             return [new_schedule[0]]
         else:
             return new_schedule
-    
+
     async def write_battery_schedule_event(self, entity_id, value):
         """
         Handle battery schedule events
@@ -1272,21 +1272,21 @@ async def test_fox_api(api_key):
 
     # Create FoxAPI instance with a lambda that returns the API key
     fox_api = FoxAPI(api_key, False, mock_base)
-    #device_List = await fox_api.get_device_list()
-    #print(f"Device List: {device_List}")
+    # device_List = await fox_api.get_device_list()
+    # print(f"Device List: {device_List}")
     # await fox_api.start()
-    #res = await fox_api.get_device_settings(sn)
-    #res = await fox_api.get_battery_charging_time(sn)
-    #res = await fox_api.get_scheduler(sn)
+    # res = await fox_api.get_device_settings(sn)
+    # res = await fox_api.get_battery_charging_time(sn)
+    # res = await fox_api.get_scheduler(sn)
     # res = await fox_api.compute_schedule(sn)
     # res = await fox_api.publish_data()
-    #res = await fox_api.set_device_setting(sn, "dummy", 42)
-    #print(res)
+    # res = await fox_api.set_device_setting(sn, "dummy", 42)
+    # print(res)
 
-    #res = await fox_api.get_scheduler(sn)
-    #groups = res.get('groups', [])
-    # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
-    #new_slot = groups[0].copy()
+    # res = await fox_api.get_scheduler(sn)
+    # groups = res.get('groups', [])
+    # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
+    # new_slot = groups[0].copy()
     new_slot = {}
     new_slot["enable"] = 1
     new_slot["workMode"] = "ForceDischarge"
@@ -1301,13 +1301,12 @@ async def test_fox_api(api_key):
     new_slot2["enable"] = 1
     new_slot2["workMode"] = "ForceCharge"
     new_slot2["startHour"] = 00
-    new_slot2["startMinute"] = 00 
+    new_slot2["startMinute"] = 00
     new_slot2["endHour"] = 00
     new_slot2["endMinute"] = 30
     new_slot2["fdSoc"] = 100
     new_slot2["fdPwr"] = 8000
     new_slot2["minSocOnGrid"] = 100
-
 
     new_schedule = fox_api.validate_schedule([new_slot])
     print("Validated schedule")
