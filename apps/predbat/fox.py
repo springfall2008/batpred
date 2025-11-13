@@ -747,8 +747,14 @@ class FoxAPI:
         result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
         if result:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
+            # XXX: Fox seems to be have an issue with FD Power max value, no maximum is listed but the default fdPwr listed in disabled groups seems to be the max so find that
+            for group in result.get("groups", []):
+                if group.get("enable", 1) == 0:
+                    self.fdpwr_max[deviceSN] = group.get("fdPwr", self.fdpwr_max[deviceSN])
+                    break
+
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
-            self.log("Fox: Fetched schedule got {}".format(result))
+            self.log("Fox: Fetched schedule got {} fdPwr max {} fdSoc min {}".format(result, self.fdpwr_max[deviceSN], self.fdsoc_min[deviceSN]))
             self.device_scheduler[deviceSN] = result
             return result
         return {}
@@ -853,21 +859,21 @@ class FoxAPI:
                 self.failures_total += 1
                 if errno in [40400, 41200, 41201, 41202, 41203, 41935, 44098]:
                     # Rate limiting so wait up to 31 seconds
-                    self.log("Info: Fox: Rate limiting or comms issue detected, waiting...")
+                    self.log(f"Info: Fox: Rate limiting or comms issue detected {msg}:{errno}, waiting...")
                     await asyncio.sleep(random.random() * 30 + 1)
                     return None, True
                 elif errno in [40402]:
                     # Out of API calls for today
-                    self.log("Warn: Fox: Has run out of API calls for today, sleeping...")
+                    self.log(f"Warn: Fox: Has run out of API calls for today {msg}:{errno}, sleeping...")
                     await asyncio.sleep(5 * 60)
                     return None, False
                 elif errno in [44096]:
                     # Unsupported function code
-                    self.log("Warn: Fox: Unsupported function code {} from {}".format(errno, url))
+                    self.log(f"Warn: Fox: Unsupported function code {msg}:{errno} from {url}")
                     return None, False
                 elif errno in [40257]:
                     # Invalid parameter
-                    self.log("Warn: Fox: Invalid parameter {} from {} message {}".format(errno, url, msg))
+                    self.log(f"Warn: Fox: Invalid parameter {msg}:{errno} from {url}")
                     return None, False
                 else:
                     self.log("Warn: Fox: Error {} from {} message {}".format(errno, url, msg))
@@ -1283,12 +1289,16 @@ async def test_fox_api(api_key):
 
     # Create FoxAPI instance with a lambda that returns the API key
     fox_api = FoxAPI(api_key, False, mock_base)
-    # device_List = await fox_api.get_device_list()
-    # print(f"Device List: {device_List}")
+    device_List = await fox_api.get_device_list()
+    print(f"Device List: {device_List}")
     # await fox_api.start()
-    # res = await fox_api.get_device_settings(sn)
-    # res = await fox_api.get_battery_charging_time(sn)
-    # res = await fox_api.get_scheduler(sn)
+    res = await fox_api.get_device_settings(sn)
+    print(res)
+    res = await fox_api.get_battery_charging_time(sn)
+    print(res)
+    res = await fox_api.get_scheduler(sn)
+    print(res)
+    return 1
     # res = await fox_api.compute_schedule(sn)
     # res = await fox_api.publish_data()
     # res = await fox_api.set_device_setting(sn, "dummy", 42)
@@ -1301,13 +1311,13 @@ async def test_fox_api(api_key):
     new_slot = {}
     new_slot["enable"] = 1
     new_slot["workMode"] = "ForceDischarge"
-    new_slot["startHour"] = 23
+    new_slot["startHour"] = 11
     new_slot["startMinute"] = 30
-    new_slot["endHour"] = 23
-    new_slot["endMinute"] = 59
-    new_slot["fdSoc"] = 10
-    new_slot["fdPwr"] = 10500
-    new_slot["minSocOnGrid"] = 10
+    new_slot["endHour"] = 12
+    new_slot["endMinute"] = 00
+    new_slot["fdSoc"] = 20
+    new_slot["fdPwr"] = 4000
+    new_slot["minSocOnGrid"] = 20
     new_slot2 = {}
     new_slot2["enable"] = 1
     new_slot2["workMode"] = "ForceCharge"
@@ -1319,10 +1329,9 @@ async def test_fox_api(api_key):
     new_slot2["fdPwr"] = 8000
     new_slot2["minSocOnGrid"] = 100
 
-    new_schedule = fox_api.validate_schedule([new_slot2, new_slot])
+    new_schedule = fox_api.validate_schedule([new_slot])
     print("Validated schedule")
     print(new_schedule)
-    return 0
 
     print("Sending: {}".format(new_schedule))
     res = await fox_api.set_scheduler(sn, new_schedule)
