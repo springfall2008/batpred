@@ -748,10 +748,13 @@ class FoxAPI:
         if result:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
             # XXX: Fox seems to be have an issue with FD Power max value, no maximum is listed but the default fdPwr listed in disabled groups seems to be the max so find that
+            fdMax = 0
             for group in result.get("groups", []):
                 if group.get("enable", 1) == 0:
-                    self.fdpwr_max[deviceSN] = group.get("fdPwr", self.fdpwr_max[deviceSN])
+                    fdMax = max(fdMax, group.get("fdPwr", 0))
                     break
+            if fdMax:
+                self.fdpwr_max[deviceSN] = min(fdMax, self.fdpwr_max[deviceSN])
 
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
             self.log("Fox: Fetched schedule got {} fdPwr max {} fdSoc min {}".format(result, self.fdpwr_max[deviceSN], self.fdsoc_min[deviceSN]))
@@ -1289,15 +1292,15 @@ async def test_fox_api(api_key):
 
     # Create FoxAPI instance with a lambda that returns the API key
     fox_api = FoxAPI(api_key, False, mock_base)
-    device_List = await fox_api.get_device_list()
-    print(f"Device List: {device_List}")
+    #device_List = await fox_api.get_device_list()
+    #print(f"Device List: {device_List}")
     # await fox_api.start()
-    res = await fox_api.get_device_settings(sn)
-    print(res)
-    res = await fox_api.get_battery_charging_time(sn)
-    print(res)
+    #res = await fox_api.get_device_settings(sn)
+    #print(res)
+    #res = await fox_api.get_battery_charging_time(sn)
+    #print(res)
     res = await fox_api.get_scheduler(sn)
-    print(res)
+    #print(res)
     return 1
     # res = await fox_api.compute_schedule(sn)
     # res = await fox_api.publish_data()
