@@ -2592,6 +2592,17 @@ class Output:
         """
         Calculate the base plan for yesterday
         """
+
+        # Check  savings_last_updated timestamp, we don't need to re-compute this one every iteration, once an hour or when the day rolls over is enough
+        if self.savings_last_updated:
+            # savings_last_update is a timestamp object, compare age and date
+            age = self.now_utc - self.savings_last_updated
+            if age < timedelta(minutes=59) and self.savings_last_updated.date() == self.now_utc.date():
+                # Less than an hour old and already updated today
+                return
+            
+        self.log("Calculating data from yesterday for savings calculation")
+
         yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
@@ -2690,10 +2701,6 @@ class Output:
             cost_data_car_per_kwh, _ = minute_data(cost_today_car_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             cost_yesterday_car = cost_data_car.get(minutes_back, 0.0)
             cost_car_per_kwh = cost_data_car_per_kwh.get(minutes_back, 0.0)
-
-        # Save step data for debug
-        self.yesterday_load_step = yesterday_load_step
-        self.yesterday_pv_step = yesterday_pv_step
 
         # Save state
         minutes_now = self.minutes_now
@@ -3002,6 +3009,9 @@ class Output:
         self.carbon_enable = carbon_enable
         self.rate_import_replicated = rate_import_replicated
         self.rate_export_replicated = rate_export_replicated
+
+        # Update timestamp
+        self.savings_last_updated = self.now_utc
 
     def publish_rate_and_threshold(self):
         """
