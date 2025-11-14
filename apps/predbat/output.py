@@ -2598,9 +2598,6 @@ class Output:
         minutes_back = self.minutes_now + 1
         end_record = 24 * 60
 
-        now_utc_actual = datetime.now(self.local_tz)
-        now_utc_actual = now_utc_actual.replace(second=0, microsecond=0)
-
         # Get yesterday's SOC
         try:
             soc_yesterday = float(self.get_state_wrapper(self.prefix + ".savings_total_soc", default=0.0))
@@ -2652,8 +2649,8 @@ class Output:
         if not cost_today_data:
             self.log("Warn: Calculate yesterday: No cost_today data for yesterday")
             return
-        cost_data, _ = minute_data(cost_today_data[0], 2, now_utc_actual, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-        cost_data_per_kwh, _ = minute_data(cost_today_data[0], 2, now_utc_actual, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        cost_data, _ = minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        cost_data_per_kwh, _ = minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(minutes_back, 0.0)
         cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
         cost_yesterday_array = {}
@@ -2665,7 +2662,7 @@ class Output:
         if not battery_today_data:
             self.log("Warn: Calculate yesterday: No soc_kw_h0 data for yesterday")
             return
-        battery_data, _ = minute_data(battery_today_data[0], 2, now_utc_actual, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         battery_soc_yesterday = battery_data.get(minutes_back, 0.0)
         battery_soc_yesterday_array = {}
         for minute in range(0, end_record + self.minutes_now):
@@ -2689,8 +2686,8 @@ class Output:
             cost_data_car_per_kwh = 0
             cost_car_per_kwh = 0
         else:
-            cost_data_car, _ = minute_data(cost_today_car_data[0], 2, now_utc_actual, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-            cost_data_car_per_kwh, _ = minute_data(cost_today_car_data[0], 2, now_utc_actual, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            cost_data_car, _ = minute_data(cost_today_car_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            cost_data_car_per_kwh, _ = minute_data(cost_today_car_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             cost_yesterday_car = cost_data_car.get(minutes_back, 0.0)
             cost_car_per_kwh = cost_data_car_per_kwh.get(minutes_back, 0.0)
 
@@ -2758,8 +2755,6 @@ class Output:
             final_iboost,
             final_carbon_g,
         ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=end_record, save="yesterday")
-        # Add back in standing charge which will be in the historical data also
-        metric_baseline += self.metric_standing_charge
 
         # Add back in battery value
         overall_metric, battery_value_baseline = self.compute_metric(
@@ -2788,7 +2783,7 @@ class Output:
 
         # Fake charge/export windows based on previous predbat status
         if predbat_status_data:
-            predbat_status = minute_data_state(predbat_status_data[0], 2, now_utc_actual, "state", "last_updated")
+            predbat_status = minute_data_state(predbat_status_data[0], 2, self.now_utc, "state", "last_updated")
             for minute in predbat_status:
                 status = predbat_status[minute]
                 if "," in status:
@@ -2925,9 +2920,7 @@ class Output:
         self.soc_max = 0
 
         self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step)
-        metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction([], [], [], [], False, end_record=end_record)
-        # Add back in standing charge which will be in the historical data also
-        metric_no_pvbat += self.metric_standing_charge
+        metric_no_pvbat, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction([], [], [], [], False, end_record=end_record, save="yesterday")
 
         # Add back in battery value
         overall_metric, battery_value_no_pvbat = self.compute_metric(

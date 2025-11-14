@@ -586,7 +586,8 @@ class OctopusAPI:
             completed_dispatches = self.get_intelligent_completed_dispatches()
             intelligent_device = await self.async_get_intelligent_device(account_id, deviceID, completed_dispatches)
             if intelligent_device is not None:
-                self.intelligent_device = intelligent_device
+                if 'completed_dispatches' in intelligent_device:
+                    self.intelligent_device = intelligent_device
         return self.intelligent_device
 
     def join_saving_session_event(self, event_code):
@@ -1125,13 +1126,12 @@ class OctopusAPI:
 
             planned = []
             if device_result:
-                result = {}
                 dispatch_result = await self.async_graphql_query(intelligent_dispatches_query.format(account_id=account_id, device_id=device_id), "get-intelligent-dispatches", ignore_errors=True)
                 chargePointVariants = device_result.get("chargePointVariants", [])
                 electricVehicles = device_result.get("electricVehicles", [])
                 devices = device_result.get("devices", [])
                 if not devices:
-                    return result
+                    return None
                 for device in device_result["devices"]:
                     deviceType = device.get("deviceType", None)
                     status = device.get("status", {}).get("current", None)
