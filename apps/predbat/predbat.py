@@ -25,7 +25,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.27.18"
+THIS_VERSION = "v8.27.19"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py"]
@@ -544,10 +544,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.savings_today_predbat_soc = 0.0
         self.savings_today_pvbat = 0.0
         self.savings_today_actual = 0.0
+        self.savings_last_updated = None
         self.cost_yesterday_car = 0.0
         self.cost_total_car = 0.0
-        self.yesterday_load_step = {}
-        self.yesterday_pv_step = {}
         self.rate_import = {}
         self.rate_import_replicated = {}
         self.rate_export = {}
