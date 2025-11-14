@@ -586,7 +586,7 @@ class OctopusAPI:
             completed_dispatches = self.get_intelligent_completed_dispatches()
             intelligent_device = await self.async_get_intelligent_device(account_id, deviceID, completed_dispatches)
             if intelligent_device is not None:
-                if 'completed_dispatches' in intelligent_device:
+                if "completed_dispatches" in intelligent_device:
                     self.intelligent_device = intelligent_device
         return self.intelligent_device
 
