@@ -2600,7 +2600,7 @@ class Output:
             if age < timedelta(minutes=59) and self.savings_last_updated.date() == self.now_utc.date():
                 # Less than an hour old and already updated today
                 return
-            
+
         self.log("Calculating data from yesterday for savings calculation")
 
         yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
