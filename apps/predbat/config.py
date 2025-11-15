@@ -1289,6 +1289,16 @@ CONFIG_ITEMS = [
         "default": 20,
         "enable": "predheat_enable",
     },
+    {
+        "name": "inverter_limit_override",
+        "friendly_name": "Inverter Limit Override",
+        "type": "input_number",
+        "min": 0,
+        "max": 50000,
+        "step": 1000,
+        "unit": "W",
+        "default": 0,
+    },
 ]
 
 # These settings can be overridden by the API
