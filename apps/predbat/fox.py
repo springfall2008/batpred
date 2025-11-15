@@ -623,7 +623,7 @@ class FoxAPI:
         """
         Publish the schedule settings to HA
         """
-        # Device must have attery to publish settings
+        # Device must have battery to publish settings
         if not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
             return
 
@@ -977,7 +977,7 @@ class FoxAPI:
             await self.publish_schedule_settings_ha(sn)
 
         for sn in self.device_settings:
-            # Device must have attery to publish settings
+            # Device must have battery to publish settings
             if not self.device_detail.get(sn, {}).get("hasBattery", False):
                 continue
 
