@@ -12,6 +12,7 @@ from datetime import timedelta
 from config import MINUTE_WATT
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from inverter import Inverter
+import time
 
 """
 Execute Predbat plan
@@ -234,9 +235,7 @@ class Execute:
                                 )
 
                                 # Track IOG action latency for SLO metrics (if this is an IOG slot)
-                                import time
-
-                                if hasattr(self, "octopus_intelligent_charging") and self.octopus_intelligent_charging:
+                                if self.octopus_intelligent_charging:
                                     # Calculate latency from slot start time
                                     slot_start_timestamp = charge_start_time.timestamp()
                                     current_timestamp = time.time()
