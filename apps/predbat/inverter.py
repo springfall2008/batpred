@@ -357,8 +357,15 @@ class Inverter:
             raise ValueError
 
         # Battery rate max charge, discharge (all converted to kW/min)
-        self.battery_rate_max_charge = min(self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
-        self.battery_rate_max_discharge = min(self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
+        inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
+        inverter_limit_discharge = self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W")
+        inverter_limit_override = self.base.get_arg("inverter_limit_override", 0, index=self.id, required_unit="W")
+        if inverter_limit_override > 0:
+            self.log("Info: Inverter {} applying inverter_limit_override of {} W to charge and discharge limits".format(self.id, inverter_limit_override))
+            inverter_limit_charge = min(inverter_limit_override, inverter_limit_charge)
+            inverter_limit_discharge = min(inverter_limit_override, inverter_limit_discharge)
+        self.battery_rate_max_charge = min(inverter_limit_charge, self.battery_rate_max_raw) / MINUTE_WATT
+        self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_max_charge_scaled = self.battery_rate_max_charge * self.base.battery_rate_max_scaling
         self.battery_rate_max_discharge_scaled = self.battery_rate_max_discharge * self.base.battery_rate_max_scaling_discharge
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
