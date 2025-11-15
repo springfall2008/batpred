@@ -1583,7 +1583,7 @@ class GECloudData:
         if not gekey:
             self.log("Error: GECloudDirect has been enabled but ge_cloud_key is not set to your appkey")
             return False
-        
+
         # Load cache if not already loaded
         self.load_ge_cache()
 
