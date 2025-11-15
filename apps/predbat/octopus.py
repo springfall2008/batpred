@@ -588,7 +588,27 @@ class OctopusAPI:
             if intelligent_device is not None:
                 if "completed_dispatches" in intelligent_device:
                     self.intelligent_device = intelligent_device
+                    await self.fetch_previous_dispatch()
         return self.intelligent_device
+    
+    async def fetch_previous_dispatch(self):
+        entity_id = self.get_entity_name("binary_sensor", "intelligent_dispatch")
+        old_dispatches = self.base.get_state_wrapper(entity_id, attribute="completed_dispatches", default=[])
+        if old_dispatches and isinstance(old_dispatches, list):
+            current_completed = self.intelligent_device.get("completed_dispatches", [])
+            for dispatch in old_dispatches:
+                if isinstance(dispatch, dict):
+                    already_exists = False
+                    for current in current_completed:
+                        current_start = parse_date_time(current.get("start", None))
+                        dispatch_start = parse_date_time(dispatch.get("start", None))
+                        if dispatch_start == current_start:
+                            already_exists = True
+                    if not already_exists:
+                        self.log("Info: Adding previous dispatch to completed dispatches: {}".format(dispatch))
+                        current_completed.append(dispatch)
+            current_completed = sorted(current_completed, key=lambda x: parse_date_time(x["start"]))
+            self.intelligent_device["completed_dispatches"] = current_completed
 
     def join_saving_session_event(self, event_code):
         """
@@ -1309,7 +1329,7 @@ class OctopusAPI:
         completed = intelligent_device.get("completed_dispatches", [])
 
         active_event = False
-        for dispatch in planned:
+        for dispatch in planned + completed:
             start = dispatch.get("start", None)
             end = dispatch.get("end", None)
             if start and end:
