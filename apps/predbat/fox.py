@@ -389,6 +389,10 @@ class FoxAPI:
         """
         Get device settings
         """
+        # Check if device has battery
+        if not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
+            # These controls don't exist for non-battery devices
+            return
         for key in FOX_SETTINGS:
             await self.get_device_setting(deviceSN, key)
 
@@ -447,6 +451,10 @@ class FoxAPI:
 
         """
         GET_BATTERY_CHARGING_TIME = "/op/v0/device/battery/forceChargeTime/get"
+        # Check if we have a battery
+        if not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
+            # These controls don't exist for non-battery devices
+            return {}
         result = await self.request_get(GET_BATTERY_CHARGING_TIME, datain={"sn": deviceSN}, post=False)
         if result:
             self.device_battery_charging_time[deviceSN] = result
@@ -615,6 +623,10 @@ class FoxAPI:
         """
         Publish the schedule settings to HA
         """
+        # Device must have attery to publish settings
+        if not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
+            return
+
         local_schedule = self.local_schedule.get(deviceSN, {})
         for direction in ["charge", "discharge"]:
             for attribute in ["start_time", "end_time", "soc", "enable", "power", "write"]:
@@ -854,7 +866,6 @@ class FoxAPI:
         if response.status_code in [200, 201]:
             if data is None:
                 data = {}
-            print("Fox: API Response Data: {}".format(data))
             errno = data.get("errno", 0)
             msg = data.get("msg", "")
             if errno != 0:
@@ -961,6 +972,10 @@ class FoxAPI:
             await self.publish_schedule_settings_ha(sn)
 
         for sn in self.device_settings:
+            # Device must have attery to publish settings
+            if not self.device_detail.get(sn, {}).get("hasBattery", False):
+                continue
+
             for setting in self.device_settings[sn]:
                 item = self.device_settings[sn][setting]
                 state = item.get("value", None)
