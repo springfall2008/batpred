@@ -386,6 +386,10 @@ i.e. if you change the reserve min to a level higher than the current battery So
 this can be used to workaround some firmware issues where the SoC target is used for solar charging as well as grid charging.
 When disabled the SoC target % will not be changed after a charge slot.
 
+**input_number.inverter_limit_override** When non-zero sets the maximum rate (in Watts) to set the battery charge or discharge rate to when in operation.
+Useful to workaround bad installs that trip the fuse/breaker when operating at full power.
+A value of 0 applies no limit.
+
 ## Balance Inverters
 
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).

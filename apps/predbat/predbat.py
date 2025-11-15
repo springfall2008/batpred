@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 import traceback
 import sys
 import gc
+import random
+import time
 
 # from memory_profiler import profile
 
@@ -701,6 +703,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
             if (plan_age_minutes + RUN_EVERY) > self.calculate_plan_every:
                 self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} minutes before the next run".format(dp1(plan_age_minutes), self.calculate_plan_every))
+                plan_random_delay = self.get_arg("plan_random_delay", 0)
+                if plan_random_delay > 0:
+                    delay = random.uniform(0, plan_random_delay)
+                    self.log("Adding a random delay of {:.1f} seconds before recalculating the plan....".format(delay))
+                    time.sleep(delay)
                 # Calculate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
                 self.fetch_inverter_data()

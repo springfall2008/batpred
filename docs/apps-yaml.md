@@ -245,6 +245,15 @@ such as 30 or 36 if you have a small battery and thus don't need to forecast 2 d
   forecast_hours: 48
 ```
 
+### plan_random_delay
+
+Can set the maximum number of seconds of delay when recalculating the plan after it expires. The exact delay will be between 0 and this value.
+The default is 0.
+
+```yaml
+  plan_random_delay: 30
+```
+
 ## Inverter information
 
 The template `apps.yaml` for each inverter type comes pre-configured with regular expressions that should auto-discover the Home Assistant entity names for that inverter type.
