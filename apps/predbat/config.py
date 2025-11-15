@@ -1298,7 +1298,7 @@ CONFIG_ITEMS = [
         "step": 1000,
         "unit": "W",
         "default": 0,
-    },    
+    },
 ]
 
 # These settings can be overridden by the API
