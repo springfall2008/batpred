@@ -1577,19 +1577,18 @@ class GECloudData:
         geserial = self.ge_cloud_serial
         gekey = self.ge_cloud_key
 
-        # Load cache if not already loaded
-        if not self.ge_url_cache:
-            self.load_ge_cache()
-
-        # Clean old cache entries
-        self.clean_ge_url_cache(now_utc)
-
         if not geserial:
             self.log("Error: GECloudDirect has been enabled but ge_cloud_serial is not set to your serial")
             return False
         if not gekey:
             self.log("Error: GECloudDirect has been enabled but ge_cloud_key is not set to your appkey")
             return False
+        
+        # Load cache if not already loaded
+        self.load_ge_cache()
+
+        # Clean old cache entries
+        self.clean_ge_url_cache(now_utc)
 
         headers = {"Authorization": "Bearer  " + gekey, "Content-Type": "application/json", "Accept": "application/json"}
         mdata = []
@@ -1633,6 +1632,7 @@ class GECloudData:
 
         # Save GE URL cache to disk for next time
         self.save_ge_cache()
+        self.ge_url_cache = {}
         return True
 
     def get_data(self):
