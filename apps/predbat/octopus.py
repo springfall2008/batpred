@@ -590,7 +590,7 @@ class OctopusAPI:
                     self.intelligent_device = intelligent_device
                     await self.fetch_previous_dispatch()
         return self.intelligent_device
-    
+
     async def fetch_previous_dispatch(self):
         entity_id = self.get_entity_name("binary_sensor", "intelligent_dispatch")
         old_dispatches = self.base.get_state_wrapper(entity_id, attribute="completed_dispatches", default=[])
