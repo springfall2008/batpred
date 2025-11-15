@@ -779,6 +779,9 @@ class Plan:
            self.export_window_best
            self.export_limits_best
         """
+        import time
+
+        plan_start_time = time.time()
 
         # Re-compute plan due to time wrap
         if self.plan_last_updated_minutes > self.minutes_now:
@@ -1157,6 +1160,11 @@ class Plan:
                 self.log("Warn: failed to close thread pool: {}".format(e))
                 self.log("Warn: " + traceback.format_exc())
             self.pool = None
+
+        # Record planning duration for SLO metrics
+        self.plan_last_duration_seconds = time.time() - plan_start_time
+        self.log("Plan calculation took {:.2f} seconds".format(self.plan_last_duration_seconds))
+
         # Return if we recomputed or not
         return recompute
 
