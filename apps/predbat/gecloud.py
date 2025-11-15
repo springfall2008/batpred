@@ -541,11 +541,23 @@ class GECloudDirect:
                         self.base.dashboard_item(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}), app="gecloud")
                         self.base.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
 
-    async def enable_real_time_control(self, device, registers):
+    async def enable_default_options(self, device, registers):
         for key in registers:
             reg_name = registers[key].get("name", "")
             value = registers[key].get("value", None)
             ha_name = regname_to_ha(reg_name)
+            if "inverter_max_output_active_power_percent" in ha_name:
+                if value and value != 100:
+                    self.log("GECloud: Setting inverter max output active power percent to 100 for {} was {}".format(device, value))
+                    result = await self.async_write_inverter_setting(device, key, 100)
+                    if result and ("value" in result):
+                        registers[key]["value"] = result["value"]
+                        await self.publish_registers(device, self.settings[device], select_key=key)
+                        return True
+                    else:
+                        self.log("GECloud: Failed to set inverter max output active power percent for {}".format(device))
+                        return False
+
             if "real_time_control" in ha_name:
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
@@ -857,7 +869,7 @@ class GECloudDirect:
                         if self.automatic:
                             await self.async_automatic_config(devices_dict)
                         for device in device_list:
-                            await self.enable_real_time_control(device, self.settings[device])
+                            await self.enable_default_options(device, self.settings[device])
 
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))

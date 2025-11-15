@@ -808,7 +808,6 @@ class FoxAPI:
         while retries < FOX_RETRIES:
             result, allow_retry = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
-                self.log("Fox: API Response successful for {} got {}".format(path, result))
                 return result
             if not allow_retry:
                 break
