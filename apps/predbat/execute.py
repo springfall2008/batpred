@@ -232,6 +232,22 @@ class Execute:
                                 self.log(
                                     "Inverter {} configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start))
                                 )
+
+                                # Track IOG action latency for SLO metrics (if this is an IOG slot)
+                                import time
+
+                                if hasattr(self, "octopus_intelligent_charging") and self.octopus_intelligent_charging:
+                                    # Calculate latency from slot start time
+                                    slot_start_timestamp = charge_start_time.timestamp()
+                                    current_timestamp = time.time()
+                                    latency = max(0, current_timestamp - slot_start_timestamp)  # Don't record negative latency
+
+                                    # Only record if we're within reasonable window (e.g., within 10 minutes of start)
+                                    if latency < 600:  # 10 minutes
+                                        self.iog_last_action_latency_seconds = latency
+                                        self.iog_last_action_status = "success"
+                                        self.log("IOG action latency: {:.1f} seconds from slot start".format(latency))
+
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
                             self.log(
