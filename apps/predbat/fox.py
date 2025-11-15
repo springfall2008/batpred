@@ -756,6 +756,11 @@ class FoxAPI:
         }
         """
         GET_SCHEDULER = "/op/v1/device/scheduler/get"
+
+        # Only for battery devices
+        if not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
+            return {}
+
         result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
         if result:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
