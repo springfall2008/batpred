@@ -123,7 +123,7 @@ pred_bat:
     - re:(sensor.solax([a-z_]+|)_battery(_1|)_temperature)
 
   battery_power:
-    - re:(sensor.solax([a-z_]+|)_battery(_1|)_power_charge)
+    - re:(sensor.solax([a-z_]+|)_battery_power_charge)
 
   battery_power_invert:
     - true
