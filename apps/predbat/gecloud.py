@@ -1603,14 +1603,15 @@ class GECloudData:
         self.oldest_data_time = last_updated_time
         self.mdata = mdata
 
-        # Memory optimization: Clear cached data from RAM now that we've accumulated everything
+        # Save GE URL cache to disk for next time (MUST happen before clearing RAM cache)
+        self.save_ge_cache()
+
+        # Memory optimization: Clear cached data from RAM now that we've saved to disk
         # This prevents duplicate storage - data is only in self.mdata and disk cache
         for url_key in list(self.ge_url_cache.keys()):
             if "data" in self.ge_url_cache[url_key]:
                 del self.ge_url_cache[url_key]["data"]
 
-        # Save GE URL cache to disk for next time
-        self.save_ge_cache()
         return True
 
     def get_data(self):
