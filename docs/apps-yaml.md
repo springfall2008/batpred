@@ -868,7 +868,7 @@ Note that gas rates are only required if you have a gas boiler, and an iBoost, a
 
 ## Energy Comparison
 
-You can configure in apps.yaml a **compare_list** section to define a list of Energy tariffs for Predbat to compare based on your predicted load and solar generation.
+You can configure in `apps.yaml` a **compare_list** section to define a list of Energy tariffs for Predbat to compare based on your predicted load and solar generation.
 
 See the [Predbat Compare feature](compare.md) for details of how to define the tariffs to be compared.
 
@@ -1052,7 +1052,7 @@ In `apps.yaml`, uncomment (or add) the following lines, customising to the list 
 ```
 
 Note the notation for watch_list, a single value apps.yaml configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
-but for apps.yaml configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
+but for `apps.yaml` configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
 
 ## Load Forecast
 
@@ -1203,6 +1203,20 @@ The recommended setting is 200 for Gen 1 hybrids with this issue.
 
 Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set it to 100 if your inverter allows setting it to 100%.
+
+### Savings Max Charge Slots
+
+Every day Predbat calculates the [financial savings you have made by running Predbat](output-data.md#cost-saving-data) vs not using Predbat to automate your battery activity.
+
+The are calculated by default by comparing Predbat's activity to you having one fixed nightly charge slot set to charge at the lowest import rate with a target of 100%.
+
+You can change the number of simulated charge slots for this comparison by setting:
+
+```yaml
+  calculate_savings_max_charge_slots: slots
+```
+
+If set to 0 then Demand (Eco) mode will be used as the baseline, or if non-zero then the maximum number of slots can be set (e.g. 2).
 
 ## Automatic restarts
 
