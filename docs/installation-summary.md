@@ -6,16 +6,11 @@ Please see the sections below for how to achieve each step. This is just a check
 see the [video guides](video-guides.md) section for those and other videos
 2. Make sure the right [inverter control module](install.md#inverter-control-install) is installed and running
 3. Install a file editor (either the File editor or Studio Code Server add-on) to enable you to edit configuration files if you haven't already - [Editing configuration files](install.md#editing-configuration-files-in-home-assistant)
-4. Install Predbat, either:
-    - a) Install the Predbat add-on - [Predbat add-on install](install.md#predbat-add-on-install), or
-    - b) Complete the separate installation steps:
-        - i) Install HACS if you haven't already - [HACS install](install.md#hacs-install)
-        - ii) Install AppDaemon if you haven't already - [AppDaemon install](install.md#appdaemon-install)
-        - iii) Install Predbat using HACS - [Predbat install](install.md#install-predbat-through-hacs)
-5. Register for a Solcast hobbyist account if you haven't already [Solcast install](install.md#solcast-install) and either:
-    - a) [Configure Predbat to call Solcast](install.md#predbat-direct-solcast-method) for the Solar forecast, or
-    - b) [Install and configure the Solcast integration](install.md#solcast-home-assistant-integration-method), create an automation to update Solcast a times a day,
-    and check that you see the Solcast data in Home Assistant
+4. Install - [Predbat add-on install](install.md#predbat-add-on-install) for HAOS, or as a [Docker install](install.md#docker-install)
+5. Decide on and setup a Solar Forecast. It's recommended that you use [Solcast](install.md#solcast-install), or you can use [Forecast.solar](install.md#predbat-direct-to-forecastsolar).<BR>For Solcast:
+    - Register for a Solcast hobbyist account if you haven't already [Solcast install](install.md#solcast-install) and either:
+    - [Configure Predbat to call Solcast](install.md#predbat-direct-solcast-method) for the Solar forecast, or
+    - [Install and configure the Solcast integration](install.md#solcast-home-assistant-integration-method), and check that you see the Solcast data in Home Assistant
 6. Follow the [Energy Rates](energy-rates.md) instructions to tell Predbat what your import and export energy rates are.
 If you use Octopus Energy then this includes installing the Octopus Energy integration (if you haven't already) - [Octopus Energy](energy-rates.md#octopus-energy-integration)
 7. Edit Predbat's `apps.yaml` configuration file to to match your system - [apps.yaml settings](apps-yaml.md)<BR>

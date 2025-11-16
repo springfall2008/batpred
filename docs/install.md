@@ -106,9 +106,9 @@ The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](htt
 ## Solcast Install
 
 Predbat needs a solar forecast to predict solar generation and battery charging.
-If you do have solar panels it's recommended to use the Solcast integration to retrieve your forecast solar generation.
+If you have solar panels it's recommended to use the Solcast integration to retrieve your forecast solar generation.
 
-If you do not want to use Solcast you can also use Forecast.solar (less accurate) - see below.
+If you do not want to use Solcast you can also use [Forecast.solar](#predbat-direct-to-forecastsolar) (less accurate) - see below.
 
 If you don't have one already, register for a free [Solcast hobbyist account](https://solcast.com/) and enter the details of your system.
 You can create 2 sites maximum under one (free hobbyist) account, if you have more aspects then it suggests you average the angle based on the number of panels
