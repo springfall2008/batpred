@@ -77,7 +77,7 @@ COMPONENT_LIST = {
         "class": SolarAPI,
         "name": "Solar API",
         "args": {
-            "prefix": {"required": True, "config": "prefix"},
+            "prefix": {"required": True, "config": "prefix", "default": "predbat"},
             "solcast_host": {"required": False, "config": "solcast_host"},
             "solcast_api_key": {"required": False, "config": "solcast_api_key"},
             "solcast_sites": {"required": False, "config": "solcast_sites"},
