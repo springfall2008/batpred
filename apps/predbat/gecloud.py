@@ -1361,10 +1361,10 @@ class GECloudData(ComponentBase):
     def wait_api_started(self, timeout=MAX_START_TIME):
         """
         Wait for the API to start with custom timeout
-        
+
         Args:
             timeout: Maximum time to wait in seconds
-            
+
         Returns:
             bool: True if component started successfully, False if timeout
         """

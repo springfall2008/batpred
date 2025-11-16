@@ -36,7 +36,7 @@ COMPONENT_LIST = {
         },
         "can_restart": False,
         "phase": 0,
-        "new": True
+        "new": True,
     },
     "ha": {
         "class": HAInterface,
@@ -50,16 +50,9 @@ COMPONENT_LIST = {
         },
         "can_restart": False,
         "phase": 0,
-        "new": True
+        "new": True,
     },
-    "ha_history": {
-        "class": HAHistory,
-        "name": "Home Assistant History",
-        "args": {},
-        "can_restart": False,
-        "phase": 0,
-        "new": True
-    },
+    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0, "new": True},
     "web": {
         "class": WebInterface,
         "name": "Web Interface",
@@ -67,7 +60,7 @@ COMPONENT_LIST = {
             "web_port": {"required": False, "config": "web_port", "default": 5052},
         },
         "phase": 0,
-        "new": True
+        "new": True,
     },
     "mcp": {
         "class": PredbatMCPServer,
@@ -78,7 +71,7 @@ COMPONENT_LIST = {
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
         "phase": 1,
-        "new": True
+        "new": True,
     },
     "solar": {
         "class": SolarAPI,
@@ -120,7 +113,7 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
-        "new": True
+        "new": True,
     },
     "gecloud_data": {
         "class": GECloudData,
@@ -145,7 +138,7 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
-        "new": True
+        "new": True,
     },
     "octopus": {
         "class": OctopusAPI,

@@ -21,6 +21,7 @@ from utils import str2time
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
 
+
 class RunThread(threading.Thread):
     def __init__(self, coro):
         self.coro = coro
@@ -154,7 +155,7 @@ class HAHistory(ComponentBase):
 
         # Update last success timestamp
         self.update_success_timestamp()
-    
+
     async def start(self):
         self.log("Info: Starting HAHistory")
         ha_interface = self.base.components.get_component("ha")

@@ -14,19 +14,20 @@ import asyncio
 import os
 import time
 
+
 class ComponentBase(ABC):
     """
     Base class for all Predbat components.
-    
+
     This class defines a standard interface that all components should implement,
     providing consistent lifecycle management, health monitoring, and event handling.
-    
+
     Components can inherit from this class to gain:
     - Standardized startup/shutdown interface
     - Health check and monitoring capabilities
     - Event handling framework
     - Common logging infrastructure
-    
+
     Attributes:
         base: Reference to the main Predbat base object
         log: Logging function from the base object
@@ -34,11 +35,11 @@ class ComponentBase(ABC):
         api_stop: Flag to signal the component to stop
         last_success_timestamp: Timestamp of the last successful operation
     """
-    
+
     def __init__(self, base, **kwargs):
         """
         Initialize the component base.
-        
+
         Args:
             base: The main Predbat base object providing system-wide services
         """
@@ -66,18 +67,21 @@ class ComponentBase(ABC):
     def arg_errors(self):
         """Get the argument errors from the base system"""
         return self.base.arg_errors
+
     @property
     def now_utc(self):
         """Get the current time in UTC"""
         return self.base.now_utc
+
     @property
     def midnight_utc(self):
         """Get today's midnight time in UTC"""
         return self.base.midnight_utc
+
     @property
     def now_utc_exact(self):
         return datetime.now(self.local_tz)
-    
+
     @property
     def minutes_now(self):
         """Get the current time in minutes since midnight"""
@@ -87,36 +91,36 @@ class ComponentBase(ABC):
     def plan_interval_minutes(self):
         """Get the plan interval in minutes"""
         return self.base.plan_interval_minutes
-    
+
     @property
     def num_cars(self):
         """Get the number of cars configured in the system"""
         return self.base.num_cars
-    
+
     @abstractmethod
     async def start(self):
         """
         Start the component's main operation loop.
-        
+
         This method should:
         - Initialize any required resources
         - Set api_started to True when ready
         - Run the main processing loop until api_stop is True
         - Clean up resources before exiting
-        
+
         Must be implemented by subclasses.
         """
         pass
-    
+
     async def stop(self):
         """
         Stop the component gracefully.
-        
+
         This method should:
         - Set api_stop to True to signal the main loop to exit
         - Wait for any ongoing operations to complete
         - Release any held resources
-        
+
         Must be implemented by subclasses.
         """
         self.api_stop = True
@@ -126,7 +130,7 @@ class ComponentBase(ABC):
     def fatal_error_occurred(self):
         """
         Notify the base system that a fatal error has occurred.
-        
+
         This method sets the fatal_error flag in the base object,
         which can trigger system-wide error handling procedures.
         """
@@ -136,28 +140,28 @@ class ComponentBase(ABC):
     def fatal_error(self):
         """
         Check if a fatal error has occurred in the base system.
-        
+
         Returns:
             bool: True if a fatal error has occurred, False otherwise
         """
         return self.base.fatal_error
 
-    def get_history_wrapper(self, entity_id, days=30, required=True, tracked=True):       
+    def get_history_wrapper(self, entity_id, days=30, required=True, tracked=True):
         return self.base.get_history_wrapper(entity_id, days=days, required=required, tracked=tracked)
-    
-    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None):     
+
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None):
         return self.base.get_state_wrapper(entity_id, default=default, attribute=attribute, refresh=refresh, required_unit=required_unit)
-    
+
     def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
         return self.base.set_state_wrapper(entity_id, state, attributes=attributes, required_unit=required_unit)
 
-    def wait_api_started(self, timeout=5*60):
+    def wait_api_started(self, timeout=5 * 60):
         """
         Wait for the component to start.
-        
+
         Args:
             timeout: Maximum time to wait in seconds (default: 5*60)
-            
+
         Returns:
             bool: True if component started successfully, False if timeout
         """
@@ -170,60 +174,60 @@ class ComponentBase(ABC):
             self.log(f"Warn: {self.__class__.__name__}: Failed to start")
             return False
         return True
-    
+
     def is_alive(self):
         """
         Check if the component is alive and functioning.
-        
+
         Default implementation checks if the component has started.
         Subclasses can override to add additional health checks.
-        
+
         Returns:
             bool: True if component is alive and healthy, False otherwise
         """
         return self.api_started
-    
+
     def last_updated_time(self):
         """
         Get the timestamp of the last successful operation.
-        
+
         Returns:
             datetime: Timestamp of last successful operation, or None if never succeeded
         """
         return self.last_success_timestamp
-    
+
     async def select_event(self, entity_id, value):
         """
         Handle select entity state changes from Home Assistant.
-        
+
         Args:
             entity_id: The entity ID that changed
             value: The new selected value
-            
+
         Default implementation does nothing. Override in subclasses that handle select events.
         """
         pass
-    
+
     async def number_event(self, entity_id, value):
         """
         Handle number entity value changes from Home Assistant.
-        
+
         Args:
             entity_id: The entity ID that changed
             value: The new numeric value
-            
+
         Default implementation does nothing. Override in subclasses that handle number events.
         """
         pass
-    
+
     async def switch_event(self, entity_id, service):
         """
         Handle switch entity service calls from Home Assistant.
-        
+
         Args:
             entity_id: The entity ID being controlled
             service: The service being called (e.g., 'turn_on', 'turn_off')
-            
+
         Default implementation does nothing. Override in subclasses that handle switch events.
         """
         pass
