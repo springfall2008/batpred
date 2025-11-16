@@ -55,7 +55,7 @@ Below this is the Predbat Entities panel which details all the other Predbat out
 
 ### Plan View
 
-This view provides an easy way to see what Predbat is planning for your battery/inverter. It displays the current Predbat plan in 30 minute segments showing import and export rates,
+This view provides an easy way to see what Predbat is planning for your battery/inverter. It displays the current Predbat plan in (by default) 30 minute segments showing import and export rates,
 Predbat's planned state for the battery (charging, discharging, etc), predicted solar generation, predicted house load, car charging, cost, etc.
 
 ![image](images/web-interface-plan-view.png)

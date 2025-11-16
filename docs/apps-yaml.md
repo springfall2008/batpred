@@ -784,7 +784,7 @@ By default, Predbat will use the central (PV50) estimate and apply to it the **i
 You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.
 
 Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
-this modulates the PV output predictions up and down over the 30-minute slot as if there were passing clouds.
+this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.
 This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
 
 - **pv_estimate** in `apps.yaml` can be used to configure Predbat to always use the 10% forecast by setting the configuration item to '10',
@@ -863,6 +863,7 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
 - **octopus_api_key** - Sets API key to communicate directly with octopus
 - **octopus_account** - Sets Octopus account number
+- **plan_interval_minutes** - Sets time duration of the slots used by Predbat for planning
 
 Note that gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)
 
@@ -973,7 +974,7 @@ Customise for your car charger sensor if it sets sensor values that are not in t
 
 - **car_charging_now** - For some cases finding details of planned car charging is difficult.<BR>
 The car_charging_now configuration item can be set to point to a Home Assistant sensor that tells you that the car is currently charging.
-Predbat will then assume this 30-minute slot is used for charging regardless of the plan.<BR>
+Predbat will then assume this slot is used for charging regardless of the plan.<BR>
 If Octopus Intelligent Charging is enabled and car_charging_now indicates the car is charging then Predbat will also assume that this is a
 low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.<BR>
 WARNING: Some cars will briefly start charging as soon as they are plugged in, which Predbat will detect and assume that this is a low rate slot even when it isn't.
@@ -1114,7 +1115,7 @@ weirdness you may have from your inverter and battery setup.
 ### Base load
 
 Sometimes the load predictions can yield near zero data due to inaccuracy of data (e.g. a second PV system not tracked, car data being unreliable, poor sensors).
-In order to not get unrealistically low values you can set a base load value (in watts) which Predbat will use as a minimum load for a 30-minute period.
+In order to not get unrealistically low values you can set a base load value (in watts) which Predbat will use as a minimum load for a slot duration.
 
 To set a base load set **base_load** as an integer value in watts.
 
@@ -1122,7 +1123,7 @@ To set a base load set **base_load** as an integer value in watts.
    base_load: 300
 ```
 
-The above example load forecasts will now not fall below 300 watts which would be 0.15 kWh in a 30-minute period.
+The above example load forecasts will now not fall below 300 watts which would be 0.15 kWh in a (default) 30-minute period.
 
 ### Clock skew
 

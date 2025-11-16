@@ -15,7 +15,7 @@ writes continuously, you could eventually encounter problems.
 - For example, on a current GivEnergy inverter, it's estimated that the usable limit is around 1 million register writes (although firmware changes may increase this limit).
 - This would allow approximately 270 writes per day, or one every 5 minutes.
 - Each change of inverter mode requires multiple register writes — e.g. charge start time, end time, scheduled charge enable, set battery pause mode, etc. — which could total around 6 registers.
-- This means one change of mode every 30 minutes, on average, would be acceptable.
+- This means one change of mode every slot, (by default) every 30 minutes, on average, would be acceptable.
 - However, as most plans include longer intervals (often hours) where the battery is in Demand mode, Charging, or Exporting — during which registers are not updated — it is unlikely that this limit will be exceeded.
 
 As different inverter designs may have different limits, it's wise to avoid making your plan too complex if it doesn't result in meaningful gains.

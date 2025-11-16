@@ -6,7 +6,7 @@ It automatically runs every 5 minutes and will update its prediction for the hom
 Predbat will automatically decide when to charge and discharge your battery to achieve the best (lowest) cost spend within the parameters you have set.
 It uses the solar production forecast from Solcast combined with your historical energy usage to make this prediction.
 
-- The output is a prediction of the battery levels, solar generation, house load, charging activity, discharging activity, costs and import and export amounts based on 30-minute slots.
+- The output is a prediction of the battery levels, solar generation, house load, charging activity, discharging activity, costs and import and export amounts based on (by default) 30-minute slots.
 - Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Energy integration
     - Both import and export rates are supported.
     - Intelligent Octopus is also supported and takes into account allocated charging slots.  
@@ -40,8 +40,8 @@ The inverter also converts AC power from the grid into DC to charge a battery.
 - **AC Coupled** - A battery that comes with its own inverter and is always charged or discharged with AC (using an internal inverter)
 - **Micro Inverters** - Small inverters that are fitted in line with the DC solar panels and produce AC power on a per-panel basis. Typically used with an AC-coupled battery.
 - **Slot** - A period of time where Predbat acts e.g. charging. In Predbat everything is a multiple of 5 minutes
-    - Charge slots are always in multiples of 30 minutes and align to a 30-minute boundary to match the way energy rates are allocated
-    - Discharge slots can be any multiple of 5 minutes and always finish on a 30-minute boundary.
+    - Charge slots are always in multiples of the [plan interval duration](energy-rates.md#plan-interval), default is 30 minutes, and align to the interval time boundaries to match the way energy rates are allocated
+    - Discharge slots can be any multiple of 5 minutes and always finish on a plan interval (default 30-minute) boundary.
 - **Loss** - Refers to energy lost in your system due to heat or other factors.
 
 - **PV10** - A prediction of the 10% scenario for solar, this is like a worst case, occurs 1 in 10 days

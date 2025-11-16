@@ -34,7 +34,7 @@ If you get an error 'Custom element doesn't exist: html-template-card' then you'
 
 ## Understanding the Predbat plan
 
-For every half-hour period (slot) that Predbat has planned for (the *forecast_hours* setting in `apps.yaml`), the Predbat plan shows:
+For every period (slot) that Predbat has planned for (the *forecast_hours* setting in `apps.yaml`), the Predbat plan shows:
 
 - The import rate in pence for that slot
 - The export rate in pence for that slot
@@ -44,7 +44,7 @@ For every half-hour period (slot) that Predbat has planned for (the *forecast_ho
 - Forecast house load (from your historical load data)
 - Planned car charging (if car charging is configured in Predbat)
 - Planned iBoost immersion heating (if iBoost is configured)
-- What the battery SoC will be at the start of the 30-minute slot
+- What the battery SoC will be at the start of the slot
 - The forecast cost for the half-hour slot
 - A running total cost
 - Forecast CO2 Carbon intensity and Carbon footprint emitted by the grid's electricity generation, and the direction of travel over the slot (if carbon forecasting is enabled)
@@ -72,8 +72,9 @@ Cost symbols:
 
 Explaining each column in the Predbat plan in more detail:
 
-- **Time** - Predbat plans your home, solar and battery load in 30-minute slots, on the :00 and :30 minutes past each hour.
+- **Time** - Predbat plans your home, solar and battery load in (by default) 30-minute slots, on the :00 and :30 minutes past each hour.
 The Predbat slots are therefore aligned to Octopus Agile slots or rate change times on any other tariff.
+The slot length defaults to being 30 minutes long, but can be changed by setting **[plan_interval_minutes](energy-rates.md#plan-interval)** in `apps.yaml`.
 
 - **Import** - The import rate for that time slot in pence.<BR>
 The rate will be coloured Blue if the price is zero pence or negative,
@@ -98,12 +99,12 @@ or downwards if the battery SoC is decreasing (i.e. discharging).<BR>
 If Predbat's plan has been over-ridden and the [slot has been manually controlled](customisation.md#manual-control) to be a Charging slot, Discharging or Idle,
 then alongside the State and battery SoC arrow will be an upside down 'F' (&#8526;) indicating it is a 'Forced' activity.<BR>
 The slot will be coloured Green for Charging, Yellow for Discharging, Silver Grey for Freeze Charging, Dark Grey for Freeze Discharging, Pale Blue for Hold Charging or White for Idle.<BR>
-NB: The Predbat plan is shown in 30-minute time slots but Predbat actually plans battery activity in 5-minute segments within the 30-minute slot.
+NB: The Predbat plan is shown in (by default) 30-minute time slots, but Predbat actually plans battery activity in 5-minute segments within the slot.
 If the Home Assistant control *switch.predbat_calculate_export_oncharge* is set to True,
-then within a 30-minute slot (and depending on import and export rates), Predbat could potentially plan for there to be both
+then within a slot (and depending on import and export rates), Predbat could potentially plan for there to be both
 charging and discharging activity - if Predbat plans this, the state will show as both Charging and Exporting in the same slot.
 
-- **Limit %** - Alongside any battery activity (charging, discharging, etc) there will be a SoC limit. This limit is what the SoC is planned to be at the end of the 30-minute time slot.
+- **Limit %** - Alongside any battery activity (charging, discharging, etc) there will be a SoC limit. This limit is what the SoC is planned to be at the end of the slot.
 e.g. 'Charge&nearr; 70%' is charge to 70% SoC, and 'Exp&searr; 4%' is force exporting the battery to the 4% reserve level.<BR>
 If Predbat is planning a slow charge or slow export then the limit will be preceded by a snail symbol (&#x1F40C;) and will be shown as 'limit.tens_of_percentage_rate_reduction'. e.g.: 16.3 means limit of 16% and charge/discharge at 70% of normal rate.
 
@@ -151,7 +152,7 @@ As you can see the Total continues to increase in the plan past midnight with ea
 the Total from the preceding slot plus the Cost estimate from the preceding slot - a reminder that Total gives the running total *at the start* of the slot.<BR>
 The total cost is always coloured White.
 
-- **CO2 (g/kWh)** - The estimated CO2 Carbon intensity emitted by the grid when generating electricity at the start of the 30-minute slot.
+- **CO2 (g/kWh)** - The estimated CO2 Carbon intensity emitted by the grid when generating electricity at the start of the slot.
 This column will only be shown if *switch.predbat_carbon_enable* is set to True.<BR>
 The CO2 value will be coloured according to how high the carbon footprint intensity is: greater or equal to 450g/kWh it will be deep red; greater or equal to 290, dark red;
 then golden orange from 200 upwards; yellow from 120; green from 40 and light green if less than 40.
