@@ -547,7 +547,7 @@ class Prediction:
             reserve_expected = reserve
             import_rate = rate_import.get(minute_absolute, 0)
             if io_adjusted.get(minute_absolute, 0) and pv10 and minute > 30:
-                import_rate = self.rate_max # Assume in worst case that slot goes away and max rate applies
+                import_rate = self.rate_max  # Assume in worst case that slot goes away and max rate applies
             export_rate = rate_export.get(minute_absolute, 0)
 
             # Alert?
