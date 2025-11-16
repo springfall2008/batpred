@@ -101,6 +101,8 @@ class FoxAPI:
                         # and we get the realtime data every 5 minutes
                         await self.get_device_list()
                         self.log("Fox API: Found {} devices".format(len(self.device_list)))
+                        if not self.device_list:
+                            raise Exception("FoxAPI: No devices found, unable to start API")
 
                         # Get per device data
                         for device in self.device_list:
@@ -797,6 +799,7 @@ class FoxAPI:
         GET_DEVICE_LIST = "/op/v0/device/list"
         query = {"pageSize": 100, "currentPage": 1}
         result = await self.request_get(GET_DEVICE_LIST, post=True, datain=query)
+        devices = []
         if result:
             devices = result.get("data", [])
             self.device_list = devices
