@@ -169,7 +169,7 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "*",
         "icon": "mdi:multiplication",
-        "default": 1.0,
+        "default": 1.05,
     },
     {
         "name": "battery_loss",

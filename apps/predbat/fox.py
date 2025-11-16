@@ -101,6 +101,8 @@ class FoxAPI:
                         # and we get the realtime data every 5 minutes
                         await self.get_device_list()
                         self.log("Fox API: Found {} devices".format(len(self.device_list)))
+                        if not self.device_list:
+                            raise Exception("FoxAPI: No devices found, unable to start API")
 
                         # Get per device data
                         for device in self.device_list:
@@ -725,7 +727,7 @@ class FoxAPI:
                     value = self.base.get_state_wrapper(entity_id_switch, default="off")
                     self.local_schedule[deviceSN][attribute] = 1 if value == "on" else 0
 
-    async def get_scheduler(self, deviceSN):
+    async def get_scheduler(self, deviceSN, checkBattery=True):
         """
         Get device scheduler
         {
@@ -758,20 +760,18 @@ class FoxAPI:
         GET_SCHEDULER = "/op/v1/device/scheduler/get"
 
         # Only for battery devices
-        if not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
+        if checkBattery and not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
             return {}
+
+        detail = self.device_detail.get(deviceSN, {})
+        inverter_capacity = detail.get("capacity", 0) * 1000.0
 
         result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
         if result:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
-            # XXX: Fox seems to be have an issue with FD Power max value, no maximum is listed but the default fdPwr listed in disabled groups seems to be the max so find that
-            fdMax = 0
-            for group in result.get("groups", []):
-                if group.get("enable", 1) == 0:
-                    fdMax = max(fdMax, group.get("fdPwr", 0))
-                    break
-            if fdMax:
-                self.fdpwr_max[deviceSN] = min(fdMax, self.fdpwr_max[deviceSN])
+            # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity
+            if inverter_capacity:
+                self.fdpwr_max[deviceSN] = min(inverter_capacity, self.fdpwr_max[deviceSN])
 
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
             self.log("Fox: Fetched schedule got {} fdPwr max {} fdSoc min {}".format(result, self.fdpwr_max[deviceSN], self.fdsoc_min[deviceSN]))
@@ -799,6 +799,7 @@ class FoxAPI:
         GET_DEVICE_LIST = "/op/v0/device/list"
         query = {"pageSize": 100, "currentPage": 1}
         result = await self.request_get(GET_DEVICE_LIST, post=True, datain=query)
+        devices = []
         if result:
             devices = result.get("data", [])
             self.device_list = devices
@@ -1307,7 +1308,7 @@ async def test_fox_api(api_key):
     # Create a mock base object
     mock_base = MockBase()
 
-    sn = "60JH37203B3B015"
+    sn = "609H50204BPM048"
 
     # Create FoxAPI instance with a lambda that returns the API key
     fox_api = FoxAPI(api_key, False, mock_base)
@@ -1318,8 +1319,10 @@ async def test_fox_api(api_key):
     # print(res)
     # res = await fox_api.get_battery_charging_time(sn)
     # print(res)
-    res = await fox_api.get_scheduler(sn)
-    # print(res)
+    res = await fox_api.get_device_detail(sn)
+    print(res)
+    res = await fox_api.get_scheduler(sn, checkBattery=False)
+    print(res)
     return 1
     # res = await fox_api.compute_schedule(sn)
     # res = await fox_api.publish_data()
@@ -1337,9 +1340,9 @@ async def test_fox_api(api_key):
     new_slot["startMinute"] = 30
     new_slot["endHour"] = 12
     new_slot["endMinute"] = 00
-    new_slot["fdSoc"] = 20
-    new_slot["fdPwr"] = 4000
-    new_slot["minSocOnGrid"] = 20
+    new_slot["fdSoc"] = 10
+    new_slot["fdPwr"] = 5000
+    new_slot["minSocOnGrid"] = 10
     new_slot2 = {}
     new_slot2["enable"] = 1
     new_slot2["workMode"] = "ForceCharge"

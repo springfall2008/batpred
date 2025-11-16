@@ -167,6 +167,8 @@ class Prediction:
             self.car_charging_battery_size = base.car_charging_battery_size
             self.rate_import = base.rate_import
             self.rate_export = base.rate_export
+            self.io_adjusted = base.io_adjusted
+            self.rate_max = base.rate_max
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
             self.load_minutes_step = load_minutes_step
@@ -393,6 +395,7 @@ class Prediction:
 
         rate_import = self.rate_import
         rate_export = self.rate_export
+        io_adjusted = self.io_adjusted
 
         # Data structures creating during the prediction
         predict_soc = {}
@@ -543,6 +546,8 @@ class Prediction:
             prev_soc = soc
             reserve_expected = reserve
             import_rate = rate_import.get(minute_absolute, 0)
+            if io_adjusted.get(minute_absolute, 0) and pv10 and minute > 30:
+                import_rate = self.rate_max  # Assume in worst case that slot goes away and max rate applies
             export_rate = rate_export.get(minute_absolute, 0)
 
             # Alert?
