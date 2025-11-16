@@ -12,6 +12,7 @@ import random
 import time
 import yaml
 import os
+from component_base import ComponentBase
 
 """
 GE Cloud data download
@@ -201,13 +202,13 @@ def regname_to_ha(name):
     return name
 
 
-class GECloudDirect:
-    def __init__(self, direct, api_key, automatic, base):
-        """
-        Setup client
-        """
-        self.base = base
-        self.log = base.log
+class GECloudDirect(ComponentBase):
+    """
+    GivEnergy Cloud Direct API interface
+    """
+
+    def initialize(self, ge_cloud_direct, api_key, automatic):
+        """Initialize the GE Cloud Direct component"""
         self.api_key = api_key
         self.automatic = automatic
         self.register_list = {}
@@ -215,8 +216,6 @@ class GECloudDirect:
         self.status = {}
         self.meter = {}
         self.info = {}
-        self.stop_cloud = False
-        self.api_started = False
         self.register_entity_map = {}
         self.long_poll_active = False
         self.pending_writes = {}
@@ -228,33 +227,6 @@ class GECloudDirect:
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
-        self.last_success_timestamp = None
-
-    def wait_api_started(self):
-        """
-        Return if the API has started
-        """
-        self.log("GECloud: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < MAX_START_TIME and not self.api_fatal:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: GECloud: API failed to start in required time")
-            return False
-        return True
-
-    def is_alive(self):
-        """
-        Check if the API is alive
-        """
-        return self.api_started
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
 
     async def switch_event(self, entity_id, service):
         """
@@ -799,7 +771,6 @@ class GECloudDirect:
         Start the client
         """
 
-        self.stop_cloud = False
         self.api_started = False
         self.polling_mode = True
         # Get devices using the modified auto-detection (returns dict)
@@ -840,7 +811,7 @@ class GECloudDirect:
             return
 
         seconds = 0
-        while not self.stop_cloud and not self.base.fatal_error:
+        while not self.api_stop and not self.fatal_error:
             try:
                 if seconds % 60 == 0:
                     for device in device_list:
@@ -882,11 +853,9 @@ class GECloudDirect:
             if not self.api_started:
                 print("GECloud API Started")
                 self.api_started = True
+            self.update_success_timestamp()
             await asyncio.sleep(5)
             seconds += 5
-
-    async def stop(self):
-        self.stop_cloud = True
 
     async def async_send_evc_command(self, uuid, command, params):
         """
@@ -1066,7 +1035,7 @@ class GECloudDirect:
         """
         Get list of EVC sessions
         """
-        now = datetime.now(timezone.utc)
+        now = self.now_utc_exact
         start = now - timedelta(hours=24)
         start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_time = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1080,7 +1049,7 @@ class GECloudDirect:
         """
         Get smart device data points
         """
-        now = datetime.now(timezone.utc)
+        now = self.now_utc_exact
         start = now - timedelta(minutes=10)
         start_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_time = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1355,7 +1324,7 @@ class GECloudDirect:
         if response.status_code in [200, 201]:
             if data is None:
                 data = {}
-            self.last_success_timestamp = datetime.now(timezone.utc)
+            self.update_success_timestamp()
             return data
         if response.status_code in [401, 403, 404, 422]:
             # Unauthorized
@@ -1369,37 +1338,39 @@ class GECloudDirect:
         return None
 
 
-class GECloudData:
-    def __init__(self, enable_data, ge_cloud_key, ge_cloud_serial, days_previous, base):
-        """
-        Setup client
-        """
-        self.base = base
-        self.log = base.log
+class GECloudData(ComponentBase):
+    """
+    GivEnergy Cloud Data download and caching
+    """
+
+    def initialize(self, ge_cloud_data, ge_cloud_key, ge_cloud_serial, days_previous):
+        """Initialize the GE Cloud Data component"""
         self.ge_cloud_key = ge_cloud_key
         self.ge_cloud_serial_config_item = ge_cloud_serial
         self.days_previous = days_previous
         self.ge_cloud_serial = None
-        self.enable_data = enable_data
         self.api_fatal = False
-        self.api_started = False
-        self.stop_cloud = False
         self.ge_url_cache = {}
         self.mdata = []
 
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
-        self.last_success_timestamp = None
         self.oldest_data_time = None
 
-    def wait_api_started(self):
+    def wait_api_started(self, timeout=MAX_START_TIME):
         """
-        Return if the API has started
+        Wait for the API to start with custom timeout
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            bool: True if component started successfully, False if timeout
         """
         self.log("GECloudData: Waiting for API to start")
         count = 0
-        while not self.api_started and count < MAX_START_TIME and not self.api_fatal:
+        while not self.api_started and count < timeout and not self.api_fatal:
             time.sleep(1)
             count += 1
         if not self.api_started:
@@ -1407,38 +1378,22 @@ class GECloudData:
             return False
         return True
 
-    def is_alive(self):
-        """
-        Check if the API is alive
-        """
-        return self.api_started
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        Turn into localtime as we are keeping UTC internally
-        """
-        return self.last_success_timestamp
-
     async def start(self):
         """
         Start the client
         """
-
-        self.stop_cloud = False
-        self.api_started = False
         self.max_days_previous = max(self.days_previous) + 1
 
         # Resolve any templated values
-        self.ge_cloud_serial = self.base.get_arg(self.ge_cloud_serial_config_item, default="")
+        self.ge_cloud_serial = self.get_arg(self.ge_cloud_serial_config_item, default="")
 
         self.log("GECloudData: Starting up with max_days_previous {} and serial {}".format(self.max_days_previous, self.ge_cloud_serial))
 
         seconds = 0
-        while not self.stop_cloud and not self.base.fatal_error:
+        while not self.api_stop and not self.fatal_error:
             try:
                 if seconds % (10 * 60) == 0:
-                    now_utc = datetime.now(timezone.utc)
+                    now_utc = self.now_utc_exact
                     await self.download_ge_data(now_utc)
 
             except Exception as e:
@@ -1447,11 +1402,9 @@ class GECloudData:
             if not self.api_started:
                 print("GECloudData API Started")
                 self.api_started = True
+            self.update_success_timestamp()
             await asyncio.sleep(5)
             seconds += 5
-
-    async def stop(self):
-        self.stop_cloud = True
 
     def get_ge_cache_filename(self):
         cache_path = self.base.config_root + "/cache"
@@ -1614,7 +1567,7 @@ class GECloudData:
                         self.log("Warn: GECloudDirect: Error downloading GE data from URL {}".format(url))
                         continue
                 else:
-                    self.last_success_timestamp = datetime.now(timezone.utc)
+                    self.update_success_timestamp()
                 mdata.extend(darray)
                 # self.log("Info: GECloud downloaded {} data points".format(len(darray)))
             days_prev_count += 1

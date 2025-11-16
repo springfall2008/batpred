@@ -27,10 +27,9 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.27.21"
-
+THIS_VERSION = "v8.28.0"
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -1323,9 +1322,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         Setup the app, called once each time the app starts
         """
         self.pool = None
-        if "hass_api_version" not in self.__dict__:
-            self.hass_api_version = 1
-        self.log("Predbat: Startup {} hass version {}".format(__name__, self.hass_api_version))
+        self.log("Predbat: Startup {}".format(__name__))
         self.update_time(print=False)
         run_every = RUN_EVERY * 60
         now = self.now

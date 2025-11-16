@@ -26,6 +26,8 @@ from aiohttp import web
 import time
 import secrets
 import jwt as pyjwt
+import hashlib
+from component_base import ComponentBase
 
 
 """
@@ -41,31 +43,25 @@ Example usage in VSCode with OAuth
 """
 
 
-class PredbatMCPServer:
+class PredbatMCPServer(ComponentBase):
     """
     Model Context Protocol (MCP) Server for Predbat with OAuth support
     """
 
-    def __init__(self, enable, mcp_secret, mcp_port, base):
+    def initialize(self, mcp_enable, mcp_secret, mcp_port):
         """Initialize the MCP server component"""
-        self.enable = enable
+        self.mcp_enable = mcp_enable
         self.mcp_secret = mcp_secret
         self.mcp_port = mcp_port
-        self.base = base
         self.mcp_server = None
-        self.log = base.log
-        self.api_started = False
-        self.abort = False
-        self.last_success_timestamp = None
 
         # OAuth configuration
         # Derive JWT signing key from mcp_secret (but don't use it directly)
         # This keeps it stable across restarts but separate from the client secret
-        import hashlib
 
         self.jwt_secret = hashlib.sha256(f"jwt_signing_key_{self.mcp_secret}".encode()).hexdigest()
         self.jwt_algorithm = "HS256"
-        self.access_token_lifetime = timedelta(hours=24)
+        self.access_token_lifetime = timedelta(days=30)
         self.authorization_code_lifetime = timedelta(minutes=10)
 
         # Authorization codes storage (code -> user/client info)
@@ -73,7 +69,7 @@ class PredbatMCPServer:
 
     async def start(self):
         """Start the MCP server if enabled"""
-        if self.enable:
+        if self.mcp_enable:
             self.mcp_server = create_mcp_server(self.base, self.log)
             await self.mcp_server.start()
 
@@ -119,9 +115,9 @@ class PredbatMCPServer:
 
             print("MCP interface started with OAuth support")
             self.api_started = True
-            while not self.abort:
-                self.last_success_timestamp = datetime.now(timezone.utc)
-                await asyncio.sleep(2)
+            while not self.api_stop:
+                self.update_success_timestamp()
+                await asyncio.sleep(5)
             await runner.cleanup()
 
             if self.mcp_server:
@@ -129,34 +125,6 @@ class PredbatMCPServer:
 
             self.api_started = False
             print("MCP interface stopped")
-
-    async def stop(self):
-        print("MCP interface stop called")
-        self.abort = True
-        await asyncio.sleep(1)
-
-    def wait_api_started(self):
-        """
-        Wait for the API to start
-        """
-        self.log("MCP: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < 240:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: MCP: Failed to start")
-            return False
-        return True
-
-    def is_alive(self):
-        return self.api_started
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
 
     def verify_oauth_client(self, client_id: str, client_secret: str) -> bool:
         """
