@@ -554,7 +554,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.rate_export = {}
         self.rate_export_replicated = {}
         self.rate_slots = []
-        self.io_adjusted = {}
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = []
@@ -593,7 +592,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.last_service_hash = {}
         self.count_inverter_writes = {}
         self.rate_slots = []
-        self.io_adjusted = {}
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = []
