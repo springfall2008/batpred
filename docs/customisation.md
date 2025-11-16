@@ -147,13 +147,12 @@ thus allowing the plan to include potential export.
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example, a value of 0.95 would be 95% and indicate charging at 5% slower than reported.
 For GivEnergy inverters the charge rate reports the max AC rate and thus needs to be reduced by inverter losses.
-You can try computing your discharge curve and check recommendations for changing this figure in the logfile.
+You can try [computing your charge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
 The default is 1.0, i.e. no scaling.
 
 **input_number.predbat_battery_rate_max_scaling_discharge** is a percentage factor to adjust your maximum discharge rate from that reported by the inverter.
-For GivEnergy inverters the discharge rate is reported as the max AC rate and thus is fairly accurate.
-You can try computing your discharge curve and check recommendations for changing this figure in the logfile.
-The default is 1.0, i.e. no scaling.
+You can try [computing your discharge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
+The default is 1.05, i.e. battery discharges at 5% more power than the inverter reports.
 
 **switch.predbat_battery_capacity_nominal** - When set to On, Predbat uses the reported battery size from the GivTCP 'Battery Nominal Capacity' field rather than from the normal GivTCP reported 'Battery Capacity kWh' size.
 If your battery size is reported wrongly maybe try turning this on and see if it helps. Defaults to Off.
