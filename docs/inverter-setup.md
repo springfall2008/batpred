@@ -397,6 +397,23 @@ The discussion ticket is here: <https://github.com/springfall2008/batpred/issues
 - Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> over the top of your `apps.yaml`, and modify it for your system
 - Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which may be 12%
 
+- Huawei inverters can charge the battery from DC solar and discharge at one power level (e.g. 5kWh), but have a lower limit (e.g. 3kWh) for AC charging.
+At present Predbat doesn't have the ability to model separate DC and AC charging limits, so battery_rate_max is set to the upper limit in watts (e.g. 5000) in the template `apps.yaml` to ensure that Predbat doesn't limit DC charging and discharging.<BR>
+Create the following automation script which Predbat will call to start grid battery charging when required, customise the power rating to charge at and enter your own Huawei device id:
+
+```yaml
+alias: Charge battery from grid
+description: Start charging Huawei battery from grid at AC charge limit
+sequence:
+  - action: huawei_solar.forcible_charge_soc
+    data:
+      target_soc: 100
+      power: "3000"
+      device_id: XXXXXXXX
+```
+
+Note that predbat will plan the charging on the basis of the assumed higher (e.g. 5kWh) charge rate, but will recalculate and adjust the plan every 10 minutes as the battery is charged at the lower rate.
+
 ## SolarEdge Inverters
 
 - Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> over the top of your `apps.yaml` and modify it for your system

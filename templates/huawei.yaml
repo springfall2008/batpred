@@ -68,6 +68,12 @@ pred_bat:
     - sensor.inverter_input_power
   load_power:
     - sensor.power_meter_active_power
+  # grid_power measures active power in Watts on the grid side, but requires a separate Huawei power module for this
+  # if you do not have the module or any way to measure grid power, then comment it out of apps.yaml
+  # the only impact will be that there is no grid power flow shown on the Predbat web console powerflow.
+  # It has no impact on battery planning
+  grid_power:
+    - sensor.power_meter_active_power
   soc_percent:
     - sensor.battery_state_of_capacity
   #soc_kw:
@@ -94,7 +100,7 @@ pred_bat:
     - 14
 
   # Services to charge/discharge
-  charge_start_service: huawei_solar/forcible_charge_soc
+  charge_start_service: script.charge_battery_from_grid
   charge_stop_service: huawei_solar/stop_forcible_charge
   discharge_start_service: huawei_solar/forcible_discharge_soc
   discharge_stop_service: huawei_solar/stop_forcible_charge
@@ -109,9 +115,9 @@ pred_bat:
   inverter_limit:
     - 12000
 
-  # Set the maximum charge/discharge rate of the battery
+  # Set the maximum charge/discharge rate of the battery - see inverter setup guide
   battery_rate_max:
-    - 5500
+    - 5000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
