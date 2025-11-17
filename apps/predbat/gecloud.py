@@ -1149,7 +1149,7 @@ class GECloudDirect:
 
         return command_info
 
-    async def async_get_evc_device(self, uuid):
+    async def async_get_evc_device(self, uuid, previous={}):
         """
         Get EVC device
         """
@@ -1164,15 +1164,16 @@ class GECloudDirect:
             status = device.get("status", None)
             type = device.get("type", None)
             return {"uuid": uuid, "alias": alias, "serial_number": serial_number, "status": status, "online": online, "type": type, "went_offline_at": went_offline_at}
-        return {}
+        return previous
 
-    async def async_get_smart_devices(self):
+    async def async_get_smart_devices(self, previous=[]):
         """
         Get list of smart devices
         """
         device_list = await self.async_get_inverter_data_retry(GE_API_SMART_DEVICES)
-        devices = []
+        devices = previous
         if device_list is not None:
+            devices = []
             for device in device_list:
                 uuid = device.get("uuid", None)
                 other_data = device.get("other_data", {})
@@ -1181,13 +1182,14 @@ class GECloudDirect:
                 devices.append({"uuid": uuid, "alias": alias, "local_key": local_key})
         return devices
 
-    async def async_get_evc_devices(self):
+    async def async_get_evc_devices(self, previous=[]):
         """
         Get list of smart devices
         """
         device_list = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICES)
-        devices = []
+        devices = previous
         if device_list is not None:
+            devices = []
             for device in device_list:
                 uuid = device.get("uuid", None)
                 other_data = device.get("other_data", {})
