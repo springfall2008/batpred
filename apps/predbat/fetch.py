@@ -326,6 +326,19 @@ class Fetch:
         else:
             return total / total_weight
 
+    def get_now_from_cumulative(self, data, minutes_now, offset = 0, backwards=True):
+        """
+        Get the now value from an cumulative incrementing series e.g. kWh total -> kWh this minute
+        by subtracting the start of today from the current minutes value.
+        Allows skipping `offset` minutes from the start of the data to allow for e.g. sensors
+        that reset to zero with a slight latency.
+        """
+        offset = max(offset, 0) # Disallow negative offsets as those would be yesterday.
+        if backwards:
+            return max(data.get(0, 0) - data.get(max(minutes_now - offset, 0), 0), 0)
+        else:
+            return max(data.get(minutes_now, 0) - data.get(min(minutes_now, offset), 0), 0)
+        
     def get_from_incrementing(self, data, index, backwards=True):
         """
         Get a single value from an incrementing series e.g. kWh today -> kWh this minute
@@ -486,7 +499,7 @@ class Fetch:
             if "load_today" in self.args:
                 self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
-                self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
+                self.load_minutes_now = self.get_now_from_cumulative(self.load_minutes, self.minutes_now, self.todays_sensor_reset)
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             else:
                 if self.load_forecast:
@@ -502,21 +515,21 @@ class Fetch:
             # Load import today data
             if "import_today" in self.args:
                 self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
+                self.import_today_now = self.get_now_from_cumulative(self.import_today, self.minutes_now, self.todays_sensor_reset)
             else:
                 self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
                 self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
+                self.export_today_now = self.get_now_from_cumulative(self.export_today, self.minutes_now, self.todays_sensor_reset)
             else:
                 self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
                 self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-                self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
+                self.pv_today_now = self.get_now_from_cumulative(self.pv_today, self.minutes_now, self.todays_sensor_reset)
             else:
                 self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous pv data")
 
@@ -948,7 +961,7 @@ class Fetch:
         if not mdata:
             self.log("Warn: No GE Cloud data returned from GECloudData component, check if it is configured correctly")
             return
-
+        
         age = now_utc - oldest_data_time
         self.load_minutes_age = age.days
         self.load_minutes, _ = minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)
@@ -956,32 +969,33 @@ class Fetch:
         self.export_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
-        self.load_minutes_now = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0)
+        
+        self.load_minutes_now = self.get_now_from_cumulative(self.load_minutes, self.minutes_now, self.todays_sensor_reset)
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
-        self.import_today_now = self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0)
-        self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
-        self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
+        self.import_today_now = self.get_now_from_cumulative(self.import_today, self.minutes_now, self.todays_sensor_reset)
+        self.export_today_now = self.get_now_from_cumulative(self.export_today, self.minutes_now, self.todays_sensor_reset)
+        self.pv_today_now = self.get_now_from_cumulative(self.pv_today, self.minutes_now, self.todays_sensor_reset)
 
         # More up to date sensors for current values if set
         if "load_today" in self.args:
             load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
-            self.load_minutes_now = max(load_minutes.get(0, 0) - load_minutes.get(self.minutes_now, 0), 0)
+            self.load_minutes_now = self.get_now_from_cumulative(load_minutes, self.minutes_now, self.todays_sensor_reset)
             self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
 
         if "import_today" in self.args:
             import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.import_today_now = max(import_today.get(0, 0) - import_today.get(self.minutes_now, 0), 0)
+            self.import_today_now = self.get_now_from_cumulative(import_today, self.minutes_now, self.todays_sensor_reset)
 
         # Load export today data
         if "export_today" in self.args:
             export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.export_today_now = max(export_today.get(0, 0) - export_today.get(self.minutes_now, 0), 0)
+            self.export_today_now = self.get_now_from_cumulative(export_today, self.minutes_now, self.todays_sensor_reset)
 
         # PV today data
         if "pv_today" in self.args:
             pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-            self.pv_today_now = max(pv_today.get(0, 0) - pv_today.get(self.minutes_now, 0), 0)
+            self.pv_today_now = self.get_now_from_cumulative(pv_today, self.minutes_now, self.todays_sensor_reset)
 
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
@@ -1635,6 +1649,8 @@ class Fetch:
             self.log("Holiday mode is active, {} days remaining, setting days previous to 1".format(self.holiday_days_left))
         self.max_days_previous = max(self.days_previous) + 1
 
+        self.todays_sensor_reset = self.get_arg("todays_sensor_reset", 0)
+        
         self.forecast_days = int((forecast_hours + 23) / 24)
         self.forecast_minutes = forecast_hours * 60
         self.forecast_plan_hours = max(min(self.get_arg("forecast_plan_hours"), forecast_hours), 8)

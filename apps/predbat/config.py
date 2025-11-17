@@ -1242,6 +1242,16 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name:": "todays_sensor_reset",
+        "friendly_name": "Todays Load/PV/Import/Export sensor reset time",
+        "type": "input_number",
+        "min": 0,
+        "max": 15,
+        "step": 1,
+        "unit": "minutes",
+        "default": 0,
+    },
+    {
         "name": "holiday_days_left",
         "friendly_name": "Holiday days left",
         "type": "input_number",
