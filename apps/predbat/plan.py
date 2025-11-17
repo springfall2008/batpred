@@ -1777,8 +1777,12 @@ class Plan:
                 # Account for losses in average rate as it makes import higher
                 average = window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
                 if self.carbon_enable:
-                    carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
+                    carbon_intensity = self.carbon_intensity.get(max(window["start"] - self.minutes_now, 0), 0)
                     average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
+                is_adjusted = self.io_adjusted.get(window["start"], False)
+                if is_adjusted:
+                    # The risk that IOG adjusted slots will disappear means we should penalise them based on how far in the future they are
+                    average += min((max(window["start"] - self.minutes_now, 0) // 60), 10)
                 average += self.metric_self_sufficiency
                 average = dp2(average)  # Round to nearest 0.01 penny to avoid too many bands
                 if calculate_import_low_export:
@@ -1818,11 +1822,15 @@ class Plan:
                 # Account for losses in average rate as it makes export value lower
                 average = window["average"] * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle
                 if self.carbon_enable:
-                    carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
+                    carbon_intensity = self.carbon_intensity.get(max(window["start"] - self.minutes_now, 0), 0)
                     average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
                 average = dp1(average)  # Round to nearest 0.01 penny to avoid too many bands
                 if calculate_export_high_import:
                     average_import = dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
+                    is_adjusted = self.io_adjusted.get(window["start"], False)
+                    if is_adjusted:
+                        # The risk that IOG adjusted slots will disappear means we should penalise them based on how far in the future they are
+                        average_import += min((max(window["start"] - self.minutes_now, 0) // 60), 10)
                 else:
                     average_import = 0
                 window_start = window["start"]
