@@ -1149,7 +1149,7 @@ class GECloudDirect:
 
         return command_info
 
-    async def async_get_evc_device(self, uuid):
+    async def async_get_evc_device(self, uuid, previous={}):
         """
         Get EVC device
         """
@@ -1164,7 +1164,7 @@ class GECloudDirect:
             status = device.get("status", None)
             type = device.get("type", None)
             return {"uuid": uuid, "alias": alias, "serial_number": serial_number, "status": status, "online": online, "type": type, "went_offline_at": went_offline_at}
-        return {}
+        return previous
 
     async def async_get_smart_devices(self):
         """
