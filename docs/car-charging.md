@@ -62,7 +62,7 @@ configured in `apps.yaml`
 You will need to manually set this to the car's current charge level before charging, Predbat will increment it during charging sessions but will not reset it automatically.<BR>
 NB: **input_number.predbat_car_charging_manual_soc_kwh** must be set to the current kWh value of your car battery NOT a percentage SoC figure
 otherwise, Predbat won't know how much energy there currently is in the battery.<BR>
-NB2: If you have **car_charging_soc** set and working for your car SoC sensor in apps.yaml, **switch.predbat_car_charging_manual_soc** must be set to Off as otherwise the car SoC sensor will be ignored
+NB2: If you have **car_charging_soc** set and working for your car SoC sensor in `apps.yaml`, **switch.predbat_car_charging_manual_soc** must be set to Off as otherwise the car SoC sensor will be ignored
 
 - Ensure **switch.predbat_octopus_intelligent_charging** in Home Assistant is set to Off
 
