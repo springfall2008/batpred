@@ -399,7 +399,7 @@ The discussion ticket is here: <https://github.com/springfall2008/batpred/issues
 
 - Huawei inverters can charge the battery from DC solar and discharge at one power level (e.g. 5kWh), but have a lower limit (e.g. 3kWh) for AC charging.
 At present Predbat doesn't have the ability to model separate DC and AC charging limits, so battery_rate_max is set to the upper limit in watts (e.g. 5000) in the template `apps.yaml` to ensure that Predbat doesn't limit DC charging and discharging.<BR>
-Create the following automation script which Predbat will call to start grid battery charging when required, customise the power rating to charge at and enter your own Huawei device id:
+Create the following automation script which Predbat will call to start grid battery charging when required, customise the power rating to charge at, and enter your own Huawei device id:
 
 ```yaml
 alias: Charge battery from grid
