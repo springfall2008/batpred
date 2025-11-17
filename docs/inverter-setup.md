@@ -624,6 +624,19 @@ device class: Battery
 state class: Measurement
 ```
 
+If you have a LuxPower Hybrid Inverter you should enable the Predbat discharge freeze service. Enabling this utilises the Charge Last feature available on these inverters and will ensure you get the most out of Predbat.
+
+In your `apps.yaml` file:
+
+- change the 'support_discharge_freeze' line in the Inverter section from 'False' to 'True'
+- uncomment the following two lines in the 'discharge_stop_service' section so that Predbat turns switch.lux_charge_last off when it stops discharge from your inverter
+- uncomment the next three lines, so adding a new 'discharge_freeze_service'
+- make sure the indentation and alignment of these new lines is consistent with the other service entries
+
+Check that the Predbat configuration switch **switch.predbat_set_export_freeze** is turned On.
+
+After the Predbat Plan has recalculated you may notice some 'FrzExp' in the state column next to some slots.
+
 ## Growatt with Solar Assistant
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
