@@ -624,7 +624,7 @@ device class: Battery
 state class: Measurement
 ```
 
-If you have a LuxPower Hybrid Inverter you should enable the Predbat discharge freeze service. Enabling this utilises the Charge Last feature available on these inverters and will ensure you get the most out of Predbat.
+If you have a LuxPower inverter with the 'Charge Last' feature you should enable the Predbat discharge freeze service. Enabling this will ensure you get the most out of Predbat.
 
 In your `apps.yaml` file:
 

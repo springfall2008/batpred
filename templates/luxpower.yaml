@@ -80,7 +80,7 @@ pred_bat:
     write_and_poll_sleep: 10
     has_time_window: False
     support_charge_freeze: False
-  # if you have a LuxPower hybrid inverter then change support_discharge_freeze to True
+  # if you have a LuxPower inverter with 'Charge Last' feature then change support_discharge_freeze to True
     support_discharge_freeze: False
 
   charge_start_service:
@@ -95,7 +95,7 @@ pred_bat:
   discharge_stop_service:
     - service: switch.turn_off
       entity_id: "switch.lux_force_discharge_enable"
-  # if you have a LuxPower hybrid inverter then to take advantage of discharge freeze, uncomment the following five lines
+  # if you have a LuxPower inverter with 'Charge Last' feature then to take advantage of discharge freeze, uncomment the following five lines
   # - service: switch.turn_off
   #   entity_id: "switch.lux_charge_last"
   # discharge_freeze_service:
