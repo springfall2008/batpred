@@ -34,7 +34,6 @@ ohme_attribute_table = {
     "power_watts": {"friendly_name": "Ohme Power", "icon": "mdi:lightning-bolt", "unit_of_measurement": "W", "device_class": "power"},
     "power_amps": {"friendly_name": "Ohme Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "device_class": "current"},
     "power_volts": {"friendly_name": "Ohme Voltage", "icon": "mdi:sine-wave", "unit_of_measurement": "V", "device_class": "voltage"},
-    "ct_amps": {"friendly_name": "Ohme CT Clamp Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "device_class": "current"},
     "max_charge": {"friendly_name": "Ohme Max Charge Enabled", "icon": "mdi:battery-charging-100"},
     "available": {"friendly_name": "Ohme Available", "icon": "mdi:connection"},
     "target_soc": {"friendly_name": "Ohme Target SOC", "icon": "mdi:battery-charging", "unit_of_measurement": "%", "device_class": "battery", "min": 0, "max": 100, "step": 1},
@@ -159,7 +158,6 @@ class ChargerPower:
     watts: float
     amps: float
     volts: int | None
-    ct_amps: float
 
 
 class OhmeAPI:
@@ -226,7 +224,6 @@ class OhmeAPI:
 
                 if first or (count_seconds % (30 * 60)) == 0:
                     await self.client.async_update_device_info()
-                    await self.client.async_get_advanced_settings()
 
                 if first or (count_seconds % (120)) == 0:
                     await self.client.async_get_charge_session()
@@ -280,8 +277,8 @@ class OhmeAPI:
         battery = self.client.battery
         vehicle = self.client.current_vehicle
 
-        # self.log("Info: Ohme API: Mode: %s, Status: %s, Power: %sW, %sA, %sV, CT: %sA, Max Charge: %s, Available: %s, Target SOC: %s%%, Target Time: %s, Preconditioning: %s mins, Vehicle: %s, Slots: %s" % (
-        #         mode, status, power.watts, power.amps, power.volts, power.ct_amps, max_charge, available, target_soc,
+        # self.log("Info: Ohme API: Mode: %s, Status: %s, Power: %sW, %sA, %sV, Max Charge: %s, Available: %s, Target SOC: %s%%, Target Time: %s, Preconditioning: %s mins, Vehicle: %s, Slots: %s" % (
+        #         mode, status, power.watts, power.amps, power.volts, max_charge, available, target_soc,
         #         target_time, preconditioning, vehicle, slots)
         #        )
 
@@ -310,7 +307,6 @@ class OhmeAPI:
             self.base.dashboard_item(entity_name_sensor + "_power_watts", state=power.watts, attributes=ohme_attribute_table.get("power_watts", {}), app="ohme")
             self.base.dashboard_item(entity_name_sensor + "_power_amps", state=power.amps, attributes=ohme_attribute_table.get("power_amps", {}), app="ohme")
             self.base.dashboard_item(entity_name_sensor + "_power_volts", state=power.volts, attributes=ohme_attribute_table.get("power_volts", {}), app="ohme")
-            self.base.dashboard_item(entity_name_sensor + "_ct_amps", state=power.ct_amps, attributes=ohme_attribute_table.get("ct_amps", {}), app="ohme")
 
         # Publish boolean states
         self.base.dashboard_item(entity_name_switch + "_max_charge", state=max_charge, attributes=ohme_attribute_table.get("max_charge", {}), app="ohme")
@@ -443,7 +439,6 @@ class OhmeApiClient:
         # Charger and its capabilities
         self.device_info: dict[str, Any] = {}
         self._charge_session: dict[str, Any] = {}
-        self._advanced_settings: dict[str, Any] = {}
         self._next_session: dict[str, Any] = {}
         self._cars: list[Any] = []
 
@@ -452,7 +447,6 @@ class OhmeApiClient:
 
         self._capabilities: dict[str, bool | str | list[str]] = {}
         self._configuration: dict[str, bool | str] = {}
-        self.ct_connected: bool = False
         self.cap_available: bool = True
         self.cap_enabled: bool = False
         self.solar_capable: bool = False
@@ -625,7 +619,7 @@ class OhmeApiClient:
     @property
     def available(self) -> bool:
         """CT reading."""
-        return self._advanced_settings.get("online", False)
+        return True
 
     @property
     def power(self) -> ChargerPower:
@@ -636,7 +630,6 @@ class OhmeApiClient:
             watts=charge_power.get("watt", 0),
             amps=charge_power.get("amp", 0),
             volts=charge_power.get("volt", None),
-            ct_amps=self._advanced_settings.get("clampAmps", 0),
         )
 
     @property
@@ -903,16 +896,6 @@ class OhmeApiClient:
 
         resp = await self._make_request("GET", "/v1/chargeSessions/nextSessionInfo")
         self._next_session = resp.get("rule", {})
-
-    async def async_get_advanced_settings(self) -> None:
-        """Get advanced settings (mainly for CT clamp reading)"""
-        resp = await self._make_request("GET", f"/v1/chargeDevices/{self.serial}/advancedSettings")
-
-        self._advanced_settings = resp
-
-        # clampConnected is not reliable, so check clampAmps being > 0 as an alternative
-        if resp["clampConnected"] or (isinstance(resp.get("clampAmps"), float) and resp.get("clampAmps") > 0):
-            self.ct_connected = True
 
     async def async_update_device_info(self) -> bool:
         """Update _device_info with our charger model."""
