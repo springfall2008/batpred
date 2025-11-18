@@ -11,16 +11,16 @@ The app runs every 5 minutes and it will automatically update its prediction for
 The inputs are as follows
 
 - An external temperature sensor, can be a real one or one created by an Internet service
-- An internal temperature sensor, ideally from your home thermostat.
+- An internal temperature sensor, ideally from your home thermostat
 - The target temperature sensor, is what your home thermostat is set to.
 - A heating energy sensor in kWh (not strictly required but needed to plot historical usage and calibrate)
 - The flow temperature setting of your heating, can be static or a sensor
 - Your current energy rates, either from the Octopus Energy plugin or hand-typed into the configuration
-- Some data about your home that you have to figure out for yourself and calibrate
+- Some data about your home that you have to figure out for yourself and calibrate.
 
 The outputs are:
 
-- Prediction of the internal house temperature going forward, including times when the heating will be active.
+- Prediction of the internal house temperature going forward, including times when the heating will be active
 - Your predicted energy usage and costs. The energy usage, if electric, can also be connected to Predbat to help you project your home battery usage.
 
 Future versions will also offer Predbat to run in master mode, controlling your home's heating in the same way as a smart thermostat (e.g. Nest)
@@ -48,12 +48,13 @@ Create a new Apex chart for each chart in this template and copy the YAML code i
 
 ## Configuration guide
 
-You need to edit apps.yaml to configure your system.
+You need to edit your Predbat `apps.yaml` to configure your system.
 
-Copy the following template into The Predbat apps.yaml and edit the settings: [predheat.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/predheat.yaml)
+Copy the following [predheat.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/predheat.yaml) template and append it to the end of Predbat's `apps.yaml`, after your existing inverter/battery configuration.
 
-Set the mode (**mode**) to 'gas' or 'pump' depending on if you have a gas boiler or heat pump
-Set the external temperature sensor (**external_temperature**) either to a real sensor or create one from the open weather map by adding this sensor to your configuration.yaml file for HA:
+Set the mode (**mode**) to 'gas' or 'pump' depending on if you have a gas boiler or heat pump.
+
+Set the external temperature sensor (**external_temperature**) either to a real sensor or create one from the open weather map by adding this sensor to your `configuration.yaml` file for HA:
 
 ```yaml
 template:
@@ -141,3 +142,23 @@ If your heat source makes use of weather compensation then add the following to 
 ```
 
 Predheat will fill in the gaps between the points provided.
+
+### Link Predheat to Predbat
+
+Add a **load_forecast** entry in `apps.yaml` to configure Predbat to use the [Predheat load forecast](apps-yaml.md#load-forecast):
+
+```yaml
+  load_forecast:
+    - predheat.heat_energy$external
+```
+
+### Exclude Heat Pump load
+
+If your **load_today** sensor in `apps.yaml` already contains your heat pump load then when Predbat forecasts your house load, the heat pump load will be double counted - once from historical house load data, and once from the Predheat forecast.
+
+To resolve this you need to use **car_charging_energy** to [exclude heat pump load](apps-yaml.md#car-charging-filtering) from the historical house load energy. e.g.:
+
+```yaml
+  car_charging_energy:
+    - 'sensor.ashp_energy_today'
+```

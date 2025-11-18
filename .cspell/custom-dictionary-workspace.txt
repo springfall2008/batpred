@@ -12,6 +12,7 @@ apexcharts
 appdaemon
 appkey
 argname
+ASHP
 autodocstring
 autoflake
 automations
