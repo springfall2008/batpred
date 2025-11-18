@@ -396,7 +396,7 @@ class Fetch:
             except (ValueError, TypeError):
                 history = []
 
-            if history:
+            if isinstance(history, list) and history and history[0]:
                 item = history[0][0]
                 try:
                     last_updated_time = str2time(item["last_updated"])
