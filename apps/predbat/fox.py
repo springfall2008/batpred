@@ -1245,8 +1245,19 @@ class FoxAPI:
 
             if hasBattery and hasScheduler and capacity > 0:
                 batteries.append(sn.lower())
-            if hasPV:
-                pvs.append(sn.lower())
+                # Check if this battery inverter also has PV
+                if hasPV:
+                    pvs.append(sn.lower())
+
+        # Find any PV inverters without batteries for the battery doesn't see the PV
+        if len(pvs) < len(batteries):
+            for device in self.device_list:
+                sn = device.get("deviceSN", None)
+                detail = self.device_detail.get(sn, {})
+                hasPV = detail.get("hasPV", False)
+                hasBattery = detail.get("hasBattery", False)
+                if hasPV and not hasBattery:
+                    pvs.append(sn.lower())
 
         num_inverters = len(batteries)
         self.log("Fox API: Found {} batteries and {} PVs".format(num_inverters, len(pvs)))
