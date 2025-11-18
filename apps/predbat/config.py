@@ -1242,16 +1242,6 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
-        "name:": "todays_sensor_reset",
-        "friendly_name": "Todays Load/PV/Import/Export sensor reset time",
-        "type": "input_number",
-        "min": 0,
-        "max": 15,
-        "step": 1,
-        "unit": "minutes",
-        "default": 0,
-    },
-    {
         "name": "holiday_days_left",
         "friendly_name": "Holiday days left",
         "type": "input_number",
@@ -1330,6 +1320,7 @@ CONFIG_API_OVERRIDE = {
     "inverter_limit_discharge": True,
     "rates_import_override": True,
     "rates_export_override": True,
+    "inverter_clock_skew_midnight": True,
 }
 
 """
@@ -1768,6 +1759,7 @@ APPS_SCHEMA = {
     "ha_key": {"type": "string", "empty": False},
     "load_filter_threshold": {"type": "integer"},
     "web_port": {"type": "integer"},
+    "inverter_clock_skew_midnight": {"type": "integer", "zero": True, "allowed": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]},
     "load_today": {"type": "sensor|sensor_list", "sensor_type": "float", "required": True},
     "import_today": {
         "type": "sensor|sensor_list",
