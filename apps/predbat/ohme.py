@@ -618,7 +618,7 @@ class OhmeApiClient:
 
     @property
     def available(self) -> bool:
-        """CT reading."""
+        """Always return true due to API limitations."""
         return True
 
     @property
