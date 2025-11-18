@@ -2825,7 +2825,7 @@ class Output:
                     self.charge_window_best.append({"start": minute, "end": minute + self.plan_interval_minutes})
                     if "freeze" in status_during_slot:
                         # Assume freeze charge
-                        self.charge_limit_best.append(self.reserve_percent)
+                        self.charge_limit_best.append(self.reserve)
                     else:
                         self.charge_limit_best.append(battery_soc_yesterday_array.get(minute + self.plan_interval_minutes, 0.0))
 
