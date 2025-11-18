@@ -1249,7 +1249,7 @@ class FoxAPI:
                 if hasPV:
                     pvs.append(sn.lower())
 
-        # Find any PV inverters without batteries for the battery doesn't see the PV
+        # Find any PV inverters without batteries when the battery doesn't see the PV
         if len(pvs) < len(batteries):
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
