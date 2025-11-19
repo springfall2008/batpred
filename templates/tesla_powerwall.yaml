@@ -117,10 +117,18 @@ pred_bat:
       entity_id: select.my_home_operation_mode
       option: "backup"
       repeat: True
+  charge_freeze_service:
+    - service: switch.turn_off
+      entity_id: switch.my_home_allow_charging_from_grid
+      repeat: True
+    - service: select.select_option
+      entity_id: select.my_home_operation_mode
+      option: "backup"
+      repeat: True
   charge_stop_service:
     - service: select.select_option
       entity_id: select.my_home_operation_mode
-      option: "autonomous"
+      option: "self_consumption"
       repeat: True
     - service: number.set_value
       entity_id: number.my_home_backup_reserve
