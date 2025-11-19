@@ -779,7 +779,14 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 - make sure the inverter is already integrated into Home Assistant. Here is a ([repo](https://github.com/TypQxQ/Sigenergy-Local-Modbus)) with full integration (this is the Python version of the Sigenergy Home Assistant integration).
 - Copy the template [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) template over your `apps.yaml`, and edit for your system.
 
-The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or a package yaml:
+- All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
+
+    - sensor.sigen_plant_available_max_discharging_capacity
+    - sensor.sigen_plant_daily_consumed_energy
+    - number.sigen_plant_ess_backup_state_of_charge
+    - sensor.sigen_plant_max_active_power
+
+- The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
 
 ```yaml
     input_select:
@@ -793,6 +800,25 @@ The following additions are needed to facilitate integration with Predbat and ne
           - "Freeze Discharging"
         initial: "Demand"
         icon: mdi:battery-unknown
+
+    input_number:
+      charge_rate:
+        name: Battery charge rate
+        initial: 6950
+        min: 0
+        max: 20000
+        step: 1
+        mode: box
+        unit_of_measurement: W
+
+      discharge_rate:
+        name: Battery discharge rate
+        initial: 8000
+        min: 0
+        max: 20000
+        step: 1
+        mode: box
+        unit_of_measurement: W
 
     automation:
       - id: predbat_requested_mode_action
@@ -874,7 +900,7 @@ The following additions are needed to facilitate integration with Predbat and ne
 
       - id: "automation_sigen_ess_max_charging_limit_input_number_action"
         alias: "Predbat max charging limit action"
-        description: "Mapper from input_number.charge_rate to number.sigen_plant_ess_max_charging_limit"
+        description: "Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit"
         triggers:
           - trigger: state
             entity_id: input_number.charge_rate
@@ -899,25 +925,6 @@ The following additions are needed to facilitate integration with Predbat and ne
             data:
               value: "{{ (states('input_number.discharge_rate')| float / 1000) | round(2) | int }}"
         mode: single
-
-    input_number:
-      charge_rate:
-        name: Battery charge rate
-        initial: 6950
-        min: 0
-        max: 20000
-        step: 1
-        mode: box
-        unit_of_measurement: W
-
-      discharge_rate:
-        name: Battery discharge rate
-        initial: 8000
-        min: 0
-        max: 20000
-        step: 1
-        mode: box
-        unit_of_measurement: W
 ```
 
 ## Tesla Powerwall

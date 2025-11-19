@@ -34,7 +34,7 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
   load_today:
-    - sensor.sigen_plant_daily_consumed_energy
+    - sensor.sigen_plant_daily_load_consumption
   import_today:
     - sensor.sigen_plant_daily_grid_import_energy
   export_today:
@@ -55,6 +55,7 @@ pred_bat:
   grid_power:
     - sensor.sigen_plant_grid_active_power
 
+  # change the positive/negative sense of power sensors to match what Predbat expects
   battery_power_invert: true
   grid_power_invert: true
 
@@ -91,7 +92,8 @@ pred_bat:
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
-  inverter_limit: 6950 # For a 6kW inverter
+  inverter_limit:
+    - sensor.sigen_plant_max_active_power
 
   # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
