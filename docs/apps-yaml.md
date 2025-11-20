@@ -4,7 +4,7 @@ The basic Predbat configuration is defined in the `apps.yaml` file.
 
 Depending on how you installed Predbat the `apps.yaml` file will be held in one of three different directories in Home Assistant:
 
-- if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), apps.yaml will be in the directory `/addon_configs/6adb4f0d_predbat`,
+- if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), `apps.yaml` will be in the directory `/addon_configs/6adb4f0d_predbat`,
 
 - with the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
 
@@ -25,7 +25,7 @@ and it's very easy to end up with an incorrectly formatted file that will cause 
 
 The [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA) is a good introduction video to how YAML should be correctly structured but as a brief introduction:
 
-At the start of the apps.yaml is the predbat module definition:
+At the start of the `apps.yaml` file is the predbat module definition:
 
 ```yaml
 pred_bat:
@@ -69,16 +69,16 @@ NB: the sequence of entries in `apps.yaml` doesn't matter, as long as the YAML i
 
 You can find template configurations in the following location: <https://github.com/springfall2008/batpred/tree/main/templates>
 
-The GivEnergy GivTCP template will be installed by default but if you are using another inverter please copy the correct template into the directory
-where your `apps.yaml` is stored, replacing the existing apps.yaml file, and modify it from there.
+The GivEnergy GivTCP template will be installed by default but if you are using another inverter please copy [the correct template for your inverter](inverter-setup.md) into the directory
+where your `apps.yaml` is stored, replacing the existing `apps.yaml` file, and modify it from there.
 
-Please read [Inverter Setup](inverter-setup.md) for inverter control software and details of setting apps.yaml for non-GivEnergy inverters
+Please read [Inverter Setup](inverter-setup.md) for inverter control software and details of setting `apps.yaml` for non-GivEnergy inverters
 
 ## Checking your apps.yaml
 
 Syntax errors will be highlighted by the Home Assistant editor or via other YAML-aware editors such as VSCode.
 
-Once you have completed your apps.yaml and started Predbat you may want to open the Predbat Web Interface and click on 'apps.yaml'. Review any items shown
+Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'apps.yaml'. Review any items shown
 in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SOC if you don't have a car).
 
@@ -120,8 +120,8 @@ Sets your symbol to use for your main currency e.g. £ or $ and for 1/100th unit
 
 ### template
 
-Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
-Once you have made all other required changes to apps.yaml this line should be deleted or commented out:
+Initially set to True, this is used to stop Predbat from operating until you have finished configuring your `apps.yaml`.
+Once you have made all other required changes to `apps.yaml` this line should be deleted or commented out:
 
 ```yaml
   template: True
@@ -249,7 +249,7 @@ such as 30 or 36 if you have a small battery and thus don't need to forecast 2 d
 
 The template `apps.yaml` for each inverter type comes pre-configured with regular expressions that should auto-discover the Home Assistant entity names for that inverter type.
 
-If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
+If you have more than one inverter or entity names are non-standard then you will need to edit `apps.yaml` for your inverter entities.
 
 ### Givenergy Cloud Direct
 
@@ -306,7 +306,7 @@ If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-
 
 Only for GE inverters, this is a helper regular expression to find your inverter serial number, if it doesn't work edit it manually or change individual entities to match.
 
-If you  have more than one GivEnergy inverter you will need one per inverter to be used in the later configuration lines.  If you only have a single GivEnergy inverter then comment out all lines that refer to geserial2 in apps.yaml.
+If you  have more than one GivEnergy inverter you will need one per inverter to be used in the later configuration lines.  If you only have a single GivEnergy inverter then comment out all lines that refer to geserial2 in `apps.yaml`.
 
 ```yaml
   geserial: 're:sensor.givtcp_(.+)_soc_kwh'
@@ -314,7 +314,7 @@ If you  have more than one GivEnergy inverter you will need one per inverter to 
 ```
 
 If you are running GivTCP v3 and have an 'All-In-One' (AIO) or a 3-phase inverter then the helper regular expression will not correctly work
-and you will need to manually set geserial in apps.yaml to your inverter serial number which must be entered in lower case, e.g.:
+and you will need to manually set geserial in `apps.yaml` to your inverter serial number which must be entered in lower case, e.g.:
 
 ```yaml
   geserial: 'chNNNNgZZZ'
@@ -322,11 +322,11 @@ and you will need to manually set geserial in apps.yaml to your inverter serial 
 
 *TIP:* If you have a single GivEnergy AIO, all control is directly to the AIO and the gateway is not required.<BR>
 Check the GivTCP configuration to determine whether inverter 1 (the givtcp sensors) is the AIO or the gateway, or inverter 2 (the givtcp2 sensors) is the AIO or gateway.<BR>
-Then in apps.yaml comment out the lines corresponding to the gateway, leaving just the givtcp or givtcp2 lines for the AIO.
+Then in `apps.yaml` comment out the lines corresponding to the gateway, leaving just the givtcp or givtcp2 lines for the AIO.
 Also, delete the [appropriate givtcp_rest inverter control line](#rest-interface-inverter-control) corresponding to the gateway so that Predbat controls the AIO directly.
 
 *TIP2:* If you have multiple GivEnergy AIO's, all the AIO's are controlled by the AIO gateway and not controlled individually.<BR>
-geserial should be manually configured to be your AIO gateway serial number 'gwNNNNgZZZ' and all the geserial2 lines should be commented out in apps.yaml.
+geserial should be manually configured to be your AIO gateway serial number 'gwNNNNgZZZ' and all the geserial2 lines should be commented out in `apps.yaml`.
 You should also delete the [second givtcp_rest inverter control line](#rest-interface-inverter-control) so that Predbat controls the AIOs via the gateway.
 
 GivTCP version 3 is required for multiple AIOs or a 3-phase inverter.
@@ -353,7 +353,7 @@ Edit if necessary if you have non-standard sensor names:
 - **export_today** - Exported energy today in kWh (incrementing)
 - **pv_today** - PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
 If you have an AC-coupled inverter then enter the Home Assistant sensor for your PV inverter.<BR>
-If you don't have any PV panels, comment or delete this line out of apps.yaml.
+If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
@@ -411,7 +411,7 @@ If you need to create a ge_cloud_key, in the GivEnergy cloud portal:
 Predbat now supports GE Cloud controls directly from inside Predbat. When enabled Predbat will connect directly with the GE Cloud and expose
 the controls of your inverter inside home assistant.
 
-*Note* You will still have to configure apps.yaml to point to these controls.
+*Note* You will still have to configure `apps.yaml` to point to these controls.
 
 - **ge_cloud_direct** - Set to True to enable GE Cloud direct access
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
@@ -616,7 +616,7 @@ discharge_update_button:
 *TIP:* Some older GivEnergy inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
 GivTCP does not recognise this and so still provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
 Predbat can report an error trying to set them, or they revert back to 00:00:00 after being changed by Predbat and there will also be errors setting these controls reported in the GivTCP log.<BR>
-For these inverters the pause_start_time and pause_end_time entries should be commented out in apps.yaml to stop Predbat trying to use them.
+For these inverters the pause_start_time and pause_end_time entries should be commented out in `apps.yaml` to stop Predbat trying to use them.
 
 See section below on [creating the battery charge power curve](#workarounds).
 
@@ -624,7 +624,7 @@ See section below on [creating the battery charge power curve](#workarounds).
 
 For GivEnergy inverters Predbat can control the inverter directly via REST instead of via the Home Assistant GivTCP inverter controls detailed above.
 
-When configured in apps.yaml, control communication from Predbat to GivTCP is via REST which bypasses some issues with MQTT.
+When configured in `apps.yaml`, control communication from Predbat to GivTCP is via REST which bypasses some issues with MQTT.
 
 - **givtcp_rest** - One entry per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
 is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter - if you don't have a second inverter
@@ -670,7 +670,7 @@ Note that **device_id** will be passed to the service automatically, or it can b
 
 Some Inverters are enabled with an MQTT API, in this case certain MQTT messages are send via the HA MQTT service.
 
-The **mqtt_topic** in apps.yaml set in the root of the MQTT topic (shown as **topic** below).
+The **mqtt_topic** in `apps.yaml` set in the root of the MQTT topic (shown as **topic** below).
 
 #### Set reserve
 
@@ -883,14 +883,14 @@ These approaches and the set of settings that need to be configured together are
 
 The full list of car charging configuration items in `apps.yaml` that are used to plan car charging activity within Predbat are described below.
 The Home Assistant controls (switches, input numbers, selectors, etc) related to car charging are described in [Car Charging configuration within Home Assistant](car-charging.md),
-with a brief mention of pertinent controls included here alongside the apps.yaml configuration items where relevant for context.
+with a brief mention of pertinent controls included here alongside the `apps.yaml` configuration items where relevant for context.
 
-- **num_cars** should be set in apps.yaml to the number of cars you want Predbat to plan for.
-Set to 0 if you don't have an EV (and the remaining car sensors in apps.yaml can safely be commented out or deleted as they won't be required).<BR>
+- **num_cars** should be set in `apps.yaml` to the number of cars you want Predbat to plan for.
+Set to 0 if you don't have an EV (and the remaining car sensors in `apps.yaml` can safely be commented out or deleted as they won't be required).<BR>
 NB: num_cars must be set correctly regardless of whether you are using Octopus Intelligent Go to control your EV charging or Predbat to control the charging;
 or else Predbat could start discharging your battery when the EV is charging.
 
-- **car_charging_exclusive** should be set to True for each car in apps.yaml if you have multiple cars configured in Predbat, but only one car charger.
+- **car_charging_exclusive** should be set to True for each car in `apps.yaml` if you have multiple cars configured in Predbat, but only one car charger.
 This indicates that only one car may charge at once (the first car reporting as plugged in will be considered as charging).
 If you set this to False for each car then it is assumed that the car can charge independently, and hence two or more cars could charge at once.
 One entry per car.
@@ -961,7 +961,7 @@ Predbat uses the time entity (time.octopus_energy_{{ACCOUNT_ID}}_intelligent_tar
 which is only suitable for tariffs other than IOG.
 
 If you don't use Intelligent Octopus then the above 3 Octopus Intelligent configuration lines in `apps.yaml` can be commented out or deleted,
-and there are a number of other apps.yaml configuration items that should be set:
+and there are a number of other `apps.yaml` configuration items that should be set:
 
 - **car_charging_planned** - Optional, can be set to a Home Assistant sensor (e.g. from your car charger integration)
 which lets Predbat know the car is plugged in and planned to charge during low-rate slots.
@@ -1040,7 +1040,7 @@ Additionally Predbat can 'watch' a number of Home Assistant entities and if one 
 
 This can be useful for EV owners such as to detect when you have plugged the EV in (for Predbat to stop the battery discharging), and with Intelligent Octopus Go if Octopus gives you additional charge slots.
 
-In `apps.yaml`, uncomment (or add) the following lines, customising to the list of configuration items you have setup in apps.yaml and want Predbat to watch for changes for:
+In `apps.yaml`, uncomment (or add) the following lines, customising to the list of configuration items you have setup in `apps.yaml` and want Predbat to watch for changes for:
 
 ```yaml
   watch_list:
@@ -1053,7 +1053,7 @@ In `apps.yaml`, uncomment (or add) the following lines, customising to the list 
     - '{car_charging_now}'
 ```
 
-Note the notation for watch_list, a single value apps.yaml configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
+Note the notation for watch_list, a single value `apps.yaml` configuration item such as **octopus_intelligent_slot** is surrounded by curly bracket parenthesis {},
 but for `apps.yaml` configuration items that can be a list such as **car_charging_soc** they are surrounded by +[ and ].
 
 ## Load Forecast
@@ -1251,7 +1251,7 @@ Some batteries tail off their charge rate at high SoC% or their discharge rate a
 Note that the charge/discharge curves *only* affect the accuracy of the charging/discharging model Predbat applies in the forward battery plan,
 Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve.
 
-If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in apps.yaml,
+If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in `apps.yaml`,
 or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant.
 
 If the battery has not recently been fully charged or fully discharged then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
@@ -1265,8 +1265,8 @@ The default is 1.0 (full power) charge to 100%.
 Modelling the charge curve becomes important if you have limited charging slots (e.g. only a few hours a night) or you wish to make accurate use of the
 [low power charging mode](customisation.md#inverter-control-options) (**switch.predbat_set_charge_low_power**).
 
-If the battery_charge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon add-on,
-or an edit being made to apps.yaml), then Predbat will automatically calculate the charging curve for you from historical battery charging information.
+If the battery_charge_power_curve option is *not* set in `apps.yaml` and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon add-on,
+or an edit being made to `apps.yaml`), then Predbat will automatically calculate the charging curve for you from historical battery charging information.
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 The logfile will also include a recommendation for how to set your **battery_rate_max_scaling** setting in HA.
@@ -1275,10 +1275,10 @@ The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_
 explains how the curve works and shows how Predbat automatically creates it.
 
 Setting this option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
-history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually configure the charge curve in apps.yaml.
+history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually configure the charge curve in `apps.yaml`.
 
 NB: For Predbat to calculate your charging curve it needs to have access to historical Home Assistant data for battery_charge_rate, battery_power and soc_kw.
-These must be configured in apps.yaml to point to Home Assistant entities that have appropriate history data for your inverter/battery.
+These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
 
 If you have a GivEnergy inverter and are using the recommended default [REST mode to control your inverter](#inverter-control-configurations)
 then you will need to uncomment out the following entries in `apps.yaml`:
@@ -1314,15 +1314,15 @@ Enter the discharging curve as a series of steps of % of max discharge rate for 
 
 The default is 1.0 (full power) discharge to 0%.
 
-If the battery_discharge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon add-on,
-or an edit being made to apps.yaml), then Predbat will automatically calculate the discharging curve for you from historical battery discharging information.
+If the battery_discharge_power_curve option is *not* set in `apps.yaml` and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon add-on,
+or an edit being made to `apps.yaml`), then Predbat will automatically calculate the discharging curve for you from historical battery discharging information.
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery discharging curve and copy/paste it into your `apps.yaml` file.
 
 Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
 
 In the same way, as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for battery_discharge_rate, battery_power and soc_kw.
-These must be configured in apps.yaml to point to Home Assistant entities that have appropriate history data for your inverter/battery.
+These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
 
 If you are using REST mode to control your GivEnergy inverter then the following entries in `apps.yaml` will need to be uncommented :
 
@@ -1383,13 +1383,13 @@ gaps in the curve above 20 will use 20 degrees, and gaps below 0 will use 0 degr
 
 Predbat can take data directly from the Meteo-Alarm feed and use it to trigger keeping your battery charged so you have power in the event of a power cut.
 
-Please look at their web site for more details. The apps.yaml must be configured to select the URL for your country.
+Please look at their web site for more details. The `apps.yaml` must be configured to select the URL for your country.
 
 The event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax.
 Any unset values are ignored.
 
 Your location (from Home Assistant) is used to filter alerts that apply only to your area. If this does not work or if you want to change the location,
-you can also set **latitude** and **longitude** in the alerts section of the apps.yaml.
+you can also set **latitude** and **longitude** in the alerts section of the `apps.yaml`.
 
 Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
 This works by using a much stronger version of best_soc_keep but only for that time period.

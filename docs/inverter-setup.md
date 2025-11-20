@@ -1074,7 +1074,7 @@ automation:
         target:
           entity_id: input_text.tesla_energy_site_id
         data:
-          value: "{{ products_response.content.response[0].energy_site_id 
+          value: "{{ products_response.content.response[0].energy_site_id }}"
 ```
 
 - A number of REST commands are required to communicate to the Tesla API's:
@@ -1094,29 +1094,41 @@ rest_command:
     method: POST
     content_type: "application/x-www-form-urlencoded"
     payload: >-
-      "grant_type=refresh_token&client_id=ownerapi&refresh_token={{ (states('input_text.tesla_refresh_token_part1') or '') + (states('input_text.tesla_refresh_token_part2') or '') +
-      (states('input_text.tesla_refresh_token_part3') or '') + (states('input_text.tesla_refresh_token_part4') or '') }}&scope=openid%20email%20offline_access"
+      grant_type=refresh_token&client_id=ownerapi&refresh_token={{
+        (states('input_text.tesla_refresh_token_part1') or '') +
+        (states('input_text.tesla_refresh_token_part2') or '') +
+        (states('input_text.tesla_refresh_token_part3') or '') +
+        (states('input_text.tesla_refresh_token_part4') or '') }}&scope=openid%20email%20offline_access"
 
   tesla_api_get_products:
     url: "https://owner-api.teslamotors.com/api/1/products"
     method: GET
     headers:
       Authorization: >-
-        "Bearer {{ (states('input_text.tesla_access_token_part1') or '') + (states('input_text.tesla_access_token_part2') or '') + (states('input_text.tesla_access_token_part3') or '') + (states('input_text.tesla_access_token_part4') or '') }}"
+        Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
+          (states('input_text.tesla_access_token_part2') or '') +
+          (states('input_text.tesla_access_token_part3') or '') +
+          (states('input_text.tesla_access_token_part4') or '') }}
 
   tesla_api_get_current_tariff:
     url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
     method: GET
     headers:
       Authorization: >-
-        "Bearer {{ (states('input_text.tesla_access_token_part1') or '') + (states('input_text.tesla_access_token_part2') or '') + (states('input_text.tesla_access_token_part3') or '') + (states('input_text.tesla_access_token_part4') or '') }}"
+        Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
+          (states('input_text.tesla_access_token_part2') or '') +
+          (states('input_text.tesla_access_token_part3') or '') +
+          (states('input_text.tesla_access_token_part4') or '') }}
 
   tesla_api_set_export_now_tariff:
     url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
     method: POST
     headers:
       Authorization: >-
-        "Bearer {{ (states('input_text.tesla_access_token_part1') or '') + (states('input_text.tesla_access_token_part2') or '') + (states('input_text.tesla_access_token_part3') or '') + (states('input_text.tesla_access_token_part4') or '') }}"
+        Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
+          (states('input_text.tesla_access_token_part2') or '') +
+          (states('input_text.tesla_access_token_part3') or '') +
+          (states('input_text.tesla_access_token_part4') or '') }}
       Content-Type: application/json
     payload: >
       {% set now = now() %}
@@ -1227,7 +1239,10 @@ rest_command:
     method: POST
     headers:
       Authorization: >-
-        "Bearer {{ (states('input_text.tesla_access_token_part1') or '') + (states('input_text.tesla_access_token_part2') or '') + (states('input_text.tesla_access_token_part3') or '') + (states('input_text.tesla_access_token_part4') or '') }}"
+        Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
+          (states('input_text.tesla_access_token_part2') or '') +
+          (states('input_text.tesla_access_token_part3') or '') +
+          (states('input_text.tesla_access_token_part4') or '') }}
       Content-Type: application/json
     payload: >
       {

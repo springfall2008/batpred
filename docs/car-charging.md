@@ -45,7 +45,7 @@ This can be useful if Octopus does not know your car battery's state of charge b
 Predbat will still assume all Octopus charging slots are low rates even if some are not used by your car.
 
 - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) (default value is off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
-This will only work correctly if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in
+This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
 
 - Let the Octopus app control when your car charges.
 
@@ -122,7 +122,7 @@ NOTE: [Multiple cars](apps-yaml.md#multiple-electric-cars) can be planned with P
 
 ## Additional Car charging configurations
 
-- If you have one charger and multiple cars configured in Predbat then set **car_charging_exclusive** in apps.yaml to `True` to indicate that only one
+- If you have one charger and multiple cars configured in Predbat then set **car_charging_exclusive** in `apps.yaml` to `True` to indicate that only one
 car may charge at once (the first car reporting as plugged in will be considered as charging). If you set this to `False` then it is assumed each car
 can charge independently and hence two or more could charge at once
 
@@ -214,7 +214,7 @@ Create a helper entity (Settings / Devices & Services / Helpers) of type 'Integr
 
 Please look into [Integration - Riemann sum integral](URL) to convert kW into kWh.
 
-And add your custom car charging energy sensor in apps.yaml in place of the template Wallbox and Zappi regular expression:
+And add your custom car charging energy sensor in `apps.yaml` in place of the template Wallbox and Zappi regular expression:
 
 **Example**
 
