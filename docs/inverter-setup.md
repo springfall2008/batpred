@@ -878,26 +878,6 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
                       entity_id: number.sigen_plant_ess_max_charging_limit
                       value: 0
 
-              # If neither of the above conditions are met, set the limits to the input numbers
-              - conditions:
-                  - condition: not
-                    conditions:
-                      - condition: state
-                        entity_id: input_select.predbat_requested_mode
-                        state: "Freeze Charging"
-                      - condition: state
-                        entity_id: input_select.predbat_requested_mode
-                        state: "Freeze Discharging"
-                sequence:
-                  - service: number.set_value
-                    data_template:
-                      entity_id: number.sigen_plant_ess_max_charging_limit
-                      value: "{{ [(states('input_number.charge_rate') | float / 1000) | round(2), states('sensor.sigen_inverter_ess_rated_charge_power') | float] | min}}"
-                  - service: number.set_value
-                    data_template:
-                      entity_id: number.sigen_plant_ess_max_discharging_limit
-                      value: "{{ [(states('input_number.discharge_rate') | float / 1000) | round(2), states('sensor.sigen_inverter_ess_rated_discharge_power') | float] | min}}"
-
       - id: "automation_sigen_ess_max_charging_limit_input_number_action"
         alias: "Predbat max charging limit action"
         description: "Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit"
@@ -909,6 +889,9 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
             target:
               entity_id: number.sigen_plant_ess_max_charging_limit
             data:
+              value: >-
+                "{{ [(states('input_number.charge_rate') | float / 1000) | round(2),
+                states('sensor.sigen_inverter_ess_rated_charge_power') | float] | min}}"
               value: "{{ (states('input_number.charge_rate')| float / 1000) | round(2) }}"
         mode: single
 
@@ -923,7 +906,10 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
             target:
               entity_id: number.sigen_plant_ess_max_discharging_limit
             data:
-              value: "{{ (states('input_number.discharge_rate')| float / 1000) | round(2) | int }}"
+              value: >-
+                "{{ [(states('input_number.discharge_rate') | float / 1000) | round(2),
+                states('sensor.sigen_inverter_ess_rated_discharge_power') | float] | min}}"
+
         mode: single
 ```
 
