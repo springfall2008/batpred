@@ -1016,7 +1016,7 @@ configured to take Octopus Intelligent car charging slots from Ohme (rather than
 ```yaml
   ohme_login: "user@domain"
   ohme_password: "xxxxxxxxx"
-  ohme_automatic: true
+  ohme_automatic_octopus_intelligent: true
 ```
 
 ## Watch List - automatically start Predbat execution
