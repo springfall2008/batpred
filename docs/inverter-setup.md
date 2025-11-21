@@ -135,21 +135,21 @@ To run PredBat with Solis hybrid inverters with firmware level prior to FB00 (yo
    The majority of settings should be correct but please check.
    You will need to un-comment the `template` line to enable it. Save it to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
    Set **solax_modbus_new** in apps.yaml to True if you have integration version 2024.03.2 or greater
-6. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
+5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
    this is not fully tested. In due course, these mode settings will be incorporated into the code.
-7. Your inverter will require a "button press" triggered by Predbat to update the schedules.
+6. Your inverter will require a "button press" triggered by Predbat to update the schedules.
 
    ```yaml
    charge_discharge_update_button:
      - button.solis_update_charge_discharge_times
    ```
    
-Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
+7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
 ## Solis Inverters FB00 or later
 
-To run PredBat with Solis hybrid inverters with firware level FB00 or later (you can recognise these by having 6 slots for charging times), follow the following steps:
+To run PredBat with Solis hybrid inverters with firmware level FB00 or later (you can recognise these by having 6 slots for charging times), follow the following steps:
 
 1. Install PredBat as per the [Installation Summary](installation-summary.md)
 2. Ensure that you have the Solax Modbus integration running and select the inverter type solis_fb00. There are a number of entities which this integration disables by default that you
@@ -160,7 +160,7 @@ To run PredBat with Solis hybrid inverters with firware level FB00 or later (you
    | `sensor.solis_rtc`           | Real Time Clock |
    | `sensor.solis_battery_power` | Battery Power   |
 
-4. Instead of `apps.yaml` use `ginlong_solis.yaml` from this Repo as your starting template.
+3. Instead of `apps.yaml` use `ginlong_solis.yaml` from this Repo as your starting template.
    The majority of settings should be correct but please check.
    You will need to update these lines:
    - Comment out:
@@ -179,13 +179,17 @@ To run PredBat with Solis hybrid inverters with firware level FB00 or later (you
    - Un-comment
 
       ```yaml
+     charge_update_button: 
      - button.solis_inverter_update_charge_times
+  
+     discharge_update_button:
      - button.solis_inverter_update_discharge_times
      ```
 
      and comment out
   
-      ```yaml
+     ```yaml
+     charge_discharge_update_button:
      - button.solis_update_charge_discharge_times
      ```
      
@@ -213,7 +217,12 @@ To run PredBat with Solis hybrid inverters with firware level FB00 or later (you
       ```yaml
      template: True
      ```
-     
+   - Set **solax_modbus_new** to True if you have integration version 2024.03.2 or greater
+4. Save the file as **apps.yaml** to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
+5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
+   If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
+   this is not fully tested. In due course, these mode settings will be incorporated into the code.
+6. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.     
 
 ## Solax Gen4 Inverters
 
