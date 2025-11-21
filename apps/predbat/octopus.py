@@ -439,6 +439,9 @@ class OctopusAPI:
             except Exception as e:
                 self.log("Error: Octopus API: {}".format(e))
                 self.log("Error: " + traceback.format_exc())
+                self.failures_total += 1
+                if hasattr(self.base, "had_errors"):
+                    self.base.had_errors = True
 
             await asyncio.sleep(10)
         await self.api.async_close()

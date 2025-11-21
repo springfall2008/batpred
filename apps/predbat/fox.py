@@ -141,6 +141,9 @@ class FoxAPI:
             except Exception as e:
                 self.log("Error: Fox API: {}".format(e))
                 self.log("Error: " + traceback.format_exc())
+                self.failures_total += 1
+                if hasattr(self.base, "had_errors"):
+                    self.base.had_errors = True
 
             await asyncio.sleep(1)
             count_seconds += 1
