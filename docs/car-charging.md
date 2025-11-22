@@ -62,7 +62,8 @@ Here Predbat plans and can initiate the car charging based on the upcoming low i
 - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned when the car is 'plugged in and ready to charge' is in the list of **car_charging_planned_response** values
 configured in `apps.yaml`
 
-- If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** to On to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars SoC in kWh.<BR>
+- If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** (for car 0) to On to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the car's SoC in kWh.<BR>
+For multiple cars, use **switch.predbat_car_charging_manual_soc_1/2/3** and **input_number.predbat_car_charging_manual_soc_kwh_1/2/3** for cars 1, 2, and 3 respectively.<BR>
 You will need to manually set this to the car's current charge level before charging, Predbat will increment it during charging sessions but will not reset it automatically.<BR>
 NB: **input_number.predbat_car_charging_manual_soc_kwh** must be set to the current kWh value of your car battery NOT a percentage SoC figure
 otherwise, Predbat won't know how much energy there currently is in the battery.<BR>
@@ -238,7 +239,7 @@ Save the `apps.yaml` file and exit.
 In Home Assistant, turn **on** the following Predbat control switches:
 
 - **switch.predbat_car_charging_hold**
-- **switch.predbat_car_charging_manual_soc**
+- **switch.predbat_car_charging_manual_soc** (for car 0, or **switch.predbat_car_charging_manual_soc_1/2/3** for additional cars)
 - **switch.predbat_car_charging_plan_smart**
 
 And turn **off** the Predbat control switch:
@@ -280,7 +281,8 @@ mode: single
 Finally, for simplicity, add the below entities to your HA Dashboard so you can set them when needed:
 
 - Car Max Charge - input_number.car_max_charge
-- Car Manual SoC - input_number.predbat_car_charging_manual_soc_kwh
+- Car Manual SoC - input_number.predbat_car_charging_manual_soc_kwh (for car 0)
+- For multiple cars, add input_number.predbat_car_charging_manual_soc_kwh_1/2/3 for cars 1/2/3
 - Car Charger Plugged in - input_select.car_charger_plugged_in
 
 Annoyingly, you have to calculate the kWh your vehicle has in total by taking the Percentage left in the car / 100 * Total Car Battery capacity.<BR>
