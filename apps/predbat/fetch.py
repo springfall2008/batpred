@@ -10,7 +10,7 @@
 # pyright: reportAttributeAccessIssue=false
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data
+from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 
@@ -934,23 +934,6 @@ class Fetch:
             },
         )
         return predicted_temp
-
-    def get_now_from_cumulative(self, data, minutes_now, backwards=True):
-        """
-        Get current value from cumulative data
-        """
-        if backwards:
-            # Work out the lowest value in a 5 minute period between minutes_now and minutes_now - 5
-            lowest = 9999999999
-            for minute in range(0, 5):
-                lowest = min(data.get(minutes_now - minute, lowest), lowest)
-            value = data.get(0, 0) - lowest
-        else:
-            lowest = 9999999999
-            for minute in range(0, 5):
-                lowest = min(data.get(minute, lowest), lowest)
-            value = data.get(minutes_now, 0) - lowest
-        return max(value, 0)
 
     def download_ge_data(self, now_utc):
         """
