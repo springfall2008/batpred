@@ -326,19 +326,19 @@ class Fetch:
         else:
             return total / total_weight
 
-    def get_now_from_cumulative(self, data, minutes_now, offset = 0, backwards=True):
+    def get_now_from_cumulative(self, data, minutes_now, offset=0, backwards=True):
         """
         Get the now value from an cumulative incrementing series e.g. kWh total -> kWh this minute
         by subtracting the start of today from the current minutes value.
         Allows skipping `offset` minutes from the start of the data to allow for e.g. sensors
         that reset to zero with a slight latency.
         """
-        offset = max(offset, 0) # Disallow negative offsets as those would be yesterday.
+        offset = max(offset, 0)  # Disallow negative offsets as those would be yesterday.
         if backwards:
             return max(data.get(0, 0) - data.get(max(minutes_now - offset, 0), 0), 0)
         else:
             return max(data.get(minutes_now, 0) - data.get(min(minutes_now, offset), 0), 0)
-        
+
     def get_from_incrementing(self, data, index, backwards=True):
         """
         Get a single value from an incrementing series e.g. kWh today -> kWh this minute
@@ -961,7 +961,7 @@ class Fetch:
         if not mdata:
             self.log("Warn: No GE Cloud data returned from GECloudData component, check if it is configured correctly")
             return
-        
+
         age = now_utc - oldest_data_time
         self.load_minutes_age = age.days
         self.load_minutes, _ = minute_data(mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, interpolate=True)
@@ -969,7 +969,6 @@ class Fetch:
         self.export_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
-        
         self.load_minutes_now = self.get_now_from_cumulative(self.load_minutes, self.minutes_now, self.inverter_clock_skew_midnight)
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
         self.import_today_now = self.get_now_from_cumulative(self.import_today, self.minutes_now, self.inverter_clock_skew_midnight)
@@ -1650,7 +1649,7 @@ class Fetch:
         self.max_days_previous = max(self.days_previous) + 1
 
         self.inverter_clock_skew_midnight = self.get_arg("inverter_clock_skew_midnight", 0)
-        
+
         self.forecast_days = int((forecast_hours + 23) / 24)
         self.forecast_minutes = forecast_hours * 60
         self.forecast_plan_hours = max(min(self.get_arg("forecast_plan_hours"), forecast_hours), 8)
