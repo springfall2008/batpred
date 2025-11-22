@@ -2435,7 +2435,7 @@ class Output:
             minutes_back = self.minutes_now + 1
             yesterday_adjustment_pct = yesterday_data.get(minutes_back, 100.0)
             yesterday_adjustment = yesterday_adjustment_pct / 100.0  # Convert from percentage to factor
-            
+
             # Cap adjustment within 1/2 to 2x
             yesterday_adjustment = max(yesterday_adjustment, 0.5)
             yesterday_adjustment = min(yesterday_adjustment, 2.0)
