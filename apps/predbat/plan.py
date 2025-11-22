@@ -2231,36 +2231,34 @@ class Plan:
                     continue
 
                 window_start = self.charge_window_best[window_n]["start"]
-                if self.calculate_best_charge and (window_start not in self.manual_all_times):
-                    best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
-                        window_n,
-                        record_charge_windows,
-                        self.charge_limit_best,
-                        self.charge_window_best,
-                        self.export_window_best,
-                        self.export_limits_best,
-                        end_record=end_record,
-                    )
-                    self.charge_limit_best[window_n] = best_soc
+                best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
+                    window_n,
+                    record_charge_windows,
+                    self.charge_limit_best,
+                    self.charge_window_best,
+                    self.export_window_best,
+                    self.export_limits_best,
+                    end_record=end_record,
+                )
+                self.charge_limit_best[window_n] = best_soc
             elif typ == "d":
                 window_start = self.export_window_best[window_n]["start"]
-                if self.calculate_best_export and (window_start not in self.manual_all_times):
-                    if not self.allow_this_export_window(window_n):
-                        continue
+                if not self.allow_this_export_window(window_n):
+                    continue
 
-                    self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                    best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
-                        window_n,
-                        record_export_windows,
-                        self.charge_limit_best,
-                        self.charge_window_best,
-                        self.export_window_best,
-                        self.export_limits_best,
-                        end_record=end_record,
-                    )
-                    self.export_limits_best[window_n] = best_soc
-                    self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                    self.export_window_best[window_n]["start"] = best_start
+                self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
+                best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
+                    window_n,
+                    record_export_windows,
+                    self.charge_limit_best,
+                    self.charge_window_best,
+                    self.export_window_best,
+                    self.export_limits_best,
+                    end_record=end_record,
+                )
+                self.export_limits_best[window_n] = best_soc
+                self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
+                self.export_window_best[window_n]["start"] = best_start
             count += 1
             if count >= 8:
                 break
@@ -2432,7 +2430,7 @@ class Plan:
 
                         if export_limit < 99 and window_length <= orig_length_target:
                             # Don't optimise a charge window that hits an export window if this is disallowed
-                            if not self.allow_this_export_window(window_n):
+                            if not self.allow_this_export_window(window_n_target):
                                 continue
 
                             is_combined = False

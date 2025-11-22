@@ -935,6 +935,23 @@ class Fetch:
         )
         return predicted_temp
 
+    def get_now_from_cumulative(self, data, minutes_now, backwards=True):
+        """
+        Get current value from cumulative data
+        """
+        if backwards:
+            # Work out the lowest value in a 5 minute period between minutes_now and minutes_now - 5
+            lowest = 9999999999
+            for minute in range(0, 5):
+                lowest = min(data.get(minutes_now - minute, lowest), lowest)
+            value = data.get(0, 0) - lowest
+        else:
+            lowest = 9999999999
+            for minute in range(0, 5):
+                lowest = min(data.get(minute, lowest), lowest)
+            value = data.get(minutes_now, 0) - lowest
+        return max(value, 0)
+
     def download_ge_data(self, now_utc):
         """
         Gets the GE Cloud data into the required format
@@ -956,32 +973,32 @@ class Fetch:
         self.export_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
-        self.load_minutes_now = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0)
+        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
-        self.import_today_now = self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0)
-        self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
-        self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
+        self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
+        self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
+        self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
 
         # More up to date sensors for current values if set
         if "load_today" in self.args:
             load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
-            self.load_minutes_now = max(load_minutes.get(0, 0) - load_minutes.get(self.minutes_now, 0), 0)
+            self.load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
             self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
 
         if "import_today" in self.args:
             import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.import_today_now = max(import_today.get(0, 0) - import_today.get(self.minutes_now, 0), 0)
+            self.import_today_now = get_now_from_cumulative(import_today, self.minutes_now, backwards=True)
 
         # Load export today data
         if "export_today" in self.args:
             export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.export_today_now = max(export_today.get(0, 0) - export_today.get(self.minutes_now, 0), 0)
+            self.export_today_now = get_now_from_cumulative(export_today, self.minutes_now, backwards=True)
 
         # PV today data
         if "pv_today" in self.args:
             pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-            self.pv_today_now = max(pv_today.get(0, 0) - pv_today.get(self.minutes_now, 0), 0)
+            self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_now, backwards=True)
 
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
