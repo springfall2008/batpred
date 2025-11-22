@@ -349,7 +349,7 @@ class Plan:
                                     hit_charge = self.hit_charge_window(self.charge_window_best, export_window[window_n]["start"], export_window[window_n]["end"])
                                     if hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
                                         # Only remove if it doesn't remove the charge window entirely
-                                        if not (export_window[window_n]["start"] <= self.charge_window_best[hit_charge]["start"] and export_window[window_n]["end"] >= self.charge_window_best[hit_charge]["end"]):                                           
+                                        if not (export_window[window_n]["start"] <= self.charge_window_best[hit_charge]["start"] and export_window[window_n]["end"] >= self.charge_window_best[hit_charge]["end"]):
                                             try_export[window_n] = 100.0
                                             all_d.remove(window_n)
 
@@ -2227,7 +2227,7 @@ class Plan:
             window_n = window_index[key]["id"]
             if typ == "c":
                 # Don't optimise a charge window that hits an export window if this is disallowed
-                if not self.allow_this_charge_window (window_n):
+                if not self.allow_this_charge_window(window_n):
                     continue
 
                 window_start = self.charge_window_best[window_n]["start"]
@@ -2547,7 +2547,7 @@ class Plan:
                     return False
             return True
         return False
-    
+
     def allow_this_export_window(self, export_window_n):
         """
         Allowed to optimise this export window?
