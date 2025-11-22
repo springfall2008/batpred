@@ -2432,7 +2432,7 @@ class Output:
                 divide_by=1.0,
                 scale=1.0,
             )
-            minutes_back = self.minutes_now + 1
+            minutes_back = minutes_now + 1
             yesterday_adjustment_pct = yesterday_data.get(minutes_back, 100.0)
             yesterday_adjustment = yesterday_adjustment_pct / 100.0  # Convert from percentage to factor
 
