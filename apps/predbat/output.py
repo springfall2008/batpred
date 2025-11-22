@@ -2415,17 +2415,57 @@ class Output:
             load_predict_stamp[stamp] = dp3(load_total_pred)
             load_actual_stamp[stamp] = dp3(actual_total_today)
 
+        # Fetch yesterday's in-day adjustment factor from history
+        yesterday_adjustment = 1.0
+        yesterday_adjustment_data = self.get_history_wrapper(entity_id=self.prefix + ".load_inday_adjustment", days=1, required=False)
+        if yesterday_adjustment_data:
+            # Extract yesterday's final adjustment value at midnight position
+            yesterday_data, _ = minute_data(
+                yesterday_adjustment_data[0],
+                1,
+                self.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=1.0,
+            )
+            minutes_back = minutes_now + 1
+            yesterday_adjustment_pct = yesterday_data.get(minutes_back, 100.0)
+            yesterday_adjustment = yesterday_adjustment_pct / 100.0  # Convert from percentage to factor
+
+            # Cap adjustment within 1/2 to 2x
+            yesterday_adjustment = max(yesterday_adjustment, 0.5)
+            yesterday_adjustment = min(yesterday_adjustment, 2.0)
+
         difference = 1.0
         if minutes_now >= 180 and actual_total_now >= 1.0 and actual_total_today > 0.0:
             # Make a ratio only if we have enough data to consider the outcome
             difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
 
+        # Calculate blending weight for yesterday vs today adjustment
+        if minutes_now < 180:
+            # Use 100% yesterday's adjustment for first 3 hours
+            yesterday_weight = 1.0
+        elif minutes_now >= 480:
+            # Use 100% today's adjustment after 8 hours
+            yesterday_weight = 0.0
+        else:
+            # Linear blend between 3 and 8 hours (180-480 minutes)
+            yesterday_weight = (480 - minutes_now) / 300.0
+
         # Work out divergence
+        today_damped_factor = 1.0
         if not self.calculate_inday_adjustment:
             difference_cap = 1.0
         else:
-            # Apply damping factor to adjustment
-            difference_cap = (difference - 1.0) * self.metric_inday_adjust_damping + 1.0
+            # Apply damping factor to today's adjustment
+            today_damped_factor = (difference - 1.0) * self.metric_inday_adjust_damping + 1.0
+
+            # Blend yesterday's and today's adjustment factors
+            difference_cap = (yesterday_adjustment * yesterday_weight) + (today_damped_factor * (1.0 - yesterday_weight))
 
             # Cap adjustment within 1/2 to 2x
             difference_cap = max(difference_cap, 0.5)
@@ -2433,10 +2473,13 @@ class Output:
 
         if save:
             self.log(
-                "Today's load divergence {} % in-day adjustment {} % damping {}x".format(
+                "Today's load divergence {} % in-day adjustment {} % damping {}x yesterday {} % today {} % blend {} %".format(
                     dp2(difference * 100.0),
                     dp2(difference_cap * 100.0),
                     self.metric_inday_adjust_damping,
+                    dp2(yesterday_adjustment * 100.0),
+                    dp2(today_damped_factor * 100.0) if self.calculate_inday_adjustment else 100.0,
+                    dp2(yesterday_weight * 100.0),
                 )
             )
             self.log(
@@ -2472,6 +2515,8 @@ class Output:
                 state=dp2(difference_cap * 100.0),
                 attributes={
                     "damping": self.metric_inday_adjust_damping,
+                    "yesterday_adjustment": dp2(yesterday_adjustment * 100.0),
+                    "yesterday_weight": dp2(yesterday_weight * 100.0),
                     "friendly_name": "Load in-day adjustment factor",
                     "state_class": "measurement",
                     "unit_of_measurement": "%",
