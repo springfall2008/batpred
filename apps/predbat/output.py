@@ -1508,6 +1508,14 @@ class Output:
             raw_plan["rows"].append(json_row)
 
         # End of plan costs
+        # Recalculate final SOC% to use the actual last minute in the prediction
+        # The prediction runs up to forecast_minutes-PREDICT_STEP, so we need to find the closest available minute
+        final_minute = end_record
+        if final_minute not in self.predict_soc_best and self.predict_soc_best:
+            # Find the largest minute that exists in predict_soc_best
+            final_minute = max([k for k in self.predict_soc_best.keys() if k <= end_record], default=0)
+        soc_percent_end = calc_percent_limit(self.predict_soc_best.get(final_minute, 0.0), self.soc_max)
+
         if metric_end >= 0:
             total_str = self.currency_symbols[0] + "%02.02f" % (metric_end / 100.0)
         else:
@@ -1517,7 +1525,7 @@ class Output:
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(pv_total))
         html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(load_total))
         if plan_debug:
-            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+            clipped_amount_end = self.predict_clipped_best.get(final_minute, clipped_amount)
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(clipped_amount_end))
         if plan_debug and self.load_forecast:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
@@ -1525,7 +1533,7 @@ class Output:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(car_total))
         if self.iboost_enable:
             iboost_amount_str = "&#9866;"
-            iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)
+            iboost_amount_end = self.predict_iboost_best.get(final_minute, 0)
             if iboost_amount_end > 0:
                 iboost_amount_str = str(dp2(iboost_amount_end))
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(iboost_amount_str)
@@ -1533,7 +1541,7 @@ class Output:
         html += "<td></td>"  # Soc change
         html += "<td bgcolor=#FFFFFF><b>" + str(total_str) + "</b></td>"
         if self.carbon_enable:
-            carbon_amount_end = self.predict_carbon_best.get(minute_relative_slot_end, carbon_amount)
+            carbon_amount_end = self.predict_carbon_best.get(final_minute, carbon_amount)
             html += "<td></td><td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(carbon_amount_end / 1000.0))
         html += "</tr>\n"
         html += "</table>"
@@ -1545,7 +1553,7 @@ class Output:
         totals["pv_forecast"] = dp2(pv_total)
         totals["load_forecast"] = dp2(load_total)
         if plan_debug:
-            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+            clipped_amount_end = self.predict_clipped_best.get(final_minute, clipped_amount)
             totals["clipped"] = dp2(clipped_amount_end)
         if plan_debug and self.load_forecast:
             totals["extra_load"] = dp2(xload_total)
