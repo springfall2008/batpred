@@ -14,6 +14,24 @@ from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
+def get_now_from_cumulative(data, minutes_now, backwards):
+    """
+    Get current value from cumulative data
+    """
+    if backwards:
+        # Work out the lowest value in a 5 minute period between minutes_now and minutes_now - 5
+        lowest = 9999999999
+        for minute in range(0, 5):
+            lowest = min(data.get(minutes_now - minute, lowest), lowest)
+        value = data.get(0, 0) - lowest
+    else:
+        lowest = 9999999999
+        for minute in range(0, 5):
+            lowest = min(data.get(minute, lowest), lowest)
+        value = data.get(minutes_now, 0) - lowest
+    return max(value, 0)
+
+
 def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, intermediate=False):
     """
     Remove data from before today

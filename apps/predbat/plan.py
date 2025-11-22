@@ -348,8 +348,10 @@ class Plan:
                                 for window_n in all_d[:]:
                                     hit_charge = self.hit_charge_window(self.charge_window_best, export_window[window_n]["start"], export_window[window_n]["end"])
                                     if hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
-                                        try_export[window_n] = 100.0
-                                        all_d.remove(window_n)
+                                        # Only remove if it doesn't remove the charge window entirely
+                                        if not (export_window[window_n]["start"] <= self.charge_window_best[hit_charge]["start"] and export_window[window_n]["end"] >= self.charge_window_best[hit_charge]["end"]):
+                                            try_export[window_n] = 100.0
+                                            all_d.remove(window_n)
 
                             # Skip this one as it's the same as selected already
                             try_hash = hash(tuple(try_charge_limit)) ^ hash(tuple(try_export))
@@ -2225,48 +2227,38 @@ class Plan:
             window_n = window_index[key]["id"]
             if typ == "c":
                 # Don't optimise a charge window that hits an export window if this is disallowed
-                if not self.calculate_export_oncharge:
-                    hit_export = self.hit_charge_window(self.export_window_best, self.charge_window_best[window_n]["start"], self.charge_window_best[window_n]["end"])
-                    if hit_export >= 0 and self.export_limits_best[hit_export] < 100.0:
-                        continue
+                if not self.allow_this_charge_window(window_n):
+                    continue
 
                 window_start = self.charge_window_best[window_n]["start"]
-                if self.calculate_best_charge and (window_start not in self.manual_all_times):
-                    best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
-                        window_n,
-                        record_charge_windows,
-                        self.charge_limit_best,
-                        self.charge_window_best,
-                        self.export_window_best,
-                        self.export_limits_best,
-                        end_record=end_record,
-                    )
-                    self.charge_limit_best[window_n] = best_soc
+                best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
+                    window_n,
+                    record_charge_windows,
+                    self.charge_limit_best,
+                    self.charge_window_best,
+                    self.export_window_best,
+                    self.export_limits_best,
+                    end_record=end_record,
+                )
+                self.charge_limit_best[window_n] = best_soc
             elif typ == "d":
                 window_start = self.export_window_best[window_n]["start"]
-                if self.calculate_best_export and (window_start not in self.manual_all_times):
-                    if not self.calculate_export_oncharge:
-                        hit_charge = self.hit_charge_window(self.charge_window_best, self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"])
-                        if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
-                            continue
-                    if not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"]) >= 0):
-                        continue
-                    if not self.car_charging_from_battery and self.hit_car_window(self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"]):
-                        continue
+                if not self.allow_this_export_window(window_n):
+                    continue
 
-                    self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                    best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
-                        window_n,
-                        record_export_windows,
-                        self.charge_limit_best,
-                        self.charge_window_best,
-                        self.export_window_best,
-                        self.export_limits_best,
-                        end_record=end_record,
-                    )
-                    self.export_limits_best[window_n] = best_soc
-                    self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                    self.export_window_best[window_n]["start"] = best_start
+                self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
+                best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
+                    window_n,
+                    record_export_windows,
+                    self.charge_limit_best,
+                    self.charge_window_best,
+                    self.export_window_best,
+                    self.export_limits_best,
+                    end_record=end_record,
+                )
+                self.export_limits_best[window_n] = best_soc
+                self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
+                self.export_window_best[window_n]["start"] = best_start
             count += 1
             if count >= 8:
                 break
@@ -2438,10 +2430,8 @@ class Plan:
 
                         if export_limit < 99 and window_length <= orig_length_target:
                             # Don't optimise a charge window that hits an export window if this is disallowed
-                            if not self.calculate_export_oncharge:
-                                hit_charge = self.hit_charge_window(self.charge_window_best, self.export_window_best[window_n_target]["start"], self.export_window_best[window_n_target]["end"])
-                                if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
-                                    continue
+                            if not self.allow_this_export_window(window_n_target):
+                                continue
 
                             is_combined = False
                             if export_limit_target < 99 and (window_length_target + window_length) <= orig_length_target:
@@ -2545,6 +2535,38 @@ class Plan:
 
             self.log("Swap export optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(selected_metric), dp2(selected_cost), dp2(selected_keep), dp2(selected_cycle), dp0(selected_carbon), dp2(selected_import)))
 
+    def allow_this_charge_window(self, charge_window_n):
+        """
+        Allowed to optimise this charge window?
+        """
+        window_start = self.charge_window_best[charge_window_n]["start"]
+        if self.calculate_best_charge and (window_start not in self.manual_all_times):
+            if not self.calculate_export_oncharge:
+                hit_export = self.hit_charge_window(self.export_window_best, self.charge_window_best[charge_window_n]["start"], self.charge_window_best[charge_window_n]["end"])
+                if hit_export >= 0 and self.export_limits_best[hit_export] < 100:
+                    return False
+            return True
+        return False
+
+    def allow_this_export_window(self, export_window_n):
+        """
+        Allowed to optimise this export window?
+        """
+        window_start = self.export_window_best[export_window_n]["start"]
+        if self.calculate_best_export and (window_start not in self.manual_all_times):
+            if not self.calculate_export_oncharge:
+                hit_charge = self.hit_charge_window(self.charge_window_best, self.export_window_best[export_window_n]["start"], self.export_window_best[export_window_n]["end"])
+                if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
+                    # Check exact alignment of start and end times, as we allow export to replace entire charge window
+                    if not ((self.export_window_best[export_window_n]["start"] <= self.charge_window_best[hit_charge]["start"]) and (self.export_window_best[export_window_n]["end"] >= self.charge_window_best[hit_charge]["end"])):
+                        return False
+            if not self.car_charging_from_battery and self.hit_car_window(self.export_window_best[export_window_n]["start"], self.export_window_best[export_window_n]["end"]):
+                return False
+            if not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.export_window_best[export_window_n]["start"], self.export_window_best[export_window_n]["end"]) >= 0):
+                return False
+            return True
+        return False
+
     def optimise_full_second_pass(self, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=False):
         """
         Second pass optimisation of the charge and export windows
@@ -2556,14 +2578,7 @@ class Plan:
             typ = window_index[key]["type"]
             window_n = window_index[key]["id"]
             if typ == "c":
-                window_start = self.charge_window_best[window_n]["start"]
-                if self.calculate_best_charge and (window_start not in self.manual_all_times):
-                    # Don't optimise a charge window that hits an export window if this is disallowed
-                    if not self.calculate_export_oncharge:
-                        hit_export = self.hit_charge_window(self.export_window_best, self.charge_window_best[window_n]["start"], self.charge_window_best[window_n]["end"])
-                        if hit_export >= 0 and self.export_limits_best[hit_export] < 100:
-                            continue
-
+                if self.allow_this_charge_window(window_n):
                     best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
                         window_n,
                         record_charge_windows,
@@ -2575,17 +2590,7 @@ class Plan:
                     )
                     self.charge_limit_best[window_n] = best_soc
             elif typ == "d":
-                window_start = self.export_window_best[window_n]["start"]
-                if self.calculate_best_export and (window_start not in self.manual_all_times):
-                    if not self.calculate_export_oncharge:
-                        hit_charge = self.hit_charge_window(self.charge_window_best, self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"])
-                        if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
-                            continue
-                    if not self.car_charging_from_battery and self.hit_car_window(self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"]):
-                        continue
-                    if not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"]) >= 0):
-                        continue
-
+                if self.allow_this_export_window(window_n):
                     average = self.export_window_best[window_n]["average"]
                     best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
                         window_n,
@@ -2718,10 +2723,8 @@ class Plan:
                             average = self.charge_window_best[window_n]["average"]
 
                             # Don't optimise a charge window that hits an export window if this is disallowed
-                            if not self.calculate_export_oncharge:
-                                hit_export = self.hit_charge_window(self.export_window_best, self.charge_window_best[window_n]["start"], self.charge_window_best[window_n]["end"])
-                                if hit_export >= 0 and self.export_limits_best[hit_export] < 100:
-                                    continue
+                            if not self.allow_this_charge_window(window_n):
+                                continue
 
                             if (price_key > best_price_charge_level) and (self.charge_limit_best[window_n] == 0) and not pass_type == "low":
                                 continue
@@ -2809,16 +2812,7 @@ class Plan:
                                 self.log("Skip low window {} best limit {} price_set {} price {} level {}".format(window_n, self.export_limits_best[window_n], price_key, price, best_price_export_level))
                             continue
 
-                        if self.calculate_best_export and (window_start not in self.manual_all_times):
-                            if not self.calculate_export_oncharge:
-                                hit_charge = self.hit_charge_window(self.charge_window_best, self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"])
-                                if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
-                                    continue
-                            if not self.car_charging_from_battery and self.hit_car_window(self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"]):
-                                continue
-                            if not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.export_window_best[window_n]["start"], self.export_window_best[window_n]["end"]) >= 0):
-                                continue
-
+                        if self.allow_this_export_window(window_n):
                             if not printed_set:
                                 self.log(
                                     "Optimise price set {} pass {} price {} start_at_low {} best_price_export {} level {} best_metric {} best_cost {} best_cycle {} best_carbon {} best_import {}".format(

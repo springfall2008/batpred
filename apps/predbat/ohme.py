@@ -34,9 +34,9 @@ ohme_attribute_table = {
     "power_watts": {"friendly_name": "Ohme Power", "icon": "mdi:lightning-bolt", "unit_of_measurement": "W", "device_class": "power"},
     "power_amps": {"friendly_name": "Ohme Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "device_class": "current"},
     "power_volts": {"friendly_name": "Ohme Voltage", "icon": "mdi:sine-wave", "unit_of_measurement": "V", "device_class": "voltage"},
-    "ct_amps": {"friendly_name": "Ohme CT Clamp Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "device_class": "current"},
+    # "ct_amps": {"friendly_name": "Ohme CT Clamp Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "device_class": "current"},
     "max_charge": {"friendly_name": "Ohme Max Charge Enabled", "icon": "mdi:battery-charging-100"},
-    "available": {"friendly_name": "Ohme Available", "icon": "mdi:connection"},
+    # "available": {"friendly_name": "Ohme Available", "icon": "mdi:connection"},
     "target_soc": {"friendly_name": "Ohme Target SOC", "icon": "mdi:battery-charging", "unit_of_measurement": "%", "device_class": "battery", "min": 0, "max": 100, "step": 1},
     "target_time": {"friendly_name": "Ohme Target Time", "icon": "mdi:clock-outline"},
     "preconditioning": {"friendly_name": "Ohme Preconditioning", "icon": "mdi:air-conditioner", "unit_of_measurement": "mins", "min": 0, "max": 60, "step": 5},
@@ -226,7 +226,8 @@ class OhmeAPI:
 
                 if first or (count_seconds % (30 * 60)) == 0:
                     await self.client.async_update_device_info()
-                    await self.client.async_get_advanced_settings()
+                    # Advanced settings are broken in latest API
+                    # await self.client.async_get_advanced_settings()
 
                 if first or (count_seconds % (120)) == 0:
                     await self.client.async_get_charge_session()
@@ -310,7 +311,7 @@ class OhmeAPI:
             self.base.dashboard_item(entity_name_sensor + "_power_watts", state=power.watts, attributes=ohme_attribute_table.get("power_watts", {}), app="ohme")
             self.base.dashboard_item(entity_name_sensor + "_power_amps", state=power.amps, attributes=ohme_attribute_table.get("power_amps", {}), app="ohme")
             self.base.dashboard_item(entity_name_sensor + "_power_volts", state=power.volts, attributes=ohme_attribute_table.get("power_volts", {}), app="ohme")
-            self.base.dashboard_item(entity_name_sensor + "_ct_amps", state=power.ct_amps, attributes=ohme_attribute_table.get("ct_amps", {}), app="ohme")
+            # self.base.dashboard_item(entity_name_sensor + "_ct_amps", state=power.ct_amps, attributes=ohme_attribute_table.get("ct_amps", {}), app="ohme")
 
         # Publish boolean states
         self.base.dashboard_item(entity_name_switch + "_max_charge", state=max_charge, attributes=ohme_attribute_table.get("max_charge", {}), app="ohme")
