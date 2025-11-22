@@ -170,7 +170,7 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
    - Un-comment **charge_limit** to enable the charge limit through setting an upper SOC value
    - Set **solax_modbus_new** to True if you have integration version 2024.03.2 or greater
    - Last you will need to comment out or delete the **template** line to enable the configuration
-   
+
 4. Save the file as **apps.yaml** to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
 5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
