@@ -605,7 +605,6 @@ class OctopusAPI:
                         if dispatch_start == current_start:
                             already_exists = True
                     if not already_exists and dispatch.get("start", None) and dispatch.get("end", None) and dispatch.get("charge_in_kwh", None):
-                        self.log("Info: Octopus Direct: Adding previous dispatch to completed dispatches: {}".format(dispatch))
                         current_completed.append(dispatch)
             current_completed = sorted(current_completed, key=lambda x: parse_date_time(x["start"]))
             self.intelligent_device["completed_dispatches"] = current_completed
