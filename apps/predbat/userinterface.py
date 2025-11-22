@@ -81,8 +81,8 @@ class UserInterface:
                 value = None
             index = None
 
-        if index:
-            self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
+        if index and value is not None:
+            self.log("Warn: item {} is incorrectly setup, element {} has value {}".format(arg, index, value))
 
         # If we have a list of items get each and add them up or return them as a list
         if isinstance(value, list):
