@@ -856,11 +856,14 @@ class Fetch:
             self.load_inday_adjustment = 1.0
 
         force_replan = False
-        if prev_octopus_slots != self.octopus_slots:
+        if str(prev_octopus_slots) != str(self.octopus_slots):
+            self.log("Octopus slots changed from {} to {}".format(prev_octopus_slots, self.octopus_slots))
             force_replan = True
-        if prev_octopus_saving_slots != self.octopus_saving_slots:
+        if str(prev_octopus_saving_slots) != str(self.octopus_saving_slots):
+            self.log("Octopus saving slots changed from {} to {}".format(prev_octopus_saving_slots, self.octopus_saving_slots))
             force_replan = True
-        if prev_octopus_free_slots != self.octopus_free_slots:
+        if str(prev_octopus_free_slots) != str(self.octopus_free_slots):
+            self.log("Octopus free slots changed from {} to {}".format(prev_octopus_free_slots, self.octopus_free_slots))
             force_replan = True
         return force_replan
 
