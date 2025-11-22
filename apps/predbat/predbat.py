@@ -426,6 +426,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.octopus_slots = []
+        self.octopus_free_slots = []
+        self.octopus_saving_slots = []
         self.car_charging_slots = []
         self.reserve = 0
         self.reserve_current = 0
@@ -669,7 +671,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         self.expose_config("active", True)
         self.fetch_config_options()
-        self.fetch_sensor_data()
+        sensor_force_replan = self.fetch_sensor_data()
+        if sensor_force_replan:
+            self.log("Sensor changes require a replan, will recompute the plan")
+            recompute = True
         self.fetch_inverter_data()
         if self.dynamic_load():
             self.log("Dynamic load adjustment changed, will recompute the plan")

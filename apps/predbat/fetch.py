@@ -434,6 +434,11 @@ class Fetch:
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
         """
+
+        prev_octopus_slots = self.octopus_slots.copy()
+        prev_octopus_saving_slots = self.octopus_saving_slots.copy()
+        prev_octopus_free_slots = self.octopus_free_slots.copy()
+
         self.rate_import = {}
         self.rate_import_replicated = {}
         self.rate_export = {}
@@ -459,8 +464,6 @@ class Fetch:
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
-        self.octopus_free_slots = {}
-        self.octopus_saving_slots = {}
 
         # Alert feed if enabled
         if self.components:
@@ -486,7 +489,7 @@ class Fetch:
             if "load_today" in self.args:
                 self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
-                self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
+                self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             else:
                 if self.load_forecast:
@@ -502,21 +505,21 @@ class Fetch:
             # Load import today data
             if "import_today" in self.args:
                 self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
+                self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
                 self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
+                self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
                 self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-                self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
+                self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous pv data")
 
@@ -851,6 +854,16 @@ class Fetch:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save)
         else:
             self.load_inday_adjustment = 1.0
+
+        force_replan = False
+        if prev_octopus_slots != self.octopus_slots:
+            force_replan = True
+        if prev_octopus_saving_slots != self.octopus_saving_slots:
+            force_replan = True
+        if prev_octopus_free_slots != self.octopus_free_slots:
+            force_replan = True
+        return force_replan
+
 
     def fetch_pv_forecast(self):
         """
