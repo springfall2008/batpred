@@ -864,7 +864,6 @@ class Fetch:
             force_replan = True
         return force_replan
 
-
     def fetch_pv_forecast(self):
         """
         Fetch PV forecast data from one or more sensors
