@@ -29,14 +29,16 @@ Future versions will also offer Predbat to run in master mode, controlling your 
 
 Predheat is now part of Predbat, you will need to configure it using `apps.yaml` and then enable it by turning on **switch.predbat_predheat_enable**
 
-### Openweather install
+### Weather install
 
-See: <https://www.home-assistant.io/integrations/openweathermap>
+You will need a weather forecast service available in Home Assistant for Predbat to be able to forecast heating demand based on the weather forecast.
 
-Create an OpenWeather account and then register for a "One Call by Call" subscription plan. This does need a credit/debit card but won't cost anything.
+You should be able to use any weather service, the [Met Office integration](https://www.home-assistant.io/integrations/metoffice) is known to work with Predheat as is the [Open Weather Map integration](https://www.home-assistant.io/integrations/openweathermap).
+
+If you are using OpenWeather then you will need to create an OpenWeather account and then register for a [One Call API subscription plan](https://openweathermap.org/price). This does need a credit/debit card but won't cost anything.
 You get 1000 API calls a day for free, so edit your limit in the account to 1000 to avoid ever being charged.
 
-Then add in the Home Assistant service and connect up your API key to obtain hourly weather data. Use the v3.0 API and ensure you have a 2024 version of Home Assistant.
+Then add in the Home Assistant service and connect up your API key to obtain hourly weather data.
 
 ### Apex Charts install
 
