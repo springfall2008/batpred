@@ -992,7 +992,8 @@ class Output:
             minute_start = minute_relative_start + self.minutes_now
             minute_relative_end = minute_relative + self.plan_interval_minutes
             minute_end = minute_relative_end + self.minutes_now
-            minute_relative_slot_end = minute_relative_end
+            minute_relative_slot_end = min(minute_relative_end, self.forecast_minutes - PREDICT_STEP)
+
             minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
 
             rate_start = minute_timestamp
@@ -1098,7 +1099,6 @@ class Output:
 
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
-            soc_percent_end_window = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_min = self.soc_max
             soc_max = 0
             for minute_check in range(minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
