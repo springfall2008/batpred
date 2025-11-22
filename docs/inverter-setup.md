@@ -163,62 +163,14 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 3. Instead of `apps.yaml` use `ginlong_solis.yaml` from this Repo as your starting template.
    The majority of settings should be correct but please check.
    You will need to update these lines:
-   - Comment out:
-
-     ```yaml
-     inverter_type: "GS"
-     ```
-
-     and un-comment
-
-      ```yaml  
-     inverter_type: "GS_fb00"
-     ```
-
-     to enable the inverter template for the newer firmware version of Solis inverters.
-   - Un-comment
-
-      ```yaml
-     charge_update_button:
-     - button.solis_inverter_update_charge_times
-
-     discharge_update_button:
-     - button.solis_inverter_update_discharge_times
-     ```
-
-     and comment out
-
-     ```yaml
-     charge_discharge_update_button:
-     - button.solis_update_charge_discharge_times
-     ```
-
-     to enable the two "button presses" needed for writing charge/discharge times to the inverter  
-   - Un-comment
-
-      ```yaml
-     scheduled_charge_enable:
-       - switch.inverter_timed_charge_slot_1_enable
-     scheduled_discharge_enable:
-       - switch.inverter_timed_discharge_slot_1_enable
-      ```
-
-     to enable Predbat to enable/disable the charge/discharge slots
-   - Un-comment
-
-      ```yaml
-     charge_limit:
-       - number.solis_inverter_timed_charge_soc
-     ```
-
-     to enable the charge limit through setting an upper SOC value
-   - Last you will need to comment out or delete the `template` line to enable it:
-
-      ```yaml
-     template: True
-     ```
-
+   - Replace **inverter_type: "GS"** with **inverter_type: "GS_fb00"** to enable the inverter template for the newer firmware version of Solis inverters.
+   - Un-comment **charge_update_button** and **discharge_update_button** and comment out **charge_discharge_update_button** to enable
+     the two "button presses" needed for writing charge/discharge times to the inverter  
+   - Un-comment **scheduled_charge_enable** and **scheduled_discharge_enable** to enable Predbat to enable/disable the charge/discharge slots
+   - Un-comment **charge_limit** to enable the charge limit through setting an upper SOC value
    - Set **solax_modbus_new** to True if you have integration version 2024.03.2 or greater
+   - Last you will need to comment out or delete the **template** line to enable the configuration
+
 4. Save the file as **apps.yaml** to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
 5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
