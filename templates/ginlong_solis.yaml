@@ -19,13 +19,13 @@ pred_bat:
   # Sensors, currently more than one can be specified and they will be summed up automatically
   # however if you have two inverters only set one of them as they will both read the same.
   #
-  
+
   # comment out for firmware version fb00 or later:
   inverter_type: "GS"
 
   # un-comment for firmware version fb00 or later:
   #inverter_type: "GS_fb00"
-  
+
   solax_modbus_new: True   # Set to True if you have integration version 2024.03.2 or beyond
 
   num_inverters: 1
@@ -85,7 +85,7 @@ pred_bat:
   # comment out for firmware version fb00 or later:
   charge_discharge_update_button:
     - button.solis_update_charge_discharge_times
-    
+
   # un-comment for firmware version fb00 or later:
   #charge_update_button:
   #  - button.solis_inverter_update_charge_times

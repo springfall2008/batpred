@@ -144,7 +144,7 @@ To run PredBat with Solis hybrid inverters with firmware level prior to FB00 (yo
    charge_discharge_update_button:
      - button.solis_update_charge_discharge_times
    ```
-   
+
 7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
 ## Solis Inverters FB00 or later
@@ -164,11 +164,11 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
    The majority of settings should be correct but please check.
    You will need to update these lines:
    - Comment out:
-     
+
      ```yaml
      inverter_type: "GS"
      ```
-     
+
      and un-comment
 
       ```yaml  
@@ -179,21 +179,21 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
    - Un-comment
 
       ```yaml
-     charge_update_button: 
+     charge_update_button:
      - button.solis_inverter_update_charge_times
-  
+
      discharge_update_button:
      - button.solis_inverter_update_discharge_times
      ```
 
      and comment out
-  
+
      ```yaml
      charge_discharge_update_button:
      - button.solis_update_charge_discharge_times
      ```
-     
-     to enable the two "button presses" needed for writing charge/discharge times to the inverter     
+
+     to enable the two "button presses" needed for writing charge/discharge times to the inverter  
    - Un-comment
 
       ```yaml
@@ -217,12 +217,13 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
       ```yaml
      template: True
      ```
+
    - Set **solax_modbus_new** to True if you have integration version 2024.03.2 or greater
 4. Save the file as **apps.yaml** to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
 5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
    this is not fully tested. In due course, these mode settings will be incorporated into the code.
-6. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.     
+6. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.  
 
 ## Solax Gen4 Inverters
 
