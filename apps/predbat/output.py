@@ -1508,13 +1508,14 @@ class Output:
             raw_plan["rows"].append(json_row)
 
         # End of plan costs
-        # Recalculate final SOC% to use the actual last minute in the prediction
+        # Recalculate final SOC% and metric to use the actual last minute in the prediction
         # The prediction runs up to forecast_minutes-PREDICT_STEP, so we need to find the closest available minute
         final_minute = end_record
         if final_minute not in self.predict_soc_best and self.predict_soc_best:
             # Find the largest minute that exists in predict_soc_best
             final_minute = max([k for k in self.predict_soc_best.keys() if k <= end_record], default=0)
         soc_percent_end = calc_percent_limit(self.predict_soc_best.get(final_minute, 0.0), self.soc_max)
+        metric_end = self.predict_metric_best.get(final_minute, 0.0)
 
         if metric_end >= 0:
             total_str = self.currency_symbols[0] + "%02.02f" % (metric_end / 100.0)
