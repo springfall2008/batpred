@@ -907,13 +907,13 @@ def find_charge_rate(
         # If we don't have enough minutes left go to max
         if abs_minutes_left < 0:
             if log_to:
-                log_to("Low power mode: abs_minutes_left {} < 0, default to max rate".format(abs_minutes_left))
+                log_to("Low power mode: abs_minutes_left {} < 0, default to max rate".format(dp2(abs_minutes_left)))
             return max_rate, max_rate_real
 
         # If we already have reached target go back to max
         if round(soc, 2) >= target_soc:
             if log_to:
-                log_to("Low power mode: soc {} >= target_soc {}, default to max rate".format(soc, target_soc))
+                log_to("Low power mode: SoC {}kW >= target_SoC {}kW, default to max rate".format(soc, target_soc))
             return max_rate, max_rate_real
 
         # Work out the charge left in kw
@@ -923,8 +923,8 @@ def find_charge_rate(
         if round(max_rate_real * abs_minutes_left, 2) <= charge_left:
             if log_to:
                 log_to(
-                    "Low power mode: Can't hit target: max_rate * abs_minutes_left = {} <= charge_left {}, minutes_left {} window_end {} minutes_now {} default to max rate".format(
-                        max_rate_real * abs_minutes_left, charge_left, abs_minutes_left, window["end"], minutes_now
+                    "Low power mode: Can't hit target: max_rate * abs_minutes_left = {}kW <= charge_left {}kW, minutes_left {} window_end {} minutes_now {} default to max rate".format(
+                        dp2(max_rate_real * abs_minutes_left), charge_left, abs_minutes_left, window["end"], minutes_now
                     )
                 )
             return max_rate, max_rate_real
@@ -941,8 +941,8 @@ def find_charge_rate(
 
         if log_to:
             log_to(
-                "Find charge rate for low power mode: soc: {} target_soc: {} charge_left: {} minutes_left: {} abs_minutes_left: {} max_rate: {} min_rate: {} min_rate_w: {}".format(
-                    soc, target_soc, charge_left, minutes_left, abs_minutes_left, max_rate * MINUTE_WATT, min_rate * MINUTE_WATT, min_rate_w
+                "Find charge rate for low power mode: SoC: {}kW target_SoC: {}kW charge_left: {}kW minutes_left: {} abs_minutes_left: {} max_rate: {}W min_rate: {}W min_rate_w: {}W".format(
+                    soc, target_soc, charge_left, minutes_left, abs_minutes_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(min_rate_w)
                 )
             )
 
@@ -975,13 +975,13 @@ def find_charge_rate(
         if best_rate >= highest_achievable_rate and current_charge_rate >= highest_achievable_rate:
             best_rate = current_charge_rate
             if log_to:
-                log_to("Low Power mode: best rate {} is greater than highest achievable rate {} and current rate {} so sticking with current rate".format(best_rate * MINUTE_WATT, highest_achievable_rate * MINUTE_WATT, current_charge_rate * MINUTE_WATT))
+                log_to("Low Power mode: best rate {}W is greater than highest achievable rate {}W and current rate {}W so sticking with current rate".format(dp0(best_rate * MINUTE_WATT), dp0(highest_achievable_rate * MINUTE_WATT), dp0(current_charge_rate * MINUTE_WATT)))
 
         best_rate_real = get_charge_rate_curve(soc, best_rate, soc_max, max_rate, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve) * battery_rate_max_scaling
         if log_to:
             log_to(
-                "Low Power mode: minutes left: {} absolute: {} SOC: {} Target SOC: {} Charge left: {} Max rate: {} Min rate: {} Best rate: {} Best rate real: {} Battery temp {}".format(
-                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, max_rate * MINUTE_WATT, min_rate * MINUTE_WATT, best_rate * MINUTE_WATT, best_rate_real * MINUTE_WATT, battery_temperature
+                "Low Power mode: minutes left: {} absolute: {} SoC: {}kW Target SoC: {}kW Charge left: {}kW Max rate: {}W Min rate: {}W Best rate: {}W Best rate real: {}w Battery temp {}°C".format(
+                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(best_rate * MINUTE_WATT), dp0(best_rate_real * MINUTE_WATT), battery_temperature
                 )
             )
         return best_rate, best_rate_real

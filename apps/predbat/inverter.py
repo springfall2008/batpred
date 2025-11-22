@@ -388,15 +388,15 @@ class Inverter:
             tdiff = self.inverter_time - now_utc
             tdiff = dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
-                self.base.log("Invertor time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
+                self.base.log("Inverter time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
             if abs(tdiff) >= 30:
                 self.base.log(
-                    "Warn: Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
+                    "Warn: Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
                         self.inverter_time, now_utc, tdiff
                     )
                 )
                 self.base.record_status(
-                    "Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
+                    "Inverter time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
                         self.inverter_time, now_utc, tdiff
                     ),
                     had_errors=True,
@@ -424,7 +424,7 @@ class Inverter:
             self.base.expose_config("set_reserve_min", battery_min_soc)
             self.reserve_min = battery_min_soc
 
-        self.base.log(f"Reserve min: {self.reserve_min}% Battery_min:{battery_min_soc}%")
+        self.base.log("Reserve min: {}%, battery_min: {}%".format(dp0(self.reserve_min), dp0(battery_min_soc)))
         if self.base.set_reserve_enable and self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
         else:
@@ -440,7 +440,7 @@ class Inverter:
         # Log inverter details
         if not quiet:
             self.base.log(
-                "Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} kW export limit {} kW reserve {} % current_reserve {} % temperature {} c".format(
+                "Inverter {} with soc_max {}kWh nominal_capacity {}kWh battery rate raw {}W charge rate {}kW discharge rate {}kW battery_rate_min {}W ac limit {}kW export limit {}kW reserve {}% current_reserve {}% temperature {}°C".format(
                     self.id,
                     dp2(self.soc_max),
                     dp2(self.nominal_capacity),
@@ -1254,16 +1254,16 @@ class Inverter:
         reserve = min(reserve, self.reserve_max)
 
         if current_reserve != reserve:
-            self.base.log("Inverter {} Current Reserve is {} % and new target is {} %".format(self.id, current_reserve, reserve))
+            self.base.log("Inverter {} Current Reserve is {}% and new target is {}%".format(self.id, dp0(current_reserve), dp0(reserve)))
             if self.rest_data:
                 self.rest_setReserve(reserve)
             else:
                 self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%"), reserve)
             if self.base.set_inverter_notify:
-                self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {} at {}".format(self.id, reserve, self.base.time_now_str()))
+                self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {}% at {}".format(self.id, dp0(reserve), self.base.time_now_str()))
             self.mqtt_message(topic="set/reserve", payload=reserve)
         else:
-            self.base.log("Inverter {} Current reserve is {} already at target".format(self.id, current_reserve))
+            self.base.log("Inverter {} Current reserve is {}%, already at target".format(self.id, dp0(current_reserve)))
 
     def get_current_discharge_rate(self):
         """
@@ -1425,7 +1425,7 @@ class Inverter:
                 self.base.call_notify("Predbat: Inverter {} Target SOC has been changed to {}% at {}".format(self.id, soc, self.base.time_now_str()))
             self.mqtt_message(topic="set/target_soc", payload=soc)
         else:
-            self.base.log("Inverter {} Current Target SOC is {}%, already at target".format(self.id, current_soc))
+            self.base.log("Inverter {} Current Target SoC is {}%, already at target".format(self.id, current_soc))
 
         # Inverters that need on/off controls rather than target SOC
         if not self.inv_has_target_soc:

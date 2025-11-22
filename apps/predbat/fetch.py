@@ -527,7 +527,7 @@ class Fetch:
             for minute in range(0, 24 * 60, 5):
                 data.append({minute: self.battery_temperature_history.get(minute, 0)})
             self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
-            self.log("Fetched battery temperature history data, current temperature {}".format(self.battery_temperature_history.get(0, None)))
+            self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)

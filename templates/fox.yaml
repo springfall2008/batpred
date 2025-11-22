@@ -100,26 +100,8 @@ pred_bat:
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   #balance_inverters_seconds: 60
   #
-  # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
-  # Set one per inverter
-  # If using Docker then change homeassistant.local to the Docker IP address
-  #givtcp_rest:
-  #  - 'http://homeassistant.local:6345'
-  #  - 'http://homeassistant.local:6346'
 
-  # When enabled automatic restart will restart the add-on if communication fails
-  # Example below is auto-restart for GivTCP add-on itself
-  #auto_restart:
-  #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-  #  - service: hassio/addon_restart
-  #    addon: a6a2857d_givtcp
-
-  #  Example on how to restart the inverter via GivTCP
-  #  - service: switch.turn_on
-  #    entity_id: switch.givtcp_{geserial}_reboot_invertor
-
-  # If not using REST then instead set the Control here (one for each inverter)
-  # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
+  # Set the Inverter controls (one for each inverter)
   charge_rate:
     - input_number.force_charge_power_w
   discharge_rate:

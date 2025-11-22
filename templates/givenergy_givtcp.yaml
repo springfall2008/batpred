@@ -94,8 +94,8 @@ pred_bat:
   #    addon: 533ea71a_givtcp
 
   #  Example on how to restart the inverter via GivTCP
-  #  - service: switch.turn_on
-  #    entity_id: switch.givtcp_{geserial}_reboot_invertor
+  #  - service: button.press
+  #    entity_id: button.givtcp_{geserial}_reboot_invertor
 
   # If not using REST then instead set the Control here (one for each inverter)
   # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
