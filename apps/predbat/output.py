@@ -1510,10 +1510,15 @@ class Output:
         # End of plan costs
         # Recalculate final SOC% and metric to use the actual last minute in the prediction
         # The prediction runs up to forecast_minutes-PREDICT_STEP, so we need to find the closest available minute
+        # For a 24-hour period (1440 minutes) with PREDICT_STEP=5, the last entry is at minute 1435
         final_minute = end_record
         if final_minute not in self.predict_soc_best and self.predict_soc_best:
-            # Find the largest minute that exists in predict_soc_best
-            final_minute = max([k for k in self.predict_soc_best.keys() if k <= end_record], default=0)
+            # The prediction loop runs while minute < forecast_minutes with step=PREDICT_STEP
+            # So the last minute would be end_record - PREDICT_STEP, but check if it exists
+            final_minute = end_record - PREDICT_STEP
+            # If that doesn't exist either, find the maximum key (fallback)
+            if final_minute not in self.predict_soc_best:
+                final_minute = max(self.predict_soc_best.keys(), default=0)
         soc_percent_end = calc_percent_limit(self.predict_soc_best.get(final_minute, 0.0), self.soc_max)
         metric_end = self.predict_metric_best.get(final_minute, 0.0)
 
