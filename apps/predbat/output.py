@@ -1093,7 +1093,7 @@ class Output:
                 extra_forecast += str(dp2(value))
                 extra_forecast_total += value
             xload_total += extra_forecast_total
-    
+
             raw_extra_forecast = extra_forecast
             raw_extra_forecast_total = dp2(xload_total)
 
