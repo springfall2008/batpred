@@ -2,9 +2,6 @@
 activepower
 adata
 adbase
-kwargs
-asyncio
-pytest
 afci
 AIO
 AIO's
@@ -15,6 +12,7 @@ apexcharts
 appdaemon
 appkey
 argname
+asyncio
 autodocstring
 autoflake
 automations
@@ -150,6 +148,7 @@ kopt
 Krakenflex
 kvar
 kvarh
+kwargs
 kwhb
 linebreak
 loadspower
@@ -227,6 +226,7 @@ pwindow
 pyjwt
 pylint
 pyproject
+pytest
 pytz
 rarr
 recp
