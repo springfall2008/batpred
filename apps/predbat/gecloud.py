@@ -837,6 +837,9 @@ class GECloudDirect(ComponentBase):
 
             except Exception as e:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
+                self.failures_total += 1
+                if hasattr(self.base, "had_errors"):
+                    self.base.had_errors = True
 
             # Clear pending writes
             for device in device_list:
@@ -1398,6 +1401,9 @@ class GECloudData(ComponentBase):
 
             except Exception as e:
                 self.log("Error: GECloudData: Exception in main loop {}".format(e))
+                self.failures_total += 1
+                if hasattr(self.base, "had_errors"):
+                    self.base.had_errors = True
 
             if not self.api_started:
                 print("GECloudData API Started")
