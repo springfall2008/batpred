@@ -1870,7 +1870,7 @@ var options = {
             load_energy_actual = self.get_entity_results(self.prefix + ".load_energy_actual")
             load_energy_predicted = self.get_entity_results(self.prefix + ".load_energy_predicted")
             load_energy_adjusted = self.get_entity_results(self.prefix + ".load_energy_adjusted")
-            inday_adjust_hist = history_attribute(self.get_history_wrapper(self.base.prefix + ".load_inday_adjustment", 2, required=False), scale=0.01)
+            inday_adjust_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_inday_adjustment", 2, required=False), scale=0.01)
             adjustment_factor = prune_today(inday_adjust_hist, self.now_utc, self.midnight_utc, prune=True)
 
             series_data = [
