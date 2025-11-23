@@ -341,6 +341,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.plan_debug = False
         self.arg_errors = {}
         self.ha_interface = None
+        self.num_cars = 0
         self.fatal_error = False
         self.components = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)

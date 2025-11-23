@@ -2449,12 +2449,9 @@ class Output:
         if minutes_now < 180:
             # Use 100% yesterday's adjustment for first 3 hours
             yesterday_weight = 1.0
-        elif minutes_now >= 480:
-            # Use 100% today's adjustment after 8 hours
-            yesterday_weight = 0.0
         else:
-            # Linear blend between 3 and 8 hours (180-480 minutes)
-            yesterday_weight = (480 - minutes_now) / 300.0
+            # Linear blend between yesterday and today over the day
+            yesterday_weight = (24 * 60 - minutes_now) / (24 * 60)
 
         # Work out divergence
         today_damped_factor = 1.0

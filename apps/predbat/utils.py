@@ -104,6 +104,9 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
             state = float(state) * scale
             if pounds:
                 state = dp2(state / 100)
+            else:
+                state = dp4(state)
+
         except (ValueError, TypeError):
             if isinstance(state, str):
                 if state.lower() in ["on", "true", "yes"]:
