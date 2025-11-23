@@ -9,9 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import asyncio
-import os
 import time
 
 

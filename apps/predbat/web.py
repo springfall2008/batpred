@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 import json
 import shutil
 import html as html_module
-import time
 from web_helper import (
     get_header_html,
     get_plan_css,

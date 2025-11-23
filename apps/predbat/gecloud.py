@@ -5,7 +5,7 @@
 # -----------------------------------------------------------------------------
 
 import requests
-from datetime import timedelta, datetime, timezone
+from datetime import timedelta, datetime
 from utils import str2time, dp1
 import asyncio
 import random
