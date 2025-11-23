@@ -214,8 +214,10 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
-- **switch.predbat_car_charging_manual_soc** - ignore the  **car_charging_soc** car SoC sensor set in `apps.yaml`
-- **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC (used if car SoC sensor is not available)
+- **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` (car 0)
+- **switch.predbat_car_charging_manual_soc_1/2/3** - ignore the **car_charging_soc** car SoC sensor for cars 1/2/3
+- **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC in kWh (car 0, used if car SoC sensor is not available)
+- **input_number.predbat_car_charging_manual_soc_kwh_1/2/3** - manually maintained car SoC in kWh for cars 1/2/3
 
 ## Calculation options
 

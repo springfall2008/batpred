@@ -815,17 +815,17 @@ class GECloudDirect(ComponentBase):
             try:
                 if seconds % 60 == 0:
                     for device in device_list:
-                        self.status[device] = await self.async_get_inverter_status(device)
+                        self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
                         await self.publish_status(device, self.status[device])
-                        self.meter[device] = await self.async_get_inverter_meter(device)
+                        self.meter[device] = await self.async_get_inverter_meter(device, self.meter.get(device, {}))
                         await self.publish_meter(device, self.meter[device])
-                        self.info[device] = await self.async_get_device_info(device)
+                        self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
                         await self.publish_info(device, self.info[device])
                     for uuid in evc_device_list:
-                        self.evc_device[uuid] = await self.async_get_evc_device(uuid)
+                        self.evc_device[uuid] = await self.async_get_evc_device(uuid, self.evc_device.get(uuid, {}))
                         serial = self.evc_device[uuid].get("serial_number", "unknown")
-                        self.evc_data[uuid] = await self.async_get_evc_device_data(uuid)
-                        self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid)
+                        self.evc_data[uuid] = await self.async_get_evc_device_data(uuid, self.evc_data.get(uuid, {}))
+                        self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid, self.evc_sessions.get(uuid, []))
                         await self.publish_evc_data(serial, self.evc_data[uuid])
 
                 if seconds % (10 * 60) == 0:
@@ -1031,7 +1031,7 @@ class GECloudDirect(ComponentBase):
             return point
         return {}
 
-    async def async_get_evc_sessions(self, uuid):
+    async def async_get_evc_sessions(self, uuid, previous=[]):
         """
         Get list of EVC sessions
         """
@@ -1043,9 +1043,9 @@ class GECloudDirect(ComponentBase):
         data = await self.async_get_inverter_data_retry(GE_API_EVC_SESSIONS, uuid=uuid, start_time=start_time, end_time=end_time)
         if isinstance(data, list):
             return data
-        return []
+        return previous
 
-    async def async_get_evc_device_data(self, uuid):
+    async def async_get_evc_device_data(self, uuid, previous={}):
         """
         Get smart device data points
         """
@@ -1059,7 +1059,7 @@ class GECloudDirect(ComponentBase):
         data = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICE_DATA, uuid=uuid, meter_ids=str(EVC_METER_CHARGER), start_time=start_time, end_time=end_time, measurands=measurands)
         result = {}
         if not data:
-            return result
+            return previous
 
         # Handle the new API response format
         data_points = data.get("data", []) if isinstance(data, dict) else data
@@ -1118,7 +1118,7 @@ class GECloudDirect(ComponentBase):
 
         return command_info
 
-    async def async_get_evc_device(self, uuid):
+    async def async_get_evc_device(self, uuid, previous={}):
         """
         Get EVC device
         """
@@ -1133,15 +1133,16 @@ class GECloudDirect(ComponentBase):
             status = device.get("status", None)
             type = device.get("type", None)
             return {"uuid": uuid, "alias": alias, "serial_number": serial_number, "status": status, "online": online, "type": type, "went_offline_at": went_offline_at}
-        return {}
+        return previous
 
-    async def async_get_smart_devices(self):
+    async def async_get_smart_devices(self, previous=[]):
         """
         Get list of smart devices
         """
         device_list = await self.async_get_inverter_data_retry(GE_API_SMART_DEVICES)
-        devices = []
+        devices = previous
         if device_list is not None:
+            devices = []
             for device in device_list:
                 uuid = device.get("uuid", None)
                 other_data = device.get("other_data", {})
@@ -1150,13 +1151,14 @@ class GECloudDirect(ComponentBase):
                 devices.append({"uuid": uuid, "alias": alias, "local_key": local_key})
         return devices
 
-    async def async_get_evc_devices(self):
+    async def async_get_evc_devices(self, previous=[]):
         """
         Get list of smart devices
         """
         device_list = await self.async_get_inverter_data_retry(GE_API_EVC_DEVICES)
-        devices = []
+        devices = previous
         if device_list is not None:
+            devices = []
             for device in device_list:
                 uuid = device.get("uuid", None)
                 other_data = device.get("other_data", {})
@@ -1164,7 +1166,7 @@ class GECloudDirect(ComponentBase):
                 devices.append({"uuid": uuid, "alias": alias})
         return devices
 
-    async def async_get_device_info(self, serial):
+    async def async_get_device_info(self, serial, previous={}):
         """
         Get the device info
         """
@@ -1176,7 +1178,7 @@ class GECloudDirect(ComponentBase):
                     this_serial = inverter.get("serial", None)
                     if this_serial and this_serial.lower() == serial.lower():
                         return inverter
-        return {}
+        return previous
 
     async def async_get_devices(self):
         """
@@ -1247,17 +1249,22 @@ class GECloudDirect(ComponentBase):
                 self.log("Warn: GECloud: Device without serial found: {}".format(device))
         return result
 
-    async def async_get_inverter_status(self, serial):
+    async def async_get_inverter_status(self, serial, previous={}):
         """
         Get basis status for inverter
         """
-        return await self.async_get_inverter_data_retry(GE_API_INVERTER_STATUS, serial)
+        result = await self.async_get_inverter_data_retry(GE_API_INVERTER_STATUS, serial)
+        if result is None:
+            return previous
+        return result
 
-    async def async_get_inverter_meter(self, serial):
+    async def async_get_inverter_meter(self, serial, previous={}):
         """
         Get meter data for inverter
         """
         meter = await self.async_get_inverter_data_retry(GE_API_INVERTER_METER, serial)
+        if meter is None:
+            return previous
         return meter
 
     async def async_get_inverter_data_retry(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):

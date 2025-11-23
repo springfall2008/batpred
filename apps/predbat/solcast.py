@@ -16,7 +16,7 @@ import requests
 import traceback
 import pytz
 from datetime import datetime, timedelta, timezone
-from config import PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SOLCAST, TIME_FORMAT_FORECAST_SOLAR
+from config import PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
 import time
 
@@ -197,8 +197,8 @@ class SolarAPI:
                 json.dump(data, f)
         return data
 
-    URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}"
-    URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}"
+    URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
+    URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
 
     def convert_azimuth(self, az):
         """
@@ -281,14 +281,12 @@ class SolarAPI:
 
             current_time = info.get("time", None)
             current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
-            current_time_offset = current_time_stamp.utcoffset()
 
             period_start_stamp = None
             forecast_watt_data = {}
             for period_end in watts:
-                period_end_stamp = datetime.strptime(period_end, TIME_FORMAT_FORECAST_SOLAR)
+                period_end_stamp = datetime.strptime(period_end, TIME_FORMAT)
                 # Convert period_end_stamp to a offset aware time using current_time_offset as the timezone
-                period_end_stamp = period_end_stamp.replace(tzinfo=pytz.utc) - current_time_offset
                 pv50 = watts[period_end] * efficiency  # Apply efficiency to the watt hours
                 if period_start_stamp:
                     if period_end_stamp - period_start_stamp > timedelta(minutes=60):

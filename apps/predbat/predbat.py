@@ -27,7 +27,8 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.28.0"
+THIS_VERSION = "v8.27.28"
+
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py"]
 # fmt: on
@@ -340,6 +341,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.plan_debug = False
         self.arg_errors = {}
         self.ha_interface = None
+        self.num_cars = 0
         self.fatal_error = False
         self.components = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
@@ -425,6 +427,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.octopus_slots = []
+        self.octopus_free_slots = []
+        self.octopus_saving_slots = []
         self.car_charging_slots = []
         self.reserve = 0
         self.reserve_current = 0
@@ -500,7 +504,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
-        self.car_charging_manual_soc = False
+        self.car_charging_manual_soc = []
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.octopus_intelligent_charging = False
@@ -668,7 +672,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         self.expose_config("active", True)
         self.fetch_config_options()
-        self.fetch_sensor_data()
+        sensor_force_replan = self.fetch_sensor_data()
+        if sensor_force_replan:
+            self.log("Sensor changes require a replan, will recompute the plan")
+            recompute = True
         self.fetch_inverter_data()
         if self.dynamic_load():
             self.log("Dynamic load adjustment changed, will recompute the plan")
@@ -790,8 +797,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             else:
                 cost_total_car = 0
 
-            # Increment total at midnight for next day
-            if savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and recompute:
+            # Increment total at midnight for next day, don't do if in read-only mode
+            if savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and recompute and not self.set_read_only:
                 savings_total_predbat += self.savings_today_predbat
                 savings_total_pvbat += self.savings_today_pvbat
                 savings_total_soc = self.savings_today_predbat_soc
@@ -867,10 +874,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         # Car SoC increment
         if scheduled:
             for car_n in range(self.num_cars):
-                if (car_n == 0) and self.car_charging_manual_soc:
-                    self.log("Car charging Manual SoC current is {} next is {}".format(self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
+                if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
+                    car_postfix = "" if car_n == 0 else "_" + str(car_n)
+                    self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
                     if self.car_charging_soc_next[car_n] is not None:
-                        self.expose_config("car_charging_manual_soc_kwh", dp3(self.car_charging_soc_next[car_n]))
+                        self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(self.car_charging_soc_next[car_n]))
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0 and self.minutes_now < RUN_EVERY:

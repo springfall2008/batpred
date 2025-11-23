@@ -10,7 +10,7 @@
 # pyright: reportAttributeAccessIssue=false
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data
+from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 
@@ -396,7 +396,7 @@ class Fetch:
             except (ValueError, TypeError):
                 history = []
 
-            if history:
+            if isinstance(history, list) and history and history[0]:
                 item = history[0][0]
                 try:
                     last_updated_time = str2time(item["last_updated"])
@@ -434,6 +434,11 @@ class Fetch:
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
         """
+
+        prev_octopus_slots = self.octopus_slots.copy()
+        prev_octopus_saving_slots = self.octopus_saving_slots.copy()
+        prev_octopus_free_slots = self.octopus_free_slots.copy()
+
         self.rate_import = {}
         self.rate_import_replicated = {}
         self.rate_export = {}
@@ -459,8 +464,6 @@ class Fetch:
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
-        self.octopus_free_slots = {}
-        self.octopus_saving_slots = {}
 
         # Alert feed if enabled
         if self.components:
@@ -486,7 +489,7 @@ class Fetch:
             if "load_today" in self.args:
                 self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
-                self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
+                self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             else:
                 if self.load_forecast:
@@ -502,21 +505,21 @@ class Fetch:
             # Load import today data
             if "import_today" in self.args:
                 self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
+                self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
                 self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
+                self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
                 self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-                self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
+                self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous pv data")
 
@@ -693,8 +696,9 @@ class Fetch:
         self.car_charging_soc = [0.0 for car_n in range(self.num_cars)]
         self.car_charging_soc_next = [None for car_n in range(self.num_cars)]
         for car_n in range(self.num_cars):
-            if (car_n == 0) and self.car_charging_manual_soc:
-                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh")
+            if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
+                car_postfix = "" if car_n == 0 else "_" + str(car_n)
+                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
             else:
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
@@ -852,6 +856,18 @@ class Fetch:
         else:
             self.load_inday_adjustment = 1.0
 
+        force_replan = False
+        if str(prev_octopus_slots) != str(self.octopus_slots):
+            self.log("Octopus slots changed from {} to {}".format(prev_octopus_slots, self.octopus_slots))
+            force_replan = True
+        if str(prev_octopus_saving_slots) != str(self.octopus_saving_slots):
+            self.log("Octopus saving slots changed from {} to {}".format(prev_octopus_saving_slots, self.octopus_saving_slots))
+            force_replan = True
+        if str(prev_octopus_free_slots) != str(self.octopus_free_slots):
+            self.log("Octopus free slots changed from {} to {}".format(prev_octopus_free_slots, self.octopus_free_slots))
+            force_replan = True
+        return force_replan
+
     def fetch_pv_forecast(self):
         """
         Fetch PV forecast data from one or more sensors
@@ -956,32 +972,32 @@ class Fetch:
         self.export_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
-        self.load_minutes_now = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0)
+        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
-        self.import_today_now = self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0)
-        self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
-        self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
+        self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
+        self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
+        self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
 
         # More up to date sensors for current values if set
         if "load_today" in self.args:
             load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
-            self.load_minutes_now = max(load_minutes.get(0, 0) - load_minutes.get(self.minutes_now, 0), 0)
+            self.load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
             self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
 
         if "import_today" in self.args:
             import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.import_today_now = max(import_today.get(0, 0) - import_today.get(self.minutes_now, 0), 0)
+            self.import_today_now = get_now_from_cumulative(import_today, self.minutes_now, backwards=True)
 
         # Load export today data
         if "export_today" in self.args:
             export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.export_today_now = max(export_today.get(0, 0) - export_today.get(self.minutes_now, 0), 0)
+            self.export_today_now = get_now_from_cumulative(export_today, self.minutes_now, backwards=True)
 
         # PV today data
         if "pv_today" in self.args:
             pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-            self.pv_today_now = max(pv_today.get(0, 0) - pv_today.get(self.minutes_now, 0), 0)
+            self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_now, backwards=True)
 
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
@@ -1860,7 +1876,10 @@ class Fetch:
 
         # Car options
         self.car_charging_hold = self.get_arg("car_charging_hold")
-        self.car_charging_manual_soc = self.get_arg("car_charging_manual_soc")
+        self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
+        for car_n in range(self.num_cars):
+            car_postfix = "" if car_n == 0 else "_" + str(car_n)
+            self.car_charging_manual_soc[car_n] = self.get_arg("car_charging_manual_soc" + car_postfix, False)
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold")) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale")
 

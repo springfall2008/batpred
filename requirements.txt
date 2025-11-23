@@ -1,7 +1,6 @@
 aiohttp
 coverage
 matplotlib
-mcp
 pre-commit
 pyjwt
 pytz

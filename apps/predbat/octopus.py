@@ -605,7 +605,6 @@ class OctopusAPI:
                         if dispatch_start == current_start:
                             already_exists = True
                     if not already_exists and dispatch.get("start", None) and dispatch.get("end", None) and dispatch.get("charge_in_kwh", None):
-                        self.log("Info: Octopus Direct: Adding previous dispatch to completed dispatches: {}".format(dispatch))
                         current_completed.append(dispatch)
             current_completed = sorted(current_completed, key=lambda x: parse_date_time(x["start"]))
             self.intelligent_device["completed_dispatches"] = current_completed
@@ -1225,8 +1224,8 @@ class OctopusAPI:
                                     start_date_time = parse_date_time(start)
                                     end_date_time = parse_date_time(end)
                                     minutes_now = (self.now_utc - self.midnight_utc).total_seconds() / 60
-                                    if start_date_time and end_date_time and (start_date_time <= self.now_utc):
-                                        # This slot has actually started, so move it to completed so its cached if withdrawn later
+                                    if start_date_time and end_date_time and ((self.now_utc - start_date_time) > timedelta(minutes=4)) and (end_date_time >= self.now_utc):
+                                        # This slot has actually started at least 4 minutes ago, so move it to completed so its cached if withdrawn later
                                         # Make end be the end of this slot only and scale delta to the relative minutes
                                         start_minutes = (start_date_time - self.midnight_utc).total_seconds() / 60
                                         # Only consider now onwards
