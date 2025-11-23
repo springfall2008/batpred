@@ -1148,10 +1148,6 @@ class Plan:
                     self.log(line)
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
-                # Web history
-                if self.components and self.components.get_component("web"):
-                    self.components.get_component("web").history_update()
-
         # Destroy pool
         if self.pool:
             try:

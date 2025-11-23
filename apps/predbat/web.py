@@ -54,13 +54,6 @@ class WebInterface:
         self.plan_interval_minutes = base.plan_interval_minutes
         self.log = base.log
         self.default_page = "./dash"
-        self.pv_power_hist = {}
-        self.pv_forecast_hist = {}
-        self.cost_today_hist = {}
-        self.compare_hist = {}
-        self.cost_yesterday_hist = {}
-        self.cost_yesterday_car_hist = {}
-        self.cost_yesterday_no_car = {}
         self.web_port = web_port
         self.default_log = "warnings"
         self.api_started = False
@@ -102,36 +95,6 @@ class WebInterface:
             else:
                 results[key] = hist1[key]
         return results
-
-    def history_update(self):
-        """
-        Update the history data
-        """
-        self.log("Web interface history update")
-        self.pv_power_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7, required=False))
-        self.pv_forecast_hist = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False))
-        self.pv_forecast_histCL = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
-        self.cost_today_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
-        self.cost_hour_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
-        self.cost_yesterday_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
-
-        if self.base.num_cars > 0:
-            self.cost_yesterday_car_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
-            self.cost_yesterday_no_car = self.subtract_daily(self.cost_yesterday_hist, self.cost_yesterday_car_hist)
-        else:
-            self.cost_yesterday_no_car = self.cost_yesterday_hist
-
-        compare_list = self.base.get_arg("compare_list", [])
-        for item in compare_list:
-            id = item.get("id", None)
-            if id and self.base.comparison:
-                self.compare_hist[id] = {}
-                result = self.base.comparison.get_comparison(id)
-                if result:
-                    self.compare_hist[id]["cost"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
-                    self.compare_hist[id]["metric"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
-
-        self.last_success_timestamp = datetime.now(timezone.utc)
 
     async def start(self):
         # Start the web server
@@ -190,8 +153,12 @@ class WebInterface:
 
         print("Web interface started")
         self.api_started = True
+        count = 0
         while not self.abort:
             await asyncio.sleep(1)
+            if count % 60 == 0:
+                self.last_success_timestamp = datetime.now(timezone.utc)
+            count += 1
         await runner.cleanup()
 
         self.api_started = False
@@ -1932,8 +1899,11 @@ var options = {
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
-            cost_pkwh_today = prune_today(self.cost_today_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
-            cost_pkwh_hour = prune_today(self.cost_hour_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
+            cost_today_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
+            cost_hour_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
+
+            cost_pkwh_today = prune_today(cost_today_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
+            cost_pkwh_hour = prune_today(cost_hour_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
             series_data = [
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
@@ -1946,17 +1916,24 @@ var options = {
             load_energy_actual = self.get_entity_results(self.base.prefix + ".load_energy_actual")
             load_energy_predicted = self.get_entity_results(self.base.prefix + ".load_energy_predicted")
             load_energy_adjusted = self.get_entity_results(self.base.prefix + ".load_energy_adjusted")
+            inday_adjust_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".load_inday_adjustment", 2, required=False), scale=0.01)
+            adjustment_factor = prune_today(inday_adjust_hist, self.now_utc, self.midnight_utc, prune=True)
 
             series_data = [
                 {"name": "Actual", "data": load_energy_actual, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
                 {"name": "Predicted", "data": load_energy_predicted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
                 {"name": "Adjusted", "data": load_energy_adjusted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "Adjustment Factor", "data": adjustment_factor, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
         elif chart == "PV" or chart == "PV7":
-            pv_power = prune_today(self.pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
-            pv_forecast = prune_today(self.pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
-            pv_forecastCL = prune_today(self.pv_forecast_histCL, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
+            pv_power_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7, required=False))
+            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
+            pv_forecast_hist = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False))
+            pv_forecast_histCL = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
+
+            pv_forecast = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
+            pv_forecastCL = prune_today(pv_forecast_histCL, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
             pv_today_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
             pv_today_forecast10 = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
             pv_today_forecast90 = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
@@ -2480,6 +2457,27 @@ var options = {
             text += "<th>Carbon</th>"
         text += "<th>Result</th>\n"
 
+        """
+        Update the history data
+        """
+        cost_yesterday_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+        if self.base.num_cars > 0:
+            cost_yesterday_car_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            cost_yesterday_no_car = self.subtract_daily(cost_yesterday_hist, cost_yesterday_car_hist)
+        else:
+            cost_yesterday_no_car = cost_yesterday_hist
+
+        compare_list = self.base.get_arg("compare_list", [])
+        compare_hist = {}
+        for item in compare_list:
+            id = item.get("id", None)
+            if id and self.base.comparison:
+                compare_hist[id] = {}
+                result = self.base.comparison.get_comparison(id)
+                if result:
+                    compare_hist[id]["cost"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
+                    compare_hist[id]["metric"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
+
         compare_list = self.base.get_arg("compare_list", [])
 
         for compare in compare_list:
@@ -2510,12 +2508,12 @@ var options = {
                 stamp = None
 
             # Save current datapoint for today
-            if stamp and (id in self.compare_hist):
-                if "metric" not in self.compare_hist[id]:
-                    self.compare_hist[id]["metric"] = {}
-                    self.compare_hist[id]["cost"] = {}
-                self.compare_hist[id]["metric"][stamp] = dp2(metric / 100)
-                self.compare_hist[id]["cost"][stamp] = dp2(cost / 100.0)
+            if stamp and (id in compare_hist):
+                if "metric" not in compare_hist[id]:
+                    compare_hist[id]["metric"] = {}
+                    compare_hist[id]["cost"] = {}
+                compare_hist[id]["metric"][stamp] = dp2(metric / 100)
+                compare_hist[id]["cost"][stamp] = dp2(cost / 100.0)
 
             selected = '<font style="background-color:#FFaaaa;>"> Best </font>' if best else ""
             if existing_tariff:
@@ -2540,14 +2538,14 @@ var options = {
         for compare in compare_list:
             name = compare.get("name", "")
             id = compare.get("id", "")
-            series_data.append({"name": name, "data": self.compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
-        series_data.append({"name": "Actual", "data": self.cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
+            series_data.append({"name": name, "data": compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
+        series_data.append({"name": "Actual", "data": cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
         if self.base.car_charging_hold:
-            series_data.append({"name": "Actual (no car)", "data": self.cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
+            series_data.append({"name": "Actual (no car)", "data": cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
 
         now_str = self.base.now_utc.strftime(TIME_FORMAT)
 
-        if self.compare_hist:
+        if compare_hist:
             text += self.render_chart(series_data, self.base.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
