@@ -2,10 +2,10 @@
 
 ## Project Overview
 
-Predbat is a Home Assistant battery prediction and automatic charging system. It runs in Home Assistant as an Addon or standalone native Linux/MAC or with a Docker, 
+Predbat is a Home Assistant battery prediction and automatic charging system. It runs in Home Assistant as an Addon or standalone native Linux/MAC or with a Docker,
 predicting optimal battery charge/discharge schedules based on solar forecasts, energy rates, and consumption patterns.
 
-**Core Architecture**: Multiple inheritance pattern with `PredBat` class inheriting from `hass.Hass`, `Octopus`, `Energidataservice`, `Fetch`, `Plan`, `Execute`, `Output`, and `UserInterface`. 
+**Core Architecture**: Multiple inheritance pattern with `PredBat` class inheriting from `hass.Hass`, `Octopus`, `Energidataservice`, `Fetch`, `Plan`, `Execute`, `Output`, and `UserInterface`.
 The codebase uses a component-based architecture where major features extend `ComponentBase` for lifecycle management.
 
 ## Code Structure & Patterns
