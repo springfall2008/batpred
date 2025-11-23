@@ -76,7 +76,6 @@ COMPONENT_LIST = {
         "class": SolarAPI,
         "name": "Solar API",
         "args": {
-            "prefix": {"required": True, "config": "prefix"},
             "solcast_host": {"required": False, "config": "solcast_host", "default": "https://api.solcast.com.au/"},
             "solcast_api_key": {"required": False, "config": "solcast_api_key"},
             "solcast_sites": {"required": False, "config": "solcast_sites"},
@@ -91,6 +90,7 @@ COMPONENT_LIST = {
         },
         "required_or": ["solcast_host", "forecast_solar", "pv_forecast_today"],
         "phase": 1,
+        "new": True,
     },
     "gecloud": {
         "class": GECloudDirect,
