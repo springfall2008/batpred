@@ -112,6 +112,7 @@ class ComponentBase(ABC):
 
     @property
     def now_utc_exact(self):
+        """Get the current time in the local timezone"""
         return datetime.now(self.local_tz)
 
     @property
