@@ -52,6 +52,24 @@ class ComponentBase(ABC):
         self.args = base.args
         self.initialize(**kwargs)
 
+    def dashboard_item(self, entity, state, attributes, app=None):
+        """
+        Create a dashboard item representation.
+        """
+        return self.base.dashboard_item(entity, state, attributes, app=app)
+
+    def get_ha_config(self, name, default):
+        """
+        Retrieve a Home Assistant configuration value from the base system.
+        """
+        return self.base.get_ha_config(name, default)
+
+    def set_arg(self, arg, value):
+        """
+        Set a configuration argument in the base system.
+        """
+        return self.base.set_arg(arg, value)
+
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Retrieve a configuration argument from the base system.
@@ -95,6 +113,11 @@ class ComponentBase(ABC):
     def num_cars(self):
         """Get the number of cars configured in the system"""
         return self.base.num_cars
+
+    @property
+    def config_root(self):
+        """Get the configuration root directory"""
+        return self.base.config_root
 
     @abstractmethod
     async def start(self):

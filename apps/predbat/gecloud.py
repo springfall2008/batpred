@@ -377,10 +377,10 @@ class GECloudDirect(ComponentBase):
                 max_charge_rate = info.get("max_charge_rate", 0)
                 self.log("GECloud: Update data for device {} battery capacity {} max charge rate {}".format(device, capacity, max_charge_rate))
 
-                self.base.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
-                self.base.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
-                self.base.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("_battery_dod", {}), app="gecloud")
-                self.base.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("_battery_dod", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
 
     async def publish_evc_data(self, serial, evc_data):
         """
@@ -393,37 +393,37 @@ class GECloudDirect(ComponentBase):
             if measurand:
                 state = evc_data[key]
                 if measurand == "Current.Export":
-                    self.base.dashboard_item(entity_name + "_evc_current_export", state=state, attributes={"friendly_name": "EV Charger Current Export", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_current_export", state=state, attributes={"friendly_name": "EV Charger Current Export", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
                 elif measurand == "Current.Import":
-                    self.base.dashboard_item(entity_name + "_evc_current_import", state=state, attributes={"friendly_name": "EV Charger Current Import", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_current_import", state=state, attributes={"friendly_name": "EV Charger Current Import", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
                 elif measurand == "Current.Offered":
-                    self.base.dashboard_item(entity_name + "_evc_current_offered", state=state, attributes={"friendly_name": "EV Charger Current Offered", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_current_offered", state=state, attributes={"friendly_name": "EV Charger Current Offered", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
                 elif measurand == "Energy.Active.Export.Register":
-                    self.base.dashboard_item(
+                    self.dashboard_item(
                         entity_name + "_evc_energy_active_export_register", state=state, attributes={"friendly_name": "EV Charger Total Export", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud"
                     )
                 elif measurand == "Energy.Active.Import.Register":
-                    self.base.dashboard_item(
+                    self.dashboard_item(
                         entity_name + "_evc_energy_active_import_register", state=state, attributes={"friendly_name": "EV Charger Total Import", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud"
                     )
                 elif measurand == "Frequency":
-                    self.base.dashboard_item(entity_name + "_evc_frequency", state=state, attributes={"friendly_name": "EV Charger Frequency", "icon": "mdi:ev-station", "unit_of_measurement": "Hz", "device_class": "frequency"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_frequency", state=state, attributes={"friendly_name": "EV Charger Frequency", "icon": "mdi:ev-station", "unit_of_measurement": "Hz", "device_class": "frequency"}, app="gecloud")
                 elif measurand == "Power.Active.Export":
-                    self.base.dashboard_item(entity_name + "_evc_power_active_export", state=state, attributes={"friendly_name": "EV Charger Export Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_power_active_export", state=state, attributes={"friendly_name": "EV Charger Export Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power"}, app="gecloud")
                 elif measurand == "Power.Active.Import":
-                    self.base.dashboard_item(entity_name + "_evc_power_active_import", state=state, attributes={"friendly_name": "EV Charger Import Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_power_active_import", state=state, attributes={"friendly_name": "EV Charger Import Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power"}, app="gecloud")
                 elif measurand == "Power.Factor":
-                    self.base.dashboard_item(entity_name + "_evc_power_factor", state=state, attributes={"friendly_name": "EV Charger Power Factor", "icon": "mdi:ev-station", "unit_of_measurement": "*", "device_class": "power_factor"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_power_factor", state=state, attributes={"friendly_name": "EV Charger Power Factor", "icon": "mdi:ev-station", "unit_of_measurement": "*", "device_class": "power_factor"}, app="gecloud")
                 elif measurand == "Power.Offered":
-                    self.base.dashboard_item(entity_name + "_evc_power_offered", state=state, attributes={"friendly_name": "EV Charger Power Offered", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_power_offered", state=state, attributes={"friendly_name": "EV Charger Power Offered", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power"}, app="gecloud")
                 elif measurand == "SoC":
-                    self.base.dashboard_item(entity_name + "_evc_soc", state=state, attributes={"friendly_name": "EV Charger State of Charge", "icon": "mdi:ev-station", "unit_of_measurement": "%", "device_class": "battery"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_soc", state=state, attributes={"friendly_name": "EV Charger State of Charge", "icon": "mdi:ev-station", "unit_of_measurement": "%", "device_class": "battery"}, app="gecloud")
                 elif measurand == "Temperature":
-                    self.base.dashboard_item(entity_name + "_evc_temperature", state=state, attributes={"friendly_name": "EV Charger Temperature", "icon": "mdi:ev-station", "unit_of_measurement": "°C", "device_class": "temperature"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_temperature", state=state, attributes={"friendly_name": "EV Charger Temperature", "icon": "mdi:ev-station", "unit_of_measurement": "°C", "device_class": "temperature"}, app="gecloud")
                 elif measurand == "Voltage":
-                    self.base.dashboard_item(entity_name + "_evc_voltage", state=state, attributes={"friendly_name": "EV Charger Voltage", "icon": "mdi:ev-station", "unit_of_measurement": "V", "device_class": "voltage"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_voltage", state=state, attributes={"friendly_name": "EV Charger Voltage", "icon": "mdi:ev-station", "unit_of_measurement": "V", "device_class": "voltage"}, app="gecloud")
                 elif measurand == "RPM":
-                    self.base.dashboard_item(entity_name + "_evc_rpm", state=state, attributes={"friendly_name": "EV Charger Fan Speed", "icon": "mdi:ev-station", "unit_of_measurement": "RPM"}, app="gecloud")
+                    self.dashboard_item(entity_name + "_evc_rpm", state=state, attributes={"friendly_name": "EV Charger Fan Speed", "icon": "mdi:ev-station", "unit_of_measurement": "RPM"}, app="gecloud")
 
     async def publish_status(self, device, status):
         """
@@ -443,22 +443,22 @@ class GECloudDirect(ComponentBase):
             entity_name = entity_name.lower()
             attributes = {}
             if key == "time":
-                self.base.dashboard_item(entity_name + "_time", state=status[key], attributes=attribute_table.get("time", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_time", state=status[key], attributes=attribute_table.get("time", {}), app="gecloud")
             elif key == "status":
-                self.base.dashboard_item(entity_name + "_status", state=status[key], attributes=attribute_table.get("status", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_status", state=status[key], attributes=attribute_table.get("status", {}), app="gecloud")
             elif key == "solar":
-                self.base.dashboard_item(entity_name + "_solar_power", state=status[key].get("power", 0), attributes=attribute_table.get("solar_power", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_solar_power", state=status[key].get("power", 0), attributes=attribute_table.get("solar_power", {}), app="gecloud")
             elif key == "consumption":
-                self.base.dashboard_item(entity_name + "_consumption_power", state=status[key], attributes=attribute_table.get("consumption_power", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_consumption_power", state=status[key], attributes=attribute_table.get("consumption_power", {}), app="gecloud")
             elif key == "battery":
-                self.base.dashboard_item(entity_name + "_battery_power", state=status[key].get("power", 0), attributes=attribute_table.get("battery_power", {}), app="gecloud")
-                self.base.dashboard_item(entity_name + "_battery_percent", state=status[key].get("percent", 0), attributes=attribute_table.get("battery_percent", {}), app="gecloud")
-                self.base.dashboard_item(entity_name + "_battery_temperature", state=status[key].get("temperature", 0), attributes=attribute_table.get("battery_temperature", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_battery_power", state=status[key].get("power", 0), attributes=attribute_table.get("battery_power", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_battery_percent", state=status[key].get("percent", 0), attributes=attribute_table.get("battery_percent", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_battery_temperature", state=status[key].get("temperature", 0), attributes=attribute_table.get("battery_temperature", {}), app="gecloud")
             elif key == "grid":
-                self.base.dashboard_item(entity_name + "_grid_power", state=status[key].get("power", 0), attributes=attribute_table.get("grid_power", {}), app="gecloud")
-                self.base.dashboard_item(entity_name + "_grid_voltage", state=status[key].get("voltage", 0), attributes=attribute_table.get("grid_voltage", {}), app="gecloud")
-                self.base.dashboard_item(entity_name + "_grid_current", state=status[key].get("current", 0), attributes=attribute_table.get("grid_current", {}), app="gecloud")
-                self.base.dashboard_item(entity_name + "_grid_frequency", state=status[key].get("frequency", 0), attributes=attribute_table.get("grid_frequency", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_grid_power", state=status[key].get("power", 0), attributes=attribute_table.get("grid_power", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_grid_voltage", state=status[key].get("voltage", 0), attributes=attribute_table.get("grid_voltage", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_grid_current", state=status[key].get("current", 0), attributes=attribute_table.get("grid_current", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_grid_frequency", state=status[key].get("frequency", 0), attributes=attribute_table.get("grid_frequency", {}), app="gecloud")
 
     async def publish_meter(self, device, meter):
         """
@@ -488,30 +488,30 @@ class GECloudDirect(ComponentBase):
                     entity_name = entity_name.lower()
                     attributes = {}
                     if subkey == "solar":
-                        self.base.dashboard_item(entity_name + "_solar_today", state=meter[key][subkey], attributes=attribute_table.get("solar_today", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_solar_today", state=meter[key][subkey], attributes=attribute_table.get("solar_today", {}), app="gecloud")
                     elif subkey == "consumption":
-                        self.base.dashboard_item(entity_name + "_consumption_today", state=meter[key][subkey], attributes=attribute_table.get("consumption_today", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_consumption_today", state=meter[key][subkey], attributes=attribute_table.get("consumption_today", {}), app="gecloud")
                     elif subkey == "battery":
-                        self.base.dashboard_item(entity_name + "_battery_charge_today", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_today", {}), app="gecloud")
-                        self.base.dashboard_item(entity_name + "_battery_discharge_today", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_today", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_battery_charge_today", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_today", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_battery_discharge_today", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_today", {}), app="gecloud")
                     elif subkey == "grid":
-                        self.base.dashboard_item(entity_name + "_grid_import_today", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_today", {}), app="gecloud")
-                        self.base.dashboard_item(entity_name + "_grid_export_today", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_today", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_grid_import_today", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_today", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_grid_export_today", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_today", {}), app="gecloud")
             elif key == "total":
                 for subkey in meter[key]:
                     entity_name = "sensor.predbat_gecloud_" + device
                     entity_name = entity_name.lower()
                     attributes = {}
                     if subkey == "solar":
-                        self.base.dashboard_item(entity_name + "_solar_total", state=meter[key][subkey], attributes=attribute_table.get("solar_total", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_solar_total", state=meter[key][subkey], attributes=attribute_table.get("solar_total", {}), app="gecloud")
                     elif subkey == "consumption":
-                        self.base.dashboard_item(entity_name + "_consumption_total", state=meter[key][subkey], attributes=attribute_table.get("consumption_total", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_consumption_total", state=meter[key][subkey], attributes=attribute_table.get("consumption_total", {}), app="gecloud")
                     elif subkey == "battery":
-                        self.base.dashboard_item(entity_name + "_battery_charge_total", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_total", {}), app="gecloud")
-                        self.base.dashboard_item(entity_name + "_battery_discharge_total", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_total", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_battery_charge_total", state=meter[key][subkey].get("charge", 0), attributes=attribute_table.get("battery_charge_total", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_battery_discharge_total", state=meter[key][subkey].get("discharge", 0), attributes=attribute_table.get("battery_discharge_total", {}), app="gecloud")
                     elif subkey == "grid":
-                        self.base.dashboard_item(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}), app="gecloud")
-                        self.base.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}), app="gecloud")
+                        self.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
 
     async def enable_default_options(self, device, registers):
         for key in registers:
@@ -613,13 +613,13 @@ class GECloudDirect(ComponentBase):
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
                 attributes["options"] = options_text
-                self.base.dashboard_item(entity_id, state=value, attributes=attributes, app="gecloud")
+                self.dashboard_item(entity_id, state=value, attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key, "time": is_select_time}
             elif is_number:
                 entity_name = "number.predbat_gecloud_" + device
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
-                self.base.dashboard_item(entity_id, state=value, attributes=attributes, app="gecloud")
+                self.dashboard_item(entity_id, state=value, attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
             elif is_switch:
                 entity_name = "switch.predbat_gecloud_" + device
@@ -631,7 +631,7 @@ class GECloudDirect(ComponentBase):
                         state = True
                 elif isinstance(value, bool):
                     state = value
-                self.base.dashboard_item(entity_id, state="on" if state else "off", attributes=attributes, app="gecloud")
+                self.dashboard_item(entity_id, state="on" if state else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
     async def async_automatic_config(self, devices):
@@ -676,93 +676,86 @@ class GECloudDirect(ComponentBase):
 
         self.log("GECloud: Auto-config detected features - charge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(has_charge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc))
 
-        self.base.args["inverter_type"] = ["GEC" for _ in range(num_inverters)]
-        self.base.args["num_inverters"] = num_inverters
-        self.base.args["load_today"] = ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in batteries]
-        self.base.args["import_today"] = ["sensor.predbat_gecloud_" + device + "_grid_import_today" for device in batteries]
-        self.base.args["export_today"] = ["sensor.predbat_gecloud_" + device + "_grid_export_today" for device in batteries]
-        self.base.args["pv_today"] = ["sensor.predbat_gecloud_" + device + "_solar_today" for device in batteries]
-        self.base.args["charge_rate"] = ["number.predbat_gecloud_" + device + "_battery_charge_power" for device in batteries]
-        self.base.args["battery_rate_max"] = ["sensor.predbat_gecloud_" + device + "_max_charge_rate" for device in batteries]
-        self.base.args["discharge_rate"] = ["number.predbat_gecloud_" + device + "_battery_discharge_power" for device in batteries]
-        self.base.args["battery_power"] = ["sensor.predbat_gecloud_" + device + "_battery_power" for device in batteries]
-        self.base.args["pv_power"] = ["sensor.predbat_gecloud_" + device + "_solar_power" for device in batteries]
-        self.base.args["load_power"] = ["sensor.predbat_gecloud_" + device + "_consumption_power" for device in batteries]
-        self.base.args["grid_power"] = ["sensor.predbat_gecloud_" + device + "_grid_power" for device in batteries]
-        self.base.args["soc_percent"] = ["sensor.predbat_gecloud_" + device + "_battery_percent" for device in batteries]
-        self.base.args["soc_max"] = ["sensor.predbat_gecloud_" + device + "_battery_size" for device in batteries]
-        self.base.args["reserve"] = ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in batteries]
-        self.base.args["inverter_time"] = ["sensor.predbat_gecloud_" + device + "_time" for device in batteries]
-        self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + device + "_ac_charge_1_start_time" for device in batteries]
-        self.base.args["charge_end_time"] = ["select.predbat_gecloud_" + device + "_ac_charge_1_end_time" for device in batteries]
-        self.base.args["charge_limit"] = ["number.predbat_gecloud_" + device + "_ac_charge_upper_percent_limit" for device in batteries]
-        self.base.args["discharge_start_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_start_time" for device in batteries]
-        self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in batteries]
-        self.base.args["scheduled_charge_enable"] = ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries]
-        self.base.args["scheduled_discharge_enable"] = ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries]
-        self.base.args["battery_temperature"] = ["sensor.predbat_gecloud_" + device + "_battery_temperature" for device in batteries]
-        self.base.args["battery_scaling"] = ["sensor.predbat_gecloud_" + device + "_battery_dod" for device in batteries]
+        self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
+        self.set_arg("num_inverters", num_inverters)
+        self.set_arg("load_today", ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in batteries])
+        self.set_arg("import_today", ["sensor.predbat_gecloud_" + device + "_grid_import_today" for device in batteries])
+        self.set_arg("export_today", ["sensor.predbat_gecloud_" + device + "_grid_export_today" for device in batteries])
+        self.set_arg("pv_today", ["sensor.predbat_gecloud_" + device + "_solar_today" for device in batteries])
+        self.set_arg("charge_rate", ["number.predbat_gecloud_" + device + "_battery_charge_power" for device in batteries])
+        self.set_arg("battery_rate_max", ["sensor.predbat_gecloud_" + device + "_max_charge_rate" for device in batteries])
+        self.set_arg("discharge_rate", ["number.predbat_gecloud_" + device + "_battery_discharge_power" for device in batteries])
+        self.set_arg("battery_power", ["sensor.predbat_gecloud_" + device + "_battery_power" for device in batteries])
+        self.set_arg("pv_power", ["sensor.predbat_gecloud_" + device + "_solar_power" for device in batteries])
+        self.set_arg("load_power", ["sensor.predbat_gecloud_" + device + "_consumption_power" for device in batteries])
+        self.set_arg("grid_power", ["sensor.predbat_gecloud_" + device + "_grid_power" for device in batteries])
+        self.set_arg("soc_percent", ["sensor.predbat_gecloud_" + device + "_battery_percent" for device in batteries])
+        self.set_arg("soc_max", ["sensor.predbat_gecloud_" + device + "_battery_size" for device in batteries])
+        self.set_arg("reserve", ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in batteries])
+        self.set_arg("inverter_time", ["sensor.predbat_gecloud_" + device + "_time" for device in batteries])
+        self.set_arg("charge_start_time", ["select.predbat_gecloud_" + device + "_ac_charge_1_start_time" for device in batteries])
+        self.set_arg("charge_end_time", ["select.predbat_gecloud_" + device + "_ac_charge_1_end_time" for device in batteries])
+        self.set_arg("charge_limit", ["number.predbat_gecloud_" + device + "_ac_charge_upper_percent_limit" for device in batteries])
+        self.set_arg("discharge_start_time", ["select.predbat_gecloud_" + device + "_dc_discharge_1_start_time" for device in batteries])
+        self.set_arg("discharge_end_time", ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in batteries])
+        self.set_arg("scheduled_charge_enable", ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries])
+        self.set_arg("scheduled_discharge_enable", ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries])
+        self.set_arg("battery_temperature", ["sensor.predbat_gecloud_" + device + "_battery_temperature" for device in batteries])
+        self.set_arg("battery_scaling", ["sensor.predbat_gecloud_" + device + "_battery_dod" for device in batteries])
 
         if len(batteries):
-            self.base.args["battery_temperature_history"] = "sensor.predbat_gecloud_" + batteries[0] + "_battery_temperature"
+            self.set_arg("battery_temperature_history", "sensor.predbat_gecloud_" + batteries[0] + "_battery_temperature")
 
         if has_pause_battery:
-            self.base.args["pause_mode"] = ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries]
+            self.set_arg("pause_mode", ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries])
             if has_pause_start_time:
-                self.base.args["pause_start_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries]
-                self.base.args["pause_end_time"] = ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries]
+                self.set_arg("pause_start_time", ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries])
+                self.set_arg("pause_end_time", ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries])
         else:
-            if "pause_mode" in self.base.args:
-                del self.base.args["pause_mode"]
-            if "pause_start_time" in self.base.args:
-                del self.base.args["pause_start_time"]
-            if "pause_end_time" in self.base.args:
-                del self.base.args["pause_end_time"]
+            self.set_arg("pause_mode", None)
+            self.set_arg("pause_start_time", None)
+            self.set_arg("pause_end_time", None)
 
         if has_discharge_target_soc:
-            self.base.args["discharge_target_soc"] = ["number.predbat_gecloud_" + device + "_dc_discharge_1_lower_soc_percent_limit" for device in batteries]
+            self.set_arg("discharge_target_soc", ["number.predbat_gecloud_" + device + "_dc_discharge_1_lower_soc_percent_limit" for device in batteries])
         else:
-            if "discharge_target_soc" in self.base.args:
-                del self.base.args["discharge_target_soc"]
+            self.set_arg("discharge_target_soc", None)
 
         if has_charge_power_percent:
-            self.base.args["charge_rate_percent"] = ["number.predbat_gecloud_" + device + "_inverter_charge_power_percentage" for device in batteries]
-            self.base.args["discharge_rate_percent"] = ["number.predbat_gecloud_" + device + "_inverter_discharge_power_percentage" for device in batteries]
+            self.set_arg("charge_rate_percent", ["number.predbat_gecloud_" + device + "_inverter_charge_power_percentage" for device in batteries])
+            self.set_arg("discharge_rate_percent", ["number.predbat_gecloud_" + device + "_inverter_discharge_power_percentage" for device in batteries])
         else:
-            if "charge_rate_percent" in self.base.args:
-                del self.base.args["charge_rate_percent"]
-            if "discharge_rate_percent" in self.base.args:
-                del self.base.args["discharge_rate_percent"]
+            self.set_arg("charge_rate_percent", None)
+            self.set_arg("discharge_rate_percent", None)
 
-        if "givtcp_rest" in self.base.args:
-            del self.base.args["givtcp_rest"]
+        self.set_arg("givtcp_rest", None)
 
         # Use the first battery serial for the ge_cloud_serial (for status)
-        self.base.args["ge_cloud_serial"] = devices["battery"][0]
+        self.set_arg("ge_cloud_serial", devices["battery"][0])
 
         # reconfigure for EMS
         if devices["ems"]:
             self.log("GECloud: EMS detected, using this for control")
             ems = devices["ems"]
-            self.base.args["inverter_type"] = ["GEE" for _ in range(num_inverters)]
-            self.base.args["ge_cloud_serial"] = ems
-            self.base.args["load_today"] = ["sensor.predbat_gecloud_" + ems + "_consumption_today"]
-            self.base.args["import_today"] = ["sensor.predbat_gecloud_" + ems + "_grid_import_today"]
-            self.base.args["export_today"] = ["sensor.predbat_gecloud_" + ems + "_grid_export_today"]
-            self.base.args["pv_today"] = ["sensor.predbat_gecloud_" + ems + "_solar_today"]
-            self.base.args["charge_start_time"] = ["select.predbat_gecloud_" + ems + "_charge_start_time_slot_1" for _ in range(num_inverters)]
-            self.base.args["charge_end_time"] = ["select.predbat_gecloud_" + ems + "_charge_end_time_slot_1" for _ in range(num_inverters)]
-            self.base.args["idle_start_time"] = ["select.predbat_gecloud_" + ems + "_discharge_start_time_slot_1" for _ in range(num_inverters)]
-            self.base.args["idle_end_time"] = ["select.predbat_gecloud_" + ems + "_discharge_end_time_slot_1" for _ in range(num_inverters)]
-            self.base.args["charge_limit"] = ["number.predbat_gecloud_" + ems + "_charge_soc_percent_limit_1" for _ in range(num_inverters)]
-            self.base.args["discharge_start_time"] = ["select.predbat_gecloud_" + ems + "_export_start_time_slot_1" for _ in range(num_inverters)]
-            self.base.args["discharge_end_time"] = ["select.predbat_gecloud_" + ems + "_export_end_time_slot_1" for _ in range(num_inverters)]
+            self.set_arg("inverter_type", ["GEE" for _ in range(num_inverters)])
+            self.set_arg("ge_cloud_serial", ems)
+            self.set_arg("load_today", ["sensor.predbat_gecloud_" + ems + "_consumption_today"])
+            self.set_arg("import_today", ["sensor.predbat_gecloud_" + ems + "_grid_import_today"])
+            self.set_arg("export_today", ["sensor.predbat_gecloud_" + ems + "_grid_export_today"])
+            self.set_arg("pv_today", ["sensor.predbat_gecloud_" + ems + "_solar_today"])
+            self.set_arg("charge_start_time", ["select.predbat_gecloud_" + ems + "_charge_start_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("charge_end_time", ["select.predbat_gecloud_" + ems + "_charge_end_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("idle_start_time", ["select.predbat_gecloud_" + ems + "_discharge_start_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("idle_end_time", ["select.predbat_gecloud_" + ems + "_discharge_end_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("charge_limit", ["number.predbat_gecloud_" + ems + "_charge_soc_percent_limit_1" for _ in range(num_inverters)])
+            self.set_arg("discharge_start_time", ["select.predbat_gecloud_" + ems + "_export_start_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("discharge_end_time", ["select.predbat_gecloud_" + ems + "_export_end_time_slot_1" for _ in range(num_inverters)])
 
             # EMS Produces the data for all inverters
-            self.base.args["battery_power"] = ["sensor.predbat_gecloud_" + ems + "_battery_power"] + [0 for _ in range(num_inverters - 1)]
-            self.base.args["pv_power"] = ["sensor.predbat_gecloud_" + ems + "_solar_power"] + [0 for _ in range(num_inverters - 1)]
-            self.base.args["load_power"] = ["sensor.predbat_gecloud_" + ems + "_consumption_power"] + [0 for _ in range(num_inverters - 1)]
-            self.base.args["grid_power"] = ["sensor.predbat_gecloud_" + ems + "_grid_power"] + [0 for _ in range(num_inverters - 1)]
+            self.set_arg("battery_power", ["sensor.predbat_gecloud_" + ems + "_battery_power"] + [0 for _ in range(num_inverters - 1)])
+            self.set_arg("pv_power", ["sensor.predbat_gecloud_" + ems + "_solar_power"] + [0 for _ in range(num_inverters - 1)])
+            self.set_arg("load_power", ["sensor.predbat_gecloud_" + ems + "_consumption_power"] + [0 for _ in range(num_inverters - 1)])
+            self.set_arg("grid_power", ["sensor.predbat_gecloud_" + ems + "_grid_power"] + [0 for _ in range(num_inverters - 1)])
 
         self.log("GECloud: Automatic configuration complete")
 
@@ -1414,7 +1407,7 @@ class GECloudData(ComponentBase):
             seconds += 5
 
     def get_ge_cache_filename(self):
-        cache_path = self.base.config_root + "/cache"
+        cache_path = self.config_root + "/cache"
         if not os.path.exists(cache_path):
             os.makedirs(cache_path, exist_ok=True)
         cache_file = cache_path + "/givenergy_data.yaml"

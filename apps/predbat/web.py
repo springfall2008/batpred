@@ -408,9 +408,9 @@ class WebInterface(ComponentBase):
             text += "<h2>Loading please wait...</h2>"
             return text
 
-        debug_enable, ignore = self.base.get_ha_config("debug_enable", None)
-        read_only, ignore = self.base.get_ha_config("set_read_only", None)
-        mode, ignore = self.base.get_ha_config("mode", None)
+        debug_enable, ignore = self.get_ha_config("debug_enable", None)
+        read_only, ignore = self.get_ha_config("set_read_only", None)
+        mode, ignore = self.get_ha_config("mode", None)
 
         # Create a two-column layout for Status and Debug tables
         text += '<div style="display: flex; gap: 5px; margin-bottom: 20px; max-width: 800px;">\n'
