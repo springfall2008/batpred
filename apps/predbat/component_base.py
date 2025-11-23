@@ -52,6 +52,16 @@ class ComponentBase(ABC):
         self.args = base.args
         self.initialize(**kwargs)
 
+    @abstractmethod
+    def initialize(self, **kwargs):
+        """
+        Additional initialization for subclasses.
+
+        Subclasses can override this method to perform any additional setup
+        required during initialization.
+        """
+        pass
+
     def dashboard_item(self, entity, state, attributes, app=None):
         """
         Create a dashboard item representation.
