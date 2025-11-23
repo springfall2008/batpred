@@ -115,12 +115,12 @@ class ComponentBase(ABC):
         """
         Stop the component gracefully.
 
-        This method should:
-        - Set api_stop to True to signal the main loop to exit
-        - Wait for any ongoing operations to complete
-        - Release any held resources
+        This method:
+        - Sets api_stop to True to signal the main loop to exit
+        - Waits briefly to allow ongoing operations to complete
+        - Releases any held resources as needed
 
-        Must be implemented by subclasses.
+        Subclasses may override this method if additional cleanup is required.
         """
         self.api_stop = True
         self.api_started = False
