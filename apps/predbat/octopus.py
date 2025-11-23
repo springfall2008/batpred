@@ -9,6 +9,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
+from component_base import ComponentBase
 import aiohttp
 import asyncio
 import json
@@ -315,35 +316,28 @@ class OctopusEnergyApiClient:
         return self.session
 
 
-class OctopusAPI:
-    def __init__(self, api_key, account_id, automatic, base):
-        self.api_key = api_key
-        self.base = base
-        self.log = base.log
-        self.local_tz = base.local_tz
-        self.plan_interval_minutes = base.plan_interval_minutes
-        self.api = OctopusEnergyApiClient(api_key, self.log)
+class OctopusAPI(ComponentBase):
+    def initialize(self, key, account_id, automatic):
+        """Initialize the Octopus API component"""
+        self.api_key = key
+        self.api = OctopusEnergyApiClient(key, self.log)
         self.stop_api = False
         self.account_id = account_id
         self.graphql_token = None
         self.graphql_expiration = None
         self.account_data = {}
-        self.now_utc = None
         self.url_cache = {}
         self.tariffs = {}
-        self.account_data = {}
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_device = {}
-        self.api_started = False
-        self.cache_path = self.base.config_root + "/cache"
+        self.cache_path = self.config_root + "/cache"
         self.automatic = automatic
         self.commands = []
 
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
-        self.last_success_timestamp = None
         if not os.path.exists(self.cache_path):
             os.makedirs(self.cache_path)
         self.cache_file = self.cache_path + "/octopus.yaml"
@@ -367,28 +361,8 @@ class OctopusAPI:
     async def switch_event(self, entity_id, service):
         pass
 
-    def wait_api_started(self):
-        """
-        Wait for the API to start
-        """
-        self.log("Octopus API: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < 240:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: Octopus API: Failed to start")
-            return False
-        return True
-
     def is_alive(self):
         return self.api_started and self.account_data
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
 
     async def start(self):
         """
@@ -401,13 +375,11 @@ class OctopusAPI:
         while not self.stop_api:
             try:
                 # Update time every minute
-                self.now = datetime.now()
-                self.now_utc = datetime.now(self.local_tz)
-                count_minutes = self.now_utc.minute + self.now_utc.hour * 60
+                now = datetime.now()
+                count_minutes = now.minute + now.hour * 60
 
                 if first or (count_minutes % 30) == 0:
                     # 30-minute update for tariff
-                    self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
                     await self.async_get_account(self.account_id)
                     await self.async_find_tariffs()
 
@@ -514,6 +486,8 @@ class OctopusAPI:
         self.log("Find tariffs account data {}".format(self.account_data))
         if not self.account_data:
             return self.tariffs
+        
+        now = datetime.now()
 
         tariffs = {}
         gas = self.account_data.get("account", {}).get("gasAgreements", [])
@@ -532,7 +506,7 @@ class OctopusAPI:
             for meter in meters:
                 activeFrom = parse_date(meter.get("activeFrom", None))
                 activeTo = parse_date(meter.get("activeTo", None))
-                isActiveMeter = is_active(self.now, activeFrom, activeTo)
+                isActiveMeter = is_active(now, activeFrom, activeTo)
                 if isActiveMeter:
                     if meter.get("smartImportElectricityMeter", None):
                         isImport = True
@@ -551,7 +525,7 @@ class OctopusAPI:
                 tariff = this_agreement.get("tariff", {})
                 validFrom = parse_date_time(this_agreement.get("validFrom", None))
                 validTo = parse_date_time(this_agreement.get("validTo", None))
-                isActiveAgreement = is_active(self.now_utc, validFrom, validTo)
+                isActiveAgreement = is_active(self.now_utc_exact, validFrom, validTo)
                 if isActiveAgreement:
                     tariffCode = tariff.get("tariffCode", None)
                     productCode = tariff.get("productCode", None)
@@ -593,7 +567,7 @@ class OctopusAPI:
 
     async def fetch_previous_dispatch(self):
         entity_id = self.get_entity_name("binary_sensor", "intelligent_dispatch")
-        old_dispatches = self.base.get_state_wrapper(entity_id, attribute="completed_dispatches", default=[])
+        old_dispatches = self.get_state_wrapper(entity_id, attribute="completed_dispatches", default=[])
         if old_dispatches and isinstance(old_dispatches, list):
             current_completed = self.intelligent_device.get("completed_dispatches", [])
             for dispatch in old_dispatches:
@@ -721,7 +695,7 @@ class OctopusAPI:
         """
         devices = self.get_intelligent_device()
         if devices:
-            is_weekend = self.now_utc.weekday() >= 5
+            is_weekend = self.now_utc_exact.weekday() >= 5
             return devices.get("weekday_target_time" if not is_weekend else "weekend_target_time", None)
         else:
             return None
@@ -732,7 +706,7 @@ class OctopusAPI:
         """
         devices = self.get_intelligent_device()
         if devices:
-            is_weekend = self.now_utc.weekday() >= 5
+            is_weekend = self.now_utc_exact.weekday() >= 5
             return devices.get("weekday_target_soc" if not is_weekend else "weekend_target_soc", None)
         else:
             return None
@@ -773,7 +747,7 @@ class OctopusAPI:
                 event_code[event_id] = code
             if start and end and event_id not in joined_ids:
                 endDataTime = parse_date_time(end)
-                if endDataTime > self.now_utc:
+                if endDataTime > self.now_utc_exact:
                     return_available_events.append({"start": start, "end": end, "octopoints_per_kwh": event.get("rewardPerKwhInOctoPoints", None), "code": code, "id": event_id})
 
         for event in joined_events:
@@ -788,10 +762,10 @@ class OctopusAPI:
             start = event.get("start", None)
             end = event.get("end", None)
             if start and end:
-                if start <= self.now_utc and end > self.now_utc:
+                if start <= self.now_utc_exact and end > self.now_utc_exact:
                     active_event = True
                     break
-        self.base.dashboard_item(self.get_entity_name("binary_sensor", "saving_session"), "on" if active_event else "off", attributes=saving_attributes, app="octopus")
+        self.dashboard_item(self.get_entity_name("binary_sensor", "saving_session"), "on" if active_event else "off", attributes=saving_attributes, app="octopus")
 
         # Create joiner dropdown for available events
         possible_codes = []
@@ -799,7 +773,7 @@ class OctopusAPI:
             code = event.get("code", None)
             if code:
                 possible_codes.append(code)
-        self.base.dashboard_item(self.get_entity_name("select", "saving_session_join"), "", attributes={"options": possible_codes, "friendly_name": "Join Octopus Saving Session Event", "icon": "mdi:currency-usd"}, app="octopus")
+        self.dashboard_item(self.get_entity_name("select", "saving_session_join"), "", attributes={"options": possible_codes, "friendly_name": "Join Octopus Saving Session Event", "icon": "mdi:currency-usd"}, app="octopus")
 
         return return_available_events, return_joined_events
 
@@ -808,17 +782,17 @@ class OctopusAPI:
         Automatic configuration of entities
         """
         self.log("Octopus API: Automatic configuration of entities")
-        self.base.args["octopus_saving_session"] = self.get_entity_name("binary_sensor", "saving_session")
-        self.base.args["octopus_saving_session_join"] = self.get_entity_name("select", "saving_session_join")
+        self.set_arg("octopus_saving_session", self.get_entity_name("binary_sensor", "saving_session"))
+        self.set_arg("octopus_saving_session_join", self.get_entity_name("select", "saving_session_join"))
         for tariff in tariffs:
-            self.base.args["metric_octopus_{}".format(tariff)] = self.get_entity_name("sensor", tariff + "_rates")
+            self.set_arg("metric_octopus_{}".format(tariff), self.get_entity_name("sensor", tariff + "_rates"))
             if tariff == "import":
-                self.base.args["metric_standing_charge"] = self.get_entity_name("sensor", tariff + "_standing")
+                self.set_arg("metric_standing_charge", self.get_entity_name("sensor", tariff + "_standing"))
         device = self.get_intelligent_device()
         if device:
-            self.base.args["octopus_intelligent_slot"] = self.get_entity_name("binary_sensor", "intelligent_dispatch")
-            self.base.args["octopus_ready_time"] = self.get_entity_name("select", "intelligent_target_time")
-            self.base.args["octopus_charge_limit"] = self.get_entity_name("number", "intelligent_target_soc")
+            self.set_arg("octopus_intelligent_slot", self.get_entity_name("binary_sensor", "intelligent_dispatch"))
+            self.set_arg("octopus_ready_time", self.get_entity_name("select", "intelligent_target_time"))
+            self.set_arg("octopus_charge_limit", self.get_entity_name("number", "intelligent_target_soc"))
 
     async def async_get_saving_sessions(self, account_id):
         """
@@ -848,18 +822,18 @@ class OctopusAPI:
             valid_from_stamp = rate.get("valid_from", "")
             # Convert from string to datetime
             valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
-            if valid_from_stamp <= self.now_utc:
+            if valid_from_stamp <= self.now_utc_exact:
                 current_day_rate = rate.get("value_inc_vat", None)
         for rate in result_night:
             valid_from_stamp = rate.get("valid_from", "")
             # Convert from string to datetime
             valid_from_stamp = datetime.strptime(valid_from_stamp, DATE_TIME_STR_FORMAT)
-            if valid_from_stamp <= self.now_utc:
+            if valid_from_stamp <= self.now_utc_exact:
                 current_night_rate = rate.get("value_inc_vat", None)
         self.log("Info: Current day rate {} night rate {}".format(current_day_rate, current_night_rate))
         if current_day_rate is not None and current_night_rate is not None:
             # Now create a combined list of rates, start from 2 days back and go forward 3 days with the day and night rates
-            night_start_time = self.now_utc.replace(hour=OCTOPUS_NIGHT_RATE_START_HOUR, minute=OCTOPUS_NIGHT_RATE_START_MINUTE, second=0, microsecond=0) - timedelta(days=2)
+            night_start_time = self.now_utc_exact.replace(hour=OCTOPUS_NIGHT_RATE_START_HOUR, minute=OCTOPUS_NIGHT_RATE_START_MINUTE, second=0, microsecond=0) - timedelta(days=2)
             night_end_time = night_start_time.replace(hour=OCTOPUS_NIGHT_RATE_END_HOUR, minute=OCTOPUS_NIGHT_RATE_END_MINUTE)
             day_start_time = night_start_time.replace(hour=OCTOPUS_DAY_RATE_START_HOUR, minute=OCTOPUS_DAY_RATE_START_MINUTE)
             day_end_time = night_start_time.replace(hour=OCTOPUS_DAY_RATE_END_HOUR, minute=OCTOPUS_DAY_RATE_END_MINUTE) + timedelta(days=1)
@@ -992,13 +966,13 @@ class OctopusAPI:
             if standing_now:
                 standing_now = dp4(standing_now / 100)
 
-            self.base.dashboard_item(
+            self.dashboard_item(
                 self.get_entity_name("sensor", tariff + "_rates"),
                 rate_now,
                 attributes={"friendly_name": "Octopus Tariff Rates " + tariff, "icon": "mdi:currency-gbp", "standing_charge": standing_now, "rates": rates_stamp, "product_code": product_code, "tariff_code": tariff_code},
                 app="octopus",
             )
-            self.base.dashboard_item(
+            self.dashboard_item(
                 self.get_entity_name("sensor", tariff + "_standing"),
                 standing_now,
                 attributes={"friendly_name": "Octopus Tariff Standing Charge " + tariff, "icon": "mdi:currency-gbp", "product_code": product_code, "tariff_code": tariff_code},
@@ -1223,8 +1197,8 @@ class OctopusAPI:
                                 if start and end:
                                     start_date_time = parse_date_time(start)
                                     end_date_time = parse_date_time(end)
-                                    minutes_now = (self.now_utc - self.midnight_utc).total_seconds() / 60
-                                    if start_date_time and end_date_time and ((self.now_utc - start_date_time) > timedelta(minutes=4)) and (end_date_time >= self.now_utc):
+                                    minutes_now = self.minutes_now
+                                    if start_date_time and end_date_time and ((self.now_utc_exact - start_date_time) > timedelta(minutes=4)) and (end_date_time >= self.now_utc_exact):
                                         # This slot has actually started at least 4 minutes ago, so move it to completed so its cached if withdrawn later
                                         # Make end be the end of this slot only and scale delta to the relative minutes
                                         start_minutes = (start_date_time - self.midnight_utc).total_seconds() / 60
@@ -1238,7 +1212,7 @@ class OctopusAPI:
                                         end_minutes = start_minutes + self.plan_interval_minutes
 
                                         # End minutes to end of this slot only
-                                        if end_date_time > self.now_utc:
+                                        if end_date_time > self.now_utc_exact:
                                             end_minutes = max(minutes_now, end_minutes)
 
                                         # Round up end minutes to the next slot
@@ -1312,7 +1286,7 @@ class OctopusAPI:
                         completed = sorted(completed, key=lambda x: parse_date_time(x["start"]))
 
                         # Prune completed dispatches for results older than 5 days
-                        completed = [x for x in completed if parse_date_time(x["start"]) > self.now_utc - timedelta(days=5)]
+                        completed = [x for x in completed if parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
                         # Store results
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
         return result
@@ -1334,17 +1308,17 @@ class OctopusAPI:
             if start and end:
                 start = parse_date_time(start)
                 end = parse_date_time(end)
-                if start <= self.now_utc and end > self.now_utc:
+                if start <= self.now_utc_exact and end > self.now_utc_exact:
                     active_event = True
         dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", **intelligent_device}
-        self.base.dashboard_item(self.get_entity_name("binary_sensor", "intelligent_dispatch"), "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
+        self.dashboard_item(self.get_entity_name("binary_sensor", "intelligent_dispatch"), "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
 
         weekday_target_time = intelligent_device.get("weekday_target_time", None)
         weekday_target_soc = intelligent_device.get("weekday_target_soc", None)
         weekend_target_time = intelligent_device.get("weekend_target_time", None)
         weekend_target_soc = intelligent_device.get("weekend_target_soc", None)
         # Check if we are on a weekend?
-        if self.now_utc.weekday() >= 5:
+        if self.now_utc_exact.weekday() >= 5:
             target_time = weekend_target_time
             target_soc = weekend_target_soc
         else:
@@ -1352,8 +1326,8 @@ class OctopusAPI:
             target_soc = weekday_target_soc
         if target_time:
             target_time = target_time[:5]  # Only HH:MM
-        self.base.dashboard_item(self.get_entity_name("select", "intelligent_target_time"), target_time, attributes={"friendly_name": "Octopus Intelligent Target Time", "icon": "mdi:clock-outline", "options": OPTIONS_TIME}, app="octopus")
-        self.base.dashboard_item(self.get_entity_name("number", "intelligent_target_soc"), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
+        self.dashboard_item(self.get_entity_name("select", "intelligent_target_time"), target_time, attributes={"friendly_name": "Octopus Intelligent Target Time", "icon": "mdi:clock-outline", "options": OPTIONS_TIME}, app="octopus")
+        self.dashboard_item(self.get_entity_name("number", "intelligent_target_soc"), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
 
     async def async_get_account(self, account_id):
         """

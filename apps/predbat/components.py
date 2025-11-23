@@ -159,6 +159,7 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
+        "new": True,
     },
     "ohme": {
         "class": OhmeAPI,
