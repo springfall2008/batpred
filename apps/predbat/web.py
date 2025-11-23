@@ -141,7 +141,7 @@ class WebInterface(ComponentBase):
         while not self.api_stop:
             await asyncio.sleep(1)
             if count % 60 == 0:
-                self.last_success_timestamp = datetime.now(timezone.utc)
+                self.update_success_timestamp()
             count += 1
         await runner.cleanup()
 
