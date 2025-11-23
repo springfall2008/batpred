@@ -15,19 +15,15 @@ from utils import str2time, dp1
 import xml.etree.ElementTree as etree
 import asyncio
 import time
+from component_base import ComponentBase
 
 
-class AlertFeed:
-    def __init__(self, alert_config, base):
-        self.base = base
-        self.prefix = self.base.prefix
+class AlertFeed(ComponentBase):
+    def initialize(self, alert_config):
+        """Initialize the AlertFeed component"""
         self.alert_cache = {}
-        self.log = self.base.log
         self.alert_config = alert_config
         self.alert_url = self.alert_config.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom")
-        self.last_success_timestamp = None
-        self.stop_api = False
-        self.api_started = False
 
     async def select_event(self, entity_id, value):
         pass
@@ -38,32 +34,6 @@ class AlertFeed:
     async def switch_event(self, entity_id, service):
         pass
 
-    def wait_api_started(self):
-        """
-        Wait for the API to start
-        """
-        self.log("AlertFeed: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < 240:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: AlertFeed: Failed to start")
-            return False
-        return True
-
-    def is_alive(self):
-        """
-        Check if the API is alive
-        """
-        return self.api_started
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
-
     async def start(self):
         """
         Main run loop
@@ -71,7 +41,7 @@ class AlertFeed:
         first = True
         count_seconds = 0
         self.api_started = True
-        while not self.stop_api:
+        while not self.api_stop:
             try:
                 if first or count_seconds % (60 * 30) == 0:
                     # Download alerts
@@ -86,9 +56,6 @@ class AlertFeed:
 
         # Clean up on exit
         self.api_started = False
-
-    async def stop(self):
-        self.stop_api = True
 
     def process_alerts(self, minutes_now, midnight_utc, testing=False):
         """
@@ -110,9 +77,9 @@ class AlertFeed:
 
         # If latitude and longitude are not provided, use zone.home
         if latitude is None:
-            latitude = self.base.get_state_wrapper("zone.home", attribute="latitude")
+            latitude = self.get_state_wrapper("zone.home", attribute="latitude")
         if longitude is None:
-            longitude = self.base.get_state_wrapper("zone.home", attribute="longitude")
+            longitude = self.get_state_wrapper("zone.home", attribute="longitude")
 
         # If latitude and longitude are not found, we cannot process alerts
         if latitude and longitude:
@@ -181,7 +148,7 @@ class AlertFeed:
             item["title"] = alert.get("title", "")
             item["status"] = alert.get("status", "")
             alert_show.append(item)
-        self.base.dashboard_item("sensor." + self.prefix + "_alertfeed_status", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts": alert_show}, app="alertfeed")
+        self.dashboard_item("sensor." + self.prefix + "_alertfeed_status", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts": alert_show}, app="alertfeed")
 
         return alert_active_keep
 
@@ -272,13 +239,13 @@ class AlertFeed:
             age = now - stamp
             if age.seconds < (30 * 60):
                 self.log("AlertFeed: Return cached alert data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
-                self.last_success_timestamp = datetime.now(timezone.utc)
+                self.update_success_timestamp()
                 return pdata
 
         r = requests.get(url)
         if r.status_code not in [200, 201]:
             self.log("Warn: AlertFeed: Error downloading alert data from URL {}, code {}".format(url, r.status_code))
-            self.base.record_status("Warn: AlertFeed: Error downloading alert data", debug=url, had_errors=True)
+            self.record_status("Warn: AlertFeed: Error downloading alert data", debug=url, had_errors=True)
             return None
 
         self.log("AlertFeed: Downloaded alert data from {} size {} bytes".format(url, len(r.text)))
@@ -287,7 +254,7 @@ class AlertFeed:
         self.alert_cache[url] = {}
         self.alert_cache[url]["stamp"] = now
         self.alert_cache[url]["data"] = r.text
-        self.last_success_timestamp = datetime.now(timezone.utc)
+        self.update_success_timestamp()
         return r.text
 
     def parse_alert_data(self, xml):

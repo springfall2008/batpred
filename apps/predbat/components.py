@@ -49,7 +49,6 @@ COMPONENT_LIST = {
         },
         "can_restart": False,
         "phase": 0,
-        "new": True,
     },
     "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0, "new": True},
     "web": {
@@ -59,7 +58,6 @@ COMPONENT_LIST = {
             "web_port": {"required": False, "config": "web_port", "default": 5052},
         },
         "phase": 0,
-        "new": True,
     },
     "mcp": {
         "class": PredbatMCPServer,
@@ -70,7 +68,6 @@ COMPONENT_LIST = {
             "mcp_port": {"required": False, "config": "mcp_port", "default": 8199},
         },
         "phase": 1,
-        "new": True,
     },
     "solar": {
         "class": SolarAPI,
@@ -90,7 +87,6 @@ COMPONENT_LIST = {
         },
         "required_or": ["solcast_host", "forecast_solar", "pv_forecast_today"],
         "phase": 1,
-        "new": True,
     },
     "gecloud": {
         "class": GECloudDirect,
@@ -112,7 +108,6 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
-        "new": True,
     },
     "gecloud_data": {
         "class": GECloudData,
@@ -137,7 +132,6 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
-        "new": True,
     },
     "octopus": {
         "class": OctopusAPI,
@@ -159,7 +153,6 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
-        "new": True,
     },
     "ohme": {
         "class": OhmeAPI,
@@ -180,7 +173,6 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
-        "new": True,
     },
     "fox": {
         "class": FoxAPI,
@@ -198,7 +190,6 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
-        "new": True,
     },
     "alert_feed": {
         "class": AlertFeed,
@@ -263,17 +254,13 @@ class Components:
                 else:
                     arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
             required_or = component_info.get("required_or", [])
-            is_new = component_info.get("new", False)
             # If required_or is set we must have at least one of the listed args
             if required_or:
                 if not any(arg_dict.get(arg, None) for arg in required_or):
                     have_all_args = False
             if have_all_args:
                 self.log(f"Initializing {component_info['name']} interface")
-                if is_new:
-                    self.components[component_name] = component_info["class"](self.base, **arg_dict)
-                else:
-                    self.components[component_name] = component_info["class"](*arg_dict.values(), self.base)
+                self.components[component_name] = component_info["class"](self.base, **arg_dict)
 
     def start(self, only=None, phase=0):
         """Start all initialized components"""
