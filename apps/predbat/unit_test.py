@@ -8404,7 +8404,7 @@ def test_alert_feed(my_predbat):
 """
     print("Test alert feed")
 
-    alert_feed = AlertFeed({}, my_predbat)
+    alert_feed = AlertFeed(my_predbat, alert_config={})
 
     result = alert_feed.parse_alert_data(alert_data)
     if not result:
@@ -9683,8 +9683,8 @@ async def test_download_octopus_url(my_predbat):
     test_url = "https://api.octopus.energy/v1/products/VAR-22-11-01/electricity-tariffs/E-2R-VAR-22-11-01-A/standard-unit-rates/"
 
     # Test the download function
-    api = OctopusAPI("", "", False, my_predbat)
-    api.now_utc = my_predbat.now_utc
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+    # api.now_utc = my_predbat.now_utc
     rates_data = await api.async_download_octopus_url(test_url)
 
     # Basic validation checks

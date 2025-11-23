@@ -14,55 +14,24 @@
 
 TIME_FORMAT_CARBON = "%Y-%m-%dT%H:%MZ"
 
-import time
 import asyncio
 import traceback
 from datetime import datetime, timezone, timedelta
 import requests
 from config import TIME_FORMAT_HA
+from component_base import ComponentBase
 
 
-class CarbonAPI:
+class CarbonAPI(ComponentBase):
     """Carbon intensity client."""
 
-    def __init__(self, postcode, automatic, base):
-        self.base = base
-        self.log = base.log
+    def initialize(self, postcode, automatic):
+        """Initialize the CarbonAPI component"""
         self.postcode = postcode
-        self.prefix = base.prefix
-        self.api_started = False
         self.automatic = automatic
-        self.stop_api = False
         self.failures_total = 0
-        self.last_success_timestamp = None
         self.last_updated_timestamp = None
         self.carbon_data_points = []
-
-    def wait_api_started(self):
-        """
-        Wait for the API to start
-        """
-        self.log("Carbon API: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < 240:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: Carbon API: Failed to start")
-            return False
-        return True
-
-    def is_alive(self):
-        """
-        Check if the API is alive
-        """
-        return self.api_started
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
 
     async def fetch_carbon_data(self):
         """
@@ -70,7 +39,7 @@ class CarbonAPI:
         """
         last_updated = self.last_updated_timestamp
         if last_updated is not None and datetime.now(timezone.utc) - last_updated < timedelta(hours=4):
-            self.last_success_timestamp = datetime.now(timezone.utc)
+            self.update_success_timestamp()
             return
 
         self.log("Carbon API: Fetching latest carbon data for postcode {}".format(self.postcode))
@@ -94,8 +63,8 @@ class CarbonAPI:
                         data = response.json()
                         data_points = data.get("data", {}).get("data", [])
                         if data_points:
-                            self.last_success_timestamp = datetime.now(timezone.utc)
-                            self.last_updated_timestamp = self.last_success_timestamp
+                            self.update_success_timestamp()
+                            self.last_updated_timestamp = self.last_updated_time()
                             for point in data_points:
                                 from_time = point.get("from", None)
                                 to_time = point.get("to", None)
@@ -138,13 +107,13 @@ class CarbonAPI:
             if now_utc >= from_time and now_utc < to_time:
                 value_now = point["intensity"]
 
-        self.base.dashboard_item("sensor." + self.prefix + "_carbon_intensity", state=value_now, app="carbon", attributes={"unit_of_measurement": "gCO2/kWh", "friendly_name": "Carbon Intensity", "forecast": self.carbon_data_points})
+        self.dashboard_item("sensor." + self.prefix + "_carbon_intensity", state=value_now, app="carbon", attributes={"unit_of_measurement": "gCO2/kWh", "friendly_name": "Carbon Intensity", "forecast": self.carbon_data_points})
 
     async def automatic_config(self):
         """
         Automatic configuration based on carbon data
         """
-        self.base.args["carbon_intensity"] = "sensor." + self.prefix + "_carbon_intensity"
+        self.set_arg("carbon_intensity", "sensor." + self.prefix + "_carbon_intensity")
 
     async def start(self):
         """
@@ -153,7 +122,7 @@ class CarbonAPI:
 
         count_seconds = 0
         self.api_started = True
-        while not self.stop_api:
+        while not self.api_stop:
             try:
                 if count_seconds % (15 * 60) == 0:  # Every 15 minutes
                     await self.fetch_carbon_data()
@@ -168,7 +137,4 @@ class CarbonAPI:
             await asyncio.sleep(15)
             count_seconds += 15
 
-        print("Carbon API: Stopped")
-
-    async def stop(self):
-        self.stop_api = True
+        self.log("Carbon API: Stopped")

@@ -12,6 +12,7 @@ apexcharts
 appdaemon
 appkey
 argname
+asyncio
 autodocstring
 autoflake
 automations
@@ -147,6 +148,7 @@ kopt
 Krakenflex
 kvar
 kvarh
+kwargs
 kwhb
 linebreak
 loadspower
@@ -224,6 +226,7 @@ pwindow
 pyjwt
 pylint
 pyproject
+pytest
 pytz
 rarr
 recp
