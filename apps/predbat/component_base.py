@@ -49,8 +49,8 @@ class ComponentBase(ABC):
         self.last_success_timestamp = None
         self.local_tz = base.local_tz
         self.prefix = base.prefix
-        self.initialize(**kwargs)
         self.args = base.args
+        self.initialize(**kwargs)
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
