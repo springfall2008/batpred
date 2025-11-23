@@ -2451,7 +2451,7 @@ class Output:
             yesterday_weight = 1.0
         else:
             # Linear blend between yesterday and today over the day
-            yesterday_weight = (24*60 - minutes_now) / (24*60)
+            yesterday_weight = (24 * 60 - minutes_now) / (24 * 60)
 
         # Work out divergence
         today_damped_factor = 1.0
