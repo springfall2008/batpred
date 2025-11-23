@@ -54,8 +54,6 @@ class HAHistory(ComponentBase):
     def initialize(self):
         self.history_entities = {}
         self.history_data = {}
-        self.last_success_timestamp = None
-        self.local_tz = self.base.local_tz
 
     def add_entity(self, entity_id, days):
         """
