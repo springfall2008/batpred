@@ -19,7 +19,6 @@ from datetime import datetime, timedelta, timezone
 from config import TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
 from component_base import ComponentBase
-import time
 
 """
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
