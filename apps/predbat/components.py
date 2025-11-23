@@ -198,6 +198,7 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
+        "new": True,
     },
     "alert_feed": {
         "class": AlertFeed,
