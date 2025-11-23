@@ -180,6 +180,7 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
+        "new": True,
     },
     "fox": {
         "class": FoxAPI,

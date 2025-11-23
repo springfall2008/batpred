@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 from datetime import timedelta, timezone
 from config import TIME_FORMAT_HA
+from component_base import ComponentBase
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
 VERSION = "1.5.1"
@@ -162,44 +163,20 @@ class ChargerPower:
     ct_amps: float
 
 
-class OhmeAPI:
-    """Ohme API exception."""
+class OhmeAPI(ComponentBase):
+    """Ohme API component for EV charger integration."""
 
-    def __init__(self, email, password, ohme_automatic_octopus_intelligent, base):
+    def initialize(self, email, password, ohme_automatic_octopus_intelligent):
+        """Initialize the Ohme API component"""
         self.email = email
-        self.base = base
-        self.log = base.log
         self.password = password
         self.client = OhmeApiClient(email, password, self.log)
-        self.api_started = False
-        self.stop_api = False
-        self.count_errors = 0
         self.queued_events = []
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
 
-    def wait_api_started(self):
-        """
-        Wait for the API to start
-        """
-        self.log("Ohme API: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < 240:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: Ohme API: Failed to start")
-            return False
-        return True
-
-    def is_alive(self):
-        """
-        Check if the API is alive
-        """
-        return self.api_started
-
     def last_updated_time(self):
         """
-        Get the last successful update time
+        Get the last successful update time from the client
         """
         if self.client:
             return self.client.last_success_timestamp
@@ -212,7 +189,7 @@ class OhmeAPI:
 
         first = True
         count_seconds = 0
-        while not self.stop_api:
+        while not self.api_stop:
             try:
                 if not first and self.queued_events:
                     while self.queued_events:
@@ -234,7 +211,7 @@ class OhmeAPI:
                     await self.publish_data()
 
                 if not self.api_started:
-                    print("Ohme API: Started")
+                    self.log("Ohme API: Started")
                     self.api_started = True
 
                     if self.ohme_automatic_octopus_intelligent and self.client.serial:
@@ -250,19 +227,16 @@ class OhmeAPI:
             count_seconds += 1
 
         await self.client.close()
-        print("Ohme API: Stopped")
-
-    async def stop(self):
-        self.stop_api = True
+        self.log("Ohme API: Stopped")
 
     async def automatic_config_octopus_intelligent(self):
         """
         Automatically set the predbat entities to use ohme via octopus
         """
         self.log("Info: Ohme API: Setting Predbat to use Ohme")
-        self.base.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"
-        self.base.args["octopus_ready_time"] = "select.predbat_ohme_target_time"
-        self.base.args["octopus_charge_limit"] = "number.predbat_ohme_target_percent"
+        self.set_arg("octopus_intelligent_slot", "binary_sensor.predbat_ohme_slot_active")
+        self.set_arg("octopus_ready_time", "select.predbat_ohme_target_time")
+        self.set_arg("octopus_charge_limit", "number.predbat_ohme_target_percent")
 
     async def publish_data(self):
         """
@@ -298,27 +272,27 @@ class OhmeAPI:
             mode = "disconnected"
         else:
             mode = str(mode.value)
-        self.base.dashboard_item(entity_name_sensor + "_mode", state=mode, attributes=ohme_attribute_table.get("mode", {}), app="ohme")
+        self.dashboard_item(entity_name_sensor + "_mode", state=mode, attributes=ohme_attribute_table.get("mode", {}), app="ohme")
 
         if status is None:
             status = "unknown"
         else:
             status = str(status.value)
-        self.base.dashboard_item(entity_name_sensor + "_status", state=status, attributes=ohme_attribute_table.get("status", {}), app="ohme")
+        self.dashboard_item(entity_name_sensor + "_status", state=status, attributes=ohme_attribute_table.get("status", {}), app="ohme")
 
         # Publish power data
         if power:
-            self.base.dashboard_item(entity_name_sensor + "_power_watts", state=power.watts, attributes=ohme_attribute_table.get("power_watts", {}), app="ohme")
-            self.base.dashboard_item(entity_name_sensor + "_power_amps", state=power.amps, attributes=ohme_attribute_table.get("power_amps", {}), app="ohme")
-            self.base.dashboard_item(entity_name_sensor + "_power_volts", state=power.volts, attributes=ohme_attribute_table.get("power_volts", {}), app="ohme")
-            # self.base.dashboard_item(entity_name_sensor + "_ct_amps", state=power.ct_amps, attributes=ohme_attribute_table.get("ct_amps", {}), app="ohme")
+            self.dashboard_item(entity_name_sensor + "_power_watts", state=power.watts, attributes=ohme_attribute_table.get("power_watts", {}), app="ohme")
+            self.dashboard_item(entity_name_sensor + "_power_amps", state=power.amps, attributes=ohme_attribute_table.get("power_amps", {}), app="ohme")
+            self.dashboard_item(entity_name_sensor + "_power_volts", state=power.volts, attributes=ohme_attribute_table.get("power_volts", {}), app="ohme")
+            # self.dashboard_item(entity_name_sensor + "_ct_amps", state=power.ct_amps, attributes=ohme_attribute_table.get("ct_amps", {}), app="ohme")
 
         # Publish boolean states
-        self.base.dashboard_item(entity_name_switch + "_max_charge", state=max_charge, attributes=ohme_attribute_table.get("max_charge", {}), app="ohme")
-        self.base.dashboard_item(entity_name_binary_sensor + "_available", state="on" if available else "off", attributes=ohme_attribute_table.get("available", {}), app="ohme")
+        self.dashboard_item(entity_name_switch + "_max_charge", state=max_charge, attributes=ohme_attribute_table.get("max_charge", {}), app="ohme")
+        self.dashboard_item(entity_name_binary_sensor + "_available", state="on" if available else "off", attributes=ohme_attribute_table.get("available", {}), app="ohme")
 
         # Publish target data
-        self.base.dashboard_item(entity_name_number + "_target_percent", state=target_soc, attributes=ohme_attribute_table.get("target_soc", {}), app="ohme")
+        self.dashboard_item(entity_name_number + "_target_percent", state=target_soc, attributes=ohme_attribute_table.get("target_soc", {}), app="ohme")
 
         # Target time
         target_time_str = "00:00"
@@ -326,10 +300,10 @@ class OhmeAPI:
             target_time_str = f"{target_time[0]:02d}:{target_time[1]:02d}"
         target_attributes = ohme_attribute_table.get("target_time", {})
         target_attributes["options"] = OPTIONS_TIME
-        self.base.dashboard_item(entity_name_select + "_target_time", state=target_time_str, attributes=target_attributes, app="ohme")
+        self.dashboard_item(entity_name_select + "_target_time", state=target_time_str, attributes=target_attributes, app="ohme")
 
         # Publish preconditioning
-        self.base.dashboard_item(entity_name_number + "_preconditioning", state=preconditioning, attributes=ohme_attribute_table.get("preconditioning", {}), app="ohme")
+        self.dashboard_item(entity_name_number + "_preconditioning", state=preconditioning, attributes=ohme_attribute_table.get("preconditioning", {}), app="ohme")
 
         # Publish slot information
         num_slots = len(slots) if slots else 0
@@ -356,15 +330,15 @@ class OhmeAPI:
         if slots:
             slot_attributes["planned_dispatches"] = planned_dispatches
             slot_attributes["completed_dispatches"] = completed_dispatches
-        self.base.dashboard_item(entity_name_binary_sensor + "_slot_active", state=slot_active, attributes=slot_attributes, app="ohme")
+        self.dashboard_item(entity_name_binary_sensor + "_slot_active", state=slot_active, attributes=slot_attributes, app="ohme")
 
         # Publish energy and battery data
-        self.base.dashboard_item(entity_name_sensor + "_energy", state=energy, attributes=ohme_attribute_table.get("energy", {}), app="ohme")
-        self.base.dashboard_item(entity_name_sensor + "_battery_percent", state=battery, attributes=ohme_attribute_table.get("battery_percent", {}), app="ohme")
-        self.base.dashboard_item(entity_name_sensor + "_current_vehicle", state=vehicle, attributes=ohme_attribute_table.get("current_vehicle", {}), app="ohme")
+        self.dashboard_item(entity_name_sensor + "_energy", state=energy, attributes=ohme_attribute_table.get("energy", {}), app="ohme")
+        self.dashboard_item(entity_name_sensor + "_battery_percent", state=battery, attributes=ohme_attribute_table.get("battery_percent", {}), app="ohme")
+        self.dashboard_item(entity_name_sensor + "_current_vehicle", state=vehicle, attributes=ohme_attribute_table.get("current_vehicle", {}), app="ohme")
 
         # Approve charge switch
-        self.base.dashboard_item(entity_name_switch + "_approve_charge", state="off", attributes=ohme_attribute_table.get("approve_charge", {}), app="ohme")
+        self.dashboard_item(entity_name_switch + "_approve_charge", state="off", attributes=ohme_attribute_table.get("approve_charge", {}), app="ohme")
 
     # Event stubs to queue for main thread
     async def select_event(self, entity_id, value):
