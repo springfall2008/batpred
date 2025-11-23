@@ -9684,7 +9684,7 @@ async def test_download_octopus_url(my_predbat):
 
     # Test the download function
     api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
-    #api.now_utc = my_predbat.now_utc
+    # api.now_utc = my_predbat.now_utc
     rates_data = await api.async_download_octopus_url(test_url)
 
     # Basic validation checks

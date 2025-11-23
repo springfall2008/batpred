@@ -17,6 +17,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 ```
 
 **Main control loop** runs via `update_pred()` method called every 5 minutes (`RUN_EVERY = 5`):
+
 1. `fetch_config_options()` - Load configuration
 2. `fetch_sensor_data()` - Read HA sensor data
 3. `fetch_inverter_data()` - Get inverter status
@@ -24,6 +25,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 5. `execute_plan()` - Send commands to inverter (in `execute.py`)
 
 The core prediction/planning happens in `Plan` mixin (`apps/predbat/plan.py`) which orchestrates:
+
 - `optimise_all_windows()` - Main optimization entry point
 - `optimise_levels_pass()` - Initial rate-based optimization
 - `optimise_detailed_pass()` - Fine-tune charge/export windows
@@ -46,6 +48,7 @@ if not self.pool:
 ```
 
 **How it works**:
+
 - `self.pool` is a `multiprocessing.Pool` instance (NOT thread pool - uses processes)
 - Pool runs prediction scenarios in parallel using `pool.apply_async()`
 - Wrapped functions in `prediction.py`: `wrapped_run_prediction_single()`, `wrapped_run_prediction_charge()`, etc.
@@ -54,6 +57,7 @@ if not self.pool:
 - Returns `DummyThread` objects when pool disabled (for single-threaded testing)
 
 **Key pattern**:
+
 ```python
 # Async call to run prediction in pool
 if self.pool and self.pool._state == "RUN":
@@ -73,7 +77,7 @@ All major features inherit from `ComponentBase` (see `apps/predbat/component_bas
 class MyComponent(ComponentBase):
     def initialize(self, **kwargs):
         # Component-specific initialization
-        
+
     async def start(self):
         # Main async loop - MUST set self.api_started = True
         self.api_started = True
@@ -114,12 +118,14 @@ cd coverage/
 **Test structure**: 9994-line `unit_test.py` contains ALL tests. Uses custom `TestHAInterface` mock, not pytest/unittest.
 
 **Key test patterns**:
+
 - Tests are functions prefixed `test_*` (e.g., `test_basic_rates()`, `test_inverter_self_test()`)
 - Mock HA via `TestHAInterface` class which stores dummy state in `dummy_items` dict
 - Run specific debug scenarios: `python unit_test.py --debug predbat_debug_file.yaml`
 - Performance tests: `python unit_test.py --perf-only`
 
 **Coverage analysis**:
+
 ```bash
 cd coverage/
 ./run_cov  # Generates htmlcov/index.html
@@ -134,6 +140,7 @@ cd coverage/
 ## Code Quality & Formatting
 
 **Pre-commit hooks** (`.pre-commit-config.yaml`):
+
 - Black formatting: 256 char line length (see `pyproject.toml`)
 - Ruff linter (F401 - unused imports only)
 - Markdown linting
@@ -141,12 +148,14 @@ cd coverage/
 - cspell dictionary
 
 **Formatting rules** (critical):
+
 - Line length: 256 chars (Black config)
 - `# fmt: off` at top of most Python files to disable autoformat
 - `# pylint: disable=line-too-long` used extensively
 - Import sorting via isort (currently disabled in pre-commit)
 
 **Run checks**:
+
 ```bash
 pre-commit run --all-files
 ```
@@ -156,6 +165,7 @@ pre-commit run --all-files
 ### Logging
 
 Always use `self.log()` not `print()`:
+
 ```python
 self.log("Info: Starting component")
 self.log("Warn: Something unusual: {}".format(value))
@@ -172,6 +182,7 @@ self.log("Error: Failed with: {}".format(e))
 ### Prediction Engine
 
 Core prediction happens in `apps/predbat/prediction.py`:
+
 - `Prediction` class runs battery simulation in 5-min steps
 - Multiprocessing via `wrapped_run_prediction_*` functions
 - Global state in `PRED_GLOBAL` dict for process sharing
@@ -180,6 +191,7 @@ Core prediction happens in `apps/predbat/prediction.py`:
 ### State Management
 
 **DO NOT** directly access HA state. Always use wrappers:
+
 ```python
 # Read state
 value = self.get_state_wrapper(entity_id, default=0, attribute="attr_name")
@@ -194,6 +206,7 @@ history = self.get_history_wrapper(entity_id, days=30)
 ### REST API & Web Interface
 
 Web interface in `apps/predbat/web.py` runs on port 5052 (configurable via `web_port`):
+
 - `/api/state` - GET/POST entity states
 - `/api/service` - POST to call HA services
 - `/api/plan` - GET battery plan visualization
@@ -204,6 +217,7 @@ Web interface in `apps/predbat/web.py` runs on port 5052 (configurable via `web_
 **Main entry**: `apps/predbat/predbat.py` - defines `PredBat` class and version (`THIS_VERSION`)
 
 **Key modules**:
+
 - `config.py` - All configuration constants and schema
 - `prediction.py` - Battery simulation engine
 - `plan.py` - Optimization algorithms
@@ -216,6 +230,7 @@ Web interface in `apps/predbat/web.py` runs on port 5052 (configurable via `web_
 - `userinterface.py` - HA UI components (selects, switches, numbers)
 
 **External integrations**:
+
 - `octopus.py` - Octopus Energy API (rates, saving sessions)
 - `solcast.py` - Solcast solar forecasting
 - `gecloud.py` - GivEnergy cloud API
@@ -236,6 +251,7 @@ Web interface in `apps/predbat/web.py` runs on port 5052 (configurable via `web_
 ## Documentation
 
 Built with mkdocs (see `mkdocs.yml`):
+
 ```bash
 mkdocs serve  # Live preview on port 8000
 mkdocs build  # Generate static site
@@ -246,6 +262,7 @@ Docs in `docs/` folder, published to GitHub Pages via `.github/workflows/publish
 ## Dependencies
 
 See `requirements.txt`:
+
 - `aiohttp` - Async HTTP
 - `pytz` - Timezone handling  
 - `requests` - Sync HTTP
