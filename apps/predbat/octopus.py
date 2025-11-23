@@ -486,7 +486,7 @@ class OctopusAPI(ComponentBase):
         self.log("Find tariffs account data {}".format(self.account_data))
         if not self.account_data:
             return self.tariffs
-        
+
         now = datetime.now()
 
         tariffs = {}
