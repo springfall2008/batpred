@@ -80,6 +80,12 @@ class ComponentBase(ABC):
         """Update the last success timestamp to the current time"""
         self.last_success_timestamp = datetime.now(timezone.utc)
 
+
+    @property
+    def currency_symbols(self):
+        """Get the currency symbols from the base system"""
+        return self.base.currency_symbols
+
     @property
     def arg_errors(self):
         """Get the argument errors from the base system"""

@@ -1851,10 +1851,10 @@ var options = {
                 {"name": "Base10", "data": base10_metric, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
                 {"name": "Best10", "data": best10_metric, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
             ]
-            text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
+            text += self.render_chart(series_data, self.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
-            cost_today_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
-            cost_hour_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
+            cost_today_hist = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_today", 2, required=False))
+            cost_hour_hist = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_hour", 2, required=False))
 
             cost_pkwh_today = prune_today(cost_today_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
             cost_pkwh_hour = prune_today(cost_hour_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
@@ -1865,7 +1865,7 @@ var options = {
                 {"name": "Hourly p/kWh", "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
                 {"name": "Today p/kWh", "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
             ]
-            text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
+            text += self.render_chart(series_data, self.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
             load_energy_actual = self.get_entity_results(self.prefix + ".load_energy_actual")
             load_energy_predicted = self.get_entity_results(self.prefix + ".load_energy_predicted")
@@ -2371,7 +2371,7 @@ var options = {
         res = ""
         if cost:
             # Convert cost into pounds in format
-            res = self.base.currency_symbols[0] + "{:.2f}".format(cost / 100.0)
+            res = self.currency_symbols[0] + "{:.2f}".format(cost / 100.0)
             # Pad with leading spaces to align to 6 characters
             res = res.rjust(6)
             # Convert space to &nbsp;
@@ -2415,9 +2415,9 @@ var options = {
         """
         Update the history data
         """
-        cost_yesterday_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+        cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
         if self.base.num_cars > 0:
-            cost_yesterday_car_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            cost_yesterday_car_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
             cost_yesterday_no_car = self.subtract_daily(cost_yesterday_hist, cost_yesterday_car_hist)
         else:
             cost_yesterday_no_car = cost_yesterday_hist
@@ -2430,8 +2430,8 @@ var options = {
                 compare_hist[id] = {}
                 result = self.base.comparison.get_comparison(id)
                 if result:
-                    compare_hist[id]["cost"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
-                    compare_hist[id]["metric"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
+                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
+                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
 
         compare_list = self.get_arg("compare_list", [])
 
@@ -2501,7 +2501,7 @@ var options = {
         now_str = self.now_utc.strftime(TIME_FORMAT)
 
         if compare_hist:
-            text += self.render_chart(series_data, self.base.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
+            text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
