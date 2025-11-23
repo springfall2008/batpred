@@ -13,7 +13,6 @@ from component_base import ComponentBase
 import aiohttp
 import asyncio
 import json
-import time
 import os
 import yaml
 import traceback

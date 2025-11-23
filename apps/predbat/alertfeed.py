@@ -10,11 +10,10 @@
 
 import requests
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from utils import str2time, dp1
 import xml.etree.ElementTree as etree
 import asyncio
-import time
 from component_base import ComponentBase
 
 

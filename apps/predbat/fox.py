@@ -7,7 +7,7 @@
 # -----------------------------------------------------------------------------
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import traceback
 import time
 import hashlib

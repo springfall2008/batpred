@@ -14,7 +14,6 @@
 
 TIME_FORMAT_CARBON = "%Y-%m-%dT%H:%MZ"
 
-import time
 import asyncio
 import traceback
 from datetime import datetime, timezone, timedelta

@@ -16,7 +16,7 @@ import requests
 import traceback
 import pytz
 from datetime import datetime, timedelta, timezone
-from config import PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SOLCAST
+from config import TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
 from component_base import ComponentBase
 import time

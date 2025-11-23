@@ -14,7 +14,7 @@ from aiohttp import web
 import asyncio
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import json
 import shutil
 import html as html_module
