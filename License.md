@@ -9,15 +9,16 @@ Licensor grants you a non-exclusive, non-transferable, revocable license to use 
 The Software is provided "as is" and without any warranty, express or implied.
 
 2. Permitted Use:
-You may install and use the Software on your personal computer or devices.
-You may not modify, distribute, sublicense, or reverse engineer the Software.
+You may install and use the Software on your personal computer or devices for your sole personal use.
+You may modify the software for your own personal use or for the purpose of contributing towards its development, including Github public forks, tickets and pull requests.
+You may not distribute or sublicense this Software outside its Github repository without prior written permission.
 
 3. Ownership:
 Licensor retains all ownership rights, including intellectual property rights, in the Software.
 
 4. Termination:
 Licensor may terminate this Agreement at any time.
-Upon termination, you must cease all use of the Software.
+Upon termination, you may continue to use existing versions of the software for personal use but may not distribute copies to others.
 
 5. Limitation of Liability:
 Licensor shall not be liable for any damages arising from the use of the Software.
