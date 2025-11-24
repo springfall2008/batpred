@@ -223,6 +223,12 @@ class GECloudDirect(ComponentBase):
         self.evc_data = {}
         self.evc_sessions = {}
         self.api_fatal = False
+        self.devices_dict = {}
+        self.device_list = []
+        self.ems_device = None
+        self.gateway_device = None
+        self.evc_devices_dict = {}
+        self.evc_device_list = []
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -759,96 +765,85 @@ class GECloudDirect(ComponentBase):
 
         self.log("GECloud: Automatic configuration complete")
 
-    async def start(self):
+    async def run(self, seconds, first):
         """
         Start the client
         """
 
-        self.api_started = False
-        self.polling_mode = True
-        # Get devices using the modified auto-detection (returns dict)
-        devices_dict = await self.async_get_devices()
-        evc_devices_dict = await self.async_get_evc_devices()
+        if first:
+            self.polling_mode = True
+            # Get devices using the modified auto-detection (returns dict)
+            self.devices_dict = await self.async_get_devices()
+            self.evc_devices_dict = await self.async_get_evc_devices()
 
-        # Build a list of devices to poll:
-        # Use all battery inverter serials and also add the EMS device if it's distinct.
-        device_list = devices_dict["battery"][:]
+            # Build a list of devices to poll:
+            # Use all battery inverter serials and also add the EMS device if it's distinct.
+            self.device_list = self.devices_dict["battery"][:]
 
-        ems_device = None
-        if devices_dict["ems"]:
-            ems_device = devices_dict["ems"]
-            self.polling_mode = False
-            self.log("GECloud: Found EMS device {} and disabled polling on inverters".format(ems_device))
-            if ems_device not in device_list:
-                device_list.append(ems_device)
+            self.ems_device = None
+            if self.devices_dict["ems"]:
+                self.ems_device = self.devices_dict["ems"]
+                self.polling_mode = False
+                self.log("GECloud: Found EMS device {} and disabled polling on inverters".format(self.ems_device))
+                if self.ems_device not in self.device_list:
+                    self.device_list.append(self.ems_device)
 
-        gateway_device = None
-        if not ems_device and devices_dict["gateway"] and len(device_list) > 1:
-            gateway_device = devices_dict["gateway"]
-            self.log("GECloud: Found Gateway device {} and multiple batteries, using only this device".format(gateway_device))
-            device_list = [gateway_device]
+            self.gateway_device = None
+            if not self.ems_device and self.devices_dict["gateway"] and len(self.device_list) > 1:
+                self.gateway_device = self.devices_dict["gateway"]
+                self.log("GECloud: Found Gateway device {} and multiple batteries, using only this device".format(self.gateway_device))
+                self.device_list = [self.gateway_device]
 
-        evc_device_list = []
-        for device in evc_devices_dict:
-            uuid = device.get("uuid", None)
-            device_name = device.get("alias", None)
-            evc_device_list.append(uuid)
+            self.evc_device_list = []
+            for device in self.evc_devices_dict:
+                uuid = device.get("uuid", None)
+                device_name = device.get("alias", None)
+                self.evc_device_list.append(uuid)
+            self.log("GECloud: Starting up, found devices {} evc_devices {}".format(self.device_list, self.evc_device_list))
+            for device in self.device_list:
+                self.pending_writes[device] = []
 
-        self.log("GECloud: Starting up, found devices {} evc_devices {}".format(device_list, evc_device_list))
-        for device in device_list:
-            self.pending_writes[device] = []
+            if not self.device_list and not self.evc_device_list:
+                self.log("Error: GECloud: No devices found, check your GE Cloud credentials")
+                self.api_fatal = True
+                return False
 
-        if not device_list and not evc_device_list:
-            self.log("Error: GECloud: No devices found, check your GE Cloud credentials")
-            self.api_fatal = True
-            return
+        if first or (seconds % 60 == 0):
+            for device in self.device_list:
+                self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
+                await self.publish_status(device, self.status[device])
+                self.meter[device] = await self.async_get_inverter_meter(device, self.meter.get(device, {}))
+                await self.publish_meter(device, self.meter[device])
+                self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
+                await self.publish_info(device, self.info[device])
+            for uuid in self.evc_device_list:
+                self.evc_device[uuid] = await self.async_get_evc_device(uuid, self.evc_device.get(uuid, {}))
+                serial = self.evc_device[uuid].get("serial_number", "unknown")
+                self.evc_data[uuid] = await self.async_get_evc_device_data(uuid, self.evc_data.get(uuid, {}))
+                self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid, self.evc_sessions.get(uuid, []))
+                await self.publish_evc_data(serial, self.evc_data[uuid])
 
-        seconds = 0
-        while not self.api_stop and not self.fatal_error:
-            try:
-                if seconds % 60 == 0:
-                    for device in device_list:
-                        self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
-                        await self.publish_status(device, self.status[device])
-                        self.meter[device] = await self.async_get_inverter_meter(device, self.meter.get(device, {}))
-                        await self.publish_meter(device, self.meter[device])
-                        self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
-                        await self.publish_info(device, self.info[device])
-                    for uuid in evc_device_list:
-                        self.evc_device[uuid] = await self.async_get_evc_device(uuid, self.evc_device.get(uuid, {}))
-                        serial = self.evc_device[uuid].get("serial_number", "unknown")
-                        self.evc_data[uuid] = await self.async_get_evc_device_data(uuid, self.evc_data.get(uuid, {}))
-                        self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid, self.evc_sessions.get(uuid, []))
-                        await self.publish_evc_data(serial, self.evc_data[uuid])
+        if first or (seconds % (10 * 60) == 0):
+            # Get All registers every now and again in case user changes them
+            for device in self.device_list:
+                if seconds == 0 or self.polling_mode or (device == self.ems_device) or (device == self.gateway_device):
+                    self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
+                    await self.publish_registers(device, self.settings[device])
 
-                if seconds % (10 * 60) == 0:
-                    # Get All registers every now and again in case user changes them
-                    for device in device_list:
-                        if seconds == 0 or self.polling_mode or (device == ems_device) or (device == gateway_device):
-                            self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
-                            await self.publish_registers(device, self.settings[device])
+            # One shot tasks
+            if first:
+                if self.automatic:
+                    await self.async_automatic_config(self.devices_dict)
+                for device in self.device_list:
+                    await self.enable_default_options(device, self.settings[device])
 
-                    # One shot tasks
-                    if seconds == 0:
-                        if self.automatic:
-                            await self.async_automatic_config(devices_dict)
-                        for device in device_list:
-                            await self.enable_default_options(device, self.settings[device])
+        # Clear pending writes
+        for device in self.device_list:
+            if device in self.pending_writes:
+                self.pending_writes[device] = []
 
-            except Exception as e:
-                self.log("Error: GECloud: Exception in main loop {}".format(e))
-
-            # Clear pending writes
-            for device in device_list:
-                if device in self.pending_writes:
-                    self.pending_writes[device] = []
-
-            if not self.api_started:
-                print("GECloud API Started")
-                self.api_started = True
-            self.update_success_timestamp()
-            await asyncio.sleep(5)
-            seconds += 5
+        self.update_success_timestamp()
+        return True
 
     async def async_send_evc_command(self, uuid, command, params):
         """
@@ -1378,33 +1373,22 @@ class GECloudData(ComponentBase):
             return False
         return True
 
-    async def start(self):
+    async def run(self, seconds, first):
         """
-        Start the client
+        Run the client
         """
-        self.max_days_previous = max(self.days_previous) + 1
+        if first:
+            self.max_days_previous = max(self.days_previous) + 1
+            # Resolve any templated values
+            self.ge_cloud_serial = self.get_arg(self.ge_cloud_serial_config_item, default="")
+            self.log("GECloudData: Starting up with max_days_previous {} and serial {}".format(self.max_days_previous, self.ge_cloud_serial))
 
-        # Resolve any templated values
-        self.ge_cloud_serial = self.get_arg(self.ge_cloud_serial_config_item, default="")
+        if seconds % (10 * 60) == 0:
+            now_utc = self.now_utc_exact
+            await self.download_ge_data(now_utc)
 
-        self.log("GECloudData: Starting up with max_days_previous {} and serial {}".format(self.max_days_previous, self.ge_cloud_serial))
-
-        seconds = 0
-        while not self.api_stop and not self.fatal_error:
-            try:
-                if seconds % (10 * 60) == 0:
-                    now_utc = self.now_utc_exact
-                    await self.download_ge_data(now_utc)
-
-            except Exception as e:
-                self.log("Error: GECloudData: Exception in main loop {}".format(e))
-
-            if not self.api_started:
-                print("GECloudData API Started")
-                self.api_started = True
-            self.update_success_timestamp()
-            await asyncio.sleep(5)
-            seconds += 5
+        self.update_success_timestamp()
+        return True
 
     def get_ge_cache_filename(self):
         cache_path = self.config_root + "/cache"

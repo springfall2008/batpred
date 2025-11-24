@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import asyncio
 import hashlib
 import json
 import os
@@ -55,26 +54,13 @@ class SolarAPI(ComponentBase):
         self.forecast_solar_last_success_timestamp = None
         self.forecast_days = 4
 
-    async def start(self):
+    async def run(self, seconds, first):
         """
-        Start the Solar API
+        Run the Solar API
         """
-        seconds = 0
-        while not self.api_stop:
-            if seconds % (self.plan_interval_minutes * 60) == 0:  # Every plan_interval_minutes
-                try:
-                    self.fetch_pv_forecast()
-                except Exception as e:
-                    self.log("Error: Solcast API fetch_pv_forecast exception {}".format(e))
-                    self.log("Error: " + traceback.format_exc())
-
-            if not self.api_started:
-                self.api_started = True
-                self.log("SolarAPI started")
-            await asyncio.sleep(10)
-            seconds += 10
-
-        self.log("Solar API stopped")
+        if seconds % (self.plan_interval_minutes * 60) == 0:  # Every plan_interval_minutes
+            self.fetch_pv_forecast()
+        return True
 
     def cache_get_url(self, url, params, max_age=8 * 60):
         # Check if this is a Solcast API call for metrics tracking

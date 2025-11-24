@@ -13,7 +13,6 @@ import re
 from datetime import datetime
 from utils import str2time, dp1
 import xml.etree.ElementTree as etree
-import asyncio
 from component_base import ComponentBase
 
 
@@ -33,28 +32,16 @@ class AlertFeed(ComponentBase):
     async def switch_event(self, entity_id, service):
         pass
 
-    async def start(self):
+    async def run(self, seconds, first):
         """
         Main run loop
         """
-        first = True
-        count_seconds = 0
-        self.api_started = True
-        while not self.api_stop:
-            try:
-                if first or count_seconds % (60 * 30) == 0:
-                    # Download alerts
-                    self.alert_xml = self.download_alert_data(self.alert_url)
-                    first = False
-                    self.api_started = True
-            except Exception as e:
-                self.log("Warn: AlertFeed: Exception in alert feed main loop: {}".format(e))
-
-            await asyncio.sleep(5)
-            count_seconds += 5
-
-        # Clean up on exit
-        self.api_started = False
+        if first or (seconds % (60 * 30) == 0):
+            # Download alerts
+            self.alert_xml = self.download_alert_data(self.alert_url)
+        else:
+            self.update_success_timestamp()
+        return True
 
     def process_alerts(self, minutes_now, midnight_utc, testing=False):
         """

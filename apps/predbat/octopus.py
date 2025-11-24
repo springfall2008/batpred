@@ -11,11 +11,9 @@ from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 from component_base import ComponentBase
 import aiohttp
-import asyncio
 import json
 import os
 import yaml
-import traceback
 from config import TIME_FORMAT
 import json
 import pytz
@@ -363,57 +361,52 @@ class OctopusAPI(ComponentBase):
     def is_alive(self):
         return self.api_started and self.account_data
 
-    async def start(self):
+    async def run(self, seconds, first):
         """
         Main run loop
         """
-        # Load cached data
-        await self.load_octopus_cache()
+        if first:
+            # Load cached data
+            await self.load_octopus_cache()
+            self.log("Octopus API: Started")
 
-        first = True
-        while not self.stop_api:
-            try:
-                # Update time every minute
-                now = datetime.now()
-                count_minutes = now.minute + now.hour * 60
+        # Update time every minute
+        now = datetime.now()
+        count_minutes = now.minute + now.hour * 60
 
-                if first or (count_minutes % 30) == 0:
-                    # 30-minute update for tariff
-                    await self.async_get_account(self.account_id)
-                    await self.async_find_tariffs()
+        # Process any queued commands
+        refresh = False
+        if not first and (await self.process_commands(self.account_id)):
+            # Commands processed - will trigger refresh on next cycle
+            refresh = True
 
-                if first or (count_minutes % 10) == 0:
-                    # 10-minute update for intelligent device
-                    await self.async_update_intelligent_device(self.account_id)
-                    await self.fetch_tariffs(self.tariffs)
-                    self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
-                    self.get_saving_session_data()
+        if first or (count_minutes % 30) == 0:
+            # 30-minute update for tariff
+            await self.async_get_account(self.account_id)
+            await self.async_find_tariffs()
 
-                if first or (count_minutes % 2) == 0:
-                    # 2-minute update for intelligent device sensor
-                    await self.async_intelligent_update_sensor(self.account_id)
-                    await self.save_octopus_cache()
+        if first or refresh or (count_minutes % 10) == 0:
+            # 10-minute update for intelligent device
+            await self.async_update_intelligent_device(self.account_id)
+            await self.fetch_tariffs(self.tariffs)
+            self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
+            self.get_saving_session_data()
 
-                first = False
+        if first or refresh or (count_minutes % 2) == 0:
+            # 2-minute update for intelligent device sensor
+            await self.async_intelligent_update_sensor(self.account_id)
+            await self.save_octopus_cache()
 
-                # Process any queued commands
-                if await self.process_commands(self.account_id):
-                    # Trigger a refresh
-                    first = True
+        if first and self.automatic:
+            self.automatic_config(self.tariffs)
 
-                if not self.api_started:
-                    if self.automatic:
-                        self.automatic_config(self.tariffs)
-                    print("Octopus API: Started")
-                    self.api_started = True
+        return True
 
-            except Exception as e:
-                self.log("Error: Octopus API: {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-
-            await asyncio.sleep(10)
+    async def final(self):
+        """
+        Final cleanup before stopping
+        """
         await self.api.async_close()
-        print("Octopus API: Stopped")
 
     async def process_commands(self, account_id):
         """
@@ -856,7 +849,7 @@ class OctopusAPI(ComponentBase):
         pages = 0
         while url and pages < 3:
             self.requests_total += 1
-            r = requests.get(url)
+            r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
             if r.status_code not in [200, 201, 400]:
                 self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
@@ -1093,7 +1086,7 @@ class OctopusAPI(ComponentBase):
             async with client.post(url, json=payload, headers=headers) as response:
                 response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
                 if response_body and ("data" in response_body):
-                    self.last_success_timestamp = datetime.now(timezone.utc)
+                    self.update_success_timestamp()
                     return response_body["data"]
                 else:
                     self.failures_total += 1

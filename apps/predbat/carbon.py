@@ -14,8 +14,6 @@
 
 TIME_FORMAT_CARBON = "%Y-%m-%dT%H:%MZ"
 
-import asyncio
-import traceback
 from datetime import datetime, timezone, timedelta
 import requests
 from config import TIME_FORMAT_HA
@@ -115,26 +113,14 @@ class CarbonAPI(ComponentBase):
         """
         self.set_arg("carbon_intensity", "sensor." + self.prefix + "_carbon_intensity")
 
-    async def start(self):
+    async def run(self, seconds, first):
         """
         Main run loop
         """
+        if first or (seconds % (15 * 60) == 0):  # Every 15 minutes
+            await self.fetch_carbon_data()
 
-        count_seconds = 0
-        self.api_started = True
-        while not self.api_stop:
-            try:
-                if count_seconds % (15 * 60) == 0:  # Every 15 minutes
-                    await self.fetch_carbon_data()
+        if first and self.automatic:
+            await self.automatic_config()
 
-                if count_seconds == 0 and self.automatic:
-                    await self.automatic_config()
-
-            except Exception as e:
-                self.log("Error: Carbon API: {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-
-            await asyncio.sleep(15)
-            count_seconds += 15
-
-        self.log("Carbon API: Stopped")
+        return True

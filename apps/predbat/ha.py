@@ -154,45 +154,38 @@ class HAHistory(ComponentBase):
         # Update last success timestamp
         self.update_success_timestamp()
 
-    async def start(self):
-        self.log("Info: Starting HAHistory")
+    async def run(self, seconds, first):
+        if first:
+            self.log("Info: Starting HAHistory")
+
         ha_interface = self.base.components.get_component("ha")
         if not ha_interface:
             self.log("Error: HAHistory: No HAInterface available, cannot start history updates")
-            return
+            return False
 
-        self.api_started = True
-        seconds = 0
-        while not self.api_stop:
-            try:
-                if seconds % (2 * 60) == 0:
-                    # Update history data every 2 minutes
-                    now = datetime.now(self.local_tz)
-                    for entity_id in list(self.history_entities.keys()):
-                        # self.log("HAHistory: Updating history for {}".format(entity_id))
-                        current_history_data = self.history_data.get(entity_id, None)
-                        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
-                        if last_updated:
-                            history_data = ha_interface.get_history(entity_id, now, days=1, from_time=str2time(last_updated))
-                            if history_data and len(history_data) > 0:
-                                history_data = history_data[0]
-                                self.update_entity(entity_id, history_data)
-                        else:
-                            history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
-                            if history_data and len(history_data) > 0:
-                                history_data = history_data[0]
-                                self.update_entity(entity_id, history_data)
-                if seconds % (60 * 60) == 0:
-                    # Prune history data every hour
-                    self.log("Info: HAHistory: Pruning history data")
-                    self.prune_history(datetime.now(self.local_tz))
+        if first or (seconds % (2 * 60) == 0):
+            # Update history data every 2 minutes
+            now = datetime.now(self.local_tz)
+            for entity_id in list(self.history_entities.keys()):
+                # self.log("HAHistory: Updating history for {}".format(entity_id))
+                current_history_data = self.history_data.get(entity_id, None)
+                last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
+                if last_updated:
+                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=str2time(last_updated))
+                    if history_data and len(history_data) > 0:
+                        history_data = history_data[0]
+                        self.update_entity(entity_id, history_data)
+                else:
+                    history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
+                    if history_data and len(history_data) > 0:
+                        history_data = history_data[0]
+                        self.update_entity(entity_id, history_data)
 
-            except Exception as e:
-                self.log("Error: HAHistory exception in update loop: {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-            await asyncio.sleep(5)
-            seconds += 5
-        self.api_started = False
+        if first or (seconds % (60 * 60) == 0):
+            # Prune history data every hour
+            self.log("Info: HAHistory: Pruning history data")
+            self.prune_history(datetime.now(self.local_tz))
+        return True
 
 
 class HAInterface(ComponentBase):
@@ -477,7 +470,7 @@ class HAInterface(ComponentBase):
         if not self.api_stop:
             self.log("Error: Web Socket failed to reconnect, stopping....")
             self.websocket_active = False
-            raise Exception("Web Socket failed to reconnect")
+            self.fatal_error_occurred()
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
