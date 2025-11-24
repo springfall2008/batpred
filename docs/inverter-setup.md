@@ -126,12 +126,12 @@ There are a number of entities which this integration disables by default that y
    | `sensor.solisx_rtc`           | Real Time Clock |
    | `sensor.solisx_battery_power` | Battery Power   |
 
-4. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/gilong_solis.yaml> over the top of your `apps.yaml`, and modify it for your system
-5. Set **solax_modbus_new** in `apps.yaml` to True if you have integration version 2024.03.2 or greater
-6. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
+3. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/gilong_solis.yaml> over the top of your `apps.yaml`, and modify it for your system
+4. Set **solax_modbus_new** in `apps.yaml` to True if you have integration version 2024.03.2 or greater
+5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
 If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that this is not fully tested.
 In due course, these mode settings will be incorporated into the code.
-7. Your inverter will require a "button press" triggered by Predbat to update the schedules. Some Solis inverter integrations feature a combined charge/discharge update button, in which case a single `apps.yaml` entry of:
+6. Your inverter will require a "button press" triggered by Predbat to update the schedules. Some Solis inverter integrations feature a combined charge/discharge update button, in which case a single `apps.yaml` entry of:
 
 ```yaml
 charge_discharge_update_button:
@@ -148,6 +148,41 @@ discharge_update_button:
 ```
 
 Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
+
+## Solis Inverters FB00 or later
+
+To run PredBat with Solis hybrid inverters with firmware level FB00 or later (you can recognise these by having 6 slots for charging times), follow the following steps:
+
+1. Install PredBat as per the [Installation Summary](installation-summary.md)
+2. Ensure that you have the Solax Modbus integration running and select the inverter type solis_fb00.
+There are a number of entities which this integration disables by default that you will need to enable via the Home Assistant GUI:
+
+   | Name                          | Description     |
+   | :---------------------------- | :-------------- |
+   | `sensor.solisx_rtc`           | Real Time Clock |
+   | `sensor.solisx_battery_power` | Battery Power   |
+
+3. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/gilong_solis.yaml> over the top of your `apps.yaml`, and modify it for your system.
+You will need to update these lines:
+
+- Replace **inverter_type: "GS"** with **inverter_type: "GS_fb00"** to enable the inverter template for the newer firmware version of Solis inverters
+- Un-comment **charge_update_button** and **discharge_update_button** and comment out **charge_discharge_update_button** to enable the two "button presses" needed for writing charge/discharge times to the inverter
+- Un-comment **scheduled_charge_enable** and **scheduled_discharge_enable** to enable Predbat to enable/disable the charge/discharge slots
+- Un-comment **charge_limit** to enable the charge limit through setting an upper SoC value
+- Set **solax_modbus_new** to True if you have integration version 2024.03.2 or greater
+- Lastly you will need to comment out or delete the **template** line to enable the configuration
+
+4. Save the file as `apps.yaml` to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
+
+5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
+If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that this is not fully tested.
+In due course, these mode settings will be incorporated into the code.
+
+6. Note: Predbat will read the minimum SoC level set on the inverter via **sensor.solis_battery_minimum_soc** configured in `apps.yaml`.
+You must set the minimum SoC level that Predbat will set in **input_number.predbat_set_reserve_min** to at least 1% more than the inverter minimum SoC.
+So for example, if the inverter minimum SoC is set to 20%, predbat_set_reserve_min must be set to at least 21%. If this is not done then when Predbat sets the reserve SoC, the instruction will be rejected by the inverter and Predbat will error.
+
+7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
 ## Solax Gen4+ Inverters
 
