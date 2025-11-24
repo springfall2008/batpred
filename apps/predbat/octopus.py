@@ -403,7 +403,7 @@ class OctopusAPI(ComponentBase):
 
         return True
 
-    async def final():
+    async def final(self):
         """
         Final cleanup before stopping
         """

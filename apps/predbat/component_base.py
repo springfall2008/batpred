@@ -192,6 +192,7 @@ class ComponentBase(ABC):
         """
         self.api_stop = True
         self.api_started = False
+        self.log("Info: {}: Stopping".format(self.__class__.__name__))
         await asyncio.sleep(0.1)  # Allow time for the main loop to exit
 
     def fatal_error_occurred(self):
