@@ -8,7 +8,6 @@
 
 import asyncio
 from datetime import datetime, timedelta
-import traceback
 import time
 import hashlib
 import requests
@@ -86,7 +85,7 @@ class FoxAPI(ComponentBase):
             if self.automatic:
                 await self.automatic_config()
 
-        if seconds % (60 * 60) == 0:
+        if first or (seconds % (60 * 60) == 0):
             # Regular updates for registers and scheduler data
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
@@ -97,7 +96,7 @@ class FoxAPI(ComponentBase):
                     await self.compute_schedule(sn)
 
         # Real time data every 5 minutes
-        if seconds % (5 * 60) == 0:
+        if first or (seconds % (5 * 60) == 0):
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
                 if sn:

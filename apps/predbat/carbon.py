@@ -14,8 +14,6 @@
 
 TIME_FORMAT_CARBON = "%Y-%m-%dT%H:%MZ"
 
-import asyncio
-import traceback
 from datetime import datetime, timezone, timedelta
 import requests
 from config import TIME_FORMAT_HA
@@ -119,7 +117,7 @@ class CarbonAPI(ComponentBase):
         """
         Main run loop
         """
-        if seconds % (15 * 60) == 0:  # Every 15 minutes
+        if first or (seconds % (15 * 60) == 0):  # Every 15 minutes
             await self.fetch_carbon_data()
 
         if first and self.automatic:

@@ -14,7 +14,6 @@ from typing import Any, Optional, Self, Mapping
 from dataclasses import dataclass
 import datetime
 import aiohttp
-import traceback
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
@@ -190,6 +189,7 @@ class OhmeAPI(ComponentBase):
             self.log("Ohme API: Started")
 
         # Process queued events
+        refresh = False
         if self.queued_events:
             while self.queued_events:
                 event = self.queued_events.pop(0)
@@ -198,13 +198,14 @@ class OhmeAPI(ComponentBase):
                     await handler(*args)
                 except ApiException as e:
                     self.log("Warn: Ohme API: Event handler error: {}".format(e))
+            refresh = True
 
-        if first or (seconds % (30 * 60)) == 0:
+        if first or refresh or (seconds % (30 * 60)) == 0:
             await self.client.async_update_device_info()
             # Advanced settings are broken in latest API
             # await self.client.async_get_advanced_settings()
 
-        if first or (seconds % 120) == 0:
+        if first or refresh or (seconds % 120) == 0:
             await self.client.async_get_charge_session()
             await self.publish_data()
 

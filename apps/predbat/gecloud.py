@@ -788,11 +788,11 @@ class GECloudDirect(ComponentBase):
                 if self.ems_device not in self.device_list:
                     self.device_list.append(self.ems_device)
 
-            gateway_device = None
+            self.gateway_device = None
             if not self.ems_device and self.devices_dict["gateway"] and len(self.device_list) > 1:
-                gateway_device = self.devices_dict["gateway"]
-                self.log("GECloud: Found Gateway device {} and multiple batteries, using only this device".format(gateway_device))
-                self.device_list = [gateway_device]
+                self.gateway_device = self.devices_dict["gateway"]
+                self.log("GECloud: Found Gateway device {} and multiple batteries, using only this device".format(self.gateway_device))
+                self.device_list = [self.gateway_device]
 
             self.evc_device_list = []
             for device in self.evc_devices_dict:
@@ -808,7 +808,7 @@ class GECloudDirect(ComponentBase):
                 self.api_fatal = True
                 return False
 
-        if seconds % 60 == 0:
+        if first or (seconds % 60 == 0):
             for device in self.device_list:
                 self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
                 await self.publish_status(device, self.status[device])
@@ -823,7 +823,7 @@ class GECloudDirect(ComponentBase):
                 self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid, self.evc_sessions.get(uuid, []))
                 await self.publish_evc_data(serial, self.evc_data[uuid])
 
-        if seconds % (10 * 60) == 0:
+        if first or (seconds % (10 * 60) == 0):
             # Get All registers every now and again in case user changes them
             for device in self.device_list:
                 if seconds == 0 or self.polling_mode or (device == self.ems_device) or (device == self.gateway_device):
@@ -831,7 +831,7 @@ class GECloudDirect(ComponentBase):
                     await self.publish_registers(device, self.settings[device])
 
             # One shot tasks
-            if seconds == 0:
+            if first:
                 if self.automatic:
                     await self.async_automatic_config(self.devices_dict)
                 for device in self.device_list:

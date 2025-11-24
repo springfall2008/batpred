@@ -157,13 +157,13 @@ class HAHistory(ComponentBase):
     async def run(self, seconds, first):
         if first:
             self.log("Info: Starting HAHistory")
-            ha_interface = self.base.components.get_component("ha")
-            if not ha_interface:
-                self.log("Error: HAHistory: No HAInterface available, cannot start history updates")
-                return False
 
         ha_interface = self.base.components.get_component("ha")
-        if seconds % (2 * 60) == 0:
+        if not ha_interface:
+            self.log("Error: HAHistory: No HAInterface available, cannot start history updates")
+            return False
+        
+        if first or (seconds % (2 * 60) == 0):
             # Update history data every 2 minutes
             now = datetime.now(self.local_tz)
             for entity_id in list(self.history_entities.keys()):
@@ -181,7 +181,7 @@ class HAHistory(ComponentBase):
                         history_data = history_data[0]
                         self.update_entity(entity_id, history_data)
 
-        if seconds % (60 * 60) == 0:
+        if first or (seconds % (60 * 60) == 0):
             # Prune history data every hour
             self.log("Info: HAHistory: Pruning history data")
             self.prune_history(datetime.now(self.local_tz))

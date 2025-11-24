@@ -11,11 +11,9 @@ from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 from component_base import ComponentBase
 import aiohttp
-import asyncio
 import json
 import os
 import yaml
-import traceback
 from config import TIME_FORMAT
 import json
 import pytz
@@ -376,27 +374,28 @@ class OctopusAPI(ComponentBase):
         now = datetime.now()
         count_minutes = now.minute + now.hour * 60
 
+        # Process any queued commands
+        refresh = False
+        if not first and (await self.process_commands(self.account_id)):
+            # Commands processed - will trigger refresh on next cycle
+            refresh = True
+
         if first or (count_minutes % 30) == 0:
             # 30-minute update for tariff
             await self.async_get_account(self.account_id)
             await self.async_find_tariffs()
 
-        if first or (count_minutes % 10) == 0:
+        if first or refresh or (count_minutes % 10) == 0:
             # 10-minute update for intelligent device
             await self.async_update_intelligent_device(self.account_id)
             await self.fetch_tariffs(self.tariffs)
             self.saving_sessions = await self.async_get_saving_sessions(self.account_id)
             self.get_saving_session_data()
 
-        if first or (count_minutes % 2) == 0:
+        if first or refresh or (count_minutes % 2) == 0:
             # 2-minute update for intelligent device sensor
             await self.async_intelligent_update_sensor(self.account_id)
             await self.save_octopus_cache()
-
-        # Process any queued commands
-        if await self.process_commands(self.account_id):
-            # Commands processed - will trigger refresh on next cycle
-            pass
 
         if first and self.automatic:
             self.automatic_config(self.tariffs)

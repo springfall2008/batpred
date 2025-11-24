@@ -13,7 +13,6 @@ import re
 from datetime import datetime
 from utils import str2time, dp1
 import xml.etree.ElementTree as etree
-import asyncio
 from component_base import ComponentBase
 
 

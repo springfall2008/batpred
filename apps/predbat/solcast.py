@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import asyncio
 import hashlib
 import json
 import os
@@ -61,8 +60,6 @@ class SolarAPI(ComponentBase):
         """
         if seconds % (self.plan_interval_minutes * 60) == 0:  # Every plan_interval_minutes
             self.fetch_pv_forecast()
-
-        self.update_success_timestamp()
         return True
 
     def cache_get_url(self, url, params, max_age=8 * 60):
