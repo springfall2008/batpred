@@ -579,7 +579,7 @@ class Fetch:
             entity_id = self.get_arg("carbon_intensity", None, indirect=False)
             self.carbon_intensity, self.carbon_history = self.fetch_carbon_intensity(entity_id)
 
-        # SOC history
+        # SoC history
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
         if soc_kwh_data:
             self.soc_kwh_history, _ = minute_data(

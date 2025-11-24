@@ -54,7 +54,7 @@ The inverter also converts AC power from the grid into DC to charge a battery.
 - **Best10** - The best plan but with the 10% outcome for Solar and Load (worst case)
 - **Charge Limit Best** - This is the target charge % in the Best plan (what is currently set on your inverter)
 - **Export Limit Best** - This is the target to force export to in % in the Best plan.
-- **Best SOC Keep** - The amount of battery you want to keep in the plan that Predbat has made
+- **Best SoC Keep** - The amount of battery you want to keep in the plan that Predbat has made
 
 ### Predbat modes
 

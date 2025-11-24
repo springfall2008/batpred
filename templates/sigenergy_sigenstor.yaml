@@ -195,7 +195,7 @@ pred_bat:
   # To make planned car charging more accurate, either using car_charging_planned or Octopus Intelligent
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
   # If you have intelligent the battery size and limit will be extracted from Intelligent directly
-  # Set the car SOC% if you have it to give an accurate forecast of the cars battery levels
+  # Set the car SoC% if you have it to give an accurate forecast of the cars battery levels
   # One entry per car if you have multiple cars
   # car_charging_battery_size:
   #   - 75

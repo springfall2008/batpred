@@ -822,7 +822,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
 
 def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve, debug=False):
     """
-    Compute true charging rate from SOC and charge rate setting
+    Compute true charging rate from SoC and charge rate setting
     """
     soc_percent = calc_percent_limit(soc, soc_max)
     max_charge_rate = battery_rate_max_charge * battery_charge_power_curve.get(soc_percent, 1.0)
@@ -833,7 +833,7 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
 
     if debug:
         print(
-            "Max charge rate: {} SOC: {} Percent {} Rate in: {} rate out: {} cap: {}".format(
+            "Max charge rate: {} SoC: {} Percent {} Rate in: {} rate out: {} cap: {}".format(
                 max_charge_rate * MINUTE_WATT, soc, soc_percent, charge_rate_setting * MINUTE_WATT, min(charge_rate_setting, max_charge_rate) * MINUTE_WATT, max_rate_cap * MINUTE_WATT
             )
         )
@@ -842,7 +842,7 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
 
 def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
     """
-    Compute true discharging rate from SOC and charge rate setting
+    Compute true discharging rate from SoC and charge rate setting
     """
     soc_percent = calc_percent_limit(soc, soc_max)
     max_discharge_rate = battery_rate_max_discharge * battery_discharge_power_curve.get(soc_percent, 1.0)
@@ -965,7 +965,7 @@ def find_charge_rate(
                         best_rate_real = rate_scale_max
                         break
                 # if log_to:
-                #   log_to("Low Power mode: rate: {} minutes: {} SOC: {} Target SOC: {} Charge left: {} Charge now: {} Rate scale: {} Charge amount: {} Charge now: {} best rate: {} highest achievable_rate {}".format(
+                #   log_to("Low Power mode: rate: {} minutes: {} SOC: {} Target SoC: {} Charge left: {} Charge now: {} Rate scale: {} Charge amount: {} Charge now: {} best rate: {} highest achievable_rate {}".format(
                 #        rate * MINUTE_WATT, minute, soc, target_soc, charge_left, charge_now, rate_scale * MINUTE_WATT, charge_amount, round(charge_now, 2), best_rate*MINUTE_WATT, highest_achievable_rate*MINUTE_WATT))
             else:
                 break
@@ -975,7 +975,11 @@ def find_charge_rate(
         if best_rate >= highest_achievable_rate and current_charge_rate >= highest_achievable_rate:
             best_rate = current_charge_rate
             if log_to:
-                log_to("Low Power mode: best rate {}W is greater than highest achievable rate {}W and current rate {}W so sticking with current rate".format(dp0(best_rate * MINUTE_WATT), dp0(highest_achievable_rate * MINUTE_WATT), dp0(current_charge_rate * MINUTE_WATT)))
+                log_to(
+                    "Low Power mode: best rate {}W is greater than highest achievable rate {}W and current rate {}W so sticking with current rate".format(
+                        dp0(best_rate * MINUTE_WATT), dp0(highest_achievable_rate * MINUTE_WATT), dp0(current_charge_rate * MINUTE_WATT)
+                    )
+                )
 
         best_rate_real = get_charge_rate_curve(soc, best_rate, soc_max, max_rate, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve) * battery_rate_max_scaling
         if log_to:

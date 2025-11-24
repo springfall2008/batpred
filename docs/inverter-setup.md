@@ -385,7 +385,7 @@ defines the custom HA entities and should be added to HA's `configuration.yaml`.
 - Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory). This file should be copied over the top of your `apps.yaml` and edited for your installation
 
 - Please note that the inverter needs to be put into "Passive Mode" for the sofar2mqtt to control the inverter.
-- This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%
+- This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SoC%
 - Note: You will need to change the min reserve in Home Assistant to match your minimum battery level (**input_number.predbat_set_reserve_min**).
 
 Please see this ticket in Github for ongoing discussions: <https://github.com/springfall2008/batpred/issues/395>
@@ -718,7 +718,7 @@ mode: single
 
 ```yaml
 alias: PredBat - Copy Charge Limit
-description: Copy Battery SOC to all timezone (time) slots
+description: Copy Battery SoC to all timezone (time) slots
 trigger:
   - platform: state
     entity_id:

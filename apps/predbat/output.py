@@ -2592,7 +2592,7 @@ class Output:
         yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         minutes_back = self.minutes_now + 1
 
-        # Get yesterday's SOC
+        # Get yesterday's SoC
         try:
             soc_yesterday = float(self.get_state_wrapper(self.prefix + ".savings_total_soc", default=0.0))
         except (ValueError, TypeError):

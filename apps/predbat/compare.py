@@ -162,7 +162,7 @@ class Compare:
             True,
             end_record=end_record,
         )
-        # Work out value of the battery at the start end end of the period to allow for the change in SOC
+        # Work out value of the battery at the start end end of the period to allow for the change in SoC
         metric_start, battery_value_start = my_predbat.compute_metric(end_record, my_predbat.soc_kw, my_predbat.soc_kw, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         metric_end, battery_value_end = my_predbat.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, 0, 0, 0, 0, 0, 0)
 

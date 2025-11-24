@@ -3241,7 +3241,7 @@ class Plan:
                     )
                 )
                 self.log("         [{}]".format(self.scenario_summary_title(record_time)))
-                self.log("    SOC: [{}]".format(self.scenario_summary(record_time, predict_soc_time)))
+                self.log("    SoC: [{}]".format(self.scenario_summary(record_time, predict_soc_time)))
                 self.log("    BAT: [{}]".format(self.scenario_summary(record_time, predict_state)))
                 self.log("   LOAD: [{}]".format(self.scenario_summary(record_time, load_kwh_time)))
                 self.log("     PV: [{}]".format(self.scenario_summary(record_time, pv_kwh_time)))

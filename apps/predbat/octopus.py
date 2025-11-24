@@ -1250,7 +1250,7 @@ class OctopusAPI:
         if target_time:
             target_time = target_time[:5]  # Only HH:MM
         self.base.dashboard_item(self.get_entity_name("select", "intelligent_target_time"), target_time, attributes={"friendly_name": "Octopus Intelligent Target Time", "icon": "mdi:clock-outline", "options": OPTIONS_TIME}, app="octopus")
-        self.base.dashboard_item(self.get_entity_name("number", "intelligent_target_soc"), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SOC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
+        self.base.dashboard_item(self.get_entity_name("number", "intelligent_target_soc"), target_soc, attributes={"friendly_name": "Octopus Intelligent Target SoC", "icon": "mdi:battery-percent", "min": 0, "max": 100}, app="octopus")
 
     async def async_get_account(self, account_id):
         """

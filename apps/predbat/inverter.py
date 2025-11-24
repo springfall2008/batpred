@@ -633,7 +633,7 @@ class Inverter:
                 # Find 100% end points
                 for data_point in search_range:
                     for minute in range(1, min_len):
-                        # Start trigger is when the SOC just increased above the data point
+                        # Start trigger is when the SoC just increased above the data point
                         if (
                             not discharge
                             and soc_percent.get(minute - 1, 0) == (data_point + 1)
@@ -657,7 +657,7 @@ class Inverter:
                         ):
                             total_power = 0
                             total_count = 0
-                            # Find a period where charging was at full rate and the SOC just drops below the data point
+                            # Find a period where charging was at full rate and the SoC just drops below the data point
                             for target_minute in range(minute, min_len):
                                 this_soc = soc_percent.get(target_minute, 0)
                                 if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) < max_power_scaled or battery_power.get(minute, 0) >= 0):
@@ -674,7 +674,7 @@ class Inverter:
                                     else:
                                         this_soc += 1
                                     # So the power for this data point average has been stored, it's possible we spanned more than one data point
-                                    # if not all SOC %'s are represented for this battery size
+                                    # if not all SoC %'s are represented for this battery size
                                     from_soc = soc_kwh.get(minute, 0)
                                     to_soc = soc_kwh.get(target_minute, 0)
                                     soc_charged = from_soc - to_soc
@@ -934,7 +934,7 @@ class Inverter:
 
         if not quiet:
             self.base.log(
-                "Inverter {} SOC: {}kW {}% Current charge rate {}W Current discharge rate {}W Current battery power {}W Current battery voltage {}V Grid power {}W load power {}W PV Power {}W".format(
+                "Inverter {} SoC: {}kW {}% Current charge rate {}W Current discharge rate {}W Current battery power {}W Current battery voltage {}V Grid power {}W load power {}W PV Power {}W".format(
                     self.id, dp2(self.soc_kw), self.soc_percent, dp0(self.charge_rate_now * MINUTE_WATT), dp0(self.discharge_rate_now * MINUTE_WATT), self.battery_power, self.battery_voltage, self.grid_power, self.load_power, self.pv_power
                 )
             )
@@ -1165,10 +1165,10 @@ class Inverter:
 
     def mimic_target_soc(self, current_charge_limit, discharge=False):
         """
-        Function to turn on/off charging based on the current SOC and the set charge limit
+        Function to turn on/off charging based on the current SoC and the set charge limit
 
         Parameters:
-            current_charge_limit (float): The target SOC (State of Charge) limit for charging.
+            current_charge_limit (float): The target SoC (State of Charge) limit for charging.
 
         Returns:
             None
@@ -1182,20 +1182,20 @@ class Inverter:
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", discharge_power)
             elif self.soc_percent < float(current_charge_limit):
-                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Discharge disabled.")
+                self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Discharge disabled.")
                 self.alt_charge_discharge_enable("discharge", False)
-            elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
+            elif self.soc_percent == float(current_charge_limit):  # If SoC target is reached
                 if self.inv_output_charge_control == "current":
                     self.alt_charge_discharge_enable("discharge", True)
-                    self.set_current_from_power("discharge", (0))  # Set charge current to zero (i.e hold SOC)
+                    self.set_current_from_power("discharge", (0))  # Set charge current to zero (i.e hold SoC)
                 else:
                     self.alt_charge_discharge_enable("discharge", False)
             else:
-                self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Discharge enabled.")
+                self.base.log(f"Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled.")
                 self.alt_charge_discharge_enable("discharge", True)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", discharge_power)
-                    self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Discharge enabled, amp rate written to inverter.")
+                    self.base.log(f"Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled, amp rate written to inverter.")
         else:
             if current_charge_limit == 0:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
@@ -1204,23 +1204,23 @@ class Inverter:
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", discharge_power)  # Reset discharge power too
             elif self.soc_percent > float(current_charge_limit):
-                # If current SOC is above Target SOC, turn Grid Charging off
+                # If current SoC is above Target SoC, turn Grid Charging off
                 self.alt_charge_discharge_enable("charge", False)
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
-                self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
-            elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
+                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SoC)
+                self.base.log(f"Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Charge disabled.")
+            elif self.soc_percent == float(current_charge_limit):  # If SoC target is reached
                 self.alt_charge_discharge_enable("charge", True)  # Make sure charging is on
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
-                    self.base.log(f"Current SOC {self.soc_percent}% is same as Target SOC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
+                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SoC)
+                    self.base.log(f"Current SoC {self.soc_percent}% is same as Target SoC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
             else:
                 # If we drop below the target, turn grid charging back on and make sure the charge current is correct
                 self.alt_charge_discharge_enable("charge", True)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
-                    self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
-                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
+                    self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
+                self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
 
     def adjust_reserve(self, reserve):
         """
@@ -1385,7 +1385,7 @@ class Inverter:
 
     def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         """
-        Adjust the battery charging target SOC % in GivTCP
+        Adjust the battery charging target SoC % in GivTCP
 
         Inverter Class Parameters
         =========================
@@ -1400,11 +1400,11 @@ class Inverter:
             charge_limit                       int           %
 
         """
-        # SOC has no decimal places and clamp in min
+        # SoC has no decimal places and clamp in min
         soc = int(max(soc, self.reserve_percent))
 
         if isExporting and self.inv_has_target_soc and not self.inv_target_soc_used_for_discharge:
-            self.log("Inverter {} Exporting, not adjusting SOC target".format(self.id))
+            self.log("Inverter {} Exporting, not adjusting SoC target".format(self.id))
             return
 
         # Check current setting and adjust
@@ -1422,12 +1422,12 @@ class Inverter:
                 self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id, required_unit="%"), soc)
 
             if self.base.set_inverter_notify:
-                self.base.call_notify("Predbat: Inverter {} Target SOC has been changed to {}% at {}".format(self.id, soc, self.base.time_now_str()))
+                self.base.call_notify("Predbat: Inverter {} Target SoC has been changed to {}% at {}".format(self.id, soc, self.base.time_now_str()))
             self.mqtt_message(topic="set/target_soc", payload=soc)
         else:
             self.base.log("Inverter {} Current Target SoC is {}%, already at target".format(self.id, current_soc))
 
-        # Inverters that need on/off controls rather than target SOC
+        # Inverters that need on/off controls rather than target SoC
         if not self.inv_has_target_soc:
             if isCharging:
                 self.mimic_target_soc(soc)
@@ -2503,7 +2503,7 @@ class Inverter:
             else:
                 delay = 40
 
-            self.base.log("Warn: inverter {} didn't receive JSON response from REST GET {}, received \"{}\". Waiting {}s then retrying".format(self.id, url, json, delay))
+            self.base.log('Warn: inverter {} didn\'t receive JSON response from REST GET {}, received "{}". Waiting {}s then retrying'.format(self.id, url, json, delay))
             self.sleep(delay)
 
         # Exhausted retry attempts, fail REST GET and fallback to using HA entities (if they have been configured in apps.yaml)

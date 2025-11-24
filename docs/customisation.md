@@ -31,7 +31,7 @@ Selecting any of the .yaml files you have created will restore your settings fro
 The mode that Predbat operates in will change the operation, this can be configured with **select.predbat_mode** drop-down menu as follows:
 
 - Monitor
-- Control SOC only
+- Control SoC only
 - Control charge
 - Control charge & discharge
 
@@ -48,9 +48,9 @@ _NOTE: Changing the Predbat mode or the read-only switch will cause Predbat to r
 In **Monitor** mode Predbat will not control or Plan any charging or discharging, inverter balancing will take place if enabled,
 and the plan will show just what is expected based on the current inverter configuration alone.
 
-### Predbat Control SOC only mode
+### Predbat Control SoC only mode
 
-In **Control SOC only** mode Predbat will adjust the target charge percentage (SoC target) according to the Best plan, but the charge
+In **Control SoC only** mode Predbat will adjust the target charge percentage (SoC target) according to the Best plan, but the charge
 window will not be modified.
 
 This mode can be useful if you just have one fixed charge slot per day and you only want Predbat to control the percentage the battery is charged based on solar generation

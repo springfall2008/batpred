@@ -37,7 +37,7 @@ ohme_attribute_table = {
     "ct_amps": {"friendly_name": "Ohme CT Clamp Current", "icon": "mdi:current-ac", "unit_of_measurement": "A", "device_class": "current"},
     "max_charge": {"friendly_name": "Ohme Max Charge Enabled", "icon": "mdi:battery-charging-100"},
     "available": {"friendly_name": "Ohme Available", "icon": "mdi:connection"},
-    "target_soc": {"friendly_name": "Ohme Target SOC", "icon": "mdi:battery-charging", "unit_of_measurement": "%", "device_class": "battery", "min": 0, "max": 100, "step": 1},
+    "target_soc": {"friendly_name": "Ohme Target SoC", "icon": "mdi:battery-charging", "unit_of_measurement": "%", "device_class": "battery", "min": 0, "max": 100, "step": 1},
     "target_time": {"friendly_name": "Ohme Target Time", "icon": "mdi:clock-outline"},
     "preconditioning": {"friendly_name": "Ohme Preconditioning", "icon": "mdi:air-conditioner", "unit_of_measurement": "mins", "min": 0, "max": 60, "step": 5},
     "slots": {"friendly_name": "Ohme Charge Slots", "icon": "mdi:calendar-clock"},
@@ -280,7 +280,7 @@ class OhmeAPI:
         battery = self.client.battery
         vehicle = self.client.current_vehicle
 
-        # self.log("Info: Ohme API: Mode: %s, Status: %s, Power: %sW, %sA, %sV, CT: %sA, Max Charge: %s, Available: %s, Target SOC: %s%%, Target Time: %s, Preconditioning: %s mins, Vehicle: %s, Slots: %s" % (
+        # self.log("Info: Ohme API: Mode: %s, Status: %s, Power: %sW, %sA, %sV, CT: %sA, Max Charge: %s, Available: %s, Target SoC: %s%%, Target Time: %s, Preconditioning: %s mins, Vehicle: %s, Slots: %s" % (
         #         mode, status, power.watts, power.amps, power.volts, power.ct_amps, max_charge, available, target_soc,
         #         target_time, preconditioning, vehicle, slots)
         #        )
@@ -396,7 +396,7 @@ class OhmeAPI:
             if (isinstance(value, float) or isinstance(value, int)) and 0 <= value <= 100:
                 await self.client.async_apply_session_rule(target_percent=int(value))
             else:
-                self.log(f"Warn: Ohme API: Invalid target SOC value: {value}")
+                self.log(f"Warn: Ohme API: Invalid target SoC value: {value}")
         elif entity_id.endswith("_preconditioning"):
             try:
                 value = int(value)
@@ -960,9 +960,7 @@ class OhmeApiClient:
 
 
 # Exceptions
-class ApiException(Exception):
-    ...
+class ApiException(Exception): ...
 
 
-class AuthException(ApiException):
-    ...
+class AuthException(ApiException): ...

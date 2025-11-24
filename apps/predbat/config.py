@@ -212,7 +212,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "inverter_soc_reset",
-        "friendly_name": "Inverter SOC Reset",
+        "friendly_name": "Inverter SoC Reset",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -320,7 +320,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "best_soc_min",
-        "friendly_name": "Best SOC Min",
+        "friendly_name": "Best SoC Min",
         "type": "input_number",
         "min": 0,
         "max": 100.0,
@@ -332,7 +332,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "best_soc_max",
-        "friendly_name": "Best SOC Max",
+        "friendly_name": "Best SoC Max",
         "type": "input_number",
         "min": 0,
         "max": 100.0,
@@ -344,7 +344,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "best_soc_keep",
-        "friendly_name": "Best SOC Keep",
+        "friendly_name": "Best SoC Keep",
         "type": "input_number",
         "min": 0,
         "max": 100.0,
@@ -355,7 +355,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "best_soc_keep_weight",
-        "friendly_name": "Best SOC Keep Weighting",
+        "friendly_name": "Best SoC Keep Weighting",
         "type": "input_number",
         "min": 0.1,
         "max": 5,
@@ -581,7 +581,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "car_charging_manual_soc",
-        "friendly_name": "Car charging manual SOC",
+        "friendly_name": "Car charging manual SoC",
         "type": "switch",
         "default": False,
         "enable": "num_cars",
@@ -589,7 +589,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "car_charging_manual_soc_kwh",
-        "friendly_name": "Car manual SOC kWh",
+        "friendly_name": "Car manual SoC kWh",
         "type": "input_number",
         "min": 0,
         "max": 100,

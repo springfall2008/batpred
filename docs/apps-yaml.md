@@ -80,7 +80,7 @@ Syntax errors will be highlighted by the Home Assistant editor or via other YAML
 
 Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'apps.yaml'. Review any items shown
 in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
-match can be ignored if you are not supporting that feature (e.g. Car SOC if you don't have a car).
+match can be ignored if you are not supporting that feature (e.g. Car SoC if you don't have a car).
 
 As an example these do not match and are shown in the web interface in red, I'm ignoring them as I only have one inverter and I'm using
 the Predbat internal Solcast rather than the external integration:
@@ -558,11 +558,11 @@ e.g:
 
 #### Battery SoC
 
-- **soc_kw** - Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
+- **soc_kw** - Entity name of the battery SoC in kWh, should be the inverter one not an individual battery
 
 or
 
-- **soc_percent** Entity name of the battery SOC in percent of the maximum battery size, should be the inverter one not an individual battery
+- **soc_percent** Entity name of the battery SoC in percent of the maximum battery size, should be the inverter one not an individual battery
 
 #### Inverter Info  
 
@@ -583,7 +583,7 @@ or
 - **discharge_end_hour** and **discharge_end_minute** - Ditto for battery discharge end time
 - **charge_time** - Battery charge time entity for inverters that require a charge time expressed as a range in the format "*start hour*:*start minute*-*end hour*:*end minute*".
 - **discharge_time** = Ditto battery discharge time expressed as a time range.
-- **charge_limit** - Entity name for used to set the SOC target for the battery in percentage (AC charge target)
+- **charge_limit** - Entity name for used to set the SoC target for the battery in percentage (AC charge target)
 - **scheduled_charge_enable** - Switch to enable/disable battery charge according to the charge start/end times defined above.
 - **scheduled_discharge_enable** - Switch to enable/disable battery discharge according to the discharge start/end times defined above.
 - **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
