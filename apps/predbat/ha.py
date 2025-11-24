@@ -162,7 +162,7 @@ class HAHistory(ComponentBase):
         if not ha_interface:
             self.log("Error: HAHistory: No HAInterface available, cannot start history updates")
             return False
-        
+
         if first or (seconds % (2 * 60) == 0):
             # Update history data every 2 minutes
             now = datetime.now(self.local_tz)
