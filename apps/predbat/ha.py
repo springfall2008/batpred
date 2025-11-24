@@ -470,7 +470,7 @@ class HAInterface(ComponentBase):
         if not self.api_stop:
             self.log("Error: Web Socket failed to reconnect, stopping....")
             self.websocket_active = False
-            raise Exception("Web Socket failed to reconnect")
+            self.fatal_error_occurred()
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
