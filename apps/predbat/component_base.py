@@ -14,6 +14,7 @@ import asyncio
 import time
 import traceback
 
+
 class ComponentBase(ABC):
     """
     Base class for all Predbat components.
