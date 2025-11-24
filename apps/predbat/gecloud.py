@@ -841,7 +841,7 @@ class GECloudDirect(ComponentBase):
         for device in self.device_list:
             if device in self.pending_writes:
                 self.pending_writes[device] = []
-            
+
         self.update_success_timestamp()
         return True
 
