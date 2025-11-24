@@ -62,66 +62,49 @@ class FoxAPI(ComponentBase):
         """
         return self.api_started and self.device_list
 
-    async def start(self):
+    async def run(self, seconds, first):
         """
         Main run loop
         """
+        if first:
+            # Only do these once as battery charging times are ignored with the scheduler
+            # and we get the realtime data every 5 minutes
+            await self.get_device_list()
+            self.log("Fox API: Found {} devices".format(len(self.device_list)))
+            if not self.device_list:
+                self.log("Error: FoxAPI: No devices found, unable to start API")
+                return False
 
-        first = True
-        count_seconds = 0
-        while not self.api_stop:
-            try:
-                if first or (count_seconds % (60 * 60) == 0):
-                    if first:
-                        # Only do these once as battery charging times are ignored with the scheduler
-                        # and we get the realtime data every 5 minutes
-                        await self.get_device_list()
-                        self.log("Fox API: Found {} devices".format(len(self.device_list)))
-                        if not self.device_list:
-                            raise Exception("FoxAPI: No devices found, unable to start API")
+            # Get per device data
+            for device in self.device_list:
+                sn = device.get("deviceSN", None)
+                if sn:
+                    await self.get_device_detail(sn)
+                    await self.get_device_history(sn)
+                    await self.get_battery_charging_time(sn)
 
-                        # Get per device data
-                        for device in self.device_list:
-                            sn = device.get("deviceSN", None)
-                            if sn:
-                                await self.get_device_detail(sn)
-                                await self.get_device_history(sn)
-                                await self.get_battery_charging_time(sn)
+            if self.automatic:
+                await self.automatic_config()
 
-                    # Regular updates for registers and scheduler data
-                    for device in self.device_list:
-                        sn = device.get("deviceSN", None)
-                        if sn:
-                            await self.get_device_settings(sn)
-                            await self.get_schedule_settings_ha(sn)
-                            await self.get_scheduler(sn)
-                            await self.compute_schedule(sn)
+        if seconds % (60 * 60) == 0:
+            # Regular updates for registers and scheduler data
+            for device in self.device_list:
+                sn = device.get("deviceSN", None)
+                if sn:
+                    await self.get_device_settings(sn)
+                    await self.get_schedule_settings_ha(sn)
+                    await self.get_scheduler(sn)
+                    await self.compute_schedule(sn)
 
-                if first and self.automatic:
-                    await self.automatic_config()
+        # Real time data every 5 minutes
+        if seconds % (5 * 60) == 0:
+            for device in self.device_list:
+                sn = device.get("deviceSN", None)
+                if sn:
+                    await self.get_real_time_data(sn)
+            await self.publish_data()
 
-                # Real time data every 5 minutes
-                if first or (count_seconds % (5 * 60)) == 0:
-                    for device in self.device_list:
-                        sn = device.get("deviceSN", None)
-                        if sn:
-                            await self.get_real_time_data(sn)
-                    await self.publish_data()
-
-                if not self.api_started:
-                    self.log("Fox API: Started")
-                    self.api_started = True
-
-                first = False
-
-            except Exception as e:
-                self.log("Error: Fox API: {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-
-            await asyncio.sleep(1)
-            count_seconds += 1
-
-        self.log("Fox API: Stopped")
+        return True
 
     async def get_available_variables(self):
         """

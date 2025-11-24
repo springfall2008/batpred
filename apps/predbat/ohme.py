@@ -182,52 +182,37 @@ class OhmeAPI(ComponentBase):
             return self.client.last_success_timestamp
         return None
 
-    async def start(self):
+    async def run(self, seconds, first):
         """
         Main run loop
         """
+        if first:
+            self.log("Ohme API: Started")
 
-        first = True
-        count_seconds = 0
-        while not self.api_stop:
-            try:
-                if not first and self.queued_events:
-                    while self.queued_events:
-                        event = self.queued_events.pop(0)
-                        handler, *args = event
-                        try:
-                            await handler(*args)
-                        except ApiException as e:
-                            self.log("Warn: Ohme API: Event handler error: {}".format(e))
-                    first = True  # Force an immediate update after handling events
+        # Process queued events
+        if self.queued_events:
+            while self.queued_events:
+                event = self.queued_events.pop(0)
+                handler, *args = event
+                try:
+                    await handler(*args)
+                except ApiException as e:
+                    self.log("Warn: Ohme API: Event handler error: {}".format(e))
 
-                if first or (count_seconds % (30 * 60)) == 0:
-                    await self.client.async_update_device_info()
-                    # Advanced settings are broken in latest API
-                    # await self.client.async_get_advanced_settings()
+        if first or (seconds % (30 * 60)) == 0:
+            await self.client.async_update_device_info()
+            # Advanced settings are broken in latest API
+            # await self.client.async_get_advanced_settings()
 
-                if first or (count_seconds % (120)) == 0:
-                    await self.client.async_get_charge_session()
-                    await self.publish_data()
+        if first or (seconds % 120) == 0:
+            await self.client.async_get_charge_session()
+            await self.publish_data()
 
-                if not self.api_started:
-                    self.log("Ohme API: Started")
-                    self.api_started = True
+        if first and self.ohme_automatic_octopus_intelligent and self.client.serial:
+            await self.automatic_config_octopus_intelligent()
 
-                    if self.ohme_automatic_octopus_intelligent and self.client.serial:
-                        await self.automatic_config_octopus_intelligent()
-
-                first = False
-
-            except Exception as e:
-                self.log("Error: Ohme API: {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-
-            await asyncio.sleep(1)
-            count_seconds += 1
-
-        await self.client.close()
-        self.log("Ohme API: Stopped")
+        self.update_success_timestamp()
+        return True
 
     async def automatic_config_octopus_intelligent(self):
         """

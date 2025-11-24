@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 import asyncio
 import time
-
+import traceback
 
 class ComponentBase(ABC):
     """
@@ -51,6 +51,7 @@ class ComponentBase(ABC):
         self.prefix = base.prefix
         self.args = base.args
         self.initialize(**kwargs)
+        self.count_errors = 0
 
     @abstractmethod
     def initialize(self, **kwargs):
@@ -135,7 +136,6 @@ class ComponentBase(ABC):
         """Get the configuration root directory"""
         return self.base.config_root
 
-    @abstractmethod
     async def start(self):
         """
         Start the component's main operation loop.
@@ -146,7 +146,36 @@ class ComponentBase(ABC):
         - Run the main processing loop until api_stop is True
         - Clean up resources before exiting
 
-        Must be implemented by subclasses.
+        """
+        seconds = 0
+        first = True
+        while not self.api_stop and not self.fatal_error:
+            try:
+                if first or seconds % 60 == 0:
+                    if await self.run(seconds, first):
+                        if not self.api_started:
+                            self.api_started = True
+                            self.log(f"{self.__class__.__name__}: Started")
+                    else:
+                        self.count_errors += 1
+                first = False
+            except Exception as e:
+                self.log(f"Error: {self.__class__.__name__}: {e}")
+                self.log("Error: " + traceback.format_exc())
+
+            seconds += 5
+            await asyncio.sleep(5)
+
+        await self.final()
+
+        self.api_started = False
+        self.log(f"{self.__class__.__name__}: Stopped")
+
+    async def final(self):
+        """
+        Final cleanup before stopping.
+        Subclasses can override this method to perform any necessary cleanup
+        before the component stops.
         """
         pass
 
