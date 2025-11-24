@@ -918,6 +918,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         else:
             self.expose_config("compare_active", False)
 
+        # Free memory
+        if not self.debug_enable:
+            self.load_minutes_step = {}
+            self.load_minutes_step10 = {}
+            self.pv_forecast_minute_step = {}
+            self.pv_forecast_minute10_step = {}
+
         gc.collect()
 
     async def async_download_predbat_version(self, version):
