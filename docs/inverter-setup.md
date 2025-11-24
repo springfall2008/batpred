@@ -32,10 +32,7 @@ you copy but don't replace the standard template then Predbat will not function 
 
 ## GivEnergy with GivTCP
 
-It's recommended that you first watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=ygD9KyciX54).
-Although the video covers GivTCP v2 and v3 has been recently released, the installation and setup process are very similar.
-
-The below instructions assume you are installing GivTCP v3, with changes highlighted against GivTCP v2 as covered in the video.
+It's recommended that you first watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=d06Mqeplvns).
 
 1. Install Mosquitto Broker add-on:
 
@@ -44,7 +41,6 @@ The below instructions assume you are installing GivTCP v3, with changes highlig
 - Once the Mosquitto broker has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on, and click 'START' to start the add-on
 - Next, configure Mosquitto broker by going to Settings / Devices and Services / Integrations.
 Mosquitto broker should appear as a Discovered integration so click the blue 'CONFIGURE' button, then SUBMIT to complete configuring Mosquitto broker
-- With GivTCP v3 you no longer need to create a dedicated Home Assistant user for MQTT so this part of the video can be skipped over
 
 2. Install the GivTCP add-on:
 
@@ -60,8 +56,7 @@ Click on the 'GivTCP' add-on, then click 'INSTALL'
 
 3. Configure GivTCP:
 
-- The configuration process for GivTCP in v3 has changed from that shown in the video,
-the Configuration tab is no longer used and all configuration is now done via the add-on's Web interface
+- All configuration for GivTCP is done via the add-on's Web interface
 - On the GivTCP add-on, click 'START' to start the add-on
 - Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
@@ -73,10 +68,10 @@ The prefixes should be set before you start using GivTCP in anger
 as changing the prefixes later on will result in both the old and new sensor names appearing in Home Assistant with the 'old' sensors being "unavailable".<BR>
 Note that if you do change the givtcp prefixes then you will also have to edit the apps.yaml configuration file to match,
 and change the sensor names that Predbat is looking for (by default prefixed 'givtcp_xxx') to your new sensor naming structure
-- Click Next and Next to get to the Selfrun page, and turn on Self Run. The Self Run Loop Timer is how often GivTCP will retrieve data from your inverters - it's
+- Click Next and Next to get to the Selfrun page, and turn on Self Run so that GivTCP automatically retrieves data from your inverter. The Self Run Loop Timer is how often GivTCP will retrieve data - it's
 recommended that set this to a value between 20 and 60, but not less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
 and won't communicate with the GivEnergy portal and app
-- GivTCP now auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant;
+- GivTCP auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant;
 you won't need to create a dedicated MQTT user or enter the details on the MQTT page
 - You don't need to configure the Influx page. Tariff and Palm pages can also be skipped as these functions are done by Predbat
 - (Optional) On the Web page, you can turn the Dashboard on to see a simple power flow diagram for your inverters (similar to the GivEnergy mobile app)

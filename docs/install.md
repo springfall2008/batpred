@@ -13,7 +13,7 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 
 - [What is Home Assistant from Smart Home Junkie](https://www.youtube.com/watch?v=Frd-C7ZeZAo)
 - [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA)
-- [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=jzpm89956Pw)
+- [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=TL2eqsjhmTE)
 - [Setting up the Energy dashboard for GivEnergy inverters from Speak to the Geek](https://www.youtube.com/watch?v=YPPpwTKIz7M)
 - [Power Flow Card Plus from Speak to the Geek](https://www.youtube.com/watch?v=C4Zh35E9wJE)
 
@@ -21,30 +21,12 @@ If you get stuck, please read the [FAQs](faq.md) and if necessary raise a [Githu
 
 ## Inverter Control install
 
-You will need to install an integration to communicate with and control your inverter. The specific integration you need will depend on the brand of inverter you have:
+You will need to install an integration to communicate with and control your inverter. Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
 
-| Brand     | Integration     | GitHub Link                                                                      |
-| :-------- | :-----------     | :------------------------------------------------------------------------------- |
-| GivEnergy | GivTCP           | <https://github.com/britkat1980/ha-addons>    |
-| GivEnergy | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
-| GivEnergy EMS | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
-| Solis     | SolaX ModBus     | <https://github.com/wills106/homeassistant-solax-modbus> |
-| Solax Gen4| Solax Modbus     | <https://github.com/wills106/homeassistant-solax-modbus> |
-| Sofar     | Sofar MQTT       | <https://github.com/cmcgerty/Sofar2mqtt> |
-| Huawei    | Huawei Modbus    | <https://github.com/wlcrs/huawei_solar> |
-| SolarEdge | SolarEdge Modbus | <https://github.com/WillCodeForCats/solaredge-modbus-multi> |
-| SunSynk   | SunSynk Modbus   | <https://github.com/kellerza/sunsynk> |
-| Fox       | Fox Modbus       | <https://github.com/nathanmarlor/foxess_modbus> |
-| LuxPower  | LuxPython        | <https://github.com/guybw/LuxPython_DEV> |
-
-Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
-
-Please see [Inverter Setup](inverter-setup.md) for details on installing and configuring the appropriate inverter control software
+The specific integration you need will depend on the brand of inverter you have, please see [Inverter Setup](inverter-setup.md) for details on installing and configuring the appropriate inverter control software
 so that Home Assistant is able to 'see' and manage your inverter.
 
 You will need at least 24 hours of history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
-
-NB: If you have multiple GivEnergy AIOs or a 3-phase inverter, GivTCP version 3 is required.
 
 ## Editing Configuration Files in Home Assistant
 
@@ -59,7 +41,7 @@ but does require HACS (the Home Assistant Community Store) to be installed first
 
 If you do not have one of these file editors already installed in Home Assistant:
 
-- For Studio Code Server you will need to install HACS first.
+- For Studio Code Server you will need to install HACS first (see Speak To The Geek video linked above)
 - Go to Settings / Add-ons / Add-on Store (bottom right)
 - Scroll down the add-on store list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the add-on, click 'INSTALL'
 - Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the add-on
@@ -101,7 +83,15 @@ The Predbat web interface will work through the Predbat add-on, you can click on
 
 As an alternative to the Predbat add-on, Predbat can be installed via Docker
 
-The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and a fork of the Predbat add-on with installation instructions and updates for Docker can be found at [https://github.com/nipar4/predbat_addon](https://github.com/nipar4/predbat_addon).
+The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and is a fork of the Predbat add-on with updates so it will run directly as a Docker docker container. 
+
+Installation instructions can be found at [https://github.com/nipar4/predbat_addon](https://github.com/nipar4/predbat_addon).
+
+## Predbat Installation Into Appdaemon
+
+Installing HACS, Appdaemon and then Predbat within Appdaemon has been deprecated, please swap to either the Predbat add-on or Docker installation methods.
+
+The process to [upgrade from Predbat within Appdaemon to Predbat addon](#upgrading-from-appdaemon-to-predbat-add-on) is described below.
 
 ## Solcast Install
 
