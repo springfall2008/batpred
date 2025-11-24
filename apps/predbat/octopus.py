@@ -849,7 +849,7 @@ class OctopusAPI(ComponentBase):
         pages = 0
         while url and pages < 3:
             self.requests_total += 1
-            r = requests.get(url)
+            r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
             if r.status_code not in [200, 201, 400]:
                 self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
