@@ -2855,10 +2855,8 @@ class Output:
                     slot_status = predbat_status.get(slot_minute, "").lower()
                     if "export" in slot_status:
                         status_during_slot = slot_status
-                        break
                     elif "charging" in slot_status:
                         status_during_slot = slot_status
-                        break
 
                 if "export" in status_during_slot:
                     # Assume exporting at this time
