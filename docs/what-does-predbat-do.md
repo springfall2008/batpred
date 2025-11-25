@@ -72,6 +72,8 @@ The current Predbat status is reported in the Home Assistant entity **predbat.st
 - **Demand** - This is the default, the load will be covered by solar and/or battery. Excess solar will charge the battery or be
 exported if the battery is full. This is described as 'Eco' Mode for GivEnergy inverters but other inverters use different terminology.
 
+- **Demand (Holiday)** - Predbat is in Demand mode, and additionally [Holiday Mode](customisation.md#holiday-mode) is active.
+
 - **Charging** - The battery charges from the grid and the grid also covers any load. Solar power will also be used to charge the battery.
 
 - **Freeze charging** - The battery is charging but the current battery level (SoC) is frozen (held). Think of it as a charge to the current battery level.
@@ -93,6 +95,12 @@ If the battery level again gets above the threshold it will be changed back to E
 
 - **Hold for car** and **Demand, Hold for car** - A car is charging (either Predbat-led or Octopus-led), the battery is in Demand mode,
 but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be set to On).
+
+- **Hold for iBoost** and **Demand, Hold for iBoost** - iBoost is active, the battery is in Demand mode, but is set to prevent discharging into the iBoost (requires **switch.predbat_iboost_prevent_discharge** to be set to On).
+
+- **Read-Only** - Predbat is in [read-only mode](customisation.md#manual-control), the plan will be produced and updated but no instructions will be sent to the inverter to charge or discharge.
+
+- **[Alert]** will be appended to the Predbat status if an [Alert is active](apps-yaml.md#alert-system).
 
 - **Calibration** - The inverter is calibrating the batteries.
 On GivEnergy systems the battery state of charge (SoC) level has to be calibrated by performing a full battery discharge and then a full charge

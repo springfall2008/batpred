@@ -481,7 +481,7 @@ The default is 30 minutes but can be set in multiples of the slot duration (defa
 
 - **switch.predbat_iboost_on_export** If set to On allows iBoost to run even if the battery is forced to export to the grid, otherwise it won't run in these circumstances.
 
-- **switch.iboost_prevent_discharge** When set to On will stop your battery from discharging when iBoost is active and thus prevent your battery from draining to the diverter.
+- **switch.predbat_iboost_prevent_discharge** When set to On will stop your battery from discharging when iBoost is active and thus prevent your battery from draining to the diverter.
 This switch will work in all modes and is not recommended to be used when iBoost Solar is On as it will prevent your battery from discharging during excess solar periods
 which could cause additional imports due to passing clouds.
 
@@ -549,6 +549,8 @@ When you go away you are likely to use less electricity and so the previous load
 Using the Home Assistant entity **input_number.predbat_holiday_days_left** you can set the number of full days that you will be away (including today).
 The number will count down by 1 day at midnight until it gets back to zero.
 Whilst the holiday days left are non-zero, Predbat's 'holiday mode' is active.
+
+When Predbat is in 'Demand' mode (i.e. not actively charging or discharging) and 'holiday mode' is active, Predbat's status will show as 'Demand (Holiday)'.
 
 When Predbat's 'holiday mode' is active the historical load data will be taken from yesterday's data (1 day ago) rather than from the **days_previous** setting in `apps.yaml`.
 This means Predbat will adjust more quickly to the new usage pattern.

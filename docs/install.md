@@ -83,7 +83,7 @@ The Predbat web interface will work through the Predbat add-on, you can click on
 
 As an alternative to the Predbat add-on, Predbat can be installed via Docker
 
-The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and is a fork of the Predbat add-on with updates so it will run directly as a Docker docker container. 
+The Predbat docker image is [https://hub.docker.com/r/nipar44/predbat_addon](https://hub.docker.com/r/nipar44/predbat_addon) and is a fork of the Predbat add-on with updates so it will run directly as a Docker docker container.
 
 Installation instructions can be found at [https://github.com/nipar4/predbat_addon](https://github.com/nipar4/predbat_addon).
 
