@@ -3836,7 +3836,7 @@ def get_plan_css():
         overlay.style.display = 'flex';
         overlay.style.justifyContent = 'center';
         overlay.style.alignItems = 'center';
-        
+
         // Create modal dialog
         const modal = document.createElement('div');
         modal.style.backgroundColor = 'white';
@@ -3846,13 +3846,13 @@ def get_plan_css():
         modal.style.width = '90%';
         modal.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.3)';
         modal.style.position = 'relative';
-        
+
         // Create error icon and message container
         const content = document.createElement('div');
         content.style.marginBottom = '20px';
         content.innerHTML = '<div style="color: #f44336; font-size: 48px; text-align: center; margin-bottom: 15px;">⚠</div>' +
                            '<div style="color: #333; font-size: 16px; line-height: 1.5; text-align: center;"><strong>Error</strong><br>' + message + '</div>';
-        
+
         // Create dismiss button
         const button = document.createElement('button');
         button.textContent = 'Dismiss';
@@ -3868,10 +3868,10 @@ def get_plan_css():
         button.onmouseover = function() { this.style.backgroundColor = '#d32f2f'; };
         button.onmouseout = function() { this.style.backgroundColor = '#f44336'; };
         button.onclick = function() { overlay.remove(); };
-        
+
         // Allow clicking overlay to close
         overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
-        
+
         // Assemble modal
         modal.appendChild(content);
         modal.appendChild(button);

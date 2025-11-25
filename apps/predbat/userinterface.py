@@ -9,7 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
+from utils import get_override_time_from_string
 import json
 import yaml
 import re
@@ -1285,7 +1286,7 @@ class UserInterface:
         rate_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
         minutes_now = int(self.minutes_now / plan_interval) * plan_interval
-        manual_rate_max = 18 * 60
+        manual_rate_max = 48 * 60
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
@@ -1308,20 +1309,19 @@ class UserInterface:
             else:
                 rate_time = value
                 rate_value = default_rate
-            try:
-                start_time = datetime.strptime(rate_time, "%H:%M:%S")
-            except (ValueError, TypeError):
-                start_time = None
 
             try:
                 rate_value = float(rate_value)
             except (ValueError, TypeError):
                 rate_value = default_rate
 
-            if start_time:
-                minutes = start_time.hour * 60 + start_time.minute
-                if minutes < minutes_now:
-                    minutes += 24 * 60
+            # Parse time with day of week support using utility function
+            override_time = get_override_time_from_string(self.now_utc, rate_time, plan_interval)
+
+            if override_time:
+                # Calculate minutes from midnight today
+                minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+
                 if (minutes - minutes_now) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
                     for minute in range(minutes, minutes + plan_interval):
@@ -1330,7 +1330,7 @@ class UserInterface:
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute, rate in rate_overrides:
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute_str not in exclude:
                 values_list.append(minute_str + "=" + str(rate))
         values = ",".join(values_list)
@@ -1340,7 +1340,7 @@ class UserInterface:
         # Create the new dropdown
         time_values = []
         for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute in rate_overrides_minutes:
                 rate_value = rate_overrides_minutes[minute]
                 minute_str = f"{minute_str}={rate_value}"
@@ -1364,7 +1364,7 @@ class UserInterface:
         time_overrides = []
         plan_interval = self.get_arg("plan_interval_minutes", 30)
         minutes_now = int(self.minutes_now / plan_interval) * plan_interval
-        manual_time_max = 18 * 60
+        manual_time_max = 48 * 60
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
@@ -1382,21 +1382,23 @@ class UserInterface:
         for value in values_list:
             if value == "off":
                 continue
-            try:
-                start_time = datetime.strptime(value, "%H:%M:%S")
-            except (ValueError, TypeError):
-                start_time = None
-            if start_time:
-                minutes = start_time.hour * 60 + start_time.minute
-                if minutes < minutes_now:
-                    minutes += 24 * 60
+
+            # Parse time with day of week support using utility function
+            from utils import get_override_time_from_string
+
+            override_time = get_override_time_from_string(self.now_utc, value, plan_interval)
+
+            if override_time:
+                # Calculate minutes from midnight today
+                minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+
                 if (minutes - minutes_now) < manual_time_max:
                     time_overrides.append(minutes)
 
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute in time_overrides:
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute_str not in exclude:
                 values_list.append(minute_str)
         values = ",".join(values_list)
@@ -1406,7 +1408,7 @@ class UserInterface:
         # Create the new dropdown
         time_values = []
         for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute in time_overrides:
                 minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)
