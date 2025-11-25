@@ -8,6 +8,16 @@ predicting optimal battery charge/discharge schedules based on solar forecasts, 
 **Core Architecture**: Multiple inheritance pattern with `PredBat` class inheriting from `hass.Hass`, `Octopus`, `Energidataservice`, `Fetch`, `Plan`, `Execute`, `Output`, and `UserInterface`.
 The codebase uses a component-based architecture where major features extend `ComponentBase` for lifecycle management.
 
+## Submitting changes
+
+All changes MUST be submitted via Pull Requests to the `main` branch. Follow these guidelines:
+- Create a branch for the feature/fix
+- Write clear commit messages
+- Create a pull request
+- Ensure the PR tests are passing
+- Wait for review
+- Merge after approval
+
 ## Code Structure & Patterns
 
 ### Core PredBat Class
