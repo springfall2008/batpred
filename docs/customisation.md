@@ -370,15 +370,17 @@ If you have **switch.predbat_inverter_hybrid** set to Off then if **switch.predb
 target SoC % will be reset to 100% outside of a charge window. This may be required for the AIO inverter to ensure it charges from solar. The default for
 this switch is On but it can be disabled in expert mode if need be.
 
-**input_number.predbat_set_reserve_min** Defines the battery reserve percentage, i.e. the minimum charge level that should be retained in the battery,
+**input_number.predbat_set_reserve_min** Defines the battery reserve percentage for inverter 1, i.e. the minimum charge level that should be retained in the battery,
 a value of 4 is the default and minimum value and is recommended to make use of the full battery.
 When the battery level reaches the specified minimum level, your inverter will start importing from the grid to satisfy house load.
 If you want to pre-prepare the battery to retain extra charge in the event of a high likelihood of a grid power outage such as storms predicted,
 you can increase set_reserve_min to a higher value, and then change it back afterwards.<BR>
 (Obviously this is only any use if your inverter is wired to act as an Emergency Power Supply or whole-home backup 'island mode' on the GivEnergy AIO).
 
-Note that **input_number.predbat_set_reserve_min** is used by Predbat to stop the battery SoC dropping below the specified level but it is not used in planning battery charging.
-i.e. if you change the reserve min to a level higher than the current battery SoC then Predbat will not plan charging activity to increase the SoC to that level; you should set [manual charges](#manual-control) to increase the SoC level.
+**input_number.predbat_set_reserve_min_1** defines the same minimum battery reserve percentage for inverter 2. Likewise predbat_set_reserve_min_2 and set_reserve_min_3 are the reserve minimums for inverter 3 and 4.
+
+Note that the **input_number.predbat_set_reserve_min**'s are used by Predbat to stop the battery SoC dropping below the specified level but are not used in planning battery charging.
+i.e. if you change a reserve min to a level higher than the current battery SoC then Predbat will not plan charging activity to increase the SoC to that level; you should set [manual charges](#manual-control) to increase the SoC level.
 
 **switch.predbat_inverter_soc_reset**  (_expert mode_) When set to On (the default) the target SoC for the inverter(s) will be reset to 100% when a charge slot is not active,
 this can be used to workaround some firmware issues where the SoC target is used for solar charging as well as grid charging.

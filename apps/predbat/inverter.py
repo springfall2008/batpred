@@ -406,8 +406,9 @@ class Inverter:
             else:
                 self.base.restart_active = False
 
-        # Get the expected minimum reserve value
-        self.reserve_min = self.base.get_arg("set_reserve_min")
+        # Get the expected minimum reserve value for the current inverter
+        reserve_min_postfix = "" if self.id == 0 else "_" + str(self.id)
+        self.reserve_min = int(self.base.get_arg("set_reserve_min" + reserve_min_postfix))
 
         # Min soc setting
         battery_min_soc = self.base.get_arg("battery_min_soc", default=max(self.reserve_min, 4), index=self.id)
@@ -420,11 +421,11 @@ class Inverter:
         self.reserve_current = dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         if self.reserve_min < battery_min_soc:
-            self.base.log(f"Increasing set_reserve_min from {self.reserve_min}%  to battery_min_soc of {battery_min_soc}%")
-            self.base.expose_config("set_reserve_min", battery_min_soc)
+            self.base.log("Increasing set_reserve_min{} from {}%  to battery_min_soc of {}%".format(reserve_min_postfix, self.reserve_min, battery_min_soc))
+            self.base.expose_config("set_reserve_min" + reserve_min_postfix, battery_min_soc)
             self.reserve_min = battery_min_soc
 
-        self.base.log("Reserve min: {}%, battery_min: {}%".format(dp0(self.reserve_min), dp0(battery_min_soc)))
+        self.base.log("Reserve min: {}%, battery_min: {}%".format(self.reserve_min, dp0(battery_min_soc)))
         if self.base.set_reserve_enable and self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
         else:
