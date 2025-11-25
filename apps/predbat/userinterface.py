@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 from utils import get_override_time_from_string
 import json
 import yaml
