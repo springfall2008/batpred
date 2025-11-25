@@ -1711,7 +1711,7 @@ class Octopus:
             if self.debug_enable:
                 self.log("Download {}".format(url))
             try:
-                r = requests.get(url)
+                r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"})
             except requests.exceptions.ConnectionError:
                 self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
                 self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
