@@ -10,7 +10,6 @@
 #
 # Helper functions for web pages
 
-
 def get_restart_button_js():
     # Add JavaScript for restart functionality
     text = """
