@@ -8,16 +8,60 @@ predicting optimal battery charge/discharge schedules based on solar forecasts, 
 **Core Architecture**: Multiple inheritance pattern with `PredBat` class inheriting from `hass.Hass`, `Octopus`, `Energidataservice`, `Fetch`, `Plan`, `Execute`, `Output`, and `UserInterface`.
 The codebase uses a component-based architecture where major features extend `ComponentBase` for lifecycle management.
 
-##  Submitting changes
+##  Submitting changes
 
 All changes MUST be submitted via Pull Requests to the `main` branch. Follow these guidelines:
 
 - Create a branch for the feature/fix
 - Write clear commit messages
+- **Run pre-commit checks** before committing (see below)
 - Create a pull request
 - Ensure the PR tests are passing
 - Wait for review
 - Merge after approval
+
+### Pre-commit Checks
+
+Before committing code, ALWAYS run pre-commit hooks to ensure code quality:
+
+```bash
+# Install pre-commit if not already installed
+python3 -m pip install pre-commit
+
+# Run all pre-commit checks
+/usr/bin/python3 -m pre_commit run --all-files
+```
+
+Common pre-commit checks:
+- **Ruff** - Linter for unused imports (F401), etc.
+- **Black** - Code formatter (256 char line length)
+- **Trailing whitespace** - Removes trailing spaces
+- **Markdown linting** - Checks markdown formatting
+- **cspell** - Spell checking
+
+If pre-commit fails, fix the issues and run again until all checks pass.
+
+### Git Commands
+
+Use GitKraken MCP tools or local git commands:
+
+**GitKraken MCP tools** (preferred for most operations):
+- `mcp_gitkraken_git_add_or_commit` - Stage and commit changes
+- `mcp_gitkraken_git_push` - Push to remote
+- `mcp_gitkraken_git_status` - Check git status
+- `mcp_gitkraken_git_branch` - List/create branches
+- `mcp_gitkraken_git_log_or_diff` - View log or diff
+
+**Local git commands** (use when MCP tools fail or for complex operations):
+```bash
+git add .                    # Stage all changes
+git commit -m "message"      # Commit with message
+git push                     # Push to remote
+git pull --rebase            # Pull with rebase
+git status                   # Check status
+```
+
+**Important**: If `git push` fails with "rejected" error, run `git pull --rebase` first to sync with remote changes (often from pre-commit.ci), then push again.
 
 ## Code Structure & Patterns
 
@@ -167,11 +211,33 @@ cd coverage/
 - `# pylint: disable=line-too-long` used extensively
 - Import sorting via isort (currently disabled in pre-commit)
 
-**Run checks**:
+**Running pre-commit checks**:
+
+Pre-commit hooks automatically check code quality before commits. They are also run automatically by pre-commit.ci on pull requests.
 
 ```bash
-pre-commit run --all-files
+# Run all pre-commit checks locally
+/usr/bin/python3 -m pre_commit run --all-files
+
+# Install pre-commit hooks (one-time setup)
+/usr/bin/python3 -m pre_commit install
 ```
+
+**Common pre-commit failures and fixes**:
+
+1. **Ruff F401 (unused imports)**: Remove the unused import
+   ```python
+   # Bad
+   from datetime import datetime, timedelta  # datetime unused
+   
+   # Good
+   from datetime import timedelta
+   ```
+
+2. **Trailing whitespace**: Automatically fixed by pre-commit
+3. **Black formatting**: Automatically reformatted by pre-commit
+
+Always run pre-commit checks before pushing to catch issues early.
 
 ## Development Patterns
 
