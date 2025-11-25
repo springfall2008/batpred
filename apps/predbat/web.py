@@ -2791,11 +2791,11 @@ var options = {
             override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 17 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 17 hours from now."}, status=400)
+            if minutes_from_now >= 48 * 60:
+                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
 
-            selection_option = "{}={}".format(override_time.strftime("%H:%M:%S"), rate)
-            clear_option = "[{}={}]".format(override_time.strftime("%H:%M:%S"), rate)
+            selection_option = "{}={}".format(override_time.strftime("%a %H:%M"), rate)
+            clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), rate)
             if action == "Clear Import":
                 await self.base.async_manual_select("manual_import_rates", clear_option)
             elif action == "Set Import":
@@ -2853,11 +2853,11 @@ var options = {
                 return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 17 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 17 hours from now."}, status=400)
+            if minutes_from_now >= 48 * 60:
+                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
 
-            selection_option = "{}".format(override_time.strftime("%H:%M:%S"))
-            clear_option = "[{}]".format(override_time.strftime("%H:%M:%S"))
+            selection_option = "{}".format(override_time.strftime("%a %H:%M"))
+            clear_option = "[{}]".format(override_time.strftime("%a %H:%M"))
             if action == "Clear":
                 await self.base.async_manual_select("manual_demand", selection_option)
                 await self.base.async_manual_select("manual_demand", clear_option)

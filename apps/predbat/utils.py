@@ -159,14 +159,20 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     day_of_week_today = now_utc.weekday()
 
     override_time = now_utc.replace(hour=override_time.hour, minute=override_time.minute, second=0, microsecond=0)
-    add_days = day_of_week - day_of_week_today
-    if add_days < 0:
-        add_days += 7
-    override_time += timedelta(days=add_days)
-
+    
     # Ensure minutes are rounded down to the nearest plan_interval_minutes (e.g., 15 or 10)
     minute = (override_time.minute // plan_interval_minutes) * plan_interval_minutes
     override_time = override_time.replace(minute=minute)
+    
+    # Calculate days to add
+    add_days = day_of_week - day_of_week_today
+    
+    # If the day has passed this week, or it's today but the time has already passed, use next week
+    if add_days < 0:
+        add_days += 7
+    
+    override_time += timedelta(days=add_days)
+    
     return override_time
 
 
