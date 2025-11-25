@@ -8,7 +8,7 @@ predicting optimal battery charge/discharge schedules based on solar forecasts, 
 **Core Architecture**: Multiple inheritance pattern with `PredBat` class inheriting from `hass.Hass`, `Octopus`, `Energidataservice`, `Fetch`, `Plan`, `Execute`, `Output`, and `UserInterface`.
 The codebase uses a component-based architecture where major features extend `ComponentBase` for lifecycle management.
 
-##  Submitting changes
+## Submitting changes
 
 All changes MUST be submitted via Pull Requests to the `main` branch. Follow these guidelines:
 
@@ -33,6 +33,7 @@ python3 -m pip install pre-commit
 ```
 
 Common pre-commit checks:
+
 - **Ruff** - Linter for unused imports (F401), etc.
 - **Black** - Code formatter (256 char line length)
 - **Trailing whitespace** - Removes trailing spaces
@@ -46,6 +47,7 @@ If pre-commit fails, fix the issues and run again until all checks pass.
 Use GitKraken MCP tools or local git commands:
 
 **GitKraken MCP tools** (preferred for most operations):
+
 - `mcp_gitkraken_git_add_or_commit` - Stage and commit changes
 - `mcp_gitkraken_git_push` - Push to remote
 - `mcp_gitkraken_git_status` - Check git status
@@ -53,6 +55,7 @@ Use GitKraken MCP tools or local git commands:
 - `mcp_gitkraken_git_log_or_diff` - View log or diff
 
 **Local git commands** (use when MCP tools fail or for complex operations):
+
 ```bash
 git add .                    # Stage all changes
 git commit -m "message"      # Commit with message
@@ -226,10 +229,11 @@ Pre-commit hooks automatically check code quality before commits. They are also 
 **Common pre-commit failures and fixes**:
 
 1. **Ruff F401 (unused imports)**: Remove the unused import
+
    ```python
    # Bad
    from datetime import datetime, timedelta  # datetime unused
-   
+
    # Good
    from datetime import timedelta
    ```
