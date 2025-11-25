@@ -1309,7 +1309,7 @@ class UserInterface:
             else:
                 rate_time = value
                 rate_value = default_rate
-            
+
             try:
                 rate_value = float(rate_value)
             except (ValueError, TypeError):
@@ -1317,11 +1317,11 @@ class UserInterface:
 
             # Parse time with day of week support using utility function
             override_time = get_override_time_from_string(self.now_utc, rate_time, plan_interval)
-            
+
             if override_time:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
-                
+
                 if (minutes - minutes_now) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
                     for minute in range(minutes, minutes + plan_interval):
@@ -1382,15 +1382,16 @@ class UserInterface:
         for value in values_list:
             if value == "off":
                 continue
-            
+
             # Parse time with day of week support using utility function
             from utils import get_override_time_from_string
+
             override_time = get_override_time_from_string(self.now_utc, value, plan_interval)
-            
+
             if override_time:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
-                
+
                 if (minutes - minutes_now) < manual_time_max:
                     time_overrides.append(minutes)
 
