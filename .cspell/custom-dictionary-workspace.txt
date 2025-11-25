@@ -1,4 +1,6 @@
 # Custom Dictionary Words
+onmouseover
+onmouseout
 activepower
 adata
 adbase
