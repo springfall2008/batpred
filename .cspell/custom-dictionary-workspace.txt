@@ -1,6 +1,4 @@
 # Custom Dictionary Words
-onmouseover
-onmouseout
 activepower
 adata
 adbase
@@ -204,6 +202,8 @@ ohmepy
 onchange
 oncharge
 oninput
+onmouseout
+onmouseover
 openweathermap
 pdata
 pdetails
