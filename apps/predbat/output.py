@@ -2862,7 +2862,7 @@ class Output:
                     slot_status = predbat_status.get(slot_minute, "").lower()
                     real_minute = minute + slot_offset
 
-                    if "export" in slot_status:
+                    if "exporting" in slot_status:
                         export_during_slot = slot_status
                         if export_start_minute is None:
                             export_start_minute = real_minute
@@ -2885,7 +2885,7 @@ class Output:
                 if charge_end_minute is None and charge_start_minute is not None:
                     charge_end_minute = minute + self.plan_interval_minutes
 
-                if "export" in export_during_slot:
+                if "exporting" in export_during_slot:
                     # Assume exporting at this time
                     self.export_window_best.append({"start": export_start_minute, "end": export_end_minute})
                     if "freeze" in export_during_slot:
