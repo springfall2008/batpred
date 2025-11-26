@@ -60,7 +60,12 @@ Predbat's planned state for the battery (charging, discharging, etc), predicted 
 
 ![image](images/web-interface-plan-view.png)
 
-You can also [create the Predbat Plan card](predbat-plan-card.md) to show this plan on your own custom dashboard.
+You can easily change Predbat's planned activity for a slot by clicking on the slot time, then selecting Manual Demand, Manual Charge, Manual Export, Manual Freeze Charge or Manual Freeze Export to set the activity.
+If you have previously changed Predbat's planned activity for a slot, choose Clear to return Predbat to its planned activity.
+
+Further details of the columns, what they show, the colour coding, etc can be found in the [Predbat plan card documentation](predbat-plan-card.md#understanding-the-predbat-plan).
+
+You can also [create a Predbat Plan card](predbat-plan-card.md) to show Predbat's plan on your own custom dashboard.
 
 ### Entities View
 

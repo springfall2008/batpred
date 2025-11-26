@@ -209,6 +209,7 @@ to tailor how the Predbat plan looks and is highly recommended if you want to ch
 
 - Change the sequence of columns and which columns are shown in the plan
 - Restyle the columns, or retain the Predbat original colour scheme
+- Easily change Predbat's planned activity for a slot by clicking on the slot time, then selecting Demand, Charge, Export, Freeze Charge or Freeze Export
 - Apply custom light/dark themes
 - Show the weather forecast alongside the plan
 - Display different columns for different screen widths, e.g. less detail on a phone, more on a tablet/PC
