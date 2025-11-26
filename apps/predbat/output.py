@@ -2879,7 +2879,7 @@ class Output:
                             if export_start_minute is not None:
                                 export_end_minute = charge_start_minute
 
-                # Assume slots end at end of period if not found
+                # Assume slots end at end of period if not found
                 if export_end_minute is None and export_start_minute is not None:
                     export_end_minute = minute + self.plan_interval_minutes
                 if charge_end_minute is None and charge_start_minute is not None:
