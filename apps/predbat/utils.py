@@ -153,7 +153,7 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
         day_of_week_text = time_str.split()[0].lower()
         day_of_week = DAY_OF_WEEK_MAP.get(day_of_week_text, 0)
         has_day = True
-    except ValueError:    
+    except ValueError:
         try:
             override_time = datetime.strptime(time_str, "%H:%M")
             day_of_week = now_utc.weekday()
