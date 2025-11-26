@@ -2866,7 +2866,7 @@ class Output:
                         export_during_slot = slot_status
                         if export_start_minute is None:
                             export_start_minute = real_minute
-                            if charge_start_minute == 5:
+                            if slot_offset == 5:
                                 export_start_minute -= 5
                             if charge_start_minute is not None:
                                 charge_end_minute = export_start_minute
