@@ -14,7 +14,7 @@ import pytz
 import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
-from utils import calc_percent_limit, dp0, dp2, dp3, time_string_to_stamp, minute_data, minute_data_state
+from utils import calc_percent_limit, calc_kwh_limit, dp0, dp2, dp3, time_string_to_stamp, minute_data, minute_data_state
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -574,7 +574,7 @@ class Inverter:
                         required_unit="%",
                     )
                     for entry in soc_kwh:
-                        soc_kwh[entry] = calc_percent_limit(soc_kwh[entry], self.soc_max)
+                        soc_kwh[entry] = calc_kwh_limit(soc_kwh[entry], self.soc_max)
                 else:
                     soc_kwh, ignore_io = minute_data(
                         soc_kwh_data[0],
