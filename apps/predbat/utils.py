@@ -150,12 +150,18 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     # Format is Sun 13:00
     try:
         override_time = datetime.strptime(time_str, "%a %H:%M")
+        day_of_week_text = time_str.split()[0].lower()
+        day_of_week = DAY_OF_WEEK_MAP.get(day_of_week_text, 0)
+        has_day = True
     except ValueError:
-        return None
+        try:
+            override_time = datetime.strptime(time_str, "%H:%M")
+            day_of_week = now_utc.weekday()
+            has_day = False
+        except ValueError:
+            return None
 
     # Convert day of week text to a number (0=Monday, 6=Sunday)
-    day_of_week_text = time_str.split()[0].lower()
-    day_of_week = DAY_OF_WEEK_MAP.get(day_of_week_text, 0)
     day_of_week_today = now_utc.weekday()
 
     override_time = now_utc.replace(hour=override_time.hour, minute=override_time.minute, second=0, microsecond=0)
@@ -167,9 +173,11 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     # Calculate days to add
     add_days = day_of_week - day_of_week_today
 
-    # If the day has passed this week, or it's today but the time has already passed, use next week
+    # If the day has passed this week then use next week
     if add_days < 0:
         add_days += 7
+    elif not has_day and override_time <= now_utc:
+        add_days += 1
 
     override_time += timedelta(days=add_days)
 
