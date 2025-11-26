@@ -167,6 +167,7 @@ measurands
 Meteo
 Meteoalarm
 meterpoint
+meterpower
 metricb
 metricmid
 minb
