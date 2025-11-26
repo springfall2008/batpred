@@ -1228,7 +1228,7 @@ class FoxAPI(ComponentBase):
         self.set_arg("pv_today", [f"sensor.predbat_fox_{device}_pvenergytotal" for device in pvs])
         self.set_arg("battery_rate_max", [f"sensor.predbat_fox_{device}_battery_rate_max" for device in batteries])
         self.set_arg("battery_power", [f"sensor.predbat_fox_{device}_invbatpower" for device in batteries])
-        self.set_arg("grid_power", [f"sensor.predbat_fox_{device}_gridconsumptionpower" for device in batteries])
+        self.set_arg("grid_power", [f"sensor.predbat_fox_{device}_meterpower" for device in batteries])
         self.set_arg("grid_power_invert", [True for device in batteries])
         self.set_arg("pv_power", [f"sensor.predbat_fox_{device}_pvpower" for device in pvs])
         self.set_arg("load_power", [f"sensor.predbat_fox_{device}_loadspower" for device in batteries])
