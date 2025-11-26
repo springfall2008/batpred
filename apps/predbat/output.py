@@ -2836,6 +2836,7 @@ class Output:
         self.export_limits_best = []
         self.export_window_best = []
         self.predict_soc_best = battery_soc_yesterday_array
+        self.predict_soc = battery_soc_yesterday_array
         self.predict_metric_best = cost_yesterday_array
 
         # Fake charge/export windows based on previous predbat status
@@ -2848,34 +2849,61 @@ class Output:
                     predbat_status[minute] = status.split(",")[0].strip()
             for minute in range(0, end_record + minutes_now, self.plan_interval_minutes):
                 minute_offset = minutes_now + end_record - minute
-                status_during_slot = ""
+                charge_during_slot = ""
+                export_during_slot = ""
+                charge_start_minute = None
+                charge_end_minute = None
+                export_start_minute = None
+                export_end_minute = None
 
                 # Searching for charge or export in this slot, ignore the first and last 5 minutes to avoid edge effects
-                for slot_minute in range(minute_offset - 5, minute_offset - self.plan_interval_minutes + 5, -1):
+                for slot_offset in range(5, self.plan_interval_minutes - 5):
+                    slot_minute = minute_offset - self.plan_interval_minutes + slot_offset
                     slot_status = predbat_status.get(slot_minute, "").lower()
-                    if "export" in slot_status:
-                        status_during_slot = slot_status
-                    elif "charging" in slot_status:
-                        status_during_slot = slot_status
+                    real_minute = minute + slot_offset
 
-                if "export" in status_during_slot:
+                    if "export" in slot_status:
+                        export_during_slot = slot_status
+                        if export_start_minute is None:
+                            export_start_minute = real_minute
+                            if export_start_minute == 5:
+                                export_start_minute = 0
+                            if charge_start_minute is not None:
+                                charge_end_minute = export_start_minute
+                    elif "charging" in slot_status:
+                        charge_during_slot = slot_status
+                        if charge_start_minute is None:
+                            charge_start_minute = real_minute
+                            if charge_start_minute == 5:
+                                charge_start_minute = 0
+                            if export_start_minute is not None:
+                                export_end_minute = charge_start_minute
+
+                # Assume slots end at end of period if not found
+                if export_end_minute is None and export_start_minute is not None:
+                    export_end_minute = minute + self.plan_interval_minutes
+                if charge_end_minute is None and charge_start_minute is not None:
+                    charge_end_minute = minute + self.plan_interval_minutes
+
+                if "export" in export_during_slot:
                     # Assume exporting at this time
-                    self.export_window_best.append({"start": minute, "end": minute + self.plan_interval_minutes})
-                    if "freeze" in status_during_slot:
+                    self.export_window_best.append({"start": export_start_minute, "end": export_end_minute})
+                    if "freeze" in export_during_slot:
                         # Assume freeze export
                         self.export_limits_best.append(99.0)
                     else:
-                        soc_was = battery_soc_yesterday_array.get(minute + self.plan_interval_minutes, 0.0)
+                        soc_was = battery_soc_yesterday_array.get(export_end_minute, 0.0)
                         soc_percent = calc_percent_limit(soc_was, self.soc_max)
                         self.export_limits_best.append(soc_percent)
-                elif "charging" in status_during_slot:
+
+                if "charging" in charge_during_slot:
                     # Assume charging at this time
-                    self.charge_window_best.append({"start": minute, "end": minute + self.plan_interval_minutes})
-                    if "freeze" in status_during_slot:
+                    self.charge_window_best.append({"start": charge_start_minute, "end": charge_end_minute})
+                    if "freeze" in charge_during_slot:
                         # Assume freeze charge
                         self.charge_limit_best.append(self.reserve)
                     else:
-                        self.charge_limit_best.append(battery_soc_yesterday_array.get(minute + self.plan_interval_minutes, 0.0))
+                        self.charge_limit_best.append(battery_soc_yesterday_array.get(charge_end_minute, 0.0))
 
         # Simulate yesterday with actual charge/export windows
         self.forecast_minutes = end_record + minutes_now
