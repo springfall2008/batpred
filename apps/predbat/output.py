@@ -2866,16 +2866,16 @@ class Output:
                         export_during_slot = slot_status
                         if export_start_minute is None:
                             export_start_minute = real_minute
-                            if export_start_minute == 5:
-                                export_start_minute = 0
+                            if charge_start_minute == 5:
+                                export_start_minute -= 5
                             if charge_start_minute is not None:
                                 charge_end_minute = export_start_minute
                     elif "charging" in slot_status:
                         charge_during_slot = slot_status
                         if charge_start_minute is None:
                             charge_start_minute = real_minute
-                            if charge_start_minute == 5:
-                                charge_start_minute = 0
+                            if slot_offset == 5:
+                                charge_start_minute -= 5
                             if export_start_minute is not None:
                                 export_end_minute = charge_start_minute
 
