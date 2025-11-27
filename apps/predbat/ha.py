@@ -277,6 +277,7 @@ class HAInterface(ComponentBase):
                 await asyncio.sleep(5)
                 seconds += 5
         self.api_started = False
+        self.log("Info: HA interface stopped")
 
     def get_slug(self):
         """
@@ -471,6 +472,8 @@ class HAInterface(ComponentBase):
             self.log("Error: Web Socket failed to reconnect, stopping....")
             self.websocket_active = False
             self.fatal_error_occurred()
+
+        self.log("Info: Web Socket stopped")
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
