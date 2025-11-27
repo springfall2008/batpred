@@ -1000,7 +1000,7 @@ class Inverter:
                     self.charge_end_time_minutes += 60 * 24
 
             # Window already passed, move it forward until the next one
-            if self.charge_end_time_minutes < minutes_now:
+            if self.charge_end_time_minutes <= minutes_now:
                 self.charge_start_time_minutes += 60 * 24
                 self.charge_end_time_minutes += 60 * 24
         else:
@@ -1102,7 +1102,7 @@ class Inverter:
                 self.discharge_end_time_minutes += 60 * 24
 
         # Move forward if the window has passed
-        if self.discharge_end_time_minutes < minutes_now:
+        if self.discharge_end_time_minutes <= minutes_now:
             self.discharge_start_time_minutes += 60 * 24
             self.discharge_end_time_minutes += 60 * 24
 
@@ -1154,7 +1154,7 @@ class Inverter:
                 self.idle_end_minutes += 60 * 24
 
         # Window already passed, move it forward until the next one
-        if self.idle_end_minutes < minutes_now:
+        if self.idle_end_minutes <= minutes_now:
             self.idle_start_minutes += 60 * 24
             self.idle_end_minutes += 60 * 24
 
@@ -1817,7 +1817,7 @@ class Inverter:
                 end_minute += 60 * 24
 
         # Window already passed, move it forward until the next one
-        if end_minute < minutes_now:
+        if end_minute <= minutes_now:
             start_minute += 60 * 24
             end_minute += 60 * 24
         return start_minute, end_minute
@@ -2063,9 +2063,11 @@ class Inverter:
                     self.press_and_poll_button()
 
         # Updated cached status to disabled
-        self.charge_enable_time = False
-        self.charge_start_time_minutes = self.base.forecast_minutes
-        self.charge_end_time_minutes = self.base.forecast_minutes
+        # Don't do it if notify is not set as this is just a temporary call when setting the charge window
+        if notify:
+            self.charge_enable_time = False
+            self.charge_start_time_minutes = self.base.forecast_minutes
+            self.charge_end_time_minutes = self.base.forecast_minutes
 
     def alt_charge_discharge_enable(self, direction, enable):
         """
@@ -2320,6 +2322,15 @@ class Inverter:
         if old_charge_schedule_enable in ["off", "disable"]:
             old_charge_schedule_enable = "off"
 
+        # Store the new start/end minutes
+        self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
+        self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
+        if self.charge_end_time_minutes < self.charge_start_time_minutes:
+            self.charge_end_time_minutes += 24 * 60
+        if self.charge_end_time_minutes < minutes_now:
+            self.charge_end_time_minutes += 24 * 60
+            self.charge_start_time_minutes += 24 * 60
+        
         # Apply clock skew
         charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
         charge_end_time += timedelta(seconds=self.base.inverter_clock_skew_end * 60)

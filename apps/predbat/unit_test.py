@@ -3672,6 +3672,7 @@ def run_execute_tests(my_predbat):
     charge_window_best7 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
     charge_window_best7b = [{"start": 24 * 60 - 5, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
     charge_window_best7c = [{"start": 0, "end": 11 * 60, "average": 1}]
+    charge_window_best7d = [{"start": 22*60, "end": 23 * 60, "average": 1}]
     charge_window_best8 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
     charge_window_best9 = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 1}]
     charge_window_best_short = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 15, "average": 1}]
@@ -4455,6 +4456,19 @@ def run_execute_tests(my_predbat):
         assert_charge_end_time_minutes=11 * 60,
         inverter_charge_time_minutes_start=12 * 60,
         minutes_now=0,
+    )
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_midnight2d",
+        charge_window_best=charge_window_best7d,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Demand",
+        assert_charge_start_time_minutes=30 + 24*60,
+        assert_charge_end_time_minutes=-1,
+        inverter_charge_time_minutes_start=30 + 24 * 60,
     )
 
     for inverter in my_predbat.inverters:

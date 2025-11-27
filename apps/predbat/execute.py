@@ -249,16 +249,21 @@ class Execute:
 
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
-                            self.log(
-                                "Inverter {} disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
-                                    inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                            # If there is a previous set charge window, but its more than the set window minutes in the future but we are not close to it then we can leave it enabled for now
+                            # saves register writes and avoids turning off the window before the inverter knows it finished
+                            if (inverter.charge_start_time_minutes != inverter.charge_end_time_minutes) and (inverter.charge_start_time_minutes - self.minutes_now) > self.set_window_minutes:
+                                self.log(
+                                    "Inverter {} leaving charge window as already set and more than set_window_minutes {} away (now {} charge start time {})".format(
+                                        inverter.id, self.set_window_minutes, self.time_abs_str(self.minutes_now), self.time_abs_str(inverter.charge_start_time_minutes)
+                                    )
                                 )
-                            )
-                            inverter.disable_charge_window()
-
-                    # Set configured window minutes for the SoC adjustment routine
-                    inverter.charge_start_time_minutes = minutes_start
-                    inverter.charge_end_time_minutes = minutes_end
+                            else:
+                                self.log(
+                                    "Inverter {} disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {}) original inverter start time {}".format(
+                                        inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start), self.time_abs_str(inverter.charge_start_time_minutes)
+                                    )
+                                )
+                                inverter.disable_charge_window()
                 else:
                     self.log(
                         "Inverter {} Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
