@@ -789,22 +789,6 @@ def calc_percent_limit(charge_limit, soc_max):
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
 
-def calc_kwh_limit(charge_limit, soc_max):
-    """
-    Calculate a charge limit in kwh
-    """
-    if isinstance(charge_limit, list):
-        if soc_max <= 0:
-            return [0 for i in range(len(charge_limit))]
-        else:
-            return [min(float(charge_limit[i]) / 100.0 * soc_max, soc_max) for i in range(len(charge_limit))]
-    else:
-        if soc_max <= 0:
-            return 0
-        else:
-            return min(float(charge_limit) / 100.0 * soc_max, soc_max)
-
-
 def remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
     """
     Filters and removes intersecting charge windows
