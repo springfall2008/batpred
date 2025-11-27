@@ -188,7 +188,7 @@ class FoxAPI(ComponentBase):
         GET_AVAILABLE_VARIABLES = "/op/v0/device/variable/get"
         result = await self.request_get(GET_AVAILABLE_VARIABLES)
         available_data = {}
-        if result and isinstance(result, list):
+        if result is not None and isinstance(result, list):
             for variable_item in result:
                 for variable_id in variable_item:
                     variable = variable_item.get(variable_id, {})
@@ -263,7 +263,7 @@ class FoxAPI(ComponentBase):
         GET_REAL_TIME_DATA = "/op/v1/device/real/query"
         query = {"lang": FOX_LANG, "sns": [deviceSN]}
         result = await self.request_get(GET_REAL_TIME_DATA, post=True, datain=query)
-        if result and isinstance(result, list):
+        if result is not None and isinstance(result, list):
             for item in result:
                 if "datas" in item:
                     timestamp = item.get("time", "")
@@ -288,7 +288,7 @@ class FoxAPI(ComponentBase):
         timestamp = round(time.time() * 1000)
         query = {"sn": deviceSN, "begin": timestamp - 1000 * 60 * 60 * 1, "end": timestamp}
         result = await self.request_get(GET_DEVICE_HISTORY, post=True, datain=query)
-        if result and isinstance(result, list):
+        if result is not None and isinstance(result, list):
             for item in result:
                 if "datas" in item:
                     datas = item["datas"]
@@ -339,7 +339,7 @@ class FoxAPI(ComponentBase):
         GET_DEVICE_INFO = f"/op/v0/device/detail"
         query = {"sn": deviceSN}
         result = await self.request_get(GET_DEVICE_INFO, post=False, datain=query)
-        if result:
+        if result is not None:
             self.device_detail[deviceSN] = result
 
     async def get_device_settings(self, deviceSN):
@@ -413,7 +413,7 @@ class FoxAPI(ComponentBase):
             # These controls don't exist for non-battery devices
             return {}
         result = await self.request_get(GET_BATTERY_CHARGING_TIME, datain={"sn": deviceSN}, post=False)
-        if result:
+        if result is not None:
             self.device_battery_charging_time[deviceSN] = result
             return result
         return {}
@@ -515,7 +515,7 @@ class FoxAPI(ComponentBase):
         year = datetime.now(self.local_tz).year
         variables = ["generation", "feedin", "gridConsumption", "chargeEnergyToTal", "dischargeEnergyToTal"]
         result = await self.request_get(GET_DEVICE_PRODUCTION, datain={"sn": deviceSN, "year": year, "dimension": "year", "variables": variables}, post=True)
-        if result:
+        if result is not None:
             self.device_production[deviceSN] = result
 
     async def get_device_power_generation(self, deviceSN):
@@ -524,25 +524,28 @@ class FoxAPI(ComponentBase):
         """
         GET_DEVICE_POWER = "/op/v0/device/generation"
         result = await self.request_get(GET_DEVICE_POWER, datain={"sn": deviceSN})
-        if result:
+        if result is not None:
             self.device_power_generation[deviceSN] = result
 
     async def set_scheduler_enabled(self, deviceSN, enabled):
         """
         Set scheduler enabled/disabled
         """
+        enabled_value = 1 if enabled else 0
 
         # Do change enable if not already modified
-        if self.device_scheduler.get(deviceSN, {}).get("enable", None) == enabled:
+        if self.device_scheduler.get(deviceSN, {}).get("enable", None) == enabled_value:
             self.log("Fox: Debug: Scheduler for {} already set to enabled {}".format(deviceSN, enabled))
             return
+        
+        self.log("Fox: Debug: Setting scheduler enabled={} was {} for {}".format(enabled, self.device_scheduler.get(deviceSN, {}).get("enable", None), deviceSN))
 
         SET_SCHEDULER_ENABLED = "/op/v1/device/scheduler/set/flag"
-        result = await self.request_get(SET_SCHEDULER_ENABLED, datain={"deviceSN": deviceSN, "enable": 1 if enabled else 0}, post=True)
-        if result:
+        result = await self.request_get(SET_SCHEDULER_ENABLED, datain={"deviceSN": deviceSN, "enable": enabled_value}, post=True)
+        if result is not None:
             if deviceSN not in self.device_scheduler:
                 self.device_scheduler[deviceSN] = {}
-            self.device_scheduler[deviceSN]["enable"] = enabled
+            self.device_scheduler[deviceSN]["enable"] = enabled_value
 
     async def set_scheduler(self, deviceSN, groups):
         """
@@ -572,7 +575,7 @@ class FoxAPI(ComponentBase):
             self.log("Fox: Debug: Setting scheduler for {} same={} current_enable={} current_groups={} new_groups={}".format(deviceSN, same, current_enable, current_groups, groups))
             if not same:
                 result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
-                if result:
+                if result is not None:
                     self.device_scheduler[deviceSN]["enable"] = True
                     self.device_scheduler[deviceSN]["groups"] = groups
 
@@ -722,7 +725,7 @@ class FoxAPI(ComponentBase):
         inverter_capacity = detail.get("capacity", 0) * 1000.0
 
         result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
-        if result:
+        if result is not None:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
             # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity
             if inverter_capacity:
@@ -755,7 +758,7 @@ class FoxAPI(ComponentBase):
         query = {"pageSize": 100, "currentPage": 1}
         result = await self.request_get(GET_DEVICE_LIST, post=True, datain=query)
         devices = []
-        if result:
+        if result is not None:
             devices = result.get("data", [])
             self.device_list = devices
         return devices
