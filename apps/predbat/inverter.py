@@ -2330,7 +2330,7 @@ class Inverter:
         if self.charge_end_time_minutes < minutes_now:
             self.charge_end_time_minutes += 24 * 60
             self.charge_start_time_minutes += 24 * 60
-        
+
         # Apply clock skew
         charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
         charge_end_time += timedelta(seconds=self.base.inverter_clock_skew_end * 60)
