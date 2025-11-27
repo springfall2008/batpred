@@ -318,7 +318,6 @@ class OctopusAPI(ComponentBase):
         """Initialize the Octopus API component"""
         self.api_key = key
         self.api = OctopusEnergyApiClient(key, self.log)
-        self.stop_api = False
         self.account_id = account_id
         self.graphql_token = None
         self.graphql_expiration = None
@@ -462,9 +461,6 @@ class OctopusAPI(ComponentBase):
         octopus_cache["intelligent_device"] = self.intelligent_device
         with open(self.cache_file, "w") as f:
             yaml.dump(octopus_cache, f)
-
-    async def stop(self):
-        self.stop_api = True
 
     def get_tariff(self, tariff_type):
         if tariff_type in self.tariffs:

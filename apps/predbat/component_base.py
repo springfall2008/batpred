@@ -167,6 +167,7 @@ class ComponentBase(ABC):
             seconds += 5
             await asyncio.sleep(5)
 
+        self.log(f"{self.__class__.__name__}: Finalizing...")
         await self.final()
 
         self.api_started = False
