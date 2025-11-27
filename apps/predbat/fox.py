@@ -537,7 +537,7 @@ class FoxAPI(ComponentBase):
         if self.device_scheduler.get(deviceSN, {}).get("enable", None) == enabled_value:
             self.log("Fox: Debug: Scheduler for {} already set to enabled {}".format(deviceSN, enabled))
             return
-        
+
         self.log("Fox: Debug: Setting scheduler enabled={} was {} for {}".format(enabled, self.device_scheduler.get(deviceSN, {}).get("enable", None), deviceSN))
 
         SET_SCHEDULER_ENABLED = "/op/v1/device/scheduler/set/flag"
