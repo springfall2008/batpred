@@ -641,10 +641,10 @@ class Inverter:
                 for data_point in search_range:
                     for minute in range(1, min_len):
                         # Start trigger is when the SOC just increased above the data point
-                        last_soc = soc_percent.get(minute - 1, 0)
+                        previous_point = soc_percent.get(minute - 1, 0)
                         if (
                             not discharge
-                            and last_soc > data_point
+                            and previous_point > data_point
                             and soc_percent.get(minute, 0) == data_point
                             and predbat_status.get(minute - 1, "") == "Charging"
                             and predbat_status.get(minute, "") == "Charging"
@@ -654,7 +654,7 @@ class Inverter:
                             and battery_power.get(minute, 0) < 0
                         ) or (
                             discharge
-                            and last_soc < data_point
+                            and previous_point < data_point
                             and soc_percent.get(minute, 0) == data_point
                             and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
                             and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
@@ -686,7 +686,7 @@ class Inverter:
                                     from_soc = soc_kwh.get(minute, 0)
                                     to_soc = soc_kwh.get(target_minute, 0)
                                     soc_charged = from_soc - to_soc
-                                    average_power = total_power / total_count / max(abs(this_soc - last_soc), 1)
+                                    average_power = total_power / total_count
                                     charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
                                     if self.base.debug_enable:
                                         self.log(
@@ -702,9 +702,9 @@ class Inverter:
                                         )
                                     # Store data points
                                     if discharge:
-                                        store_range = range(this_soc, last_soc, -1)
+                                        store_range = range(this_soc, previous_point, -1)
                                     else:
-                                        store_range = range(this_soc, last_soc)
+                                        store_range = range(this_soc, previous_point)
 
                                     for point in store_range:
                                         if point not in final_curve:
