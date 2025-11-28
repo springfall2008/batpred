@@ -5051,7 +5051,7 @@ def run_execute_tests(my_predbat):
         assert_force_export=True,
         assert_discharge_start_time_minutes=my_predbat.minutes_now + 15,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
-    )    
+    )
     # Freeze should not set the timer as it doesn't actually export
     failed |= run_execute_test(
         my_predbat,
