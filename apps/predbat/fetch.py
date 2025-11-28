@@ -567,11 +567,11 @@ class Fetch:
             entity_id = self.get_arg("metric_octopus_gas", None, indirect=False)
             self.rate_gas = self.fetch_octopus_rates(entity_id)
             if not self.rate_gas:
-                self.log("Error: metric_octopus_gas is not set correctly or no energy rates can be read")
-                self.record_status(message="Error: rate_import_gas not set correctly or no energy rates can be read", had_errors=True)
-                raise ValueError
-            self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
-            self.rate_scan_gas(self.rate_gas, print=True)
+                self.log("Warn: metric_octopus_gas is not set correctly or no energy rates can be read")
+                self.record_status(message="Warn: rate_import_gas not set correctly or no energy rates can be read", had_errors=True)
+            else:
+                self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+                self.rate_scan_gas(self.rate_gas, print=True)
         elif "rates_gas" in self.args:
             self.rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "rates_gas")
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)

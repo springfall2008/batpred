@@ -5026,11 +5026,7 @@ def run_execute_tests(my_predbat):
     my_predbat.inverters = inverters
 
     failed |= run_execute_test(my_predbat, "no_discharge", export_window_best=export_window_best, export_limits_best=export_limits_best, assert_reserve=-1)
-    if failed:
-        return failed
     failed |= run_execute_test(my_predbat, "no_discharge2", export_window_best=export_window_best, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0, assert_status="Hold exporting")
-    if failed:
-        return failed
     failed |= run_execute_test(
         my_predbat,
         "discharge_upcoming1",
@@ -5043,11 +5039,7 @@ def run_execute_tests(my_predbat):
         assert_discharge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
     )
-    if failed:
-        return failed
     failed |= run_execute_test(my_predbat, "no_discharge3b", export_window_best=export_window_best6, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0)
-    if failed:
-        return failed
     failed |= run_execute_test(
         my_predbat,
         "discharge_upcoming2",
@@ -5058,6 +5050,19 @@ def run_execute_tests(my_predbat):
         soc_kw=0,
         assert_force_export=True,
         assert_discharge_start_time_minutes=my_predbat.minutes_now + 15,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
+    )
+    # Freeze should not set the timer as it doesn't actually export
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_upcoming3",
+        export_window_best=export_window_best3,
+        export_limits_best=export_limits_best_frz,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=0,
+        assert_force_export=False,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
     )
     if failed:

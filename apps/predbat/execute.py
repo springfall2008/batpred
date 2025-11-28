@@ -368,7 +368,8 @@ class Execute:
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, int(target))
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {} and target {}".format(self.soc_kw, discharge_soc))
                 else:
-                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 100):
+                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 99.0):
+                        # We can't schedule freeze export only full export
                         inverter.adjust_force_export(inverter.inv_has_discharge_enable_time, discharge_start_time, discharge_end_time)
                     else:
                         self.log("Not setting export as we are not yet within the export window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
