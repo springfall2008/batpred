@@ -765,18 +765,17 @@ class Inverter:
 
                         # If we have the correct data then output it
                         if rate_scaling > 0:
+                            if discharge:
+                                text = "  battery_discharge_power_curve:\n"
+                            else:
+                                text = "  battery_charge_power_curve:\n"
                             keys = sorted(final_curve.keys())
                             keys.reverse()
                             first = True
-                            text = ""
                             for key in keys:
                                 if (final_curve[key] < 1.0 or first) and final_curve[key] > 0.0:
                                     text += "    {} : {}\n".format(key, final_curve[key])
                                     first = False
-                            if discharge:
-                                text += "  battery_discharge_power_curve:\n"
-                            else:
-                                text += "  battery_charge_power_curve:\n"
                             if self.base.battery_charge_power_curve_auto:
                                 self.log("Curve automatically computed as:\n" + text)
                             else:
