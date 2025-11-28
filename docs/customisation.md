@@ -405,6 +405,21 @@ Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It i
 - **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SoC during charge before balancing, default is 1%
 - **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SoC during discharge before balancing, default is 1%
 
+## Freeze Export during Demand
+
+An alternative to Predbat's full [inverter balancing](#balance-inverters) option if you have multiple inverters that can cross charge when the inverter is in Eco/Demand mode, is **switch.predbat_set_freeze_export_during_demand** (_expert mode_).
+
+Typically overnight when there is no solar generation and inverters are just meeting house load (Demand mode),  multi-inverter setups will start cross charging from one inverter battery to another.
+
+If you turn On **switch.predbat_set_freeze_export_during_demand** then when Predbat is not charging or discharging, i.e. would be in Demand mode,
+then Predbat will override the normal Demand mode and set the inverters to Freeze Export mode which allows battery discharge, but not battery charging; thus preventing inverter cross-charging.
+
+It is recommended that you control **switch.predbat_set_freeze_export_during_demand** via an automation, such as turning it Off at sunrise and On at sunset so that the batteries can charge normally via solar generation.
+
+NB: Setting this switch to On has no affect on Predbat's planned Charging and Export activity, those will be executed normally, the switch only affects Demand mode.
+
+When the Freeze Export override is active, [Predbat status](what-does-predbat-do.md#predbat-status) will have '[Freeze exporting]' appended to the status.
+
 ## Cloud coverage and load variance
 
 By default Predbat tries to model passing clouds by modulating the PV forecast data on a 5-minute interval up and down while retaining the same predicted total.

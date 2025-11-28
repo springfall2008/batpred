@@ -20,7 +20,10 @@ Execute Predbat plan
 
 class Execute:
     def execute_plan(self):
-        status_extra = ""
+        status_extra = ""              # extra status text added to Predbat notifications
+        status_hold_car = ""           # car hold status text
+        status_hold_iboost = ""        # iBoost hold status text
+        status_freeze_export = ""      # freeze export during demand status text
 
         in_alert = self.alert_active_keep.get(self.minutes_now, 0)
 
@@ -357,6 +360,23 @@ class Execute:
                 self.log("No export window planned")
                 inverter.adjust_force_export(False)
 
+            # if Predbat is not currently Charging or Exporting, and set_freeze_export_during_demand is On, then disable charging (i.e. set Freeze Export) (to prevent cross charging)
+            if (not isCharging) and (not isExporting) and self.set_freeze_export_during_demand:
+                self.log("In Demand mode, turning on Freeze Export")
+
+                # In export freeze mode we disable charging
+                if inverter.inv_charge_discharge_with_rate:
+                    inverter.adjust_charge_rate(0)
+                    resetCharge = False
+                if inverter.inv_has_timed_pause:
+                    inverter.adjust_pause_mode(pause_charge=True)
+                    resetPause = False
+                else:
+                    inverter.adjust_charge_rate(0)
+                    resetCharge = False
+
+                status_freeze_export = " [Freeze exporting]"
+
             # Car charging from battery disable?
             carHolding = False
             if self.set_charge_window and not self.car_charging_from_battery:
@@ -382,15 +402,14 @@ class Execute:
                                         inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                         resetReserve = False
                                 carHolding = True
-                                self.log("Disabling battery discharge while the car {} is charging".format(car_n))
-                                if "Hold for car" not in status:
-                                    if status != "Demand":
-                                        status += ", Hold for car"
-                                    else:
-                                        status = "Hold for car"
+                                self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
+                                if status == "Demand":
+                                    status = "Hold for car"
+                                else:
+                                    status_hold_car = ", Hold for car"
                             break
 
-            # Iboost running?
+            # iBoost running?
             boostHolding = False
             if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Exporting", "Charging"]:
                 if inverter.inv_has_timed_pause:
@@ -405,12 +424,11 @@ class Execute:
                         inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                         resetReserve = False
                 boostHolding = True
-                self.log("Disabling battery discharge while iBoost is running")
-                if "Hold for iBoost" not in status:
-                    if status != "Demand":
-                        status += ", Hold for iBoost"
-                    else:
-                        status = "Hold for iBoost"
+                self.log("Disabling battery discharge whilst iBoost is running")
+                if status == "Demand":
+                    status = "Hold for iBoost"
+                else:
+                    status_hold_iboost = ", Hold for iBoost"
 
             # Reset charge/discharge rate
             if resetPause:
@@ -420,10 +438,12 @@ class Execute:
             if resetCharge:
                 inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
 
-            if self.charge_limit_best:
-                clm = self.charge_limit_best[0]
-            else:
-                clm = 0
+            # Commented this block out as clm is never used after being set. Redundant code?
+            #
+            # if self.charge_limit_best:
+            #    clm = self.charge_limit_best[0]
+            # else:
+            #     clm = 0
 
             # Set the SoC just before or within the charge window
             if self.set_soc_enable:
@@ -435,7 +455,7 @@ class Execute:
                     elif not inverter.inv_has_discharge_enable_time:
                         self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
                     elif not self.inverter_hybrid and self.inverter_soc_reset and inverter.inv_has_target_soc:
-                        # AC Coupled, charge to 100 on solar
+                        # AC Coupled, charge to 100% on solar
                         self.log("Resetting charging SoC to 100% as we are not charging and inverter_soc_reset is enabled")
                         self.adjust_battery_target_multi(inverter, 100.0, isCharging, isExporting)
                     else:
@@ -547,6 +567,9 @@ class Execute:
         self.set_charge_export_status(isCharging and not disabled_charge_window, isExporting and not disabled_export, not (isCharging or isExporting))
         self.isCharging = isCharging
         self.isExporting = isExporting
+
+        # append the status texts together
+        status += status_hold_car + status_hold_iboost + status_freeze_export
 
         if in_alert > 0:
             status += " [Alert]"

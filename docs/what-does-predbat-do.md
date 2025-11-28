@@ -90,6 +90,8 @@ but if there is excess Solar power above the house load, the excess solar will b
 The battery or solar covers the house load. As charging is disabled, if there is excess solar generated, the current SoC level will be held and the excess solar will be exported.
 If there is a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
 
+- **Demand [Freeze exporting]** - Predbat's Demand mode has been overridden and Predbat is set to Freeze exporting mode.  See [Freeze Export during Demand](customisation.md#freeze-export-during-demand).
+
 - **Hold exporting** - The plan was to force export but the minimum battery level was reached and thus the battery is kept in Demand mode.
 If the battery level again gets above the threshold it will be changed back to Export mode.
 

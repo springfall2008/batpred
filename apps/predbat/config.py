@@ -840,6 +840,14 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "set_freeze_export_during_demand",
+        "friendly_name": "Set Freeze Export during Demand",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": False,
+        "reset_inverter": True,
+    },
+    {
         "name": "set_read_only",
         "friendly_name": "Read Only mode",
         "type": "switch",

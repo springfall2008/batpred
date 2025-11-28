@@ -1753,7 +1753,7 @@ class Fetch:
         self.set_inverter_notify = self.get_arg("set_inverter_notify")
         self.set_export_freeze_only = self.get_arg("set_export_freeze_only")
         self.set_discharge_during_charge = self.get_arg("set_discharge_during_charge")
-
+        self.set_freeze_export_during_demand = self.get_arg("set_freeze_export_during_demand")
         # Mode
         self.predbat_mode = self.get_arg("mode")
         if self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_SOC]:
