@@ -921,7 +921,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
             data:
               value: >-
                 "{{ [(states('input_number.charge_rate') | float / 1000) | round(2),
-                states('sensor.sigen_inverter_ess_rated_charge_power') | float] | min}}"
+                states('sensor.sigen_inverter_ess_rated_charging_power') | float] | min}}"
               value: "{{ (states('input_number.charge_rate')| float / 1000) | round(2) }}"
         mode: single
 
@@ -938,7 +938,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
             data:
               value: >-
                 "{{ [(states('input_number.discharge_rate') | float / 1000) | round(2),
-                states('sensor.sigen_inverter_ess_rated_discharge_power') | float] | min}}"
+                states('sensor.sigen_inverter_ess_rated_discharging_power') | float] | min}}"
 
         mode: single
 ```
