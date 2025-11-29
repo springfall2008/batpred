@@ -312,15 +312,25 @@ class Inverter:
                         self.base.log("Warn: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity * self.battery_scaling
 
-            soc_force_adjust = raw_data.get("invertor", {}).get("soc_force_adjust", None)
-            if soc_force_adjust:
-                try:
-                    soc_force_adjust = int(soc_force_adjust)
-                except ValueError:
-                    soc_force_adjust = 0
-                if (soc_force_adjust > 0) and (soc_force_adjust < 7):
+            if self.rest_v3:
+                # GivTCP v3 indicates battery is being calibrated via [inverter serial no].battery_calibration_status
+                soc_force_adjust = idetails["Battery_Calibration_Status"]
+                if soc_force_adjust != "Off":
                     self.in_calibration = True
-                    self.log("Warn: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
+            else:
+                # older GivTCP uses soc_force_adjust to indicate battery calibration
+                soc_force_adjust = raw_data.get("invertor", {}).get("soc_force_adjust", None)
+                if soc_force_adjust:
+                    try:
+                        soc_force_adjust = int(soc_force_adjust)
+                    except ValueError:
+                        soc_force_adjust = 0
+                    if (soc_force_adjust > 0) and (soc_force_adjust < 7):
+                        self.in_calibration = True
+
+            self.log("Warn: soc_force_adjust={}, self.in_calibration={}".format(soc_force_adjust, self.in_calibration))
+            if self.in_calibration:
+                self.log("Warn: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
 
             # Max battery rate
             if "Invertor_Max_Bat_Rate" in idetails:
