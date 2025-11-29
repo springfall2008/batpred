@@ -708,6 +708,47 @@ def time_string_to_stamp(time_string):
     return datetime.strptime(time_string, "%H:%M:%S")
 
 
+def compute_window_minutes(start_time, end_time, minutes_now):
+    """
+    Convert start/end times to minutes and adjust for midnight-spanning windows and past windows.
+
+    Args:
+        start_time: Start time (datetime, time, or object with hour/minute attributes)
+        end_time: End time (datetime, time, or object with hour/minute attributes)
+        minutes_now: Current time in minutes from midnight
+
+    Returns:
+        Tuple of (start_minute, end_minute) adjusted for midnight spanning and current time
+    """
+    start_minute = start_time.hour * 60 + start_time.minute
+    end_minute = end_time.hour * 60 + end_time.minute
+
+    if end_minute < start_minute:
+        # Window spans midnight - adjust based on current time
+        if end_minute > minutes_now:
+            # We're past midnight but before end - move start back
+            start_minute -= 24 * 60
+        else:
+            # End has passed - move end forward
+            end_minute += 24 * 60
+
+    # Window already passed, move it forward until the next one
+    if end_minute <= minutes_now:
+        start_minute += 24 * 60
+        end_minute += 24 * 60
+
+    return start_minute, end_minute
+
+
+def window2minutes(start, end, minutes_now):
+    """
+    Convert time start/end window string into minutes
+    """
+    start = time_string_to_stamp(start)
+    end = time_string_to_stamp(end)
+    return compute_window_minutes(start, end, minutes_now)
+
+
 def minutes_since_yesterday(now):
     """
     Calculate the number of minutes since 23:59 yesterday
