@@ -2959,7 +2959,7 @@ class Output:
                 "json": plan_json_yesterday,
             },
         )
-        if self.num_cars > 0:
+        if num_cars > 0:
             self.dashboard_item(
                 self.prefix + ".cost_yesterday_car",
                 state=dp2(cost_yesterday_car),
