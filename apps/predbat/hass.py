@@ -1,13 +1,3 @@
-# -----------------------------------------------------------------------------
-# Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
-# This application maybe used for personal use only and not for commercial use
-# -----------------------------------------------------------------------------
-# fmt off
-# pylint: disable=consider-using-f-string
-# pylint: disable=line-too-long
-# pylint: disable=attribute-defined-outside-init
-
 import io
 import yaml
 import sys
@@ -15,11 +5,8 @@ import asyncio
 import predbat
 import time
 from datetime import datetime, timedelta
-import logging
-import logging.config
-from multiprocessing import Pool, cpu_count, set_start_method
+from multiprocessing import set_start_method
 import concurrent.futures
-from aiohttp import web, ClientSession, WSMsgType
 import threading
 import os
 import traceback
@@ -54,7 +41,7 @@ async def main():
         print("Error: Failed to construct predbat {}".format(e))
         print(traceback.format_exc())
         return
-    
+
     try:
         p_han.initialize()
     except Exception as e:
@@ -100,12 +87,12 @@ class Hass:
         self.logfile.write(message)
         self.logfile.flush()
         msg_lower = msg.lower()
-        if not quiet or msg_lower.startswith("error") or msg_lower.startswith('warn') or msg_lower.startswith('info'):
+        if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
 
         # maximum number of historic logfiles to retain
         max_logs = 9
-        
+
         log_size = self.logfile.tell()
         if log_size > 10000000:
             # check for existence of previous logfiles and rename each in turn
@@ -114,7 +101,7 @@ class Hass:
                 if os.path.isfile(filename):
                     newfile = "predbat." + format(num_logs + 1) + ".log"
                     os.rename(filename, newfile)
-            
+
             self.logfile.close()
             os.rename("predbat.log", "predbat.1.log")
             self.logfile = open("predbat.log", "w")
@@ -157,7 +144,7 @@ class Hass:
         await self.terminate()
 
         for t in self.threads:
-            t.join(5*60)
+            t.join(5 * 60)
         self.logfile.close()
 
     def __init__(self):
@@ -173,8 +160,9 @@ class Hass:
         self.logfile = open("predbat.log", "a")
 
         # Open YAML file apps.yaml and read it
-        self.log("Loading apps.yaml", quiet=False)
-        with io.open("apps.yaml", "r") as stream:
+        apps_file = os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+        self.log(f"Loading {apps_file}", quiet=False)
+        with io.open(apps_file, "r") as stream:
             try:
                 config = yaml.safe_load(stream)
                 self.args = config["pred_bat"]
