@@ -589,7 +589,21 @@ def test_disable_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start
 
 
 def test_adjust_charge_window(
-    test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, charge_start_time, charge_end_time, minutes_now, short=False, has_inverter_time_button_press=False, expect_inverter_time_button_press=False
+    test_name,
+    ha,
+    inv,
+    dummy_rest,
+    prev_charge_start_time,
+    prev_charge_end_time,
+    prev_enable_charge,
+    charge_start_time,
+    charge_end_time,
+    minutes_now,
+    short=False,
+    has_inverter_time_button_press=False,
+    expect_inverter_time_button_press=False,
+    expect_charge_start_time_minutes=None,
+    expect_charge_end_time_minutes=None,
 ):
     """
     test:
@@ -627,6 +641,16 @@ def test_adjust_charge_window(
         failed = True
     if ha.get_state("switch.inverter_button") != ("on" if expect_inverter_time_button_press else "off"):
         print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
+
+    # Verify charge_start_time_minutes and charge_end_time_minutes if expected values provided
+    if expect_charge_start_time_minutes is not None:
+        if inv.charge_start_time_minutes != expect_charge_start_time_minutes:
+            print("ERROR: charge_start_time_minutes should be {} got {}".format(expect_charge_start_time_minutes, inv.charge_start_time_minutes))
+            failed = True
+    if expect_charge_end_time_minutes is not None:
+        if inv.charge_end_time_minutes != expect_charge_end_time_minutes:
+            print("ERROR: charge_end_time_minutes should be {} got {}".format(expect_charge_end_time_minutes, inv.charge_end_time_minutes))
+            failed = True
 
     # REST Mode
     inv.rest_api = "dummy"
@@ -2402,6 +2426,83 @@ def run_inverter_tests():
     failed |= test_adjust_charge_window("adjust_charge_window6", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
     failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", True, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=False)
     failed |= test_adjust_charge_window("adjust_charge_window7", ha, inv, dummy_rest, "00:11:00", "00:12:00", False, "00:11:00", "00:12:00", my_predbat.minutes_now, short=True, has_inverter_time_button_press=True, expect_inverter_time_button_press=True)
+
+    # Test midnight-spanning windows - verify charge_start_time_minutes and charge_end_time_minutes are calculated correctly
+    # Normal window (end > start): no adjustment, minutes_now=600 (10:00), start=11:00 (660), end=14:00 (840)
+    failed |= test_adjust_charge_window(
+        "adjust_charge_window_normal",
+        ha,
+        inv,
+        dummy_rest,
+        "00:00:00",
+        "00:00:00",
+        True,
+        "11:00:00",
+        "14:00:00",
+        600,
+        has_inverter_time_button_press=True,
+        expect_inverter_time_button_press=True,
+        expect_charge_start_time_minutes=660,
+        expect_charge_end_time_minutes=840,
+    )
+
+    # Midnight span - past midnight but before end: start=23:00 (1380), end=02:00 (120), minutes_now=60 (01:00)
+    # Since end (120) > minutes_now (60), start should be moved back: start=-60 (23:00 - 24*60), end=120
+    failed |= test_adjust_charge_window(
+        "adjust_charge_window_midnight_before_end",
+        ha,
+        inv,
+        dummy_rest,
+        "00:00:00",
+        "00:00:00",
+        True,
+        "23:00:00",
+        "02:00:00",
+        60,
+        has_inverter_time_button_press=True,
+        expect_inverter_time_button_press=True,
+        expect_charge_start_time_minutes=-60,
+        expect_charge_end_time_minutes=120,
+    )
+
+    # Midnight span - end has passed: start=23:00 (1380), end=02:00 (120), minutes_now=600 (10:00)
+    # Since end (120) < minutes_now (600), end should be moved forward: start=1380, end=120+1440=1560
+    failed |= test_adjust_charge_window(
+        "adjust_charge_window_midnight_end_passed",
+        ha,
+        inv,
+        dummy_rest,
+        "00:00:00",
+        "00:00:00",
+        True,
+        "23:00:00",
+        "02:00:00",
+        600,
+        has_inverter_time_button_press=True,
+        expect_inverter_time_button_press=True,
+        expect_charge_start_time_minutes=1380,
+        expect_charge_end_time_minutes=1560,
+    )
+
+    # Window entirely in the past: start=01:00 (60), end=02:00 (120), minutes_now=600 (10:00)
+    # Since end (120) < minutes_now (600), both should be moved forward: start=60+1440=1500, end=120+1440=1560
+    failed |= test_adjust_charge_window(
+        "adjust_charge_window_past_window",
+        ha,
+        inv,
+        dummy_rest,
+        "00:00:00",
+        "00:00:00",
+        True,
+        "01:00:00",
+        "02:00:00",
+        600,
+        has_inverter_time_button_press=True,
+        expect_inverter_time_button_press=True,
+        expect_charge_start_time_minutes=1500,
+        expect_charge_end_time_minutes=1560,
+    )
+
     if failed:
         return failed
 

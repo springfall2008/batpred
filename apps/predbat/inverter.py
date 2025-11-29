@@ -2326,7 +2326,13 @@ class Inverter:
         self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
         self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
         if self.charge_end_time_minutes < self.charge_start_time_minutes:
-            self.charge_end_time_minutes += 24 * 60
+            # Window spans midnight - adjust based on current time
+            if self.charge_end_time_minutes > minutes_now:
+                # We're past midnight but before end - move start back
+                self.charge_start_time_minutes -= 24 * 60
+            else:
+                # End has passed - move both forward
+                self.charge_end_time_minutes += 24 * 60
         if self.charge_end_time_minutes < minutes_now:
             self.charge_end_time_minutes += 24 * 60
             self.charge_start_time_minutes += 24 * 60
