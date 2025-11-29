@@ -1,5 +1,3 @@
-python3 -m venv venv
-source venv/bin/activate
-pip install -r ../requirements.txt
+source setup.csh
 rm predbat.log
 python3 ../apps/predbat/unit_test.py $*
