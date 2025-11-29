@@ -3774,6 +3774,7 @@ def run_test_web_if(my_predbat):
     my_predbat.components = Components(my_predbat)
     my_predbat.components.initialize()
     my_predbat.components.start("ha_interface")
+    my_predbat.components.start("db")
     my_predbat.components.start("web")
     ha = my_predbat.ha_interface
 
