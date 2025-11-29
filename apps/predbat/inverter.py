@@ -1800,27 +1800,44 @@ class Inverter:
                 self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
                 self.idle_end_minutes = idle_end_minutes
 
+    def compute_window_minutes(self, start_time, end_time, minutes_now):
+        """
+        Convert start/end times to minutes and adjust for midnight-spanning windows and past windows.
+
+        Args:
+            start_time: Start time (datetime, time, or object with hour/minute attributes)
+            end_time: End time (datetime, time, or object with hour/minute attributes)
+            minutes_now: Current time in minutes from midnight
+
+        Returns:
+            Tuple of (start_minute, end_minute) adjusted for midnight spanning and current time
+        """
+        start_minute = start_time.hour * 60 + start_time.minute
+        end_minute = end_time.hour * 60 + end_time.minute
+
+        if end_minute < start_minute:
+            # Window spans midnight - adjust based on current time
+            if end_minute > minutes_now:
+                # We're past midnight but before end - move start back
+                start_minute -= 24 * 60
+            else:
+                # End has passed - move end forward
+                end_minute += 24 * 60
+
+        # Window already passed, move it forward until the next one
+        if end_minute <= minutes_now:
+            start_minute += 24 * 60
+            end_minute += 24 * 60
+
+        return start_minute, end_minute
+
     def window2minutes(self, start, end, minutes_now):
         """
         Convert time start/end window string into minutes
         """
         start = time_string_to_stamp(start)
         end = time_string_to_stamp(end)
-        start_minute = start.hour * 60 + start.minute
-        end_minute = end.hour * 60 + end.minute
-
-        if end_minute < start_minute:
-            # As windows wrap, if end is in the future then move start back, otherwise forward
-            if end_minute > minutes_now:
-                start_minute -= 60 * 24
-            else:
-                end_minute += 60 * 24
-
-        # Window already passed, move it forward until the next one
-        if end_minute <= minutes_now:
-            start_minute += 60 * 24
-            end_minute += 60 * 24
-        return start_minute, end_minute
+        return self.compute_window_minutes(start, end, minutes_now)
 
     def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
         """
@@ -2322,20 +2339,8 @@ class Inverter:
         if old_charge_schedule_enable in ["off", "disable"]:
             old_charge_schedule_enable = "off"
 
-        # Store the new start/end minutes
-        self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
-        self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
-        if self.charge_end_time_minutes < self.charge_start_time_minutes:
-            # Window spans midnight - adjust based on current time
-            if self.charge_end_time_minutes > minutes_now:
-                # We're past midnight but before end - move start back
-                self.charge_start_time_minutes -= 24 * 60
-            else:
-                # End has passed - move both forward
-                self.charge_end_time_minutes += 24 * 60
-        if self.charge_end_time_minutes < minutes_now:
-            self.charge_end_time_minutes += 24 * 60
-            self.charge_start_time_minutes += 24 * 60
+        # Store the new start/end minutes using helper to handle midnight-spanning windows
+        self.charge_start_time_minutes, self.charge_end_time_minutes = self.compute_window_minutes(charge_start_time, charge_end_time, minutes_now)
 
         # Apply clock skew
         charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
