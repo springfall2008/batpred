@@ -41,7 +41,23 @@ except ImportError:
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2, dp4, minute_data, get_override_time_from_string, window2minutes, compute_window_minutes, get_now_from_cumulative, prune_today, history_attribute, minute_data_state, format_time_ago, str2time
+from utils import (
+    calc_percent_limit,
+    remove_intersecting_windows,
+    find_charge_rate,
+    dp2,
+    dp4,
+    minute_data,
+    get_override_time_from_string,
+    window2minutes,
+    compute_window_minutes,
+    get_now_from_cumulative,
+    prune_today,
+    history_attribute,
+    minute_data_state,
+    format_time_ago,
+    str2time,
+)
 from futurerate import FutureRate
 from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST, PREDICT_STEP
 from inverter import Inverter
@@ -9544,10 +9560,7 @@ def test_minute_data(my_predbat):
         {"state": "15.0", "last_updated": "2024-10-04T11:00:00+00:00"},  # Back to normal
         {"state": "20.0", "last_updated": "2024-10-04T11:30:00+00:00"},
     ]
-    glitch_result, ignore_io = minute_data(
-        history=history_glitch, days=1, now=now, state_key="state", last_updated_key="last_updated",
-        backwards=True, smoothing=True, clean_increment=True, max_increment=50
-    )
+    glitch_result, ignore_io = minute_data(history=history_glitch, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=True, clean_increment=True, max_increment=50)
     if len(glitch_result) == 0:
         print("ERROR: clean_increment glitch filter test failed - no data returned")
         failed = True
@@ -9570,10 +9583,7 @@ def test_minute_data(my_predbat):
         {"state": "1000.0", "last_updated": "2024-10-04T10:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
         {"state": "2000.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
     ]
-    watts_result, ignore_io = minute_data(
-        history=history_watts, days=1, now=now, state_key="state", last_updated_key="last_updated",
-        backwards=True, required_unit="kWh"
-    )
+    watts_result, ignore_io = minute_data(history=history_watts, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="kWh")
     if len(watts_result) == 0:
         print("ERROR: W to kWh conversion test failed - no data returned")
         failed = True
@@ -9594,10 +9604,7 @@ def test_minute_data(my_predbat):
         {"state": "1.5", "last_updated": "2024-10-04T10:00:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
         {"state": "2.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
     ]
-    kw_result, ignore_io = minute_data(
-        history=history_kw, days=1, now=now, state_key="state", last_updated_key="last_updated",
-        backwards=True, required_unit="kWh", to_key=None
-    )
+    kw_result, ignore_io = minute_data(history=history_kw, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="kWh", to_key=None)
     if len(kw_result) == 0:
         print("ERROR: kW to kWh conversion test failed - no data returned")
         failed = True
@@ -9617,10 +9624,7 @@ def test_minute_data(my_predbat):
     history_spreading = [
         {"state": "10.0", "last_updated": "2024-10-04T11:00:00+00:00"},
     ]
-    spread_result, ignore_io = minute_data(
-        history=history_spreading, days=1, now=now, state_key="state", last_updated_key="last_updated",
-        backwards=False, spreading=30  # Spread over 30 minutes
-    )
+    spread_result, ignore_io = minute_data(history=history_spreading, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=False, spreading=30)  # Spread over 30 minutes
     # Check that data is spread across multiple minutes
     count_with_value = sum(1 for v in spread_result.values() if v == 10.0)
     if count_with_value < 10:
@@ -9632,10 +9636,7 @@ def test_minute_data(my_predbat):
     history_divide = [
         {"state": "100.0", "last_updated": "2024-10-04T11:00:00+00:00"},
     ]
-    divide_result, ignore_io = minute_data(
-        history=history_divide, days=1, now=now, state_key="state", last_updated_key="last_updated",
-        backwards=True, divide_by=2
-    )
+    divide_result, ignore_io = minute_data(history=history_divide, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, divide_by=2)
     if divide_result.get(0) != 50.0:
         print(f"ERROR: divide_by test failed - expected 50.0, got {divide_result.get(0)}")
         failed = True
@@ -9646,10 +9647,7 @@ def test_minute_data(my_predbat):
         {"state": "10.0", "last_updated": "2024-10-04T12:10:00+00:00"},  # 5 minutes in future
         {"state": "20.0", "last_updated": "2024-10-04T12:20:00+00:00"},  # 15 minutes in future
     ]
-    forward_smooth_result, ignore_io = minute_data(
-        history=history_forward, days=1, now=now, state_key="state", last_updated_key="last_updated",
-        backwards=False, smoothing=True
-    )
+    forward_smooth_result, ignore_io = minute_data(history=history_forward, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=False, smoothing=True)
     if len(forward_smooth_result) == 0:
         print("ERROR: smoothing forward mode test failed - no data returned")
         failed = True
@@ -9659,10 +9657,7 @@ def test_minute_data(my_predbat):
     history_w_to_kw = [
         {"state": "5000.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
     ]
-    w_to_kw_result, ignore_io = minute_data(
-        history=history_w_to_kw, days=1, now=now, state_key="state", last_updated_key="last_updated",
-        backwards=True, required_unit="kW"
-    )
+    w_to_kw_result, ignore_io = minute_data(history=history_w_to_kw, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="kW")
     if len(w_to_kw_result) == 0:
         print("ERROR: W to kW conversion test failed - no data returned")
         failed = True
@@ -9675,10 +9670,7 @@ def test_minute_data(my_predbat):
     history_kw_to_w = [
         {"state": "2.5", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
     ]
-    kw_to_w_result, ignore_io = minute_data(
-        history=history_kw_to_w, days=1, now=now, state_key="state", last_updated_key="last_updated",
-        backwards=True, required_unit="W"
-    )
+    kw_to_w_result, ignore_io = minute_data(history=history_kw_to_w, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="W")
     if len(kw_to_w_result) == 0:
         print("ERROR: kW to W conversion test failed - no data returned")
         failed = True
@@ -9692,10 +9684,7 @@ def test_minute_data(my_predbat):
         {"state": "100.0", "last_updated": "2024-10-04T10:00:00+00:00", "attributes": {"unit_of_measurement": "gallons"}},
         {"state": "50.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "kWh"}},
     ]
-    bad_unit_result, ignore_io = minute_data(
-        history=history_bad_unit, days=1, now=now, state_key="state", last_updated_key="last_updated",
-        backwards=True, required_unit="kWh"
-    )
+    bad_unit_result, ignore_io = minute_data(history=history_bad_unit, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="kWh")
     # Should only have the kWh entry, gallons should be skipped
     if len(bad_unit_result) == 0:
         print("ERROR: Unsupported unit test failed - no data returned")
@@ -10516,6 +10505,7 @@ def test_prune_today(my_predbat):
     print("**** Testing prune_today function ****")
 
     import pytz
+
     utc = pytz.UTC
     now_utc = datetime(2024, 10, 15, 14, 30, 0, tzinfo=utc)
     midnight_utc = datetime(2024, 10, 15, 0, 0, 0, tzinfo=utc)
@@ -10618,10 +10608,12 @@ def test_history_attribute(my_predbat):
 
     # Test 1: Basic functionality
     print("Test 1: Basic functionality")
-    history = [[
-        {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
-        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
+            {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history)
     if len(result) != 2:
         print(f"ERROR: Test 1 failed - expected 2 entries, got {len(result)}")
@@ -10634,10 +10626,12 @@ def test_history_attribute(my_predbat):
 
     # Test 2: Missing last_updated_key is skipped (line 85)
     print("Test 2: Missing last_updated_key is skipped")
-    history = [[
-        {"state": "10.5"},  # Missing last_updated
-        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "10.5"},  # Missing last_updated
+            {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history)
     if len(result) != 1:
         print(f"ERROR: Test 2 failed - expected 1 entry (skipped missing key), got {len(result)}")
@@ -10650,10 +10644,12 @@ def test_history_attribute(my_predbat):
 
     # Test 3: attributes=True mode (lines 88-90)
     print("Test 3: attributes=True mode")
-    history = [[
-        {"attributes": {"power": "15.0"}, "last_updated": "2024-10-15T10:00:00+00:00"},
-        {"attributes": {"power": "25.0"}, "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"attributes": {"power": "15.0"}, "last_updated": "2024-10-15T10:00:00+00:00"},
+            {"attributes": {"power": "25.0"}, "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history, state_key="power", attributes=True)
     if len(result) != 2:
         print(f"ERROR: Test 3 failed - expected 2 entries from attributes, got {len(result)}")
@@ -10666,10 +10662,12 @@ def test_history_attribute(my_predbat):
 
     # Test 4: attributes=True with missing state_key in attributes (line 89)
     print("Test 4: attributes=True with missing state_key")
-    history = [[
-        {"attributes": {"other": "15.0"}, "last_updated": "2024-10-15T10:00:00+00:00"},
-        {"attributes": {"power": "25.0"}, "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"attributes": {"other": "15.0"}, "last_updated": "2024-10-15T10:00:00+00:00"},
+            {"attributes": {"power": "25.0"}, "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history, state_key="power", attributes=True)
     if len(result) != 1:
         print(f"ERROR: Test 4 failed - expected 1 entry (skipped missing attr), got {len(result)}")
@@ -10682,10 +10680,12 @@ def test_history_attribute(my_predbat):
 
     # Test 5: Missing state_key is skipped (line 94)
     print("Test 5: Missing state_key is skipped")
-    history = [[
-        {"last_updated": "2024-10-15T10:00:00+00:00"},  # Missing state
-        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"last_updated": "2024-10-15T10:00:00+00:00"},  # Missing state
+            {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history)
     if len(result) != 1:
         print(f"ERROR: Test 5 failed - expected 1 entry (skipped missing state), got {len(result)}")
@@ -10698,11 +10698,13 @@ def test_history_attribute(my_predbat):
 
     # Test 6: unavailable/unknown values are skipped (line 98)
     print("Test 6: unavailable/unknown values are skipped")
-    history = [[
-        {"state": "unavailable", "last_updated": "2024-10-15T10:00:00+00:00"},
-        {"state": "unknown", "last_updated": "2024-10-15T10:30:00+00:00"},
-        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "unavailable", "last_updated": "2024-10-15T10:00:00+00:00"},
+            {"state": "unknown", "last_updated": "2024-10-15T10:30:00+00:00"},
+            {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history)
     if len(result) != 1:
         print(f"ERROR: Test 6 failed - expected 1 entry (skipped unavailable/unknown), got {len(result)}")
@@ -10715,9 +10717,11 @@ def test_history_attribute(my_predbat):
 
     # Test 7: pounds=True scaling (line 108)
     print("Test 7: pounds=True scaling")
-    history = [[
-        {"state": "1234", "last_updated": "2024-10-15T10:00:00+00:00"},  # 1234 pence = 12.34 pounds
-    ]]
+    history = [
+        [
+            {"state": "1234", "last_updated": "2024-10-15T10:00:00+00:00"},  # 1234 pence = 12.34 pounds
+        ]
+    ]
     result = history_attribute(history, pounds=True)
     expected_value = 12.34
     if len(result) != 1:
@@ -10731,11 +10735,13 @@ def test_history_attribute(my_predbat):
 
     # Test 8: Boolean string conversion "on" -> 1 (lines 111-113)
     print("Test 8: Boolean string conversion 'on' -> 1")
-    history = [[
-        {"state": "on", "last_updated": "2024-10-15T10:00:00+00:00"},
-        {"state": "true", "last_updated": "2024-10-15T10:30:00+00:00"},
-        {"state": "yes", "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "on", "last_updated": "2024-10-15T10:00:00+00:00"},
+            {"state": "true", "last_updated": "2024-10-15T10:30:00+00:00"},
+            {"state": "yes", "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history)
     if len(result) != 3:
         print(f"ERROR: Test 8 failed - expected 3 entries, got {len(result)}")
@@ -10749,11 +10755,13 @@ def test_history_attribute(my_predbat):
 
     # Test 9: Boolean string conversion "off" -> 0 (lines 114-115)
     print("Test 9: Boolean string conversion 'off' -> 0")
-    history = [[
-        {"state": "off", "last_updated": "2024-10-15T10:00:00+00:00"},
-        {"state": "false", "last_updated": "2024-10-15T10:30:00+00:00"},
-        {"state": "no", "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "off", "last_updated": "2024-10-15T10:00:00+00:00"},
+            {"state": "false", "last_updated": "2024-10-15T10:30:00+00:00"},
+            {"state": "no", "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history)
     if len(result) != 3:
         print(f"ERROR: Test 9 failed - expected 3 entries, got {len(result)}")
@@ -10767,10 +10775,12 @@ def test_history_attribute(my_predbat):
 
     # Test 10: Unknown string is skipped (line 117)
     print("Test 10: Unknown string values are skipped")
-    history = [[
-        {"state": "some_random_string", "last_updated": "2024-10-15T10:00:00+00:00"},
-        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "some_random_string", "last_updated": "2024-10-15T10:00:00+00:00"},
+            {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history)
     if len(result) != 1:
         print(f"ERROR: Test 10 failed - expected 1 entry (skipped unknown string), got {len(result)}")
@@ -10783,11 +10793,13 @@ def test_history_attribute(my_predbat):
 
     # Test 11: daily=True mode (line 138)
     print("Test 11: daily=True mode")
-    history = [[
-        {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
-        {"state": "20.5", "last_updated": "2024-10-15T15:00:00+00:00"},  # Same day
-        {"state": "30.5", "last_updated": "2024-10-16T10:00:00+00:00"},  # Different day
-    ]]
+    history = [
+        [
+            {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
+            {"state": "20.5", "last_updated": "2024-10-15T15:00:00+00:00"},  # Same day
+            {"state": "30.5", "last_updated": "2024-10-16T10:00:00+00:00"},  # Different day
+        ]
+    ]
     result = history_attribute(history, daily=True, first=True)
     # With first=True and daily=True, should only keep first entry per day
     if len(result) != 2:
@@ -10805,10 +10817,12 @@ def test_history_attribute(my_predbat):
 
     # Test 12: daily=False mode (line 140)
     print("Test 12: daily=False mode")
-    history = [[
-        {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
-        {"state": "20.5", "last_updated": "2024-10-15T15:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
+            {"state": "20.5", "last_updated": "2024-10-15T15:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history, daily=False)
     if len(result) != 2:
         print(f"ERROR: Test 12 failed - expected 2 entries (all kept with daily=False), got {len(result)}")
@@ -10827,10 +10841,12 @@ def test_history_attribute(my_predbat):
 
     # Test 13: Invalid timestamp causes skip (lines 124-125)
     print("Test 13: Invalid timestamp causes skip")
-    history = [[
-        {"state": "10.5", "last_updated": "invalid-timestamp"},
-        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "10.5", "last_updated": "invalid-timestamp"},
+            {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history)
     if len(result) != 1:
         print(f"ERROR: Test 13 failed - expected 1 entry (skipped invalid timestamp), got {len(result)}")
@@ -10851,9 +10867,11 @@ def test_history_attribute(my_predbat):
 
     # Test 15: offset_days parameter
     print("Test 15: offset_days parameter")
-    history = [[
-        {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history, daily=True, offset_days=1)
     if len(result) != 1:
         print(f"ERROR: Test 15 failed - expected 1 entry with offset_days, got {len(result)}")
@@ -10861,9 +10879,11 @@ def test_history_attribute(my_predbat):
 
     # Test 16: scale parameter
     print("Test 16: scale parameter")
-    history = [[
-        {"state": "10.0", "last_updated": "2024-10-15T10:00:00+00:00"},
-    ]]
+    history = [
+        [
+            {"state": "10.0", "last_updated": "2024-10-15T10:00:00+00:00"},
+        ]
+    ]
     result = history_attribute(history, scale=2.0)
     if len(result) != 1:
         print(f"ERROR: Test 16 failed - expected 1 entry, got {len(result)}")
@@ -10886,6 +10906,7 @@ def test_minute_data_state(my_predbat):
     print("**** Testing minute_data_state function ****")
 
     import pytz
+
     utc = pytz.UTC
     now = datetime(2024, 10, 15, 12, 0, 0, tzinfo=utc)
 
@@ -10974,6 +10995,7 @@ def test_format_time_ago(my_predbat):
     print("**** Testing format_time_ago function ****")
 
     from datetime import timezone
+
     now = datetime.now(timezone.utc)
 
     # Test 1: None input returns "Never updated" (line 617)
