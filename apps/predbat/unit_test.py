@@ -10253,18 +10253,18 @@ def test_octopus_free(my_predbat):
     """
     failed = False
     print("**** Running Octopus free electricity test ****")
-    
+
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
     # if not free_sessions:
     #    print("**** ERROR: No free sessions found ****")
     #    failed = True
-    
+
     if not failed:
         print("**** Octopus free electricity test PASSED ****")
     else:
         print("**** Octopus free electricity test FAILED ****")
-    
+
     return failed
 
 
@@ -10274,7 +10274,7 @@ def run_debug_cases(my_predbat):
     """
     failed = False
     print("**** Running debug case files ****")
-    
+
     # Scan .yaml files in cases directory
     for filename in glob.glob("cases/*.yaml"):
         basename = os.path.basename(filename)
@@ -10286,7 +10286,7 @@ def run_debug_cases(my_predbat):
             break
         else:
             print(f"**** Debug case {basename}: PASSED ****")
-    
+
     return failed
 
 
