@@ -237,7 +237,7 @@ class Inverter:
                     self.serial_number = self.rest_data.get("raw", {}).get("invertor", {}).get("serial_number", "Unknown")
                     if self.givtcp_version.startswith("3"):
                         self.rest_v3 = True
-                    self.log("Inverter {} GivTCP Version: {} Firmware: {} serial {}".format(self.id, self.givtcp_version, self.firmware_version, self.serial_number))
+                    self.log("Inverter {} GivTCP Version: {}, Firmware: {}, serial {}".format(self.id, self.givtcp_version, self.firmware_version, self.serial_number))
 
         # Timed pause support?
         if self.inv_has_timed_pause:
@@ -441,7 +441,7 @@ class Inverter:
         # Log inverter details
         if not quiet:
             self.base.log(
-                "Inverter {} with soc_max {}kWh nominal_capacity {}kWh battery rate raw {}W charge rate {}kW discharge rate {}kW battery_rate_min {}W ac limit {}kW export limit {}kW reserve {}% current_reserve {}% temperature {}°C".format(
+                "Inverter {} with soc_max {}kWh, nominal_capacity {}kWh, battery rate raw {}W, charge rate {}kW, discharge rate {}kW, battery_rate_min {}W, AC limit {}kW, export limit {}kW, reserve {}%, current_reserve {}%, temperature {}°C".format(
                     self.id,
                     dp2(self.soc_max),
                     dp2(self.nominal_capacity),
@@ -935,7 +935,7 @@ class Inverter:
 
         if not quiet:
             self.base.log(
-                "Inverter {} SoC: {}kW {}% Current charge rate {}W Current discharge rate {}W Current battery power {}W Current battery voltage {}V Grid power {}W load power {}W PV Power {}W".format(
+                "Inverter {} SoC: {}kW {}%, current charge rate {}W, current discharge rate {}W, current battery power {}W, current battery voltage {}V, grid power {}W, load power {}W, PV Power {}W".format(
                     self.id, dp2(self.soc_kw), self.soc_percent, dp0(self.charge_rate_now * MINUTE_WATT), dp0(self.discharge_rate_now * MINUTE_WATT), self.battery_power, self.battery_voltage, self.grid_power, self.load_power, self.pv_power
                 )
             )
@@ -1041,7 +1041,7 @@ class Inverter:
         if not quiet:
             if self.charge_enable_time:
                 self.base.log(
-                    "Inverter {} Charge settings: {}-{} limit {} power {} kW".format(
+                    "Inverter {} Charge settings: {}-{}, limit {}%, power {}kW".format(
                         self.id,
                         self.base.time_abs_str(self.charge_start_time_minutes),
                         self.base.time_abs_str(self.charge_end_time_minutes),
@@ -1050,7 +1050,7 @@ class Inverter:
                     )
                 )
             else:
-                self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kW".format(self.id, round(self.charge_rate_now * 60.0, 2)))
+                self.base.log("Inverter {} Charge settings: timed charged is disabled, power {}kW".format(self.id, round(self.charge_rate_now * 60.0, 2)))
 
         # Construct discharge window from GivTCP settings
         self.export_window = []

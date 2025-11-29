@@ -102,7 +102,7 @@ class Execute:
                 if (not inExportWindow) and ((minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
-                    self.log("Inverter {} Charge window will be: {} - {} - current SoC {}% target {}%".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
+                    self.log("Inverter {} Charge window will be: {} - {} - current SoC {}%, target {}%".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         target_soc = self.charge_limit_percent_best[0] if self.charge_limit_best != self.reserve else self.soc_kw
@@ -130,7 +130,7 @@ class Execute:
                         new_charge_rate = int(new_charge_rate * MINUTE_WATT)
 
                         self.log(
-                            "Inverter {} Target SoC {}% (this inverter {}%) Battery temperature {}°C Select charge rate {}W (real {}W) current charge rate {}W".format(
+                            "Inverter {} Target SoC {}%, (this inverter {}%), battery temperature {}°C, select charge rate {}W (real {}W), current charge rate {}W".format(
                                 inverter.id, dp0(target_soc), dp0(inv_target_soc), inverter.battery_temperature, new_charge_rate, dp0(new_charge_rate_real * MINUTE_WATT), current_charge_rate
                             )
                         )

@@ -631,7 +631,7 @@ To create a new automation:
 - Three dots (top right corner) / Edit in YAML
 - Delete the existing (template) automation code and copy/paste the supplied automation code below
 
-### GivTCP activity monitor
+### GivTCP Activity Monitor
 
 This automation will raise an alert if any of the following occur:
 
@@ -641,7 +641,6 @@ This automation will raise an alert if any of the following occur:
 - The battery goes offline to the inverter for more than 15 minutes
 - GivTCP add-on is not running
 - Mosquitto broker add-on is not running
-- Predbat/AppDaemon-predbat or AppDaemon add-on (as appropriate) is not running
 
 The script will need to be customised for your inverter ID, battery ID and mobile details,
 and can be extended for multiple inverters and batteries by duplicating the triggers and adding appropriate battery and inverter IDs.
@@ -758,7 +757,7 @@ Restarting GivTCP does however lose the current GivTCP log-in Home Assistant.
 
 NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp'.
 
-### Predbat error monitor
+### Predbat Error Monitor
 
 This automation will raise an alert if Predbat's status turns to *Error* for more than 5 minutes.
 
@@ -766,7 +765,7 @@ In normal operation, Predbat will automatically run and update its forecast ever
 then an alert will be raised and the automation will restart the Predbat add-on to try to resolve a 'hung Predbat' issue.
 
 In the same way for the GivTCP and Mosquitto add-ons above, the last trigger requires you to enable a binary sensor that detects that the Predbat/AppDaemon add-on is running.
-Follow the same steps to enable the binary sensor for either the 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' add-on depending on which Predbat installation method you followed.
+Follow the same steps to enable the binary sensor for either the 'Predbat' or (deprecated) 'AppDaemon' add-on depending on which Predbat installation method you followed.
 
 The script will need to be customised for your mobile details.
 
@@ -837,12 +836,12 @@ triggers:
         Predbat plan is unknown for 20 minutes, possibly failed on startup,
         restarting
       restart_predbat: "Y"
-  - alias: "Heartbeat: check predbat has populated output entities OK"
+  - alias: "Heartbeat: check Predbat has populated output entities OK"
     trigger: time_pattern
     minutes: /30
     id: heartbeat
 actions:
-  - alias: Heartbeat, check predbat output variables are populated
+  - alias: Heartbeat, check Predbat output variables are populated
     if:
       - condition: trigger
         id:

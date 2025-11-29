@@ -333,7 +333,7 @@ This can be useful to adjust for your systems real performance.
 Default is Off.
 
 **input_number.predbat_carbon_metric** (_carbon enable_) When Carbon footprint tracking is turned On (**switch.predbat_carbon_enable**) (Off by default),
-you can specify a cost per Kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
+you can specify a cost per kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
 
 _Note: Carbon footprint tracking can only be turned on if `apps.yaml` is configured to point to the correct CO2 cost sensor_
 
@@ -647,7 +647,7 @@ This is described in detail in [Car Charging](manual-api.md) and is mentioned he
 
 **switch.predbat_debug_enable** When turned On will create lots of debugging information to aid diagnosis of Predbat issues. By default this is turned Off and its recommended that its only switched on when debug logs are requested. With the switch on:
 
-- Firstly Predbat prints lots of extra debug information in the predbat logfile which means the logfile will fill and swap to a new file more rapidly
+- Firstly Predbat prints lots of extra debug information in the Predbat logfile which means the logfile will fill and swap to a new file more rapidly
 - Secondly Predbat will create a debug output file 'debug/predbat_debug_HH_MM_SS.yaml' in a subfolder of the Predbat installation directory.
 This file contains a full export of your current Predbat config and is extremely useful to enable recreating your setup to diagnose issues. Any sensitive information such as Solcast or GivEnergy Cloud API keys are automatically removed.
 

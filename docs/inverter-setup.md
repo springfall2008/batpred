@@ -24,7 +24,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
 Additionally you can create a [custom inverter definition for Predbat](#i-want-to-add-an-unsupported-inverter-to-predbat) if your inverter type is not directly supported.
-Once you get everything working please share the configuration as a github issue so it can be incorporated into the predbat documentation.
+Once you get everything working please share the configuration as a github issue so it can be incorporated into the Predbat documentation.
 
 NB: By default the apps.yaml template for GivTCP is installed with Predbat.
 If you are using a different inverter then you will need to copy the appropriate `apps.yaml` template from the above list and use it to **replace the GivTCP apps.yaml** - if
@@ -111,7 +111,7 @@ If you have a Gen 1 or a firmware version that allows the reserve being set to 1
 [input_number.predbat_set_reserve_min](customisation.md#inverter-control-options) to reserve some battery power for use in emergencies.
 
 **NB: GivTCP and Predbat do not currently yet work together for 3-phase inverters**.
-This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable to charge or discharge 3 phase inverters with predbat](https://github.com/britkat1980/giv_tcp/issues/218)
+This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable to charge or discharge 3 phase inverters with Predbat](https://github.com/britkat1980/giv_tcp/issues/218)
 
 ## Solis Inverters
 
@@ -442,7 +442,9 @@ sequence:
       device_id: XXXXXXXX
 ```
 
-Note that predbat will plan the charging on the basis of the assumed higher (e.g. 5kWh) charge rate, but will recalculate and adjust the plan every 10 minutes as the battery is charged at the lower rate.
+Note that Predbat will plan the charging on the basis of the assumed higher (e.g. 5kWh) charge rate, but will recalculate and adjust the plan every 10 minutes as the battery is charged at the lower rate.
+
+- Set the Huawei inverter work mode to 'TOU' (Time Of Use).
 
 ## SolarEdge Inverters
 
@@ -814,6 +816,8 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
     - sensor.sigen_plant_available_max_discharging_capacity
     - sensor.sigen_plant_daily_consumed_energy
     - number.sigen_plant_ess_backup_state_of_charge
+    - number.sigen_plant_ess_charge_cut_off_state_of_charge
+    - number.sigen_plant_ess_discharge_cut_off_state_of_charge
     - sensor.sigen_plant_max_active_power
 
 - The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:

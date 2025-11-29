@@ -63,7 +63,7 @@ class Plan:
             state=dp3(self.load_last_period),
             attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status": self.load_last_status},
         )
-        self.log("Dynamic load last period {:.2f}kW status {} threshold_battery {} threshold_car {}".format(self.load_last_period, self.load_last_status, threshold_battery, threshold_car))
+        self.log("Dynamic load last period {:.2f}kW, status {}, threshold_battery {}kWh, threshold_car {}kWh,".format(self.load_last_period, self.load_last_status, threshold_battery, threshold_car))
 
         # Is the car currently planned to charge?
         load_car_slot = False
@@ -73,7 +73,7 @@ class Plan:
                 # Don't include the exact start minute as it may take a few for the load to filter through
                 if slot["start"] <= self.minutes_now < slot["end"]:
                     load_car_slot = True
-                    self.log("Dynamic load adjust sees car {} charging now slot {}-{} previous car slot {}".format(car_n + 1, slot["start"], slot["end"], self.load_last_car_slot))
+                    self.log("Dynamic load adjust sees car {} charging now slot {}-{}, previous car slot {}".format(car_n + 1, slot["start"], slot["end"], self.load_last_car_slot))
         self.load_last_car_slot = load_car_slot
         self.dynamic_load_baseline = {}
         if self.metric_dynamic_load_adjust:
@@ -656,7 +656,7 @@ class Plan:
             # Final check to avoid too short a plan
             end_record = max(end_record, end_record_min)
 
-        self.log("Calculated end_record as {} based on best_price {} next_charge_start {} max_windows {}".format(self.time_abs_str(end_record), best_price, self.time_abs_str(next_charge_start), max_windows))
+        self.log("Calculated end_record as {} based on best_price {}{}, next_charge_start {}, max_windows {}".format(self.time_abs_str(end_record), best_price, self.currency_symbols[1], self.time_abs_str(next_charge_start), max_windows))
         return end_record - self.minutes_now
 
     def max_charge_windows(self, end_record_abs, charge_window):
@@ -779,6 +779,7 @@ class Plan:
            self.export_window_best
            self.export_limits_best
         """
+        curr = self.currency_symbols[1]
 
         # Re-compute plan due to time wrap
         if self.plan_last_updated_minutes > self.minutes_now:
@@ -1120,14 +1121,14 @@ class Plan:
             self.export_limits_best = [dp2(elem) for elem in self.export_limits_best]
 
             self.log(
-                "Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format(
+                "Best charging limit SoC's {}kWh, export {}kWh gives import battery {}kWh, house {}kWh, export {}kWh, metric {}{}, metric10 {}{}".format(
                     self.charge_limit_best,
                     self.export_limits_best,
                     dp2(import_kwh_battery),
                     dp2(import_kwh_house),
                     dp2(export_kwh),
-                    dp2(best_metric),
-                    dp2(best_metric10),
+                    dp2(best_metric), curr,
+                    dp2(best_metric10), curr
                 )
             )
 
@@ -2315,6 +2316,7 @@ class Plan:
         Swap optimisation tries to move export windows later
         """
         swapped_target = {}
+        curr = self.currency_symbols[1]
 
         if self.calculate_best_export and record_export_windows >= 2:
             swapped = True
@@ -2322,7 +2324,7 @@ class Plan:
                 selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export = self.run_prediction_metric(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                 )
-                self.log("Swap export optimisation started metric {} cost {} battery_value {} min_improvement_swap {}".format(dp2(selected_metric), dp2(selected_cost), dp2(selected_battery_value), self.metric_min_improvement_swap))
+                self.log("Swap export optimisation started metric {}{}, cost {}{}, battery_value {}kWh, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_battery_value), self.metric_min_improvement_swap, curr))
                 swapped = False
 
                 for window_n_target in range(record_export_windows - 1, 0, -1):
@@ -2355,13 +2357,13 @@ class Plan:
                         if best_metric_drop <= selected_metric:
                             if self.debug_enable:
                                 self.log(
-                                    "Drop export window {} limit {} {}-{} metric {} cost {} keep {} cycle {} carbon {} import {}".format(
+                                    "Drop export window {}, limit {} {}-{}, metric {}{}, cost {}{}, keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(
                                         window_n_target,
                                         export_limit_target,
                                         self.time_abs_str(self.export_window_best[window_n_target]["start"]),
                                         self.time_abs_str(self.export_window_best[window_n_target]["end"]),
-                                        best_metric_drop,
-                                        dp2(best_cost_drop),
+                                        best_metric_drop, curr,
+                                        dp2(best_cost_drop), curr,
                                         dp2(best_keep_drop),
                                         dp2(best_cycle_drop),
                                         dp0(best_carbon_drop),
@@ -2485,7 +2487,7 @@ class Plan:
                             if ((selected_metric - best_metric) >= self.metric_min_improvement_swap) and (best_metric <= selected_metric or ((export_limit_target == 100.0 or is_combined))):
                                 if self.debug_enable:
                                     self.log(
-                                        "Swap export window {} {}-{} limit {} with {} => {}-{} metric {} selected_metric {} min_improvement_swap {} cost {} keep {} cycle {} carbon {} import {}".format(
+                                        "Swap export window {} {}-{} limit {} with {} => {}-{} metric {}{}, selected_metric {}{}, min_improvement_swap {}, cost {}{}, keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(
                                             window_n,
                                             self.time_abs_str(self.export_window_best[window_n]["start"]),
                                             self.time_abs_str(self.export_window_best[window_n]["end"]),
@@ -2493,10 +2495,10 @@ class Plan:
                                             window_n_target,
                                             self.time_abs_str(self.export_window_best[window_n_target]["start"]),
                                             self.time_abs_str(self.export_window_best[window_n_target]["end"]),
-                                            best_metric,
-                                            selected_metric,
+                                            best_metric, curr,
+                                            selected_metric, curr,
                                             self.metric_min_improvement_swap,
-                                            dp2(best_cost),
+                                            dp2(best_cost), curr,
                                             dp2(best_keep),
                                             dp2(best_cycle),
                                             dp0(best_carbon),
@@ -2522,7 +2524,7 @@ class Plan:
                                 self.export_limits_best[window_n_target] = export_limit_target
                                 self.export_window_best[window_n_target]["start"] = window_start_target
 
-            self.log("Swap export optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(selected_metric), dp2(selected_cost), dp2(selected_keep), dp2(selected_cycle), dp0(selected_carbon), dp2(selected_import)))
+            self.log("Swap export optimisation finished metric {}{}, cost {}{}, metric_keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_keep), dp2(selected_cycle), dp0(selected_carbon), dp2(selected_import)))
 
     def optimise_full_second_pass(self, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=False):
         """
@@ -2628,9 +2630,15 @@ class Plan:
         best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
             self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
         )
+        curr = self.currency_symbols[1]
         self.log(
-            "Starting detailed optimisation end_record {} best_price_charge {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
-                self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
+            "Starting detailed optimisation end_record {}, best_price_charge {}{}, best_price_export {}{}. lowest_price_charge {}{} with charge limits {}kWh and export limits {}kWh".format(
+                self.time_abs_str(self.end_record + self.minutes_now),
+                best_price_charge, curr,
+                best_price_export, curr,
+                lowest_price_charge, curr,
+                self.charge_limit_best,
+                self.export_limits_best
             )
         )
 
@@ -2674,20 +2682,20 @@ class Plan:
                         # Don't allow charging if the price is above the threshold and not already selected during levelling
                         if (price_key > best_price_charge_level) and (self.charge_limit_best[window_n] == 0) and pass_type == "normal":
                             if self.debug_enable:
-                                self.log("Skip high window {} best limit {} price_set {} price {} level {}".format(window_n, self.charge_limit_best[window_n], price_key, price, best_price_charge_level))
+                                self.log("Skip high window {}, best limit {}, price_set {}, price {}{}, level {}{}".format(window_n, self.charge_limit_best[window_n], price_key, price, curr, best_price_charge_level, curr))
                             continue
 
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
                             if not printed_set:
                                 self.log(
-                                    "Optimise price set {} pass {} price {} start_at_low {} best_price_charge {} best_metric {} best_cost {} best_cycle {} best_carbon {} best_import {}".format(
-                                        price_key,
+                                    "Optimise price set {}{}, pass {}, price {}{}, start_at_low {}, best_price_charge {}{}, best_metric {}{}, best_cost {}{}, best_cycle {}kWh, best_carbon {}kg, best_import {}kWh".format(
+                                        price_key, curr,
                                         pass_type,
-                                        price,
+                                        price, curr,
                                         start_at_low,
-                                        best_price_charge,
-                                        dp2(best_metric),
-                                        dp2(best_cost),
+                                        best_price_charge, curr,
+                                        dp2(best_metric), curr,
+                                        dp2(best_cost), curr,
                                         dp2(best_cycle),
                                         dp0(best_carbon),
                                         dp2(best_import),
@@ -2731,20 +2739,20 @@ class Plan:
 
                                 if self.debug_enable:
                                     self.log(
-                                        "Best charge limit pass {} window {} time {} - {} cost {} charge_limit {} (adjusted) min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} cycle {} carbon {} import {} windows {}".format(
+                                        "Best charge limit pass {}, window {}, time {} - {}, cost {}{}, charge_limit {}kWh, (adjusted) min {} @ {} (margin added {} and min {} max {}) with metric {}{}, cost {}{}, cycle {}kWh, carbon {}kg, import {}kWh, windows {}".format(
                                             pass_type,
                                             window_n,
                                             self.time_abs_str(self.charge_window_best[window_n]["start"]),
                                             self.time_abs_str(self.charge_window_best[window_n]["end"]),
-                                            average,
+                                            average, curr,
                                             dp2(best_soc),
                                             dp2(best_soc_min),
                                             self.time_abs_str(best_soc_min_minute),
                                             self.best_soc_margin,
                                             self.best_soc_min,
                                             self.best_soc_max,
-                                            dp2(best_metric),
-                                            dp2(best_cost),
+                                            dp2(best_metric), curr,
+                                            dp2(best_cost), curr,
                                             dp2(best_cycle),
                                             dp0(best_carbon),
                                             dp2(best_import),
@@ -2800,15 +2808,15 @@ class Plan:
 
                             if not printed_set:
                                 self.log(
-                                    "Optimise price set {} pass {} price {} start_at_low {} best_price_export {} level {} best_metric {} best_cost {} best_cycle {} best_carbon {} best_import {}".format(
-                                        price_key,
+                                    "Optimise price set {}{}, pass {}, price {}{}, start_at_low {}, best_price_export {}{}, level {}{}, best_metric {}{}, best_cost {}{}, best_cycle {}kWh, best_carbon {}kg, best_import {}kWh".format(
+                                        price_key, curr,
                                         pass_type,
-                                        price,
+                                        price, curr,
                                         start_at_low,
-                                        best_price_export,
-                                        best_price_export_level,
-                                        dp2(best_metric),
-                                        dp2(best_cost),
+                                        best_price_export, curr,
+                                        best_price_export_level, curr,
+                                        dp2(best_metric), curr,
+                                        dp2(best_cost), curr,
                                         dp2(best_cycle),
                                         dp0(best_carbon),
                                         dp2(best_import),
@@ -2856,18 +2864,18 @@ class Plan:
 
                                 if self.debug_enable:
                                     self.log(
-                                        "Best export limit window {} time {} - {} cost {} export_limit {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {} cycle {} carbon {} import {}".format(
+                                        "Best export limit window {}, time {} - {}, cost {}{}. export_limit {}kWh, (adjusted) min {}kWh @ {} (margin added {}kWh and min {}kWh) with metric {}{}, cost {}{}, cycle {}kWh, carbon {}kg, import {}kWh".format(
                                             window_n,
                                             self.time_abs_str(self.export_window_best[window_n]["start"]),
                                             self.time_abs_str(self.export_window_best[window_n]["end"]),
-                                            price,
+                                            price, curr,
                                             best_soc,
                                             dp2(best_soc_min),
                                             self.time_abs_str(best_soc_min_minute),
                                             self.best_soc_margin,
                                             self.best_soc_min,
-                                            dp2(best_metric),
-                                            dp2(best_cost),
+                                            dp2(best_metric), curr,
+                                            dp2(best_cost), curr,
                                             dp2(best_cycle),
                                             dp0(best_carbon),
                                             dp2(best_import),
@@ -2876,9 +2884,9 @@ class Plan:
             # Log set of charge and export windows
             if self.calculate_best_charge:
                 self.log(
-                    "Best charge windows best_metric {} best_cost {} best_carbon {} best_import {} metric_keep {} end_record {} windows {}".format(
-                        dp2(best_metric),
-                        dp2(best_cost),
+                    "Best charge windows best_metric {}{}, best_cost {}{}, best_carbon {}kg, best_import {}kWh, metric_keep {}kWh, end_record {}, windows {}".format(
+                        dp2(best_metric), curr,
+                        dp2(best_cost), curr,
                         dp0(best_carbon),
                         dp2(best_import),
                         dp2(best_keep),
@@ -2889,9 +2897,9 @@ class Plan:
 
             if self.calculate_best_export:
                 self.log(
-                    "Best export windows best_metric {} best_cost {} best_carbon {} best_import {} metric_keep {} end_record {} windows {}".format(
-                        dp2(best_metric),
-                        dp2(best_cost),
+                    "Best export windows best_metric {}{}, best_cost {}{}, best_carbon {}kg, best_import {}kWh, metric_keep {}kWh, end_record {}, windows {}".format(
+                        dp2(best_metric), curr,
+                        dp2(best_cost), curr,
                         dp0(best_carbon),
                         dp2(best_import),
                         dp2(best_keep),
@@ -3032,9 +3040,18 @@ class Plan:
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price_charge)
 
+        curr = self.currency_symbols[1]
         self.log(
-            "Set best_price_charge_level {} best_price_export_level {} best_price_charge {} best_cost_export {} best_metric {} best_keep {} best_cycle {} best_carbon {} best_import {}".format(
-                dp2(best_price_charge_level), dp2(best_price_export_level), dp2(best_price_charge), dp2(best_price_export), dp2(best_metric), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)
+            "Set best_price_charge_level {}{}, best_price_export_level {}{}, best_price_charge {}{}, best_cost_export {}{}, best_metric {}{}, best_keep {}kWh, best_cycle {}kWh, best_carbon {}kg, best_import {}kWh".format(
+                dp2(best_price_charge_level), curr,
+                dp2(best_price_export_level), curr,
+                dp2(best_price_charge), curr,
+                dp2(best_price_export), curr,
+                dp2(best_metric), curr,
+                dp2(best_keep),
+                dp2(best_cycle),
+                dp0(best_carbon),
+                dp2(best_import)
             )
         )
         self.plan_write_debug(debug_mode, "plan_levels.html")
@@ -3227,7 +3244,7 @@ class Plan:
 
             if save:
                 self.log(
-                    "predict {} end_record {} final soc {} kWh metric {} {} metric_keep {} min_soc {} @ {} kWh load {} pv {}".format(
+                    "predict {} end_record {}, final soc {}kWh, metric {}{}, metric_keep {}kWh, min_soc {}kWh @ {}, load {}kWh, PV {}kWh".format(
                         save,
                         self.time_abs_str(end_record + self.minutes_now),
                         round(final_soc, 2),
@@ -3240,20 +3257,20 @@ class Plan:
                         round(final_pv_kwh, 2),
                     )
                 )
-                self.log("         [{}]".format(self.scenario_summary_title(record_time)))
-                self.log("    SoC: [{}]".format(self.scenario_summary(record_time, predict_soc_time)))
-                self.log("    BAT: [{}]".format(self.scenario_summary(record_time, predict_state)))
-                self.log("   LOAD: [{}]".format(self.scenario_summary(record_time, load_kwh_time)))
-                self.log("     PV: [{}]".format(self.scenario_summary(record_time, pv_kwh_time)))
-                self.log(" IMPORT: [{}]".format(self.scenario_summary(record_time, import_kwh_time)))
-                self.log(" EXPORT: [{}]".format(self.scenario_summary(record_time, export_kwh_time)))
+                self.log("   Slot: [{}]".format(self.scenario_summary_title(record_time)))
+                self.log("    SoC: [{}] kWh".format(self.scenario_summary(record_time, predict_soc_time)))
+                self.log("    BAT: [{}] kWh".format(self.scenario_summary(record_time, predict_state)))
+                self.log("   LOAD: [{}] kWh".format(self.scenario_summary(record_time, load_kwh_time)))
+                self.log("     PV: [{}] kWh".format(self.scenario_summary(record_time, pv_kwh_time)))
+                self.log(" IMPORT: [{}] kWh".format(self.scenario_summary(record_time, import_kwh_time)))
+                self.log(" EXPORT: [{}] kWh".format(self.scenario_summary(record_time, export_kwh_time)))
                 if self.iboost_enable:
-                    self.log(" IBOOST: [{}]".format(self.scenario_summary(record_time, predict_iboost)))
+                    self.log(" IBOOST: [{}] kWh".format(self.scenario_summary(record_time, predict_iboost)))
                 if self.carbon_enable:
-                    self.log(" CARBON: [{}]".format(self.scenario_summary(record_time, predict_carbon_g)))
+                    self.log(" CARBON: [{}] kg".format(self.scenario_summary(record_time, predict_carbon_g)))
                 for car_n in range(self.num_cars):
-                    self.log("   CAR{}: [{}]".format(car_n, self.scenario_summary(record_time, predict_car_soc_time[car_n])))
-                self.log(" METRIC: [{}]".format(self.scenario_summary(record_time, metric_time)))
+                    self.log("   CAR{}: [{}] kWh".format(car_n, self.scenario_summary(record_time, predict_car_soc_time[car_n])))
+                self.log(" METRIC: [{}] {}".format(self.scenario_summary(record_time, metric_time), self.currency_symbols[1]))
                 if save == "best":
                     self.log(" STATE:  [{}]".format(self.scenario_summary_state(record_time)))
 
@@ -3401,7 +3418,7 @@ class Plan:
                     state=dp3(final_import_kwh_house),
                     attributes={"friendly_name": "Predicted import to house", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
                 )
-                self.log("Battery has {} hours left - now at {}".format(dp2(hours_left), dp2(self.soc_kw)))
+                self.log("Battery has {} hours left - now at {}kWh".format(dp2(hours_left), dp2(self.soc_kw)))
                 self.dashboard_item(
                     self.prefix + ".metric",
                     state=dp2(final_metric),

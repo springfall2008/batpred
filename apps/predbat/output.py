@@ -1655,6 +1655,7 @@ class Output:
         car_cost_time = {}
         day_carbon_time = {}
         carbon_g = 0
+        curr = self.currency_symbols[1]
 
         hour_cost = 0
         hour_cost_import = 0
@@ -1680,8 +1681,8 @@ class Output:
         value_increase_day = battery_change_midnight * rate_forward * self.metric_battery_value_scaling
 
         self.log(
-            "Battery level now {} -1hr {} midnight {} battery value change hour {} day {} rate_forward {}".format(
-                dp2(battery_level_now), dp2(battery_level_hour), dp2(battery_level_midnight), dp2(value_increase_hour), dp2(value_increase_day), dp2(rate_forward)
+            "Battery level now {}kWh, -1hr ago {}kWh, at midnight {}kWh, battery value change in the last hour {}{}, change today {}{}, rate_forward {}{}".format(
+                dp2(battery_level_now), dp2(battery_level_hour), dp2(battery_level_midnight), dp2(value_increase_hour), curr, dp2(value_increase_day), curr, dp2(rate_forward), curr
             )
         )
 
@@ -1721,16 +1722,16 @@ class Output:
                 hour_carbon_g -= self.carbon_history.get(minute_back, 0) * energy_export
 
         self.log(
-            "Hour energy {} import {} export {} car {} load {} cost {} import {} export {} car {} carbon {} kG".format(
+            "Last hour: net energy {}kWh, import {}kWh, export {}kWh, car {}kWh, load {}kWh, net cost {}{}, import {}{}, export {}{}, car {}{}, carbon {}kg".format(
                 dp2(hour_energy),
                 dp2(hour_energy_import),
                 dp2(hour_energy_export),
                 dp2(hour_energy_car),
                 dp2(hour_load),
-                dp2(hour_cost),
-                dp2(hour_cost_import),
-                dp2(hour_cost_export),
-                dp2(hour_cost_car),
+                dp2(hour_cost), curr,
+                dp2(hour_cost_import), curr,
+                dp2(hour_cost_export), curr,
+                dp2(hour_cost_car), curr,
                 dp2(hour_carbon_g / 1000.0),
             )
         )
@@ -1952,16 +1953,13 @@ class Output:
             },
         )
         self.log(
-            "Today's energy import {} kWh export {} kWh total {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
+            "Today: energy total net {}kWh, import {}kWh, export {}kWh, cost {}{}, import {}{}, export {}{}, carbon {}kg".format(
+                dp2(day_energy_total),
                 dp2(day_energy),
                 dp2(day_energy_export),
-                dp2(day_energy_total),
-                dp2(day_cost),
-                self.currency_symbols[1],
-                dp2(day_cost_import),
-                self.currency_symbols[1],
-                dp2(day_cost_export),
-                self.currency_symbols[1],
+                dp2(day_cost), curr,
+                dp2(day_cost_import), curr,
+                dp2(day_cost_export), curr,
                 dp2(carbon_g / 1000.0),
             )
         )
@@ -2431,14 +2429,14 @@ class Output:
             difference_cap = min(difference_cap, 2.0)
 
         self.log(
-            "Today's load divergence {} % in-day adjustment {} % damping {}x".format(
+            "Today's load divergence {}%, in-day adjustment {}%, damping {}x".format(
                 dp2(difference * 100.0),
                 dp2(difference_cap * 100.0),
                 self.metric_inday_adjust_damping,
             )
         )
         self.log(
-            "Today's predicted so far {} kWh with {} kWh car/iBoost excluded and {} kWh import ignored and {} forecast extra.".format(
+            "Today's predicted so far {}kWh with {}kWh car/iBoost excluded, {}kWh import ignored, and {}kWh forecast extra.".format(
                 dp2(load_total_pred_now),
                 dp2(car_total_pred),
                 dp2(import_ignored_load_pred),
@@ -2446,7 +2444,7 @@ class Output:
             )
         )
         self.log(
-            "Today's actual load so far {} kWh with {} kWh Car/iBoost excluded and {} kWh import ignored.".format(
+            "Today's actual load so far {}kWh with {}kWh car/iBoost excluded, and {}kWh import ignored.".format(
                 dp2(actual_total_now),
                 dp2(car_total_actual),
                 dp2(import_ignored_load_actual),
@@ -2565,7 +2563,7 @@ class Output:
             self.log("Warn: Load mean is zero, unable to calculate divergence!")
             load_divergence = 0
 
-        self.log("Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(look_over / 60.0, dp2(load_mean), dp2(load_min), dp2(load_max), dp2(load_std_dev), dp2(load_divergence * 100.0)))
+        self.log("Load divergence over {} hours mean {}W, min {}W, max {}W, std dev {}W, divergence {}%".format(look_over / 60.0, dp2(load_mean), dp2(load_min), dp2(load_max), dp2(load_std_dev), dp2(load_divergence * 100.0)))
         if self.metric_load_divergence_enable:
             return dp2(load_divergence)
         else:
@@ -2723,13 +2721,16 @@ class Output:
         # Add back in standing charge which will be in the historical data also
         metric += self.metric_standing_charge
 
+        # Get currency code
+        curr = self.currency_symbols[0]
+
         # Work out savings
         saving = metric - cost_yesterday
         self.log(
-            "Yesterday: Predbat disabled was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} start_soc {} final_soc {}".format(
-                dp2(metric),
-                dp2(cost_yesterday),
-                dp2(saving),
+            "Yesterday: Predbat disabled was {}{} vs real {}{}, saving {}{} with import {}kWh amd export {}kWh, battery_cycle {}kWh, start_soc {}kWh, final_soc {}kWh".format(
+                curr, dp2(metric / 100),
+                curr, dp2(cost_yesterday / 100),
+                curr, dp2(saving / 100),
                 dp2(import_kwh_house + import_kwh_battery),
                 dp2(export_kwh),
                 dp2(battery_cycle),
@@ -2773,7 +2774,15 @@ class Output:
         # Work out savings
         saving = metric - cost_yesterday
         self.savings_today_pvbat = saving
-        self.log("Yesterday: No Battery/PV system cost predicted was {}p vs real {}p saving {}p with import {} export {}".format(dp2(metric), dp2(cost_yesterday), dp2(saving), dp2(import_kwh_house + import_kwh_battery), dp2(export_kwh)))
+        self.log(
+            "Yesterday: No Battery/PV system cost predicted was {}{} vs real {}{}, saving {}{} with import {}kWh and export {}kWh".format(
+                curr, dp2(metric / 100),
+                curr, dp2(cost_yesterday / 100),
+                curr, dp2(saving / 100),
+                dp2(import_kwh_house + import_kwh_battery),
+                dp2(export_kwh)
+            )
+        )
 
         # Save state
         self.dashboard_item(
@@ -2815,18 +2824,20 @@ class Output:
         """
         Publish energy rate data and thresholds
         """
+        curr = self.currency_symbols[1]
+
         # Find discharging windows
         if self.rate_export:
             if self.rate_best_cost_threshold_export:
                 self.rate_export_cost_threshold = self.rate_best_cost_threshold_export
-                self.log("Export threshold used for optimisation was {}p".format(self.rate_export_cost_threshold))
+                self.log("Export threshold used for optimisation was {}{}".format(self.rate_export_cost_threshold, curr))
             self.publish_rates(self.rate_export, True)
 
         # Find charging windows
         if self.rate_import:
             if self.rate_best_cost_threshold_charge:
                 self.rate_import_cost_threshold = self.rate_best_cost_threshold_charge
-                self.log("Import threshold used for optimisation was {}p".format(self.rate_import_cost_threshold))
+                self.log("Import threshold used for optimisation was {}{}".format(self.rate_import_cost_threshold, curr))
             self.publish_rates(self.rate_import, False)
 
         # And gas
@@ -2837,28 +2848,30 @@ class Output:
         """
         Log options
         """
+        curr = self.currency_symbols[1]
+
         opts = ""
-        opts += "mode({}) ".format(self.predbat_mode)
-        opts += "calculate_export_oncharge({}) ".format(self.calculate_export_oncharge)
-        opts += "set_export_freeze_only({}) ".format(self.set_export_freeze_only)
-        opts += "set_discharge_during_charge({}) ".format(self.set_discharge_during_charge)
-        opts += "combine_charge_slots({}) ".format(self.combine_charge_slots)
-        opts += "combine_export_slots({}) ".format(self.combine_export_slots)
-        opts += "combine_rate_threshold({}) ".format(self.combine_rate_threshold)
-        opts += "best_soc_min({} kWh) ".format(self.best_soc_min)
-        opts += "best_soc_max({} kWh) ".format(self.best_soc_max)
-        opts += "best_soc_keep({} kWh) ".format(self.best_soc_keep)
-        opts += "inverter_loss({} %) ".format(int((1 - self.inverter_loss) * 100.0))
-        opts += "battery_loss({} %) ".format(int((1 - self.battery_loss) * 100.0))
-        opts += "battery_loss_discharge ({} %) ".format(int((1 - self.battery_loss_discharge) * 100.0))
-        opts += "inverter_hybrid({}) ".format(self.inverter_hybrid)
-        opts += "metric_min_improvement({} p) ".format(self.metric_min_improvement)
-        opts += "metric_min_improvement_export({} p) ".format(self.metric_min_improvement_export)
-        opts += "metric_min_improvement_export_freeze({} p) ".format(self.metric_min_improvement_export_freeze)
-        opts += "metric_battery_cycle({} p/kWh) ".format(self.metric_battery_cycle)
+        opts += "mode({}), ".format(self.predbat_mode)
+        opts += "calculate_export_oncharge({}), ".format(self.calculate_export_oncharge)
+        opts += "set_export_freeze_only({}), ".format(self.set_export_freeze_only)
+        opts += "set_discharge_during_charge({}), ".format(self.set_discharge_during_charge)
+        opts += "combine_charge_slots({}), ".format(self.combine_charge_slots)
+        opts += "combine_export_slots({}), ".format(self.combine_export_slots)
+        opts += "combine_rate_threshold({}), ".format(self.combine_rate_threshold)
+        opts += "best_soc_min({} kWh), ".format(self.best_soc_min)
+        opts += "best_soc_max({} kWh), ".format(self.best_soc_max)
+        opts += "best_soc_keep({} kWh), ".format(self.best_soc_keep)
+        opts += "inverter_loss({}%), ".format(int((1 - self.inverter_loss) * 100.0))
+        opts += "battery_loss({}%), ".format(int((1 - self.battery_loss) * 100.0))
+        opts += "battery_loss_discharge ({}%), ".format(int((1 - self.battery_loss_discharge) * 100.0))
+        opts += "inverter_hybrid({}), ".format(self.inverter_hybrid)
+        opts += "metric_min_improvement({}{}), ".format(self.metric_min_improvement, curr)
+        opts += "metric_min_improvement_export({}{}), ".format(self.metric_min_improvement_export, curr)
+        opts += "metric_min_improvement_export_freeze({}{}), ".format(self.metric_min_improvement_export_freeze, curr)
+        opts += "metric_battery_cycle({}{}/kWh), ".format(self.metric_battery_cycle, curr)
         opts += "metric_battery_value_scaling({} x) ".format(self.metric_battery_value_scaling)
         if self.carbon_enable:
-            opts += "metric_carbon({} p/Kg) ".format(self.carbon_metric)
+            opts += ", metric_carbon({}{}/kg) ".format(self.carbon_metric, curr)
         self.log("Calculate Best options: " + opts)
 
     def history_to_future_rates(self, rates, offset):

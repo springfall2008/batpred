@@ -1106,7 +1106,7 @@ CONFIG_ITEMS = [
         "min": 0,
         "max": 500,
         "step": 1,
-        "unit": "p/Kg",
+        "unit": "p/kg",
         "icon": "mdi:molecule-co2",
         "default": 0,
         "enable": "carbon_enable",

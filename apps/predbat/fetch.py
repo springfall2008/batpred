@@ -225,9 +225,9 @@ class Fetch:
                 min_sum = dp2(sum_day)
             idx += 1
 
-        self.log("Historical data totals for days {} are {} - min {}".format(days_list, sum_days, min_sum))
+        self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(days_list, sum_days, min_sum))
         if self.load_filter_modal and total_points >= 3 and (min_sum_day > 0):
-            self.log("Model filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(days_list)))
+            self.log("Modal filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(days_list)))
             min_sum_day_idx = days_list.index(min_sum_day)
             del days_list[min_sum_day_idx]
             # Remove day 'min_sum_day' from self.days_previous
@@ -266,12 +266,12 @@ class Fetch:
             if num_gaps > 0:
                 average_day = sum_days_id[days]
                 if (average_day == 0) or (num_gaps >= 24 * 60):
-                    self.log("Warn: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!".format(days))
+                    self.log("Warn: Historical day {} has no load history data, unable to fill gaps normally using nominal 24kWh - you should check your load_today sensor in apps.yaml".format(days))
                     average_day = 24.0
                 else:
                     real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
                     average_day /= real_data_percent
-                    self.log("Warn: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(days, num_gaps, dp2(sum_days_id[days]), dp2(average_day), dp0(real_data_percent * 100.0)))
+                    self.log("Warn: Historical day {} has {} minutes of gap in the load history data, filled from {}kWh to make new average {}kWh (percent {}%)".format(days, num_gaps, dp2(sum_days_id[days]), dp2(average_day), dp0(real_data_percent * 100.0)))
 
                 # Do the filling
                 per_minute_increment = average_day / (24 * 60)
@@ -461,6 +461,7 @@ class Fetch:
         self.carbon_history = {}
         self.octopus_free_slots = {}
         self.octopus_saving_slots = {}
+        curr = self.currency_symbols[1]
 
         # Alert feed if enabled
         if self.components:
@@ -495,7 +496,7 @@ class Fetch:
                     self.load_minutes_age = 0
                     self.load_last_period = 0
                 else:
-                    self.log("Error: You have not set load_today or load_forecast, you will have no load data")
+                    self.log("Error: You have not set load_today or load_forecast in apps.yaml, you will have no load data")
                     self.record_status(message="Error: load_today not set correctly", had_errors=True)
                     raise ValueError
 
@@ -518,7 +519,7 @@ class Fetch:
                 self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
                 self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
             else:
-                self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous pv data")
+                self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous PV data")
 
         # Battery temperature
         if "battery_temperature_history" in self.args:
@@ -533,7 +534,7 @@ class Fetch:
         self.car_charging_energy = self.load_car_energy(self.now_utc)
 
         # Log current values
-        self.log("Current data so far today: load {} kWh import {} kWh export {} kWh pv {} kWh".format(dp2(self.load_minutes_now), dp2(self.import_today_now), dp2(self.export_today_now), dp2(self.pv_today_now)))
+        self.log("Current data so far today: load {}kWh, import {}kWh, export {}kWh, PV {}kWh".format(dp2(self.load_minutes_now), dp2(self.import_today_now), dp2(self.export_today_now), dp2(self.pv_today_now)))
 
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
@@ -544,16 +545,16 @@ class Fetch:
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
             self.rate_import = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
             if not self.rate_import:
-                self.log("Error: metric_octopus_import is not set correctly or no energy rates can be read")
-                self.record_status(message="Error: metric_octopus_import not set correctly or no energy rates can be read", had_errors=True)
+                self.log("Error: metric_octopus_import is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
                 raise ValueError
         elif "metric_energidataservice_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_energidataservice_import", None, indirect=False)
             self.rate_import = self.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
             if not self.rate_import:
-                self.log("Error: metric_energidataservice_import is not set correctly or no energy rates can be read")
-                self.record_status(message="Error: metric_energidataservice_import not set correctly or no energy rates can be read", had_errors=True)
+                self.log("Error: metric_energidataservice_import is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_energidataservice_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
                 raise ValueError
         else:
             # Basic rates defined by user over time
@@ -564,8 +565,8 @@ class Fetch:
             entity_id = self.get_arg("metric_octopus_gas", None, indirect=False)
             self.rate_gas = self.fetch_octopus_rates(entity_id)
             if not self.rate_gas:
-                self.log("Error: metric_octopus_gas is not set correctly or no energy rates can be read")
-                self.record_status(message="Error: rate_import_gas not set correctly or no energy rates can be read", had_errors=True)
+                self.log("Error: metric_octopus_gas is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: rate_import_gas not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
                 raise ValueError
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
             self.rate_scan_gas(self.rate_gas, print=True)
@@ -613,14 +614,14 @@ class Fetch:
                 if result and ("slots" in result):
                     planned = result["slots"]
                 else:
-                    self.log("Warn: Unable to get data from {} - octopus_intelligent_slot using action config {} result was {}".format(entity_id, config_entry, result))
+                    self.log("Warn: Unable to get data from {} - octopus_intelligent_slot using action config {}, result was {}".format(entity_id, config_entry, result))
             else:
                 try:
                     completed = self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches")
                     planned = self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches")
                 except (ValueError, TypeError):
-                    self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
-                    self.record_status(message="Error: octopus_intelligent_slot not set correctly", had_errors=True)
+                    self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id))
+                    self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml", had_errors=True)
 
             # Completed and planned slots
             if completed:
@@ -671,7 +672,7 @@ class Fetch:
                             self.log("Car 0 using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]))
                             self.car_charging_planned[0] = True
                         else:
-                            self.log("Car 0 using Octopus Intelligent, not charging is planned")
+                            self.log("Car 0 using Octopus Intelligent, no charging is planned")
                             self.car_charging_planned[0] = False
                     else:
                         self.log("Car 0 using Octopus Intelligent is unplugged")
@@ -689,7 +690,7 @@ class Fetch:
             else:
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
-            self.log("Cars: SoC kWh: {} Charge limit {} plan time {} battery size {}".format(self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
+            self.log("Cars: SoC: {}kWh, Charge limit {}%, plan time {}, battery size {}kWh".format(self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -700,15 +701,15 @@ class Fetch:
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
             self.rate_export = self.fetch_octopus_rates(entity_id)
             if not self.rate_export:
-                self.log("Warning: metric_octopus_export is not set correctly or no energy rates can be read")
-                self.record_status(message="Error: metric_octopus_export not set correctly or no energy rates can be read", had_errors=True)
+                self.log("Warning: metric_octopus_export is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_octopus_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
         elif "metric_energidataservice_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_energidataservice_export", None, indirect=False)
             self.rate_export = self.fetch_energidataservice_rates(entity_id)
             if not self.rate_export:
-                self.log("Warning: metric_energidataservice_export is not set correctly or no energy rates can be read")
-                self.record_status(message="Error: metric_energidataservice_export not set correctly or no energy rates can be read", had_errors=True)
+                self.log("Warning: metric_energidataservice_export is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_energidataservice_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
         else:
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
@@ -718,7 +719,7 @@ class Fetch:
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
-        self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
+        self.log("Standing charge is set to {}{}".format(self.metric_standing_charge, curr))
 
         # futurerate data
         futurerate = FutureRate(self)
@@ -760,7 +761,7 @@ class Fetch:
         if self.rate_export:
             self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=self.rate_import)
             # Update threshold automatically
-            self.log("High export rate found rates in range {} to {}".format(lowest, highest))
+            self.log("High export rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
             if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
                 self.rate_export_cost_threshold = lowest
 
@@ -768,7 +769,7 @@ class Fetch:
         if self.rate_import:
             # Find charging window
             self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=self.rate_export)
-            self.log("Low Import rate found rates in range {} to {}".format(lowest, highest))
+            self.log("Low Import rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
             # Update threshold automatically
             if self.rate_low_threshold == 0 and highest >= self.rate_min:
                 self.rate_import_cost_threshold = highest
@@ -782,7 +783,7 @@ class Fetch:
                     self.log("Car 0 on Octopus Intelligent, no active plan")
             elif self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                 self.log(
-                    "Car {} plan charging from {} to {} with slots {} from soc {} to {} ready by {}".format(
+                    "Car {} plan charging from {} to {}, with slots {} from SoC {}% to {}%, ready by {}".format(
                         car_n,
                         self.car_charging_soc[car_n],
                         self.car_charging_limit[car_n],
@@ -807,16 +808,16 @@ class Fetch:
         # Publish the car plan
         self.publish_car_plan()
 
-        # Work out iboost plan
+        # Work out iBoost plan
         if self.iboost_enable and (((not self.iboost_solar) and (not self.iboost_charging)) or self.iboost_smart):
             self.iboost_plan = self.plan_iboost_smart()
             self.log(
-                "IBoost iboost_solar {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} min_length {} plan is: {}".format(
+                "iBoost iboost_solar {}, rate threshold import {}{}, rate threshold export {}{}, iboost_gas {}{}, iboost_gas_export {}{}, iboost_smart {}, min_length {}, plan is: {}".format(
                     self.iboost_solar,
-                    self.iboost_rate_threshold,
-                    self.iboost_rate_threshold_export,
-                    self.iboost_gas,
-                    self.iboost_gas_export,
+                    self.iboost_rate_threshold, curr,
+                    self.iboost_rate_threshold_export, curr,
+                    self.iboost_gas, curr,
+                    self.iboost_gas_export, curr,
                     self.iboost_smart,
                     self.iboost_smart_min_length,
                     self.iboost_plan,
@@ -1132,6 +1133,7 @@ class Fetch:
         works on a 24-hour period only and then gets replicated later for future days
         """
         rates = {}
+        curr = self.currency_symbols[1]
 
         if prev:
             rates = prev.copy()
@@ -1248,7 +1250,7 @@ class Fetch:
                     start_minutes += delta_minutes
                     end_minutes += delta_minutes
 
-                self.log("Adding rate {}: {} => {} to {} @ {} date {} day_of_week {} increment {}".format(rtype, this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, day_of_week, rate_increment))
+                self.log("Adding rate {}: {}{} => {} to {} @ {}{}, date {}, day_of_week {}, increment {}{}".format(rtype, this_rate, curr, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, curr, date, day_of_week, rate_increment, curr))
 
                 day_of_week_midnight = self.midnight.weekday()
 
@@ -1287,10 +1289,11 @@ class Fetch:
         """
         Scan the rates and work out min/max
         """
+        curr = self.currency_symbols[1]
 
         self.rate_export_min, self.rate_export_max, self.rate_export_average, self.rate_export_min_minute, self.rate_export_max_minute = self.rate_minmax(rates)
         if print:
-            self.log("Export rates min {} max {} average {}".format(self.rate_export_min, self.rate_export_max, self.rate_export_average))
+            self.log("Export rates: min {}{}, max {}{}, average {}{}".format(self.rate_export_min, curr, self.rate_export_max, curr, self.rate_export_average, curr))
 
     def rate_minmax(self, rates):
         """
@@ -1341,7 +1344,7 @@ class Fetch:
         for minute in range(self.minutes_now, self.forecast_minutes + 24 * 60 + self.minutes_now):
             rate_min_forward[minute] = min(rate_array[minute:])
 
-        self.log("Rate min forward looking: now {} at end of forecast {}".format(dp2(rate_min_forward[self.minutes_now]), dp2(rate_min_forward[self.forecast_minutes])))
+        self.log("Rate min forward looking: now {}{} at end of forecast {}{}".format(dp2(rate_min_forward[self.minutes_now]), self.currency_symbols[1], dp2(rate_min_forward[self.forecast_minutes]), self.currency_symbols[1]))
 
         return rate_min_forward
 
@@ -1380,6 +1383,7 @@ class Fetch:
         """
         Set the high and low rate thresholds
         """
+        curr = self.currency_symbols[1]
 
         have_alerts = len(self.alert_active_keep) > 0
 
@@ -1402,27 +1406,29 @@ class Fetch:
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
 
-        self.log("Rate thresholds (for charge/export) are import {}p ({}) export {}p ({})".format(self.rate_import_cost_threshold, self.rate_low_threshold, self.rate_export_cost_threshold, self.rate_high_threshold))
+        self.log("Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(self.rate_import_cost_threshold, curr, self.rate_low_threshold, curr, self.rate_export_cost_threshold, curr, self.rate_high_threshold, curr))
 
     def rate_scan(self, rates, print=True):
         """
         Scan the rates and work out min/max
         """
         self.rate_min, self.rate_max, self.rate_average, self.rate_min_minute, self.rate_max_minute = self.rate_minmax(rates)
+        curr = self.currency_symbols[1]
 
         if print:
             # Calculate minimum forward rates only once rate replicate has run (when print is True)
             self.rate_min_forward = self.rate_min_forward_calc(self.rate_import)
-            self.log("Import rates min {} max {} average {}".format(self.rate_min, self.rate_max, self.rate_average))
+            self.log("Import rates: min {}{}, max {}{}, average {}{}".format(self.rate_min, curr, self.rate_max, curr, self.rate_average, curr))
 
     def rate_scan_gas(self, rates, print=True):
         """
         Scan the gas rates and work out min/max
         """
         self.rate_gas_min, self.rate_gas_max, self.rate_gas_average, self.rate_gas_min_minute, self.rate_gas_max_minute = self.rate_minmax(rates)
+        curr = self.currency_symbols[1]
 
         if print:
-            self.log("Gas rates min {} max {} average {}".format(self.rate_gas_min, self.rate_gas_max, self.rate_gas_average))
+            self.log("Gas rates: min {}{}, max {}{}, average {}{}".format(self.rate_gas_min, curr, self.rate_gas_max, curr, self.rate_gas_average, curr))
 
     def get_car_charging_planned(self):
         """
@@ -1479,13 +1485,13 @@ class Fetch:
 
         if self.num_cars > 0:
             self.log(
-                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}, plan_time {}, battery size {}, limit {}, rate {}, exclusive {}".format(
+                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}%, rate {}W, exclusive {}".format(
                     self.num_cars,
                     self.car_charging_from_battery,
                     self.car_charging_planned,
                     self.car_charging_now,
                     self.car_charging_plan_smart,
-                    self.car_charging_plan_max_price,
+                    self.car_charging_plan_max_price, self.currency_symbols[1],
                     self.car_charging_plan_time,
                     self.car_charging_battery_size,
                     self.car_charging_limit,
@@ -1508,17 +1514,17 @@ class Fetch:
 
             for entity_id in entity_ids:
                 if not entity_id:
-                    self.log("Warn: Unable to fetch load forecast data, check your setting of load_forecast")
+                    self.log("Warn: Unable to fetch load forecast data, check your load_forecast setting in apps.yaml")
                     continue
 
                 attribute = None
                 if "$" in entity_id:
                     entity_id, attribute = entity_id.split("$")
                 try:
-                    self.log("Loading extra load forecast from {} attribute {}".format(entity_id, attribute))
+                    self.log("Loading extra load forecast from {}, attribute {}".format(entity_id, attribute))
                     data = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
                 except (ValueError, TypeError) as e:
-                    self.log("Error: Unable to fetch load forecast data from sensor {} exception {}".format(entity_id, e))
+                    self.log("Error: Unable to fetch load forecast data from sensor {}, exception {}".format(entity_id, e))
                     data = None
 
                 # Convert format from dict to array
@@ -1544,7 +1550,7 @@ class Fetch:
                 )
 
                 if load_forecast:
-                    self.log("Loaded load forecast from {} load from midnight {} to now {} to midnight {}".format(entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
+                    self.log("Loaded load forecast from {} load sensor; from midnight {}kWh to now {}kWh to midnight {}kwh".format(entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
                 else:
                     self.log("Warn: Unable to load load forecast from {}".format(entity_id))
 
@@ -1602,7 +1608,7 @@ class Fetch:
         self.num_cars = self.get_arg("num_cars", 1)
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
 
-        self.log("Configuration: forecast_hours {} num_cars {} debug enable is {} calculate_plan_every {}".format(forecast_hours, self.num_cars, self.debug_enable, self.calculate_plan_every))
+        self.log("Configuration: forecast_hours {}, num_cars {}, debug enable is {}, calculate_plan_every {} minutes".format(forecast_hours, self.num_cars, self.debug_enable, self.calculate_plan_every))
 
         # Days previous
         self.holiday_days_left = self.get_arg("holiday_days_left")
@@ -1870,5 +1876,5 @@ class Fetch:
         if "car_charging_energy" in self.args:
             self.car_charging_energy = self.minute_data_import_export(now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
         else:
-            self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
+            self.log("Car charging hold {}, threshold {}kWh".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
