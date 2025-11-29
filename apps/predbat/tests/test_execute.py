@@ -11,6 +11,7 @@
 from tests.test_infra import reset_inverter
 from utils import calc_percent_limit
 
+
 class ActiveTestInverter:
     def __init__(self, id, soc_kw, soc_max, now_utc):
         self.soc_target = -1

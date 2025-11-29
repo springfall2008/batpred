@@ -11,6 +11,7 @@
 from utils import calc_percent_limit
 from tests.test_infra import DummyInverter
 
+
 def run_inverter_multi_test(
     name,
     my_predbat,
@@ -44,6 +45,7 @@ def run_inverter_multi_test(
         print("ERROR: isCharging {} should be {}".format(inverter.isCharging, isCharging))
         failed = True
     return failed
+
 
 def run_inverter_multi_tests(my_predbat):
     print("**** Running inverter multi tests ****\n")

@@ -10,6 +10,8 @@
 
 from datetime import datetime, timedelta
 from prediction import wrapped_run_prediction_single, Prediction
+
+
 class DummyInverter:
     def __init__(self, log, inverter_id=0):
         self.soc_kw = 0
@@ -27,6 +29,7 @@ class DummyInverter:
         self.soc_target = soc
         self.isCharging = isCharging
         self.isExporting = isExporting
+
 
 class TestHAInterface:
     def __init__(self):
@@ -547,4 +550,3 @@ def simple_scenario(
         return failed, prediction
     else:
         return failed
-

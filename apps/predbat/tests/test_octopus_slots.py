@@ -13,6 +13,7 @@ from tests.test_infra import reset_rates
 from utils import dp2
 import json
 
+
 def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, consider_full, car_soc, car_limit, car_loss):
     """
     Run a test for load_octopus_slot
@@ -33,6 +34,7 @@ def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, cons
         print("\nOriginal slots {}".format(slots))
         failed = True
     return failed
+
 
 def run_load_octopus_slots_tests(my_predbat):
     """

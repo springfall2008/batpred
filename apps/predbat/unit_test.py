@@ -103,8 +103,6 @@ def plot(name, prediction):
     plt.show()
 
 
-
-
 def run_nordpool_test(my_predbat):
     """
     Test the compute metric function
@@ -424,6 +422,7 @@ def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=
 
     return failed
 
+
 def run_iboost_smart_tests(my_predbat):
     """
     Test for Iboost smart
@@ -466,6 +465,7 @@ def run_car_charging_smart_tests(my_predbat):
     failed |= run_car_charging_smart_test("smart8", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=False, expect_cost=7 * 10, expect_kwh=7, plan_time="02:00:00")
 
     return failed
+
 
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False):
     print("**** Running debug test {} ****\n".format(debug_file))
@@ -1471,7 +1471,6 @@ def run_optimise_levels(
         print("Charge limit best: {} expected {} Discharge limit best {} expected {}".format(charge_limit_best, expect_charge_limit, export_limits_best, expect_export_limit))
 
     return failed, best_metric, best_keep, charge_limit_best, export_limits_best
-
 
 
 def test_find_charge_rate(my_predbat):

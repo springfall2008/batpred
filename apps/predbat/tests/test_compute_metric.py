@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
 def compute_metric_test(
     my_predbat,
     name,

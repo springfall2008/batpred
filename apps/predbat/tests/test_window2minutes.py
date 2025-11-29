@@ -11,6 +11,7 @@
 from utils import window2minutes, compute_window_minutes
 from datetime import datetime
 
+
 def test_window2minutes(my_predbat):
     """
     Test the window2minutes and compute_window_minutes functions from utils

@@ -19,11 +19,13 @@ from predbat import PredBat
 from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST, PREDICT_STEP
 from inverter import Inverter
 
+
 def dummy_sleep(seconds):
     """
     Dummy sleep function
     """
     pass
+
 
 class DummyRestAPI:
     def __init__(self):
@@ -61,7 +63,7 @@ class DummyRestAPI:
         commands = self.commands
         self.commands = []
         return commands
-    
+
 
 def test_disable_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, minutes_now, has_charge_enable_time=True, has_inverter_time_button_press=False, expect_inverter_time_button_press=False):
     """
@@ -527,7 +529,8 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
         failed = True
 
     return failed
-    
+
+
 def test_inverter_self_test(test_name, my_predbat):
     failed = 0
 
@@ -1081,6 +1084,7 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
 
     ha.service_store_enable = False
     return failed
+
 
 def run_inverter_tests(my_predbat_dummy):
     """
