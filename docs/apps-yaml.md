@@ -472,12 +472,17 @@ e.g.
 
 ```yaml
   inverter_limit_charge:
-   - 4200
+    - 4200
+
+  inverter_limit_discharge:
+    - 3000
 ```
 
 When set in Watts, overrides the maximum charge/discharge rate settings used when controlling the inverter.
-This can be used if you need Predbat to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
-will normally configure all timed charges or discharges to be at the inverter's maximum rate.
+
+This can be used if you need Predbat to cap your inverter battery rate (e.g. due to grid import/export limitations or to charge overnight at a slower rate to reduce inverter/battery heating).
+By default Predbat will normally configure all timed charges or discharges to be at the inverter's maximum rate and these options enable you to reduce that maximum rate.
+[Low rate charging](customisation.md#inverter-control-options) could also be used to slow down Predbat's charge rate whilst still meeting the battery plan.
 
 ### **inverter_can_charge_during_export**
 
