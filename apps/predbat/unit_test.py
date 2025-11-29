@@ -3394,6 +3394,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
         # my_predbat.best_soc_keep = 0
+        # my_predbat.best_soc_keep_weight = 0.5
         # my_predbat.rate_low_threshold = 0
         # my_predbat.rate_high_threshold = 0
         # my_predbat.set_charge_freeze = True

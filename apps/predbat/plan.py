@@ -1520,6 +1520,7 @@ class Plan:
         best_export = False
         best_metric = 9999999
         off_metric = 9999999
+        off_cost = 9999999
         best_cost = 0
         best_soc_min = 0
         best_soc_min_minute = 0
@@ -1682,7 +1683,8 @@ class Plan:
                 min_improvement_scaled = self.metric_min_improvement_export * window_size * rate_scale / float(self.plan_interval_minutes)
 
             # Only select an export if it makes a notable improvement has defined by min_improvement (divided in M windows)
-            if ((metric + min_improvement_scaled) <= off_metric) and (metric <= best_metric):
+            # Also require cost improvement to prevent exports that only game metric_keep without actual savings (issue #2984)
+            if (metric <= off_metric) and (metric <= best_metric) and ((cost + min_improvement_scaled) <= off_cost):
                 best_metric = metric
                 best_export = this_export_limit
                 best_cost = cost
@@ -1695,9 +1697,10 @@ class Plan:
                 best_carbon = final_carbon_g
                 best_import = import_kwh_battery + import_kwh_house
 
-            # Store the metric for export off
+            # Store the metric and cost for export off
             if off_metric == 9999999:
                 off_metric = metric
+                off_cost = cost
 
         if self.debug_enable:
             if not all_n:
