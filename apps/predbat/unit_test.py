@@ -41,7 +41,7 @@ except ImportError:
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2, dp4, minute_data, get_override_time_from_string, window2minutes, compute_window_minutes
+from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2, dp4, minute_data, get_override_time_from_string, window2minutes, compute_window_minutes, get_now_from_cumulative, prune_today, history_attribute, minute_data_state, format_time_ago, str2time
 from futurerate import FutureRate
 from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST, PREDICT_STEP
 from inverter import Inverter
@@ -9536,6 +9536,171 @@ def test_minute_data(my_predbat):
         print("ERROR: Different state key test failed - no data returned")
         failed = True
 
+    # Test 12: clean_increment=True with glitch filter (lines 319-337)
+    print("Test 12: clean_increment with glitch filter")
+    history_glitch = [
+        {"state": "10.0", "last_updated": "2024-10-04T10:00:00+00:00"},
+        {"state": "100.0", "last_updated": "2024-10-04T10:30:00+00:00"},  # Spike/glitch
+        {"state": "15.0", "last_updated": "2024-10-04T11:00:00+00:00"},  # Back to normal
+        {"state": "20.0", "last_updated": "2024-10-04T11:30:00+00:00"},
+    ]
+    glitch_result, ignore_io = minute_data(
+        history=history_glitch, days=1, now=now, state_key="state", last_updated_key="last_updated",
+        backwards=True, smoothing=True, clean_increment=True, max_increment=50
+    )
+    if len(glitch_result) == 0:
+        print("ERROR: clean_increment glitch filter test failed - no data returned")
+        failed = True
+    else:
+        # The glitch (100.0 spike) should be filtered out by clean_increment
+        # Values should not include the 100.0 spike, results should be smoothed between valid values
+        values = list(glitch_result.values())
+        if 100.0 in values:
+            print(f"ERROR: clean_increment glitch filter test failed - spike value 100.0 should be filtered, got {values[:10]}")
+            failed = True
+        # Check that we have reasonable values (should be between 10 and 20 range, not 100)
+        max_val = max(values)
+        if max_val > 50:
+            print(f"ERROR: clean_increment glitch filter test failed - max value {max_val} exceeds max_increment threshold")
+            failed = True
+
+    # Test 13: W to kWh unit conversion with integrate=True (lines 378-379)
+    print("Test 13: W to kWh unit conversion")
+    history_watts = [
+        {"state": "1000.0", "last_updated": "2024-10-04T10:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
+        {"state": "2000.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
+    ]
+    watts_result, ignore_io = minute_data(
+        history=history_watts, days=1, now=now, state_key="state", last_updated_key="last_updated",
+        backwards=True, required_unit="kWh"
+    )
+    if len(watts_result) == 0:
+        print("ERROR: W to kWh conversion test failed - no data returned")
+        failed = True
+    else:
+        # W to kWh conversion divides by 1000 and integrates over time
+        # 2000W = 2kW integrated over 60 minutes = 2.0 kWh at minute 0
+        val_at_0 = watts_result.get(0)
+        if val_at_0 is None:
+            print(f"ERROR: W to kWh conversion - no value at minute 0, keys: {list(watts_result.keys())[:5]}")
+            failed = True
+        elif abs(val_at_0 - 2.0) > 0.1:
+            print(f"ERROR: W to kWh conversion - expected 2.0 at minute 0, got {val_at_0}")
+            failed = True
+
+    # Test 14: kW to kWh unit conversion
+    print("Test 14: kW to kWh unit conversion")
+    history_kw = [
+        {"state": "1.5", "last_updated": "2024-10-04T10:00:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
+        {"state": "2.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
+    ]
+    kw_result, ignore_io = minute_data(
+        history=history_kw, days=1, now=now, state_key="state", last_updated_key="last_updated",
+        backwards=True, required_unit="kWh", to_key=None
+    )
+    if len(kw_result) == 0:
+        print("ERROR: kW to kWh conversion test failed - no data returned")
+        failed = True
+    else:
+        # kW to kWh with integration over 60 minutes
+        # 2.0kW integrated over 60 minutes = 2.0 kWh at minute 0
+        val_at_0 = kw_result.get(0)
+        if val_at_0 is None:
+            print(f"ERROR: kW to kWh conversion - no value at minute 0, keys: {list(kw_result.keys())[:5]}")
+            failed = True
+        elif abs(val_at_0 - 2.0) > 0.1:
+            print(f"ERROR: kW to kWh conversion - expected 2.0 at minute 0, got {val_at_0}")
+            failed = True
+
+    # Test 15: spreading parameter (lines 492-494)
+    print("Test 15: spreading parameter")
+    history_spreading = [
+        {"state": "10.0", "last_updated": "2024-10-04T11:00:00+00:00"},
+    ]
+    spread_result, ignore_io = minute_data(
+        history=history_spreading, days=1, now=now, state_key="state", last_updated_key="last_updated",
+        backwards=False, spreading=30  # Spread over 30 minutes
+    )
+    # Check that data is spread across multiple minutes
+    count_with_value = sum(1 for v in spread_result.values() if v == 10.0)
+    if count_with_value < 10:
+        print(f"ERROR: spreading test failed - expected multiple minutes with value 10.0, got {count_with_value}")
+        failed = True
+
+    # Test 16: divide_by parameter
+    print("Test 16: divide_by parameter")
+    history_divide = [
+        {"state": "100.0", "last_updated": "2024-10-04T11:00:00+00:00"},
+    ]
+    divide_result, ignore_io = minute_data(
+        history=history_divide, days=1, now=now, state_key="state", last_updated_key="last_updated",
+        backwards=True, divide_by=2
+    )
+    if divide_result.get(0) != 50.0:
+        print(f"ERROR: divide_by test failed - expected 50.0, got {divide_result.get(0)}")
+        failed = True
+
+    # Test 17: smoothing forward mode (backwards=False, smoothing=True) - lines 418-419
+    print("Test 17: smoothing forward mode")
+    history_forward = [
+        {"state": "10.0", "last_updated": "2024-10-04T12:10:00+00:00"},  # 5 minutes in future
+        {"state": "20.0", "last_updated": "2024-10-04T12:20:00+00:00"},  # 15 minutes in future
+    ]
+    forward_smooth_result, ignore_io = minute_data(
+        history=history_forward, days=1, now=now, state_key="state", last_updated_key="last_updated",
+        backwards=False, smoothing=True
+    )
+    if len(forward_smooth_result) == 0:
+        print("ERROR: smoothing forward mode test failed - no data returned")
+        failed = True
+
+    # Test 18: W to kW unit conversion (lines 384-385)
+    print("Test 18: W to kW unit conversion")
+    history_w_to_kw = [
+        {"state": "5000.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
+    ]
+    w_to_kw_result, ignore_io = minute_data(
+        history=history_w_to_kw, days=1, now=now, state_key="state", last_updated_key="last_updated",
+        backwards=True, required_unit="kW"
+    )
+    if len(w_to_kw_result) == 0:
+        print("ERROR: W to kW conversion test failed - no data returned")
+        failed = True
+    elif w_to_kw_result.get(0) != 5.0:
+        print(f"ERROR: W to kW conversion test failed - expected 5.0, got {w_to_kw_result.get(0)}")
+        failed = True
+
+    # Test 19: kW to W unit conversion (line 385 reverse)
+    print("Test 19: kW to W unit conversion")
+    history_kw_to_w = [
+        {"state": "2.5", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
+    ]
+    kw_to_w_result, ignore_io = minute_data(
+        history=history_kw_to_w, days=1, now=now, state_key="state", last_updated_key="last_updated",
+        backwards=True, required_unit="W"
+    )
+    if len(kw_to_w_result) == 0:
+        print("ERROR: kW to W conversion test failed - no data returned")
+        failed = True
+    elif kw_to_w_result.get(0) != 2500.0:
+        print(f"ERROR: kW to W conversion test failed - expected 2500.0, got {kw_to_w_result.get(0)}")
+        failed = True
+
+    # Test 20: Unsupported unit conversion is skipped (line 388)
+    print("Test 20: Unsupported unit conversion is skipped")
+    history_bad_unit = [
+        {"state": "100.0", "last_updated": "2024-10-04T10:00:00+00:00", "attributes": {"unit_of_measurement": "gallons"}},
+        {"state": "50.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "kWh"}},
+    ]
+    bad_unit_result, ignore_io = minute_data(
+        history=history_bad_unit, days=1, now=now, state_key="state", last_updated_key="last_updated",
+        backwards=True, required_unit="kWh"
+    )
+    # Should only have the kWh entry, gallons should be skipped
+    if len(bad_unit_result) == 0:
+        print("ERROR: Unsupported unit test failed - no data returned")
+        failed = True
+
     print("**** minute_data tests completed ****")
     return failed
 
@@ -10268,6 +10433,631 @@ def test_octopus_free(my_predbat):
     return failed
 
 
+def test_get_now_from_cumulative(my_predbat):
+    """
+    Test the get_now_from_cumulative function from utils
+    """
+    failed = False
+    print("**** Testing get_now_from_cumulative function ****")
+
+    # Test 1: backwards=True - normal data
+    print("Test 1: backwards=True with normal data")
+    data = {0: 100, 10: 90, 15: 85, 20: 80, 25: 75, 30: 70}
+    minutes_now = 15
+    result = get_now_from_cumulative(data, minutes_now, backwards=True)
+    # backwards: lowest in range 15-10 is min(85,90) = 85, value = data[0] - lowest = 100 - 85 = 15
+    expected = 15
+    if result != expected:
+        print(f"ERROR: Test 1 failed - expected {expected} got {result}")
+        failed = True
+
+    # Test 2: backwards=False - normal data
+    print("Test 2: backwards=False with normal data")
+    data = {0: 10, 1: 12, 2: 14, 3: 16, 4: 18, 10: 30, 15: 45}
+    minutes_now = 15
+    result = get_now_from_cumulative(data, minutes_now, backwards=False)
+    # forwards: lowest in range 0-4 is min(10,12,14,16,18) = 10, value = data[15] - lowest = 45 - 10 = 35
+    expected = 35
+    if result != expected:
+        print(f"ERROR: Test 2 failed - expected {expected} got {result}")
+        failed = True
+
+    # Test 3: backwards=True with missing keys in lookup range
+    print("Test 3: backwards=True with missing keys")
+    data = {0: 100, 15: 85}  # Missing 11,12,13,14
+    minutes_now = 15
+    result = get_now_from_cumulative(data, minutes_now, backwards=True)
+    # lowest = min(data.get(15,inf), data.get(14,inf), data.get(13,inf), data.get(12,inf), data.get(11,inf)) = 85
+    expected = 15  # 100 - 85
+    if result != expected:
+        print(f"ERROR: Test 3 failed - expected {expected} got {result}")
+        failed = True
+
+    # Test 4: backwards=False with missing keys at start
+    print("Test 4: backwards=False with missing keys at start")
+    data = {5: 50, 10: 100}  # Missing 0,1,2,3,4
+    minutes_now = 10
+    result = get_now_from_cumulative(data, minutes_now, backwards=False)
+    # lowest from range 0-4 all missing so lowest stays 9999999999, value = data.get(10,0) - lowest = 100 - 9999999999 < 0, max(value,0) = 0
+    expected = 0
+    if result != expected:
+        print(f"ERROR: Test 4 failed - expected {expected} got {result}")
+        failed = True
+
+    # Test 5: Empty data returns 0
+    print("Test 5: Empty data")
+    data = {}
+    result = get_now_from_cumulative(data, 10, backwards=True)
+    expected = 0  # max(0 - 9999999999, 0) = 0
+    if result != expected:
+        print(f"ERROR: Test 5 failed - expected {expected} got {result}")
+        failed = True
+
+    # Test 6: backwards=True at minute 0
+    print("Test 6: backwards=True at minute 0")
+    data = {0: 50, 1: 45, 2: 40}
+    minutes_now = 0
+    result = get_now_from_cumulative(data, minutes_now, backwards=True)
+    # Range is 0 to -4 (but negative indices won't be in data), so lowest is data.get(0) = 50
+    expected = 0  # data[0] - lowest = 50 - 50 = 0
+    if result != expected:
+        print(f"ERROR: Test 6 failed - expected {expected} got {result}")
+        failed = True
+
+    print("**** get_now_from_cumulative tests completed ****")
+    return failed
+
+
+def test_prune_today(my_predbat):
+    """
+    Test the prune_today function from utils
+    """
+    failed = False
+    print("**** Testing prune_today function ****")
+
+    import pytz
+    utc = pytz.UTC
+    now_utc = datetime(2024, 10, 15, 14, 30, 0, tzinfo=utc)
+    midnight_utc = datetime(2024, 10, 15, 0, 0, 0, tzinfo=utc)
+
+    # Test 1: prune=True removes data before midnight
+    print("Test 1: prune=True removes data before midnight")
+    data = {
+        "2024-10-14T23:00:00+00:00": 10,  # Before midnight - should be pruned
+        "2024-10-15T01:00:00+00:00": 20,  # After midnight - should be kept
+        "2024-10-15T10:00:00+00:00": 30,  # After midnight - should be kept
+    }
+    result = prune_today(data, now_utc, midnight_utc, prune=True, group=15)
+    if "2024-10-14T23:00:00+00:00" in result:
+        print("ERROR: Test 1 failed - data before midnight should be pruned")
+        failed = True
+    if "2024-10-15T01:00:00+00:00" not in result or "2024-10-15T10:00:00+00:00" not in result:
+        print("ERROR: Test 1 failed - data after midnight should be kept")
+        failed = True
+
+    # Test 2: prune=False keeps all data
+    print("Test 2: prune=False keeps all data")
+    result = prune_today(data, now_utc, midnight_utc, prune=False, group=15)
+    if len(result) != 3:
+        print(f"ERROR: Test 2 failed - expected 3 entries, got {len(result)}")
+        failed = True
+
+    # Test 3: group parameter filters close timestamps
+    print("Test 3: group parameter filters close timestamps")
+    data = {
+        "2024-10-15T10:00:00+00:00": 10,
+        "2024-10-15T10:05:00+00:00": 15,  # Within 15 min of previous - should be skipped
+        "2024-10-15T10:20:00+00:00": 20,  # More than 15 min from first - should be kept
+    }
+    result = prune_today(data, now_utc, midnight_utc, prune=False, group=15)
+    if len(result) != 2:
+        print(f"ERROR: Test 3 failed - expected 2 entries (grouped), got {len(result)}")
+        failed = True
+
+    # Test 4: prune_future=True removes future data
+    print("Test 4: prune_future=True removes future data")
+    data = {
+        "2024-10-15T10:00:00+00:00": 10,  # Past - should be kept
+        "2024-10-15T16:00:00+00:00": 20,  # Future - should be pruned
+    }
+    result = prune_today(data, now_utc, midnight_utc, prune=False, group=15, prune_future=True)
+    if "2024-10-15T16:00:00+00:00" in result:
+        print("ERROR: Test 4 failed - future data should be pruned")
+        failed = True
+    if "2024-10-15T10:00:00+00:00" not in result:
+        print("ERROR: Test 4 failed - past data should be kept")
+        failed = True
+
+    # Test 5: intermediate=True adds data points in gaps
+    print("Test 5: intermediate=True adds intermediate data points")
+    data = {
+        "2024-10-15T10:00:00+00:00": 10,
+        "2024-10-15T11:00:00+00:00": 20,  # 60 min gap > 15 min group
+    }
+    result = prune_today(data, now_utc, midnight_utc, prune=False, group=15, intermediate=True)
+    # Should have original 2 entries + intermediate entries (60/15 - 1 = 3 intermediate points)
+    if len(result) < 4:
+        print(f"ERROR: Test 5 failed - expected at least 4 entries with intermediates, got {len(result)}")
+        failed = True
+    else:
+        # Check original values are preserved
+        if result.get("2024-10-15T10:00:00+00:00") != 10:
+            print(f"ERROR: Test 5 failed - expected value 10 at 10:00, got {result.get('2024-10-15T10:00:00+00:00')}")
+            failed = True
+        if result.get("2024-10-15T11:00:00+00:00") != 20:
+            print(f"ERROR: Test 5 failed - expected value 20 at 11:00, got {result.get('2024-10-15T11:00:00+00:00')}")
+            failed = True
+
+    # Test 6: TIME_FORMAT_SECONDS format (with microseconds)
+    print("Test 6: TIME_FORMAT_SECONDS format")
+    data = {
+        "2024-10-15T10:00:00.123456+00:00": 10,
+        "2024-10-15T11:00:00.654321+00:00": 20,
+    }
+    result = prune_today(data, now_utc, midnight_utc, prune=False, group=15)
+    if len(result) != 2:
+        print(f"ERROR: Test 6 failed - expected 2 entries, got {len(result)}")
+        failed = True
+    else:
+        # Check values are preserved with microsecond timestamps
+        values = list(result.values())
+        if 10 not in values or 20 not in values:
+            print(f"ERROR: Test 6 failed - expected values [10, 20], got {values}")
+            failed = True
+
+    print("**** prune_today tests completed ****")
+    return failed
+
+
+def test_history_attribute(my_predbat):
+    """
+    Test the history_attribute function from utils
+    """
+    failed = False
+    print("**** Testing history_attribute function ****")
+
+    # Test 1: Basic functionality
+    print("Test 1: Basic functionality")
+    history = [[
+        {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history)
+    if len(result) != 2:
+        print(f"ERROR: Test 1 failed - expected 2 entries, got {len(result)}")
+        failed = True
+    else:
+        values = list(result.values())
+        if 10.5 not in values or 20.5 not in values:
+            print(f"ERROR: Test 1 failed - expected values [10.5, 20.5], got {values}")
+            failed = True
+
+    # Test 2: Missing last_updated_key is skipped (line 85)
+    print("Test 2: Missing last_updated_key is skipped")
+    history = [[
+        {"state": "10.5"},  # Missing last_updated
+        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history)
+    if len(result) != 1:
+        print(f"ERROR: Test 2 failed - expected 1 entry (skipped missing key), got {len(result)}")
+        failed = True
+    else:
+        actual = list(result.values())[0]
+        if actual != 20.5:
+            print(f"ERROR: Test 2 failed - expected value 20.5, got {actual}")
+            failed = True
+
+    # Test 3: attributes=True mode (lines 88-90)
+    print("Test 3: attributes=True mode")
+    history = [[
+        {"attributes": {"power": "15.0"}, "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"attributes": {"power": "25.0"}, "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history, state_key="power", attributes=True)
+    if len(result) != 2:
+        print(f"ERROR: Test 3 failed - expected 2 entries from attributes, got {len(result)}")
+        failed = True
+    else:
+        values = list(result.values())
+        if 15.0 not in values or 25.0 not in values:
+            print(f"ERROR: Test 3 failed - expected values [15.0, 25.0], got {values}")
+            failed = True
+
+    # Test 4: attributes=True with missing state_key in attributes (line 89)
+    print("Test 4: attributes=True with missing state_key")
+    history = [[
+        {"attributes": {"other": "15.0"}, "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"attributes": {"power": "25.0"}, "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history, state_key="power", attributes=True)
+    if len(result) != 1:
+        print(f"ERROR: Test 4 failed - expected 1 entry (skipped missing attr), got {len(result)}")
+        failed = True
+    else:
+        actual = list(result.values())[0]
+        if actual != 25.0:
+            print(f"ERROR: Test 4 failed - expected value 25.0, got {actual}")
+            failed = True
+
+    # Test 5: Missing state_key is skipped (line 94)
+    print("Test 5: Missing state_key is skipped")
+    history = [[
+        {"last_updated": "2024-10-15T10:00:00+00:00"},  # Missing state
+        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history)
+    if len(result) != 1:
+        print(f"ERROR: Test 5 failed - expected 1 entry (skipped missing state), got {len(result)}")
+        failed = True
+    else:
+        actual = list(result.values())[0]
+        if actual != 20.5:
+            print(f"ERROR: Test 5 failed - expected value 20.5, got {actual}")
+            failed = True
+
+    # Test 6: unavailable/unknown values are skipped (line 98)
+    print("Test 6: unavailable/unknown values are skipped")
+    history = [[
+        {"state": "unavailable", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "unknown", "last_updated": "2024-10-15T10:30:00+00:00"},
+        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history)
+    if len(result) != 1:
+        print(f"ERROR: Test 6 failed - expected 1 entry (skipped unavailable/unknown), got {len(result)}")
+        failed = True
+    else:
+        actual = list(result.values())[0]
+        if actual != 20.5:
+            print(f"ERROR: Test 6 failed - expected value 20.5, got {actual}")
+            failed = True
+
+    # Test 7: pounds=True scaling (line 108)
+    print("Test 7: pounds=True scaling")
+    history = [[
+        {"state": "1234", "last_updated": "2024-10-15T10:00:00+00:00"},  # 1234 pence = 12.34 pounds
+    ]]
+    result = history_attribute(history, pounds=True)
+    expected_value = 12.34
+    if len(result) != 1:
+        print(f"ERROR: Test 7 failed - expected 1 entry, got {len(result)}")
+        failed = True
+    else:
+        actual = list(result.values())[0]
+        if actual != expected_value:
+            print(f"ERROR: Test 7 failed - expected {expected_value}, got {actual}")
+            failed = True
+
+    # Test 8: Boolean string conversion "on" -> 1 (lines 111-113)
+    print("Test 8: Boolean string conversion 'on' -> 1")
+    history = [[
+        {"state": "on", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "true", "last_updated": "2024-10-15T10:30:00+00:00"},
+        {"state": "yes", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history)
+    if len(result) != 3:
+        print(f"ERROR: Test 8 failed - expected 3 entries, got {len(result)}")
+        failed = True
+    else:
+        for val in result.values():
+            if val != 1:
+                print(f"ERROR: Test 8 failed - expected all values to be 1, got {val}")
+                failed = True
+                break
+
+    # Test 9: Boolean string conversion "off" -> 0 (lines 114-115)
+    print("Test 9: Boolean string conversion 'off' -> 0")
+    history = [[
+        {"state": "off", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "false", "last_updated": "2024-10-15T10:30:00+00:00"},
+        {"state": "no", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history)
+    if len(result) != 3:
+        print(f"ERROR: Test 9 failed - expected 3 entries, got {len(result)}")
+        failed = True
+    else:
+        for val in result.values():
+            if val != 0:
+                print(f"ERROR: Test 9 failed - expected all values to be 0, got {val}")
+                failed = True
+                break
+
+    # Test 10: Unknown string is skipped (line 117)
+    print("Test 10: Unknown string values are skipped")
+    history = [[
+        {"state": "some_random_string", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history)
+    if len(result) != 1:
+        print(f"ERROR: Test 10 failed - expected 1 entry (skipped unknown string), got {len(result)}")
+        failed = True
+    else:
+        actual = list(result.values())[0]
+        if actual != 20.5:
+            print(f"ERROR: Test 10 failed - expected value 20.5, got {actual}")
+            failed = True
+
+    # Test 11: daily=True mode (line 138)
+    print("Test 11: daily=True mode")
+    history = [[
+        {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "20.5", "last_updated": "2024-10-15T15:00:00+00:00"},  # Same day
+        {"state": "30.5", "last_updated": "2024-10-16T10:00:00+00:00"},  # Different day
+    ]]
+    result = history_attribute(history, daily=True, first=True)
+    # With first=True and daily=True, should only keep first entry per day
+    if len(result) != 2:
+        print(f"ERROR: Test 11 failed - expected 2 entries (one per day with first=True), got {len(result)}")
+        failed = True
+    else:
+        # With first=True, should keep first entry per day (10.5 for Oct 15, 30.5 for Oct 16)
+        values = list(result.values())
+        if 10.5 not in values:
+            print(f"ERROR: Test 11 failed - expected 10.5 (first entry for Oct 15), got {values}")
+            failed = True
+        if 30.5 not in values:
+            print(f"ERROR: Test 11 failed - expected 30.5 (first entry for Oct 16), got {values}")
+            failed = True
+
+    # Test 12: daily=False mode (line 140)
+    print("Test 12: daily=False mode")
+    history = [[
+        {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "20.5", "last_updated": "2024-10-15T15:00:00+00:00"},
+    ]]
+    result = history_attribute(history, daily=False)
+    if len(result) != 2:
+        print(f"ERROR: Test 12 failed - expected 2 entries (all kept with daily=False), got {len(result)}")
+        failed = True
+    else:
+        # Verify both values are present
+        values = list(result.values())
+        if 10.5 not in values or 20.5 not in values:
+            print(f"ERROR: Test 12 failed - expected [10.5, 20.5], got {values}")
+            failed = True
+        # Verify keys are the original timestamps (not daily format)
+        keys = list(result.keys())
+        if "2024-10-15T10:00:00+00:00" not in keys or "2024-10-15T15:00:00+00:00" not in keys:
+            print(f"ERROR: Test 12 failed - expected original timestamps as keys, got {keys}")
+            failed = True
+
+    # Test 13: Invalid timestamp causes skip (lines 124-125)
+    print("Test 13: Invalid timestamp causes skip")
+    history = [[
+        {"state": "10.5", "last_updated": "invalid-timestamp"},
+        {"state": "20.5", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]]
+    result = history_attribute(history)
+    if len(result) != 1:
+        print(f"ERROR: Test 13 failed - expected 1 entry (skipped invalid timestamp), got {len(result)}")
+        failed = True
+    else:
+        # Verify the valid entry was kept with correct value
+        actual_value = list(result.values())[0]
+        if actual_value != 20.5:
+            print(f"ERROR: Test 13 failed - expected value 20.5, got {actual_value}")
+            failed = True
+
+    # Test 14: Non-list input returns empty dict
+    print("Test 14: Non-list input returns empty dict")
+    result = history_attribute("not a list")
+    if result != {}:
+        print(f"ERROR: Test 14 failed - expected empty dict for non-list input, got {result}")
+        failed = True
+
+    # Test 15: offset_days parameter
+    print("Test 15: offset_days parameter")
+    history = [[
+        {"state": "10.5", "last_updated": "2024-10-15T10:00:00+00:00"},
+    ]]
+    result = history_attribute(history, daily=True, offset_days=1)
+    if len(result) != 1:
+        print(f"ERROR: Test 15 failed - expected 1 entry with offset_days, got {len(result)}")
+        failed = True
+
+    # Test 16: scale parameter
+    print("Test 16: scale parameter")
+    history = [[
+        {"state": "10.0", "last_updated": "2024-10-15T10:00:00+00:00"},
+    ]]
+    result = history_attribute(history, scale=2.0)
+    if len(result) != 1:
+        print(f"ERROR: Test 16 failed - expected 1 entry, got {len(result)}")
+        failed = True
+    else:
+        actual = list(result.values())[0]
+        if actual != 20.0:
+            print(f"ERROR: Test 16 failed - expected 20.0 with scale=2.0, got {actual}")
+            failed = True
+
+    print("**** history_attribute tests completed ****")
+    return failed
+
+
+def test_minute_data_state(my_predbat):
+    """
+    Test the minute_data_state function from utils
+    """
+    failed = False
+    print("**** Testing minute_data_state function ****")
+
+    import pytz
+    utc = pytz.UTC
+    now = datetime(2024, 10, 15, 12, 0, 0, tzinfo=utc)
+
+    # Test 1: Empty history returns empty dict (line 197)
+    print("Test 1: Empty history returns empty dict")
+    result = minute_data_state([], days=1, now=now, state_key="state", last_updated_key="last_updated")
+    if result != {}:
+        print(f"ERROR: Test 1 failed - expected empty dict, got {result}")
+        failed = True
+
+    # Test 2: None history returns empty dict
+    print("Test 2: None history returns empty dict")
+    result = minute_data_state(None, days=1, now=now, state_key="state", last_updated_key="last_updated")
+    if result != {}:
+        print(f"ERROR: Test 2 failed - expected empty dict, got {result}")
+        failed = True
+
+    # Test 3: Missing state_key is skipped (line 203)
+    print("Test 3: Missing state_key is skipped")
+    history = [
+        {"last_updated": "2024-10-15T10:00:00+00:00"},  # Missing state
+        {"state": "charging", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]
+    result = minute_data_state(history, days=1, now=now, state_key="state", last_updated_key="last_updated")
+    # Should process only the second entry
+    if len(result) == 0:
+        print(f"ERROR: Test 3 failed - expected data, got empty result")
+        failed = True
+
+    # Test 4: Missing last_updated_key is skipped (line 205)
+    print("Test 4: Missing last_updated_key is skipped")
+    history = [
+        {"state": "charging"},  # Missing last_updated
+        {"state": "idle", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]
+    result = minute_data_state(history, days=1, now=now, state_key="state", last_updated_key="last_updated")
+    if len(result) == 0:
+        print(f"ERROR: Test 4 failed - expected data, got empty result")
+        failed = True
+
+    # Test 5: unavailable/unknown values are skipped (lines 208-209)
+    print("Test 5: unavailable/unknown values are skipped")
+    history = [
+        {"state": "unavailable", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "unknown", "last_updated": "2024-10-15T10:30:00+00:00"},
+        {"state": "charging", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]
+    result = minute_data_state(history, days=1, now=now, state_key="state", last_updated_key="last_updated")
+    # Should only process the "charging" entry
+    if 0 not in result:
+        print(f"ERROR: Test 5 failed - expected data at minute 0")
+        failed = True
+
+    # Test 6: Normal state tracking and interpolation
+    print("Test 6: Normal state tracking")
+    history = [
+        {"state": "idle", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "charging", "last_updated": "2024-10-15T11:00:00+00:00"},
+    ]
+    result = minute_data_state(history, days=1, now=now, state_key="state", last_updated_key="last_updated")
+    # Should have data filled for the day
+    if len(result) < 60 * 24:
+        print(f"ERROR: Test 6 failed - expected full day of data, got {len(result)} entries")
+        failed = True
+
+    # Test 7: State at minute 0 should be most recent
+    print("Test 7: State at minute 0 is most recent")
+    history = [
+        {"state": "idle", "last_updated": "2024-10-15T10:00:00+00:00"},
+        {"state": "charging", "last_updated": "2024-10-15T11:55:00+00:00"},
+    ]
+    result = minute_data_state(history, days=1, now=now, state_key="state", last_updated_key="last_updated")
+    if result.get(0) != "charging":
+        print(f"ERROR: Test 7 failed - expected 'charging' at minute 0, got {result.get(0)}")
+        failed = True
+
+    print("**** minute_data_state tests completed ****")
+    return failed
+
+
+def test_format_time_ago(my_predbat):
+    """
+    Test the format_time_ago function from utils
+    """
+    failed = False
+    print("**** Testing format_time_ago function ****")
+
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
+
+    # Test 1: None input returns "Never updated" (line 617)
+    print("Test 1: None input returns 'Never updated'")
+    result = format_time_ago(None)
+    if result != "Never updated":
+        print(f"ERROR: Test 1 failed - expected 'Never updated', got '{result}'")
+        failed = True
+
+    # Test 2: Just now (0 minutes ago) (line 631)
+    print("Test 2: Just now (0 minutes)")
+    result = format_time_ago(now)
+    if result != "Just now":
+        print(f"ERROR: Test 2 failed - expected 'Just now', got '{result}'")
+        failed = True
+
+    # Test 3: 1 minute ago (line 633)
+    print("Test 3: 1 minute ago")
+    one_min_ago = now - timedelta(minutes=1, seconds=30)
+    result = format_time_ago(one_min_ago)
+    if result != "1 minute ago":
+        print(f"ERROR: Test 3 failed - expected '1 minute ago', got '{result}'")
+        failed = True
+
+    # Test 4: Multiple minutes ago (line 635)
+    print("Test 4: Multiple minutes ago")
+    five_min_ago = now - timedelta(minutes=5)
+    result = format_time_ago(five_min_ago)
+    if result != "5 minutes ago":
+        print(f"ERROR: Test 4 failed - expected '5 minutes ago', got '{result}'")
+        failed = True
+
+    # Test 5: 45 minutes ago
+    print("Test 5: 45 minutes ago")
+    fortyfive_min_ago = now - timedelta(minutes=45)
+    result = format_time_ago(fortyfive_min_ago)
+    if result != "45 minutes ago":
+        print(f"ERROR: Test 5 failed - expected '45 minutes ago', got '{result}'")
+        failed = True
+
+    # Test 6: 1 hour ago (60-119 minutes) (line 637)
+    print("Test 6: 1 hour ago")
+    one_hour_ago = now - timedelta(minutes=65)
+    result = format_time_ago(one_hour_ago)
+    if result != "1 hour ago":
+        print(f"ERROR: Test 6 failed - expected '1 hour ago', got '{result}'")
+        failed = True
+
+    # Test 7: Multiple hours ago (lines 638-639)
+    print("Test 7: Multiple hours ago")
+    five_hours_ago = now - timedelta(hours=5)
+    result = format_time_ago(five_hours_ago)
+    if result != "5 hours ago":
+        print(f"ERROR: Test 7 failed - expected '5 hours ago', got '{result}'")
+        failed = True
+
+    # Test 8: 1 day ago (line 643)
+    print("Test 8: 1 day ago")
+    one_day_ago = now - timedelta(days=1, hours=2)
+    result = format_time_ago(one_day_ago)
+    if result != "1 day ago":
+        print(f"ERROR: Test 8 failed - expected '1 day ago', got '{result}'")
+        failed = True
+
+    # Test 9: Multiple days ago (line 645)
+    print("Test 9: Multiple days ago")
+    three_days_ago = now - timedelta(days=3)
+    result = format_time_ago(three_days_ago)
+    if result != "3 days ago":
+        print(f"ERROR: Test 9 failed - expected '3 days ago', got '{result}'")
+        failed = True
+
+    # Test 10: Future time returns "Just now" (line 629)
+    print("Test 10: Future time returns 'Just now'")
+    future_time = now + timedelta(minutes=10)
+    result = format_time_ago(future_time)
+    if result != "Just now":
+        print(f"ERROR: Test 10 failed - expected 'Just now' for future time, got '{result}'")
+        failed = True
+
+    print("**** format_time_ago tests completed ****")
+    return failed
+
+
 def run_debug_cases(my_predbat):
     """
     Run debug case files from the cases directory
@@ -10303,6 +11093,11 @@ def main():
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("minute_data", test_minute_data, "Minute data tests", False),
+        ("get_now_cumulative", test_get_now_from_cumulative, "Get now from cumulative tests", False),
+        ("prune_today", test_prune_today, "Prune today tests", False),
+        ("history_attribute", test_history_attribute, "History attribute tests", False),
+        ("minute_data_state", test_minute_data_state, "Minute data state tests", False),
+        ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
         ("octopus_url", test_download_octopus_url_wrapper, "Octopus URL download tests", False),

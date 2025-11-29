@@ -29,7 +29,7 @@ Before committing code, ALWAYS run pre-commit hooks to ensure code quality:
 python3 -m pip install pre-commit
 
 # Run all pre-commit checks
-/usr/bin/python3 -m pre_commit run --all-files
+python3 -m pre_commit run --all-files
 ```
 
 Common pre-commit checks:
@@ -181,8 +181,11 @@ cd coverage/
 
 - Tests are functions prefixed `test_*` (e.g., `test_basic_rates()`, `test_inverter_self_test()`)
 - Mock HA via `TestHAInterface` class which stores dummy state in `dummy_items` dict
-- Run specific debug scenarios: `python unit_test.py --debug predbat_debug_file.yaml`
-- Performance tests: `python unit_test.py --perf-only`
+- Tests must be run from the coverage directory
+- Run all tests: `./run_all`
+- Run named unit tests `./run_all --test test_name`
+- Run specific debug scenarios: `./update_all; python3 predbat_debug/unit_test.py --debug predbat_debug_file.yaml`
+- Performance tests: `./run_all --perf-only`
 
 **Coverage analysis**:
 
