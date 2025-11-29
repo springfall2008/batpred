@@ -41,7 +41,7 @@ except ImportError:
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2, dp4, minute_data, get_override_time_from_string
+from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate, dp2, dp4, minute_data, get_override_time_from_string, window2minutes, compute_window_minutes
 from futurerate import FutureRate
 from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST, PREDICT_STEP
 from inverter import Inverter
@@ -1817,6 +1817,46 @@ def test_basic_rates(my_predbat):
     failed |= assert_rates(results, 24 * 60 + 13 * 60, 24 * 60 + 17 * 60, 5)
     failed |= assert_rates(results, 24 * 60 + 17 * 60, 24 * 60 + 19 * 60, 10)
 
+    # Test 6: Midnight-spanning off-peak with day_of_week (Dutch tariff scenario)
+    # Weekdays: 07:00-22:00 = 14 cent (peak), 22:00-07:00 = 8 cent (off-peak spans midnight)
+    # Weekends: All day 8 cent flat rate
+    # Simulate Saturday afternoon at 14:00
+    print("*** Running test: Simple rate6 - Midnight spanning with day_of_week (Saturday afternoon)")
+    my_predbat.midnight = datetime.strptime("2025-07-05T00:00:00", "%Y-%m-%dT%H:%M:%S")  # Saturday (day 6)
+    old_minutes_now = my_predbat.minutes_now
+    my_predbat.minutes_now = 14 * 60  # 14:00 Saturday afternoon
+    dutch_rate = [
+        {"start": "07:00:00", "end": "22:00:00", "rate": 14.0, "day_of_week": "1,2,3,4,5"},  # Weekday peak
+        {"start": "22:00:00", "end": "07:00:00", "rate": 8.0, "day_of_week": "1,2,3,4,5"},  # Weekday off-peak (spans midnight)
+        {"rate": 8.0, "day_of_week": "6,7"},  # Weekend flat rate
+    ]
+    results = my_predbat.basic_rates(dutch_rate, "import")
+    results, results_replicated = my_predbat.rate_replicate(results, is_import=True, is_gas=False)
+
+    # Day 1 (Saturday): All day = 8 (weekend flat rate)
+    failed |= assert_rates(results, 0, 24 * 60, 8)  # All day Saturday = 8
+
+    # Day 2 (Sunday): All day = 8 (weekend flat rate)
+    failed |= assert_rates(results, 24 * 60, 48 * 60, 8)  # All day Sunday = 8
+
+    # Test 7: Monday (weekday) - peak/off-peak pattern
+    print("*** Running test: Simple rate7 - Weekday peak/off-peak pattern")
+    my_predbat.midnight = datetime.strptime("2025-07-07T00:00:00", "%Y-%m-%dT%H:%M:%S")  # Monday (day 1)
+    my_predbat.minutes_now = 14 * 60  # 14:00 Monday afternoon
+    results = my_predbat.basic_rates(dutch_rate, "import")
+    results, results_replicated = my_predbat.rate_replicate(results, is_import=True, is_gas=False)
+
+    # Day 1 (Monday): 00:00-07:00 = 8 (off-peak from previous night), 07:00-22:00 = 14 (peak), 22:00-24:00 = 8 (off-peak)
+    failed |= assert_rates(results, 0, 7 * 60, 8)  # 00:00-07:00 off-peak
+    failed |= assert_rates(results, 7 * 60, 22 * 60, 14)  # 07:00-22:00 peak
+    failed |= assert_rates(results, 22 * 60, 24 * 60, 8)  # 22:00-24:00 off-peak
+
+    # Day 2 (Tuesday): Same pattern as Monday
+    failed |= assert_rates(results, 24 * 60, 24 * 60 + 7 * 60, 8)  # 00:00-07:00 off-peak
+    failed |= assert_rates(results, 24 * 60 + 7 * 60, 24 * 60 + 22 * 60, 14)  # 07:00-22:00 peak
+    failed |= assert_rates(results, 24 * 60 + 22 * 60, 48 * 60, 8)  # 22:00-24:00 off-peak
+
+    my_predbat.minutes_now = old_minutes_now
     my_predbat.midnight = old_midnight
     return failed
 
@@ -2108,7 +2148,7 @@ def test_inverter_self_test(test_name, my_predbat):
     return failed
 
 
-def run_inverter_tests():
+def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
     """
@@ -9613,6 +9653,111 @@ def test_get_override_time_from_string(my_predbat):
     return failed
 
 
+def test_window2minutes(my_predbat):
+    """
+    Test the window2minutes and compute_window_minutes functions from utils
+    """
+    failed = False
+    print("**** Testing window2minutes and compute_window_minutes functions ****")
+
+    # Test 1: Normal window within same day (e.g., 10:00-14:00 when it's 08:00)
+    print("Test 1: Normal window within same day - future window")
+    minutes_now = 8 * 60  # 08:00
+    start, end = window2minutes("10:00:00", "14:00:00", minutes_now)
+    if start != 10 * 60 or end != 14 * 60:
+        print(f"ERROR: Test 1 failed - expected (600, 840) got ({start}, {end})")
+        failed = True
+
+    # Test 2: Normal window that has already passed (e.g., 02:00-04:00 when it's 10:00)
+    print("Test 2: Normal window that has already passed - should move to next day")
+    minutes_now = 10 * 60  # 10:00
+    start, end = window2minutes("02:00:00", "04:00:00", minutes_now)
+    expected_start = 2 * 60 + 24 * 60  # 02:00 next day
+    expected_end = 4 * 60 + 24 * 60  # 04:00 next day
+    if start != expected_start or end != expected_end:
+        print(f"ERROR: Test 2 failed - expected ({expected_start}, {expected_end}) got ({start}, {end})")
+        failed = True
+
+    # Test 3: Midnight-spanning window - before midnight, window spans midnight (23:00-02:00)
+    print("Test 3: Midnight-spanning window - currently before start")
+    minutes_now = 20 * 60  # 20:00
+    start, end = window2minutes("23:00:00", "02:00:00", minutes_now)
+    expected_start = 23 * 60  # 23:00 today
+    expected_end = 2 * 60 + 24 * 60  # 02:00 tomorrow (26 hours from midnight)
+    if start != expected_start or end != expected_end:
+        print(f"ERROR: Test 3 failed - expected ({expected_start}, {expected_end}) got ({start}, {end})")
+        failed = True
+
+    # Test 4: Midnight-spanning window - after midnight but before end (23:00-02:00 when it's 01:00)
+    print("Test 4: Midnight-spanning window - currently after midnight but before end")
+    minutes_now = 1 * 60  # 01:00
+    start, end = window2minutes("23:00:00", "02:00:00", minutes_now)
+    expected_start = 23 * 60 - 24 * 60  # 23:00 yesterday (-60)
+    expected_end = 2 * 60  # 02:00 today
+    if start != expected_start or end != expected_end:
+        print(f"ERROR: Test 4 failed - expected ({expected_start}, {expected_end}) got ({start}, {end})")
+        failed = True
+
+    # Test 5: Midnight-spanning window - end has passed (23:00-02:00 when it's 03:00)
+    print("Test 5: Midnight-spanning window - end has passed")
+    minutes_now = 3 * 60  # 03:00
+    start, end = window2minutes("23:00:00", "02:00:00", minutes_now)
+    expected_start = 23 * 60  # 23:00 today
+    expected_end = 2 * 60 + 24 * 60  # 02:00 tomorrow
+    if start != expected_start or end != expected_end:
+        print(f"ERROR: Test 5 failed - expected ({expected_start}, {expected_end}) got ({start}, {end})")
+        failed = True
+
+    # Test 6: Window ending exactly at current time - should move to next day
+    print("Test 6: Window ending exactly at current time")
+    minutes_now = 14 * 60  # 14:00
+    start, end = window2minutes("10:00:00", "14:00:00", minutes_now)
+    expected_start = 10 * 60 + 24 * 60  # 10:00 tomorrow
+    expected_end = 14 * 60 + 24 * 60  # 14:00 tomorrow
+    if start != expected_start or end != expected_end:
+        print(f"ERROR: Test 6 failed - expected ({expected_start}, {expected_end}) got ({start}, {end})")
+        failed = True
+
+    # Test 7: Window starting at midnight (00:00-04:00 when it's 22:00)
+    print("Test 7: Window starting at midnight - future window")
+    minutes_now = 22 * 60  # 22:00
+    start, end = window2minutes("00:00:00", "04:00:00", minutes_now)
+    expected_start = 0 + 24 * 60  # 00:00 tomorrow
+    expected_end = 4 * 60 + 24 * 60  # 04:00 tomorrow
+    if start != expected_start or end != expected_end:
+        print(f"ERROR: Test 7 failed - expected ({expected_start}, {expected_end}) got ({start}, {end})")
+        failed = True
+
+    # Test 8: Short time strings (HH:MM format)
+    print("Test 8: Short time strings (HH:MM format)")
+    minutes_now = 8 * 60  # 08:00
+    start, end = window2minutes("10:00", "14:00", minutes_now)
+    if start != 10 * 60 or end != 14 * 60:
+        print(f"ERROR: Test 8 failed - expected (600, 840) got ({start}, {end})")
+        failed = True
+
+    # Test 9: Window currently active (10:00-14:00 when it's 12:00)
+    print("Test 9: Window currently active")
+    minutes_now = 12 * 60  # 12:00
+    start, end = window2minutes("10:00:00", "14:00:00", minutes_now)
+    if start != 10 * 60 or end != 14 * 60:
+        print(f"ERROR: Test 9 failed - expected (600, 840) got ({start}, {end})")
+        failed = True
+
+    # Test 10: compute_window_minutes with datetime objects
+    print("Test 10: compute_window_minutes with datetime objects")
+    minutes_now = 8 * 60
+    start_time = datetime(2024, 1, 1, 10, 30, 0)
+    end_time = datetime(2024, 1, 1, 14, 45, 0)
+    start, end = compute_window_minutes(start_time, end_time, minutes_now)
+    if start != 10 * 60 + 30 or end != 14 * 60 + 45:
+        print(f"ERROR: Test 10 failed - expected (630, 885) got ({start}, {end})")
+        failed = True
+
+    print("**** window2minutes tests completed ****")
+    return failed
+
+
 def run_test_units(my_predbat):
     """
     Run the unit tests
@@ -10102,18 +10247,111 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
     return failed
 
 
+def test_octopus_free(my_predbat):
+    """
+    Test Octopus free electricity session download
+    """
+    failed = False
+    print("**** Running Octopus free electricity test ****")
+
+    free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
+    free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
+    # if not free_sessions:
+    #    print("**** ERROR: No free sessions found ****")
+    #    failed = True
+
+    if not failed:
+        print("**** Octopus free electricity test PASSED ****")
+    else:
+        print("**** Octopus free electricity test FAILED ****")
+
+    return failed
+
+
+def run_debug_cases(my_predbat):
+    """
+    Run debug case files from the cases directory
+    """
+    failed = False
+    print("**** Running debug case files ****")
+
+    # Scan .yaml files in cases directory
+    for filename in glob.glob("cases/*.yaml"):
+        basename = os.path.basename(filename)
+        pathname = os.path.dirname(filename)
+        test_failed = run_single_debug(basename, my_predbat, filename, pathname + "/" + basename + ".expected.json")
+        if test_failed:
+            print(f"**** Debug case {basename}: FAILED ****")
+            failed = True
+            break
+        else:
+            print(f"**** Debug case {basename}: PASSED ****")
+
+    return failed
+
+
 def main():
+    # Test registry - table of all available tests
+    # Format: (name, function, description, slow)
+    TEST_REGISTRY = [
+        ("perf", run_perf_test, "Performance tests", False),
+        ("model", run_model_tests, "Model tests", False),
+        ("inverter", run_inverter_tests, "Inverter tests", False),
+        ("execute", run_execute_tests, "Execute tests", False),
+        ("basic_rates", test_basic_rates, "Basic rates tests", False),
+        ("window_sort", run_window_sort_tests, "Window sort tests", False),
+        ("window2minutes", test_window2minutes, "Window to minutes tests", False),
+        ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
+        ("minute_data", test_minute_data, "Minute data tests", False),
+        ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
+        ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
+        ("octopus_url", test_download_octopus_url_wrapper, "Octopus URL download tests", False),
+        ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
+        ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
+        ("units", run_test_units, "Unit tests", False),
+        ("manual_api", run_test_manual_api, "Manual API tests", False),
+        ("web_if", run_test_web_if, "Web interface tests", False),
+        ("nordpool", run_nordpool_test, "Nordpool tests", False),
+        ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
+        ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
+        ("energydataservice", test_energydataservice, "Energy data service tests", False),
+        ("saving_session", test_saving_session, "Saving session tests", False),
+        ("alert_feed", test_alert_feed, "Alert feed tests", False),
+        ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
+        ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
+        ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
+        ("inverter_multi", run_inverter_multi_tests, "Inverter multi tests", False),
+        ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
+        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
+        ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
+        ("debug_cases", run_debug_cases, "Debug case file tests", True),
+    ]
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
-    parser.add_argument("--quick", action="store_true", help="Run quick tests")
-    parser.add_argument("--perf_only", action="store_true", help="Run only perf tests")
     parser.add_argument("--compare", action="store_true", help="Run compare")
     parser.add_argument("--gecloud", action="store_true", help="Run tests for GivEnergy Cloud")
     parser.add_argument("--octopus_api", action="store", help="Run Octopus API tests with given token")
     parser.add_argument("--octopus_account", action="store", help="Octopus API account ID")
+    parser.add_argument("--test", "-t", action="store", help="Run a specific test by name (use --list to see available tests)")
+    parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
+    parser.add_argument("--quick", "-q", action="store_true", help="Skip slow tests (optimise_levels, optimise_windows, debug_cases)")
     args = parser.parse_args()
+
+    # List available tests
+    if args.list:
+        print("Available tests:")
+        print("-" * 70)
+        for name, _, desc, slow in TEST_REGISTRY:
+            slow_marker = " [slow]" if slow else ""
+            print(f"  {name:25s} - {desc}{slow_marker}")
+        print("-" * 70)
+        print("\nUsage: python unit_test.py --test <test_name>")
+        print("       python unit_test.py --test basic_rates")
+        print("       python unit_test.py --quick  # Skip slow tests")
+        sys.exit(0)
 
     print("**** Starting Predbat tests ****")
     my_predbat = PredBat()
@@ -10143,85 +10381,55 @@ def main():
         failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
 
-    if not failed and not args.quick:
-        failed |= run_perf_test(my_predbat)
-        if args.perf_only:
-            return failed
-
-    if not failed:
-        failed |= run_model_tests(my_predbat)
-    if not failed:
-        failed |= run_inverter_tests()
-    if not failed:
-        failed |= run_execute_tests(my_predbat)
-
-    if not failed:
-        failed |= test_previous_days_modal_filter(my_predbat)
-    if not failed:
-        failed |= test_download_octopus_url_wrapper(my_predbat)
-    if not failed:
-        failed |= test_plugin_startup_order(my_predbat)
-    if not failed:
-        failed |= test_minute_data(my_predbat)
-    if not failed:
-        failed |= test_get_override_time_from_string(my_predbat)
-    if not failed:
-        failed |= test_dynamic_load_car_slot_cancellation(my_predbat)
-    if not failed:
-        failed |= run_test_units(my_predbat)
-    if not failed:
-        failed |= run_test_manual_api(my_predbat)
-    if not failed:
-        failed |= run_test_web_if(my_predbat)
-    if not failed:
-        failed |= run_nordpool_test(my_predbat)
-    if not failed:
-        failed |= run_load_octopus_slots_tests(my_predbat)
-    if not failed:
-        failed |= test_basic_rates(my_predbat)
-    if not failed:
-        failed |= test_find_charge_rate(my_predbat)
-    if not failed:
-        failed |= test_energydataservice(my_predbat)
-    if not failed:
-        failed |= test_saving_session(my_predbat)
-    free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
-    free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
-    # if not free_sessions:
-    #    print("**** ERROR: No free sessions found ****")
-    #    failed = 1
-    if not failed:
-        failed |= test_alert_feed(my_predbat)
-    if not failed:
-        failed |= run_iboost_smart_tests(my_predbat)
-    if not failed:
-        failed |= run_car_charging_smart_tests(my_predbat)
-    if not failed:
-        failed |= run_intersect_window_tests(my_predbat)
-    if not failed:
-        failed |= run_inverter_multi_tests(my_predbat)
-    if not failed:
-        failed |= run_window_sort_tests(my_predbat)
-    if not failed:
-        failed |= run_optimise_levels_tests(my_predbat)
-    if not failed:
-        failed |= run_optimise_all_windows_tests(my_predbat)
-    if not failed:
-        failed |= run_compute_metric_tests(my_predbat)
-
-    if not failed and not args.quick:
-        # Scan .yaml files in cases directory
-        for filename in glob.glob("cases/*.yaml"):
-            basename = os.path.basename(filename)
-            pathname = os.path.dirname(filename)
-            failed |= run_single_debug(basename, my_predbat, filename, pathname + "/" + basename + ".expected.json")
-            if failed:
+    # Run a specific test if requested
+    if args.test:
+        test_found = False
+        for name, func, desc, slow in TEST_REGISTRY:
+            if name == args.test:
+                test_found = True
+                print(f"**** Running single test: {name} - {desc} ****")
+                start_time = time.time()
+                failed = func(my_predbat)
+                elapsed = time.time() - start_time
+                if failed:
+                    print(f"**** ERROR: Test {args.test} FAILED in {elapsed:.2f}s ****")
+                else:
+                    print(f"**** Test {args.test} PASSED in {elapsed:.2f}s ****")
                 break
+        if not test_found:
+            print(f"ERROR: Test '{args.test}' not found. Use --list to see available tests.")
+            sys.exit(1)
+        if failed:
+            sys.exit(1)
+        sys.exit(0)
+
+    # Run all tests from the registry
+    total_time = 0
+    skipped_count = 0
+    for name, func, desc, slow in TEST_REGISTRY:
+        if args.quick and slow:
+            print(f"**** Skipping: {name} (slow) ****")
+            skipped_count += 1
+            continue
+        print(f"**** Running: {name} ****")
+        start_time = time.time()
+        test_failed = func(my_predbat)
+        elapsed = time.time() - start_time
+        total_time += elapsed
+        if test_failed:
+            print(f"**** {name}: FAILED in {elapsed:.2f}s ****")
+            failed = True
+            break
+        else:
+            print(f"**** {name}: PASSED in {elapsed:.2f}s ****")
 
     if failed:
-        print("**** ERROR: Some tests failed ****")
+        print(f"**** ERROR: Some tests failed (total time: {total_time:.2f}s) ****")
         sys.exit(1)
-    print("**** Tests passed ****")
+    if skipped_count > 0:
+        print(f"**** All tests passed ({skipped_count} slow tests skipped, total time: {total_time:.2f}s) ****")
+    else:
+        print(f"**** All tests passed (total time: {total_time:.2f}s) ****")
     sys.exit(0)
 
 
