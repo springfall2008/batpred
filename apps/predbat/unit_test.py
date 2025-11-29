@@ -56,7 +56,6 @@ from utils import (
     history_attribute,
     minute_data_state,
     format_time_ago,
-    str2time,
 )
 from futurerate import FutureRate
 from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST, PREDICT_STEP
