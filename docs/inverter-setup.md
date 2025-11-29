@@ -428,21 +428,54 @@ The discussion ticket is here: <https://github.com/springfall2008/batpred/issues
 - Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which may be 12%
 
 - Huawei inverters can charge the battery from DC solar and discharge at one power level (e.g. 5kWh), but have a lower limit (e.g. 3kWh) for AC charging.
-At present Predbat doesn't have the ability to model separate DC and AC charging limits, so battery_rate_max is set to the upper limit in watts (e.g. 5000) in the template `apps.yaml` to ensure that Predbat doesn't limit DC charging and discharging.<BR>
-Create the following automation script which Predbat will call to start grid battery charging when required, customise the power rating to charge at, and enter your own Huawei device id:
+At present Predbat doesn't have the ability to model separate DC and AC charging limits,
+so battery_rate_max is set to the lower limit in watts (e.g. 3000) in the template `apps.yaml` to ensure that Predbat correctly plans AC charging of the battery at the right rate.
+
+- However this means Predbat will also limit DC solar charging to this lower limit and to avoid that an automation is used to overwrite the **inverter_limit_charge** during the hours of sunrise and sunset:
 
 ```yaml
-alias: Charge battery from grid
-description: Start charging Huawei battery from grid at AC charge limit
-sequence:
-  - action: huawei_solar.forcible_charge_soc
-    data:
-      target_soc: 100
-      power: "3000"
-      device_id: XXXXXXXX
+alias: Predbat change inverter charge rate at sunrise and sunset
+description: Using predbat_manual_api
+triggers:
+  - trigger: time
+    at:
+      entity_id: sensor.sun_next_rising
+    id: sunrise
+  - trigger: time
+    at:
+      entity_id: sensor.sun_next_setting
+    id: sunset
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            alias: Sunrise
+            id:
+              - sunrise
+        sequence:
+          - action: select.select_option
+            alias: set inverter charge rate to 5000W at sunrise for maximum DC solar charging
+            target:
+              entity_id:
+                - select.predbat_manual_api
+            data:
+              option: inverter_limit_charge(0)=5000
+      - conditions:
+          - condition: trigger
+            alias: Sunset
+            id:
+              - sunset
+        sequence:
+          - action: select.select_option
+            alias: set inverter charge rate to 1500W at sunset for reduced AC charging rate
+            target:
+              entity_id:
+                - select.predbat_manual_api
+            data:
+              option: inverter_limit_charge(0)=3000
+mode: single
 ```
-
-Note that Predbat will plan the charging on the basis of the assumed higher (e.g. 5kWh) charge rate, but will recalculate and adjust the plan every 10 minutes as the battery is charged at the lower rate.
 
 - Set the Huawei inverter work mode to 'TOU' (Time Of Use).
 

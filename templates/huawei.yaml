@@ -69,7 +69,7 @@ pred_bat:
   load_power:
     - sensor.power_meter_active_power
   # grid_power measures active power in Watts on the grid side, but requires a separate Huawei power module for this
-  # if you do not have the module or any way to measure grid power, then comment it out of apps.yaml
+  # if you do not have the module or any way to measure grid power, then comment grid_power out of apps.yaml
   # the only impact will be that there is no grid power flow shown on the Predbat web console powerflow.
   # It has no impact on battery planning
   grid_power:
@@ -84,29 +84,22 @@ pred_bat:
     - number.battery_end_of_charge_soc
   reserve:
     - 12
-  scheduled_charge_enable:
-    - off
-  scheduled_discharge_enable:
-    - off
-  charge_start_time:
-    - "00:00:00"
-  charge_end_time:
-    - "06:00:00"
-  discharge_start_time:
-    - "07:00:00"
-  discharge_end_time:
-    - "23:00:00"
   battery_min_soc:
     - 14
 
   # Services to charge/discharge
   charge_start_service: 
-    - service: script.charge_battery_from_grid
+    - service: huawei_solar.forcible_charge_soc
+      target_soc: 100
+      power: "{inverter_limit_charge}"
+      device_id: "{device_id}
   charge_stop_service:
     - service: huawei_solar.stop_forcible_charge
       device_id: "{device_id}"
   discharge_start_service:
     - service: huawei_solar.forcible_discharge_soc
+      target_soc: 10
+      power: "{inverter_limit_discharge}"
       device_id: "{device_id}"
   discharge_stop_service:
     - service: huawei_solar.stop_forcible_charge
@@ -123,9 +116,15 @@ pred_bat:
   inverter_limit:
     - 12000
 
-  # Set the maximum charge/discharge rate of the battery - see inverter setup guide
+  # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
     - 5000
+
+  # Set Inverter max charge rate - see inverter setup guide
+  inverter_limit_charge: 3000
+
+  # Set Inverter max discharge rate to grid
+  inverter_limit_discharge: 5000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
