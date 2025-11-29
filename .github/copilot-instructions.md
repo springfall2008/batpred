@@ -223,10 +223,10 @@ Pre-commit hooks automatically check code quality before commits. They are also 
 
 ```bash
 # Run all pre-commit checks locally
-/usr/bin/python3 -m pre_commit run --all-files
+python3 -m pre_commit run --all-files
 
 # Install pre-commit hooks (one-time setup)
-/usr/bin/python3 -m pre_commit install
+python3 -m pre_commit install
 ```
 
 **Common pre-commit failures and fixes**:
