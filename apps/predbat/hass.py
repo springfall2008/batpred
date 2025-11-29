@@ -54,7 +54,7 @@ async def main():
         print("Error: Failed to construct predbat {}".format(e))
         print(traceback.format_exc())
         return
-    
+
     try:
         p_han.initialize()
     except Exception as e:
@@ -100,12 +100,12 @@ class Hass:
         self.logfile.write(message)
         self.logfile.flush()
         msg_lower = msg.lower()
-        if not quiet or msg_lower.startswith("error") or msg_lower.startswith('warn') or msg_lower.startswith('info'):
+        if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
 
         # maximum number of historic logfiles to retain
         max_logs = 9
-        
+
         log_size = self.logfile.tell()
         if log_size > 10000000:
             # check for existence of previous logfiles and rename each in turn
@@ -114,7 +114,7 @@ class Hass:
                 if os.path.isfile(filename):
                     newfile = "predbat." + format(num_logs + 1) + ".log"
                     os.rename(filename, newfile)
-            
+
             self.logfile.close()
             os.rename("predbat.log", "predbat.1.log")
             self.logfile = open("predbat.log", "w")
@@ -157,7 +157,7 @@ class Hass:
         await self.terminate()
 
         for t in self.threads:
-            t.join(5*60)
+            t.join(5 * 60)
         self.logfile.close()
 
     def __init__(self):
