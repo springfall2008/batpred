@@ -1028,10 +1028,12 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 
 - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
 
-- If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if it's enabled
+- If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if it's enabled.
 
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+
+An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's Github.
 
 ## Ohme car charger - direct integration
 

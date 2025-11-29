@@ -80,7 +80,8 @@ This may mean you need to use expert mode and change your low-rate threshold to 
 
 - _WARNING: Do not set **car_charging_now** in `apps.yaml` or you will create a circular dependency._
 
-- Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged; you will need to write a Home Assistant automation based on this sensor to control when your car charges.<BR>
+- Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged; you will need to write a Home Assistant automation based on this sensor to control when your car charges.
+
 A sample automation to start/stop car charging using a Zappi car charger and the [MyEnergi Zappi integration](https://github.com/CJNE/ha-myenergi) is as follows,
 this should be adapted for your charger type and how it controls starting/stopping car charging:
 
@@ -133,7 +134,7 @@ can charge independently and hence two or more could charge at once
 ```
 
 - See [Car charging filtering](apps-yaml.md#car-charging-filtering) and [Planned car charging](apps-yaml.md#planned-car-charging)
-in the [apps.yaml settings](apps-yaml.md) section of the documentation.
+in the [apps.yaml settings](apps-yaml.md) section of the documentation for further car charging setup details.
 
 - **switch.predbat_car_charging_from_battery** - When set to On the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
 When set to Off home battery discharge will be prevented when your car charges, and all load from the car and home will be from the grid.
