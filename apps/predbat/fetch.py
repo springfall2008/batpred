@@ -1217,12 +1217,12 @@ class Fetch:
                         try:
                             day = int(day)
                         except (ValueError, TypeError):
-                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 0-6".format(day_of_week))
-                            self.record_status("Bad day_of_week {} provided in energy rates, should be 0-6".format(day_of_week), had_errors=True)
+                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 1-7".format(day_of_week))
+                            self.record_status("Bad day_of_week {} provided in energy rates, should be 1-7".format(day_of_week), had_errors=True)
                             continue
                         if day < 1 or day > 7:
-                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 0-6".format(day))
-                            self.record_status("Bad day_of_week {} provided in energy rates, should be 0-6".format(day), had_errors=True)
+                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 1-7".format(day))
+                            self.record_status("Bad day_of_week {} provided in energy rates, should be 1-7".format(day), had_errors=True)
                             continue
                         # Store as Python day of week
                         day_of_week.append(day - 1)
