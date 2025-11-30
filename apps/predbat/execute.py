@@ -430,10 +430,11 @@ class Execute:
                                         resetReserve = False
                                 carHolding = True
                                 self.log("Disabling battery discharge whilst car {} is charging".format(car_n))
-                                if status == "Demand":
-                                    status = "Hold for car"
-                                else:
-                                    status_hold_car = ", Hold for car"
+                                if ("Hold for car" not in status) and (status_hold_car == ""):
+                                    if status == "Demand":
+                                        status = "Hold for car"
+                                    else:
+                                        status_hold_car = ", Hold for car"
                             break
 
             # iBoost running?
@@ -452,10 +453,11 @@ class Execute:
                         resetReserve = False
                 boostHolding = True
                 self.log("Disabling battery discharge whilst iBoost is running")
-                if status == "Demand":
-                    status = "Hold for iBoost"
-                else:
-                    status_hold_iboost = ", Hold for iBoost"
+                if ("Hold for iBoost" not in status) and (status_hold_iboost == ""):
+                    if status == "Demand":
+                        status = "Hold for iBoost"
+                    else:
+                        status_hold_iboost = ", Hold for iBoost"
 
             # Reset charge/discharge rate
             if resetPause:
