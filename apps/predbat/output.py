@@ -1722,18 +1722,22 @@ class Output:
 
         if save:
             self.log(
-              "Last hour: net energy {}kWh, import {}kWh, export {}kWh, car {}kWh, load {}kWh, net cost {}{}, import {}{}, export {}{}, car {}{}, carbon {}kg".format(
-                  dp2(hour_energy),
-                  dp2(hour_energy_import),
-                  dp2(hour_energy_export),
-                  dp2(hour_energy_car),
-                  dp2(hour_load),
-                  dp2(hour_cost), curr,
-                  dp2(hour_cost_import), curr,
-                  dp2(hour_cost_export), curr,
-                  dp2(hour_cost_car), curr,
-                  dp2(hour_carbon_g / 1000.0),
-              )
+                "Last hour: net energy {}kWh, import {}kWh, export {}kWh, car {}kWh, load {}kWh, net cost {}{}, import {}{}, export {}{}, car {}{}, carbon {}kg".format(
+                    dp2(hour_energy),
+                    dp2(hour_energy_import),
+                    dp2(hour_energy_export),
+                    dp2(hour_energy_car),
+                    dp2(hour_load),
+                    dp2(hour_cost),
+                    curr,
+                    dp2(hour_cost_import),
+                    curr,
+                    dp2(hour_cost_export),
+                    curr,
+                    dp2(hour_cost_car),
+                    curr,
+                    dp2(hour_carbon_g / 1000.0),
+                )
             )
 
         for minute in range(self.minutes_now):
@@ -1958,9 +1962,12 @@ class Output:
                     dp2(day_energy_total),
                     dp2(day_energy),
                     dp2(day_energy_export),
-                    dp2(day_cost), curr,
-                    dp2(day_cost_import), curr,
-                    dp2(day_cost_export), curr,
+                    dp2(day_cost),
+                    curr,
+                    dp2(day_cost_import),
+                    curr,
+                    dp2(day_cost_export),
+                    curr,
                     dp2(carbon_g / 1000.0),
                 )
             )
@@ -2923,12 +2930,18 @@ class Output:
 
         self.log(
             "Yesterday: Predbat disabled was {}{} (adjusted {}{}) vs {}{} (adjusted {}{}), saving {}{} (adjusted {}{}) with import {}kWh, export {}kWh, battery_cycle {}kWh, start_soc {}kWh,  final_soc {}kWh and battery_value {}kWh".format(
-                curr, dp2(metric_baseline / 100),
-                curr, dp2(metric_baseline_adjusted / 100),
-                curr, dp2(cost_yesterday / 100),
-                curr, dp2(cost_yesterday_adjusted / 100),
-                curr, dp2(saving / 100),
-                curr, dp2(saving_adjusted / 100),
+                curr,
+                dp2(metric_baseline / 100),
+                curr,
+                dp2(metric_baseline_adjusted / 100),
+                curr,
+                dp2(cost_yesterday / 100),
+                curr,
+                dp2(cost_yesterday_adjusted / 100),
+                curr,
+                dp2(saving / 100),
+                curr,
+                dp2(saving_adjusted / 100),
                 dp2(import_kwh_house + import_kwh_battery),
                 dp2(export_kwh),
                 dp2(battery_cycle),
@@ -3018,12 +3031,18 @@ class Output:
         self.savings_today_pvbat = saving_no_pvbat_adjusted
         self.log(
             "Yesterday: No Battery/PV system cost predicted was {}{} (adjusted {}{}) vs {}{} (adjusted {}{}), saving {}{} (adjusted {}{}) with import {}kWh, export {}kWh and battery_value {}kWh".format(
-                curr, dp2(metric_no_pvbat / 100),
-                curr, dp2(metric_no_pvbat_adjusted / 100),
-                curr, dp2(cost_yesterday / 100),
-                curr, dp2(cost_yesterday_adjusted / 100),
-                curr, dp2(saving_no_pvbat / 100),
-                curr, dp2(saving_no_pvbat_adjusted / 100),
+                curr,
+                dp2(metric_no_pvbat / 100),
+                curr,
+                dp2(metric_no_pvbat_adjusted / 100),
+                curr,
+                dp2(cost_yesterday / 100),
+                curr,
+                dp2(cost_yesterday_adjusted / 100),
+                curr,
+                dp2(saving_no_pvbat / 100),
+                curr,
+                dp2(saving_no_pvbat_adjusted / 100),
                 dp2(import_kwh_house + import_kwh_battery),
                 dp2(export_kwh),
                 dp2(battery_value_no_pvbat),
