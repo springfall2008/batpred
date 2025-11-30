@@ -11,6 +11,7 @@
 from datetime import datetime
 from utils import get_override_time_from_string
 
+
 def test_get_override_time_from_string(my_predbat):
     """
     Test the get_override_time_from_string function from utils

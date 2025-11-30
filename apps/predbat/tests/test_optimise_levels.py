@@ -11,6 +11,7 @@ from utils import calc_percent_limit
 from tests.test_infra import reset_rates, update_rates_import, update_rates_export, reset_inverter
 from prediction import Prediction
 
+
 def run_optimise_levels(
     name,
     my_predbat,
@@ -158,6 +159,7 @@ def run_optimise_levels(
         print("Charge limit best: {} expected {} Discharge limit best {} expected {}".format(charge_limit_best, expect_charge_limit, export_limits_best, expect_export_limit))
 
     return failed, best_metric, best_keep, charge_limit_best, export_limits_best
+
 
 def run_optimise_levels_tests(my_predbat):
     print("**** Running Optimise levels tests ****")

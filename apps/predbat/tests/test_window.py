@@ -11,6 +11,7 @@
 from utils import remove_intersecting_windows
 from tests.test_infra import reset_rates, reset_inverter
 
+
 def run_window_sort_test(name, my_predbat, charge_window_best, export_window_best, expected=[], inverter_loss=1.0, metric_battery_cycle=0.0, battery_loss=1.0, battery_loss_discharge=1.0):
     failed = False
     end_record = my_predbat.forecast_minutes

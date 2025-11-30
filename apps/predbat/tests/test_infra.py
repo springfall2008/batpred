@@ -10,6 +10,8 @@
 
 from datetime import datetime, timedelta
 from prediction import wrapped_run_prediction_single, Prediction
+
+
 class DummyInverter:
     def __init__(self, log, inverter_id=0):
         self.soc_kw = 0
@@ -228,6 +230,7 @@ def reset_inverter(my_predbat):
     my_predbat.inverter_soc_reset = True
     my_predbat.car_charging_soc_next = [None for car_n in range(4)]
 
+
 def plot(name, prediction):
     """
     Plot the prediction
@@ -247,6 +250,7 @@ def plot(name, prediction):
     ax.legend()
     plt.savefig("{}.png".format(name))
     plt.show()
+
 
 def simple_scenario(
     name,

@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 from futurerate import FutureRate
 
+
 def run_nordpool_test(my_predbat):
     """
     Test the compute metric function

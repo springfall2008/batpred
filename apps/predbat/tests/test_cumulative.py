@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 from utils import get_now_from_cumulative
 
+
 def test_get_now_from_cumulative(my_predbat):
     """
     Test the get_now_from_cumulative function from utils

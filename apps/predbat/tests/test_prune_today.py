@@ -12,13 +12,13 @@ import pytz
 from datetime import datetime
 from utils import prune_today
 
+
 def test_prune_today(my_predbat):
     """
     Test the prune_today function from utils
     """
     failed = False
     print("**** Testing prune_today function ****")
-
 
     utc = pytz.UTC
     now_utc = datetime(2024, 10, 15, 14, 30, 0, tzinfo=utc)

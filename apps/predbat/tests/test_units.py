@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
 def run_test_units(my_predbat):
     """
     Run the unit tests

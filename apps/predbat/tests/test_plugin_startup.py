@@ -10,6 +10,7 @@
 from unittest.mock import MagicMock, patch
 from predbat import PredBat
 
+
 def test_plugin_startup_order(my_predbat):
     """
     Test that plugins are initialized before the web server starts

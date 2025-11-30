@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
 def test_minute_data_state(my_predbat):
     """
     Test minute_data_state function

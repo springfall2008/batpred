@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_inverter
 
+
 def test_dynamic_load_car_slot_cancellation(my_predbat):
     """
     Test the dynamic_load function to verify that car charging slots are cancelled

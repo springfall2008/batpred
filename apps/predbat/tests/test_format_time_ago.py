@@ -10,6 +10,7 @@
 
 from datetime import datetime, timedelta, timezone
 
+
 def test_format_time_ago(my_predbat):
     """
     Test the format_time_ago function from utils

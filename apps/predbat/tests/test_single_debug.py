@@ -14,6 +14,7 @@ from prediction import Prediction
 from tests.test_infra import reset_inverter
 from utils import calc_percent_limit
 
+
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False):
     print("**** Running debug test {} ****\n".format(debug_file))
     if not expected_file:

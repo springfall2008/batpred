@@ -12,11 +12,13 @@ import asyncio
 from octopus import OctopusAPI
 from utils import minute_data
 
+
 def test_download_octopus_url_wrapper(my_predbat):
     """
     Wrapper to run the async test function
     """
     return asyncio.run(test_download_octopus_url(my_predbat))
+
 
 async def test_download_octopus_url(my_predbat):
     """
