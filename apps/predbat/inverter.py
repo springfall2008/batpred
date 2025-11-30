@@ -328,7 +328,6 @@ class Inverter:
                     if (soc_force_adjust > 0) and (soc_force_adjust < 7):
                         self.in_calibration = True
 
-            self.log("Warn: soc_force_adjust={}, self.in_calibration={}".format(soc_force_adjust, self.in_calibration))
             if self.in_calibration:
                 self.log("Warn: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
 
