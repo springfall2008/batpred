@@ -20,6 +20,8 @@ from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from web_mcp import PredbatMCPServer
+from component_client import ComponentClient
+from component_callback_server import ComponentCallbackServer
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
@@ -88,6 +90,27 @@ COMPONENT_LIST = {
         "required_or": ["solcast_host", "forecast_solar", "pv_forecast_today"],
         "phase": 1,
     },
+    "octopus": {
+        "class": OctopusAPI,
+        "name": "Octopus Energy Direct",
+        "event_filter": "predbat_octopus_",
+        "args": {
+            "key": {
+                "required": True,
+                "config": "octopus_api_key",
+            },
+            "account_id": {
+                "required": True,
+                "config": "octopus_api_account",
+            },
+            "automatic": {
+                "required": False,
+                "default": True,
+                "config": "octopus_automatic",
+            },
+        },
+        "phase": 1,
+    },
     "gecloud": {
         "class": GECloudDirect,
         "name": "GivEnergy Cloud Direct",
@@ -129,27 +152,6 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": [7],
                 "config": "days_previous",
-            },
-        },
-        "phase": 1,
-    },
-    "octopus": {
-        "class": OctopusAPI,
-        "name": "Octopus Energy Direct",
-        "event_filter": "predbat_octopus_",
-        "args": {
-            "key": {
-                "required": True,
-                "config": "octopus_api_key",
-            },
-            "account_id": {
-                "required": True,
-                "config": "octopus_api_account",
-            },
-            "automatic": {
-                "required": False,
-                "default": True,
-                "config": "octopus_automatic",
             },
         },
         "phase": 1,
@@ -222,9 +224,38 @@ class Components:
         self.component_tasks = {}
         self.base = base
         self.log = base.log
+        self.callback_server = None
 
     def initialize(self, only=None, phase=0):
         """Initialize components without starting them"""
+        
+        # Initialize callback server for remote components (phase 0 only)
+        if phase == 0 and only is None:
+            # Get component_server config from args (apps.yaml)
+            component_server_config = self.base.args.get("component_server", {})
+            component_server_components = component_server_config.get("components", [])
+            
+            if component_server_components:
+                server_url = component_server_config.get("url", "")
+                if not server_url:
+                    self.log("Warn: component_server.components configured but component_server.url is empty, disabling remote components")
+                    component_server_components = []
+                else:
+                    # Start callback server
+                    try:
+                        self.log("Components: Starting component callback server for remote components")
+                        port = component_server_config.get("callback_port", 5054)
+                        self.callback_server = ComponentCallbackServer(self.base, port)
+                        self.log("Components: Starting component callback server for remote components")
+                        self.base.create_task(self.callback_server.start())
+                        self.log("Components: Waiting for component callback server to start...")
+                        self.callback_server.wait_started(timeout=30)
+                        self.log(f"Components: Callback server started on port {port}")
+                    except Exception as e:
+                        self.log(f"Components: Error: Failed to start callback server: {e}")
+                        self.callback_server = None
+                        component_server_components = []
+        
         for component_name, component_info in COMPONENT_LIST.items():
             if only and component_name != only:
                 continue
@@ -260,7 +291,31 @@ class Components:
                     have_all_args = False
             if have_all_args:
                 self.log(f"Initializing {component_info['name']} interface")
-                self.components[component_name] = component_info["class"](self.base, **arg_dict)
+                
+                # Check if this component should run remotely
+                component_server_config = self.base.args.get("component_server", {})
+                component_server_components = component_server_config.get("components", [])
+                
+                if component_name in component_server_components and self.callback_server:
+                    # Create remote component client
+                    server_url = component_server_config.get("url", "")
+                    callback_url = component_server_config.get("callback_url", "")
+                    callback_port = component_server_config.get("callback_port", 5054)
+                    poll_interval = component_server_config.get("poll_interval", 300)
+                    timeout = component_server_config.get("timeout", 1800)
+
+                    args_data = {"callback_url": callback_url, "callback_port": callback_port, "poll_interval": poll_interval, "timeout": timeout, "component_args": arg_dict}
+                    
+                    self.log(f"Creating remote component client for {component_name} at {server_url}")
+                    self.components[component_name] = ComponentClient(
+                        self.base,
+                        server_url,
+                        component_name,
+                        **args_data,
+                    )
+                else:
+                    # Create local component
+                    self.components[component_name] = component_info["class"](self.base, **arg_dict)
 
     def start(self, only=None, phase=0):
         """Start all initialized components"""
@@ -288,6 +343,12 @@ class Components:
         return not failed
 
     async def stop(self, only=None):
+        # Stop callback server first if stopping all components
+        if not only and self.callback_server:
+            self.log("Stopping component callback server")
+            await self.callback_server.stop()
+            self.callback_server = None
+        
         for component_name, component_info in reversed(list(self.components.items())):
             if only and component_name != only:
                 continue

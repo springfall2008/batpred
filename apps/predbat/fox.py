@@ -341,6 +341,7 @@ class FoxAPI(ComponentBase):
         result = await self.request_get(GET_DEVICE_INFO, post=False, datain=query)
         if result is not None:
             self.device_detail[deviceSN] = result
+        return result
 
     async def get_device_settings(self, deviceSN):
         """
@@ -1258,8 +1259,11 @@ class FoxAPI(ComponentBase):
 class MockBase:
     """Mock base class for testing"""
 
+
     def __init__(self):
         self.local_tz = datetime.now().astimezone().tzinfo
+        self.prefix = "predbat"
+        self.args = {}
 
     def log(self, message):
         print(f"LOG: {message}")
@@ -1277,29 +1281,36 @@ async def test_fox_api(api_key):
     # Create a mock base object
     mock_base = MockBase()
 
-    sn = "609H50204BPM048"
+    sn = "603J303046YP036"
 
     # Create FoxAPI instance with a lambda that returns the API key
-    fox_api = FoxAPI(api_key, False, mock_base)
-    # device_List = await fox_api.get_device_list()
-    # print(f"Device List: {device_List}")
+    args = {
+        "key": api_key,
+        "automatic": False,
+    }
+    fox_api = FoxAPI(mock_base, **args)
+    device_List = await fox_api.get_device_list()
+    print(f"Device List: {device_List}")
+    #return(1)
     # await fox_api.start()
-    # res = await fox_api.get_device_settings(sn)
-    # print(res)
-    # res = await fox_api.get_battery_charging_time(sn)
-    # print(res)
-    res = await fox_api.get_device_detail(sn)
-    print(res)
-    res = await fox_api.get_scheduler(sn, checkBattery=False)
-    print(res)
-    return 1
+    #res = await fox_api.get_device_settings(sn)
+    #print(res)
+    #res = await fox_api.get_battery_charging_time(sn)
+    #print("Battery Charging Time:")
+    #print(res)
+    #return 1
+    #res = await fox_api.get_device_detail(sn)
+    #print(res)
+    #res = await fox_api.get_scheduler(sn, checkBattery=False)
+    #print(res)
     # res = await fox_api.compute_schedule(sn)
     # res = await fox_api.publish_data()
     # res = await fox_api.set_device_setting(sn, "dummy", 42)
     # print(res)
 
-    # res = await fox_api.get_scheduler(sn)
-    # groups = res.get('groups', [])
+    res = await fox_api.get_scheduler(sn, checkBattery=False)
+    print(res)
+    groups = res.get('groups', [])
     # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
     # new_slot = groups[0].copy()
     new_slot = {}
@@ -1310,7 +1321,7 @@ async def test_fox_api(api_key):
     new_slot["endHour"] = 12
     new_slot["endMinute"] = 00
     new_slot["fdSoc"] = 10
-    new_slot["fdPwr"] = 5000
+    new_slot["fdPwr"] = 8000
     new_slot["minSocOnGrid"] = 10
     new_slot2 = {}
     new_slot2["enable"] = 1

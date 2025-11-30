@@ -17,6 +17,7 @@ import yaml
 from config import TIME_FORMAT
 import json
 import pytz
+import traceback
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -364,6 +365,7 @@ class OctopusAPI(ComponentBase):
         """
         Main run loop
         """
+        self.log("Octopus API: enter seconds {} first {}".format(seconds, first))
         if first:
             # Load cached data
             await self.load_octopus_cache()

@@ -30,7 +30,7 @@ import asyncio
 THIS_VERSION = "v8.29.1"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py"]
+PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "component_server.py", "component_client.py", "component_callback_server.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -78,6 +78,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
     """
     The battery prediction class itself
     """
+
+    def get_local_attr(self, attr_name):
+        """
+        Get a local attribute by name
+        """
+        return getattr(self, attr_name, None)
 
     def download_predbat_releases_url(self, url):
         """
