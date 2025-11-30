@@ -184,7 +184,7 @@ cd coverage/
 - Tests must be run from the coverage directory
 - Run all tests: `./run_all`
 - Run named unit tests `./run_all --test test_name`
-- Run specific debug scenarios: `./update_all; python3 predbat_debug/unit_test.py --debug predbat_debug_file.yaml`
+- Run specific debug scenarios: `python3 ../apps/predbat/unit_test.py --debug predbat_debug_file.yaml`
 - Performance tests: `./run_all --perf-only`
 
 **Coverage analysis**:
