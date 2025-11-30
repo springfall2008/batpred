@@ -10,6 +10,14 @@
 
 from datetime import datetime, timedelta
 from prediction import wrapped_run_prediction_single, Prediction
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    plt = None
+try:
+    import numpy as np
+except ImportError:
+    np = None
 class DummyInverter:
     def __init__(self, log, inverter_id=0):
         self.soc_kw = 0
@@ -227,6 +235,25 @@ def reset_inverter(my_predbat):
     my_predbat.inverter_soc_reset = True
     my_predbat.car_charging_soc_next = [None for car_n in range(4)]
 
+def plot(name, prediction):
+    """
+    Plot the prediction
+    """
+    fig, ax = plt.subplots()
+    # Predict_soc is a hash on minutes since the start of simulation and the SOC value
+    # Convert this into a NP array for plotting
+    minutes = np.array(list(prediction.predict_soc.keys()))
+    predict_soc = np.array(list(prediction.predict_soc.values()))
+    metric_pence = list(prediction.predict_metric_best.values())
+    metric = [round(x / 100, 2) for x in metric_pence]
+    metric = np.array(metric)
+    ax.plot(minutes, predict_soc, label="soc")
+    ax.plot(minutes, metric, label="metric")
+    ax.set_xticks(range(0, prediction.forecast_minutes, 240))
+    ax.set(xlabel="time (minutes)", ylabel="Value", title=name)
+    ax.legend()
+    plt.savefig("{}.png".format(name))
+    plt.show()
 
 def simple_scenario(
     name,
