@@ -146,36 +146,6 @@ In due course, these mode settings will be incorporated into the code.
 To run PredBat with Solis hybrid inverters with firmware level FB00 or later (you can recognise these by having 6 slots for charging times), follow the following steps:
 
 1. Install PredBat as per the [Installation Summary](installation-summary.md)
-2. Ensure that you have the Solax Modbus integration running and select the inverter type solis_fb00. There are a number of entities which this integration disables by default that you
-   will need to enable via the Home Assistant GUI:
-
-   | Name                          | Description     |
-   | :---------------------------- | :-------------- |
-   | `sensor.solis_rtc`           | Real Time Clock |
-   | `sensor.solis_battery_power` | Battery Power   |
-
-3. Instead of `apps.yaml` use `ginlong_solis.yaml` from this Repo as your starting template.
-   The majority of settings should be correct but please check.
-   You will need to update these lines:
-   - Replace **inverter_type: "GS"** with **inverter_type: "GS_fb00"** to enable the inverter template for the newer firmware version of Solis inverters.
-   - Un-comment **charge_update_button** and **discharge_update_button** and comment out **charge_discharge_update_button** to enable
-     the two "button presses" needed for writing charge/discharge times to the inverter  
-   - Un-comment **scheduled_charge_enable** and **scheduled_discharge_enable** to enable Predbat to enable/disable the charge/discharge slots
-   - Un-comment **charge_limit** to enable the charge limit through setting an upper SOC value
-   - Set **solax_modbus_new** to True if you have integration version 2024.03.2 or greater
-   - Last you will need to comment out or delete the **template** line to enable the configuration
-
-4. Save the file as **apps.yaml** to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
-5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
-   If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
-   this is not fully tested. In due course, these mode settings will be incorporated into the code.
-6. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.  
-
-## Solis Inverters FB00 or later
-
-To run PredBat with Solis hybrid inverters with firmware level FB00 or later (you can recognise these by having 6 slots for charging times), follow the following steps:
-
-1. Install PredBat as per the [Installation Summary](installation-summary.md)
 2. Ensure that you have the Solax Modbus integration running and select the inverter type solis_fb00.
 There are a number of entities which this integration disables by default that you will need to enable via the Home Assistant GUI:
 

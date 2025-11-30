@@ -1683,6 +1683,7 @@ class Output:
                 "Battery level now {}kWh, -1hr ago {}kWh, at midnight {}kWh, battery value change in the last hour {}{}, change today {}{}, rate_forward {}{}".format(
                     dp2(battery_level_now), dp2(battery_level_hour), dp2(battery_level_midnight), dp2(value_increase_hour), curr, dp2(value_increase_day), curr, dp2(rate_forward), curr
                 )
+            )
 
         for minute_back in range(60):
             minute = self.minutes_now - minute_back
@@ -1732,6 +1733,7 @@ class Output:
                   dp2(hour_cost_export), curr,
                   dp2(hour_cost_car), curr,
                   dp2(hour_carbon_g / 1000.0),
+              )
             )
 
         for minute in range(self.minutes_now):
