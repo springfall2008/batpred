@@ -13,6 +13,7 @@ appdaemon
 appkey
 argname
 ASHP
+asyncio
 autodocstring
 autoflake
 automations
@@ -26,6 +27,7 @@ batteryb
 beforeunload
 bierner
 calib
+Cantarell
 cexxxx
 ceyyyy
 chargedischarge
@@ -147,6 +149,7 @@ kopt
 Krakenflex
 kvar
 kvarh
+kwargs
 kwhb
 linebreak
 loadspower
@@ -165,6 +168,7 @@ measurands
 Meteo
 Meteoalarm
 meterpoint
+meterpower
 metricb
 metricmid
 minb
@@ -200,6 +204,8 @@ ohmepy
 onchange
 oncharge
 oninput
+onmouseout
+onmouseover
 openweathermap
 ownerapi
 pdata
@@ -221,10 +227,13 @@ predbatt
 Predheat
 psum
 pvbat
+pvenergytotal
 pvpower
 pwindow
+pyjwt
 pylint
 pyproject
+pytest
 pytz
 rarr
 recp
@@ -236,16 +245,19 @@ resetmidnight
 resultid
 resultmid
 rname
+Roboto
 rowspan
 rstart
 rtype
 ruamel
 saverestore
 searr
+Segoe
 selectattr
 Selfrun
 Selfuse
 semodbus
+Sergoe
 SFMB
 sigen
 sigenergy
@@ -293,6 +305,7 @@ timezone
 tojson
 Trefor
 treforsiphone
+unsmoothed
 unstaged
 useid
 userinterface

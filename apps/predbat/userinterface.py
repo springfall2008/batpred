@@ -9,7 +9,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
+from utils import get_override_time_from_string
 import json
 import yaml
 import re
@@ -139,6 +140,21 @@ class UserInterface:
             else:
                 value = self.get_state_wrapper(entity_id=value, default=default, required_unit=required_unit)
         return value
+
+    def set_arg(self, arg, value):
+        """
+        Argument setter that can use HA state as well as fixed values
+        Parameters:
+        arg (str): The argument name to set.
+        value: The value to set for the argument, or None to delete it
+        Returns:
+        None
+        """
+        if value is None:
+            if arg in self.args:
+                del self.args[arg]
+        else:
+            self.args[arg] = value
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
@@ -775,19 +791,28 @@ class UserInterface:
         else:
             self.log("Failed to write predbat dashboard to {}".format(filename_p))
 
-    def load_previous_value_from_ha(self, entity):
+    def load_previous_value_from_ha(self, entity, attribute=None):
         """
         Load HA value either from state or from history if there is any
         """
-        ha_value = self.get_state_wrapper(entity)
-        if ha_value is not None:
-            return ha_value
+        if attribute:
+            ha_value = self.get_state_wrapper(entity, attribute=attribute)
+            if ha_value is not None:
+                return ha_value
+        else:
+            ha_value = self.get_state_wrapper(entity)
+            if ha_value is not None:
+                return ha_value
 
+        # Try history if no current state
         history = self.get_history_wrapper(entity_id=entity, required=False)
         if history:
             history = history[0]
             if history:
-                ha_value = history[-1]["state"]
+                if attribute:
+                    ha_value = history[-1].get("attributes", {}).get(attribute, None)
+                else:
+                    ha_value = history[-1].get("state", None)
         return ha_value
 
     async def trigger_watch_list(self, entity_id, attribute, old, new):
@@ -1259,8 +1284,9 @@ class UserInterface:
         """
         rate_overrides_minutes = {}
         rate_overrides = []
-        minutes_now = int(self.minutes_now / 30) * 30
-        manual_rate_max = 18 * 60
+        plan_interval = self.get_arg("plan_interval_minutes", 30)
+        minutes_now = int(self.minutes_now / plan_interval) * plan_interval
+        manual_rate_max = 48 * 60
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
@@ -1283,29 +1309,28 @@ class UserInterface:
             else:
                 rate_time = value
                 rate_value = default_rate
-            try:
-                start_time = datetime.strptime(rate_time, "%H:%M:%S")
-            except (ValueError, TypeError):
-                start_time = None
 
             try:
                 rate_value = float(rate_value)
             except (ValueError, TypeError):
                 rate_value = default_rate
 
-            if start_time:
-                minutes = start_time.hour * 60 + start_time.minute
-                if minutes < minutes_now:
-                    minutes += 24 * 60
+            # Parse time with day of week support using utility function
+            override_time = get_override_time_from_string(self.now_utc, rate_time, plan_interval)
+
+            if override_time:
+                # Calculate minutes from midnight today
+                minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+
                 if (minutes - minutes_now) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
-                    for minute in range(minutes, minutes + 30):
+                    for minute in range(minutes, minutes + plan_interval):
                         rate_overrides_minutes[minute] = rate_value
 
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute, rate in rate_overrides:
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute_str not in exclude:
                 values_list.append(minute_str + "=" + str(rate))
         values = ",".join(values_list)
@@ -1314,11 +1339,11 @@ class UserInterface:
 
         # Create the new dropdown
         time_values = []
-        for minute in range(minutes_now, minutes_now + manual_rate_max, 30):
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+        for minute in range(minutes_now, minutes_now + manual_rate_max, plan_interval):
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute in rate_overrides_minutes:
                 rate_value = rate_overrides_minutes[minute]
-                minute_str = "{}={}".format(minute_str, rate_value)
+                minute_str = f"{minute_str}={rate_value}"
                 minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)
 
@@ -1337,8 +1362,9 @@ class UserInterface:
         Update manual times sensor
         """
         time_overrides = []
-        minutes_now = int(self.minutes_now / 30) * 30
-        manual_time_max = 18 * 60
+        plan_interval = self.get_arg("plan_interval_minutes", 30)
+        minutes_now = int(self.minutes_now / plan_interval) * plan_interval
+        manual_time_max = 48 * 60
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
@@ -1356,21 +1382,23 @@ class UserInterface:
         for value in values_list:
             if value == "off":
                 continue
-            try:
-                start_time = datetime.strptime(value, "%H:%M:%S")
-            except (ValueError, TypeError):
-                start_time = None
-            if start_time:
-                minutes = start_time.hour * 60 + start_time.minute
-                if minutes < minutes_now:
-                    minutes += 24 * 60
+
+            # Parse time with day of week support using utility function
+            from utils import get_override_time_from_string
+
+            override_time = get_override_time_from_string(self.now_utc, value, plan_interval)
+
+            if override_time:
+                # Calculate minutes from midnight today
+                minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+
                 if (minutes - minutes_now) < manual_time_max:
                     time_overrides.append(minutes)
 
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute in time_overrides:
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute_str not in exclude:
                 values_list.append(minute_str)
         values = ",".join(values_list)
@@ -1379,8 +1407,8 @@ class UserInterface:
 
         # Create the new dropdown
         time_values = []
-        for minute in range(minutes_now, minutes_now + manual_time_max, 30):
-            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
+        for minute in range(minutes_now, minutes_now + manual_time_max, plan_interval):
+            minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
             if minute in time_overrides:
                 minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)

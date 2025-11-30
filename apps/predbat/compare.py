@@ -219,7 +219,7 @@ class Compare:
         self.fetch_config(tariff)
 
         if fetch_sensor:
-            self.pb.fetch_sensor_data()
+            self.pb.fetch_sensor_data(save=False)
 
         # Fetch rates
         try:
@@ -440,7 +440,8 @@ class Compare:
 
         for tariff in compare_list:
             result_data = self.run_single(tariff, rate_import_base, rate_export_base, end_record, debug=debug, fetch_sensor=fetch_sensor, car_charging_slots=save_car_charging_slots)
-            results[tariff["id"]] = result_data
+            if result_data is not None:
+                results[tariff["id"]] = result_data
             # Save and update comparisons as we go so it is updated in HA
             self.select_best(compare_list, results)
             self.comparisons = results

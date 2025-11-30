@@ -12,6 +12,7 @@ from datetime import timedelta
 from config import MINUTE_WATT
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from inverter import Inverter
+import time
 
 """
 Execute Predbat plan
@@ -84,7 +85,7 @@ class Execute:
 
                 # Avoid having too long a period to configure as registers only support 24-hours
                 if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24 * 60):
-                    minutes_start = int(self.minutes_now / 30) * 30
+                    minutes_start = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
                     self.log("Move on charge window start time to avoid wrap - new start {}".format(self.time_abs_str(minutes_start)))
 
                 # Span midnight allowed?
@@ -237,18 +238,37 @@ class Execute:
                                 self.log(
                                     "Inverter {} configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start))
                                 )
+
+                                # Track IOG action latency for SLO metrics (if this is an IOG slot)
+                                if self.octopus_intelligent_charging:
+                                    # Calculate latency from slot start time
+                                    slot_start_timestamp = charge_start_time.timestamp()
+                                    current_timestamp = time.time()
+                                    latency = max(0, current_timestamp - slot_start_timestamp)  # Don't record negative latency
+
+                                    # Only record if we're within reasonable window (e.g., within 10 minutes of start)
+                                    if latency < 600:  # 10 minutes
+                                        self.iog_last_action_latency_seconds = latency
+                                        self.iog_last_action_status = "success"
+                                        self.log("IOG action latency: {:.1f} seconds from slot start".format(latency))
+
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
-                            self.log(
-                                "Inverter {} disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
-                                    inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                            # If there is a previous set charge window, but its more than the set window minutes in the future but we are not close to it then we can leave it enabled for now
+                            # saves register writes and avoids turning off the window before the inverter knows it finished
+                            if (inverter.charge_start_time_minutes != inverter.charge_end_time_minutes) and (inverter.charge_start_time_minutes - self.minutes_now) > self.set_window_minutes:
+                                self.log(
+                                    "Inverter {} leaving charge window as already set and more than set_window_minutes {} away (now {} charge start time {})".format(
+                                        inverter.id, self.set_window_minutes, self.time_abs_str(self.minutes_now), self.time_abs_str(inverter.charge_start_time_minutes)
+                                    )
                                 )
-                            )
-                            inverter.disable_charge_window()
-
-                    # Set configured window minutes for the SoC adjustment routine
-                    inverter.charge_start_time_minutes = minutes_start
-                    inverter.charge_end_time_minutes = minutes_end
+                            else:
+                                self.log(
+                                    "Inverter {} disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {}) original inverter start time {}".format(
+                                        inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start), self.time_abs_str(inverter.charge_start_time_minutes)
+                                    )
+                                )
+                                inverter.disable_charge_window()
                 else:
                     self.log(
                         "Inverter {} Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
@@ -286,7 +306,7 @@ class Execute:
 
                 # Avoid having too long a period to configure as registers only support 24-hours
                 if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24 * 60):
-                    minutes_start = int(self.minutes_now / 30) * 30
+                    minutes_start = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
                     self.log("Move on export window start time to avoid wrap - new start {}".format(self.time_abs_str(minutes_start)))
 
                 export_adjust = 1
@@ -357,7 +377,8 @@ class Execute:
                             status_extra += " {}%-{}%".format(inverter.soc_percent, int(target))
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                 else:
-                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 100):
+                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 99.0):
+                        # We can't schedule freeze export only full export
                         inverter.adjust_force_export(inverter.inv_has_discharge_enable_time, discharge_start_time, discharge_end_time)
                     else:
                         self.log("Not setting export as we are not yet within the export window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))

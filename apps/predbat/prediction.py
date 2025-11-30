@@ -167,6 +167,8 @@ class Prediction:
             self.car_charging_battery_size = base.car_charging_battery_size
             self.rate_import = base.rate_import
             self.rate_export = base.rate_export
+            self.io_adjusted = base.io_adjusted
+            self.rate_max = base.rate_max
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
             self.load_minutes_step = load_minutes_step
@@ -179,6 +181,7 @@ class Prediction:
             self.inverter_can_charge_during_export = base.inverter_can_charge_during_export
             self.prediction_cache_enable = base.prediction_cache_enable
             self.prediction_cache = {}
+            self.plan_interval_minutes = base.plan_interval_minutes
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -392,6 +395,7 @@ class Prediction:
 
         rate_import = self.rate_import
         rate_export = self.rate_export
+        io_adjusted = self.io_adjusted
 
         # Data structures creating during the prediction
         predict_soc = {}
@@ -489,8 +493,8 @@ class Prediction:
         inverter_hybrid = self.inverter_hybrid
         inverter_loss_recp = 1 / inverter_loss
 
-        enable_standing_charge = save and (save in ["best", "base", "base10", "best10", "test"])
-        enable_save_stats = save and (save in ["best", "test", "compare"])
+        enable_standing_charge = save and (save in ["best", "base", "base10", "best10", "test", "yesterday", "yesterday10"])
+        enable_save_stats = save and (save in ["best", "test", "compare", "yesterday"])
         car_enable = self.num_cars > 0
         inverter_limit = self.inverter_limit * step
         export_limit = self.export_limit * step
@@ -542,6 +546,8 @@ class Prediction:
             prev_soc = soc
             reserve_expected = reserve
             import_rate = rate_import.get(minute_absolute, 0)
+            if io_adjusted.get(minute_absolute, 0) and pv10 and minute > 30:
+                import_rate = self.rate_max  # Assume in worst case that slot goes away and max rate applies
             export_rate = rate_export.get(minute_absolute, 0)
 
             # Alert?
@@ -622,9 +628,6 @@ class Prediction:
             # Get load and pv forecast, total up for all values in the step
             pv_now = pv_forecast_minute_step_flat[minute]
             load_yesterday = load_minutes_step_flat[minute]
-            # for offset in range(0, step, PREDICT_STEP):
-            #    pv_now += pv_forecast_minute_step[minute + offset]
-            #    load_yesterday += load_minutes_step[minute + offset]
 
             # Count PV kWh
             pv_kwh += pv_now
@@ -854,11 +857,11 @@ class Prediction:
                 pv_dc = 0
                 diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
 
-                required_for_load = load_yesterday * inverter_loss_recp
-                if inverter_hybrid:
-                    potential_to_charge = pv_now
-                else:
-                    potential_to_charge = pv_ac
+                potential_to_charge = pv_ac
+                required_for_load = load_yesterday
+                # Only apply inverter losses on the amount we might draw from the battery and not on the PV amount (which is already inverted)
+                if required_for_load > potential_to_charge:
+                    required_for_load += (required_for_load - potential_to_charge) * inverter_loss_recp - (required_for_load - potential_to_charge)
 
                 diff = required_for_load - potential_to_charge
 
@@ -1057,7 +1060,8 @@ class Prediction:
                 predict_state[stamp] = "g" + grid_state + "b" + battery_state
                 predict_battery_power[stamp] = round(battery_draw * (60 / step), 3)
                 predict_battery_cycle[stamp] = round(battery_cycle, 3)
-                predict_pv_power[stamp] = round((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (30 / step), 3)
+                # Use plan_interval_minutes instead of hardcoded 30 for scaling
+                predict_pv_power[stamp] = round((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (self.plan_interval_minutes / step), 3)
                 predict_grid_power[stamp] = round(diff * (60 / step), 3)
                 predict_load_power[stamp] = round(load_yesterday * (60 / step), 3)
                 if carbon_enable:

@@ -211,8 +211,10 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging
-- **switch.predbat_car_charging_manual_soc** - ignore the  **car_charging_soc** car SoC sensor set in `apps.yaml`
-- **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC (used if car SoC sensor is not available)
+- **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` (car 0)
+- **switch.predbat_car_charging_manual_soc_1/2/3** - ignore the **car_charging_soc** car SoC sensor for cars 1/2/3
+- **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC in kWh (car 0, used if car SoC sensor is not available)
+- **input_number.predbat_car_charging_manual_soc_kwh_1/2/3** - manually maintained car SoC in kWh for cars 1/2/3
 
 ## Calculation options
 
@@ -386,6 +388,10 @@ i.e. if you change a reserve min to a level higher than the current battery SoC 
 **switch.predbat_inverter_soc_reset**  (_expert mode_) When set to On (the default) the target SoC for the inverter(s) will be reset to 100% when a charge slot is not active,
 this can be used to workaround some firmware issues where the SoC target is used for solar charging as well as grid charging.
 When disabled the SoC target % will not be changed after a charge slot.
+
+**input_number.inverter_limit_override** When non-zero sets the maximum rate (in Watts) to set the battery charge or discharge rate to when in operation.
+Useful to workaround bad installs that trip the fuse/breaker when operating at full power.
+A value of 0 applies no limit.
 
 ## Balance Inverters
 

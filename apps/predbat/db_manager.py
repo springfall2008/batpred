@@ -13,14 +13,12 @@ import time
 import traceback
 import threading
 from db_engine import DatabaseEngine, TIME_FORMAT_DB
+from component_base import ComponentBase
 
 
-class DatabaseManager:
-    def __init__(self, db_enable, db_days, base):
-        self.base = base
-        self.log = base.log
+class DatabaseManager(ComponentBase):
+    def initialize(self, db_enable, db_days):
         self.db_days = db_days
-        self.stop_thread = False
         self.db_queue = []
         self.queue_id = 0
         self.queue_results = {}
@@ -36,34 +34,10 @@ class DatabaseManager:
         It waits for the sync_event to be set and then sets the async_event to notify the main loop.
         This allows the database manager to process commands asynchronously.
         """
-        while not self.stop_thread:
+        while not self.api_stop:
             self.sync_event.wait()
             self.sync_event.clear()  # Clear the event to allow the loop to continue
             loop.call_soon_threadsafe(self.async_event.set)
-
-    def is_alive(self):
-        """Check if the database manager is alive"""
-        return self.api_started
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
-
-    def wait_api_started(self):
-        """
-        Wait for the API to start
-        """
-        self.log("DBManager: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < 240:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: DBManager: Failed to start")
-            return False
-        return True
 
     async def start(self):
         """
@@ -80,7 +54,7 @@ class DatabaseManager:
         self.log("db_manager: Started")
         self.api_started = True
 
-        while not self.stop_thread:
+        while not self.api_stop:
             if not self.db_queue:
                 await self.async_event.wait()
                 self.async_event.clear()
@@ -105,7 +79,7 @@ class DatabaseManager:
                     self.queue_results[queue_id] = state
                     self.return_event.set()  # Notify that the result is ready
                 elif command == "stop":
-                    self.stop_thread = True
+                    self.api_stop = True
                     self.log("db_manager: stopping")
 
                 self.last_success_timestamp = datetime.now(timezone.utc)
@@ -148,7 +122,7 @@ class DatabaseManager:
         """
         Close the database connection
         """
-        self.stop_thread = True
+        self.api_stop = True
         self.send_via_ipc("stop", {}, expect_response=False)
         self.api_started = False
         self.log("db_manager: stop command sent")
@@ -175,7 +149,7 @@ class DatabaseManager:
         if timestamp is not None:
             now_utc = timestamp
         else:
-            now_utc = self.base.now_utc_real
+            now_utc = self.now_utc_exact
 
         # Convert time to GMT+0
         now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)

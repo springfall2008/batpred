@@ -394,7 +394,14 @@ Attributes of this actual/predicted energy in 5-minute slots from midnight today
 to the predicted load (based on historical data), dampened according to input_number.predbat_metric_inday_adjust_damping.
 Attributes contain the 5-minute slot forecasts to the end of the plan for charting
 - predbat.load_energy_predicted - Total predicted kWh of house load to end of plan, attributes of predicted load in 5-minute slots from midnight today to the end of the plan for charting
-- predbat.load_inday_adjustment - the % in-day adjustment factor used to adjust Predbat's predicted load by the actual load today
+- predbat.load_inday_adjustment - the % in-day adjustment factor used to adjust Predbat's predicted load by the actual load today.
+After midnight when insufficient data is available, this blends yesterday's final adjustment factor with today's developing factor:
+    - **0-3 hours**: Uses 100% of yesterday's adjustment factor
+    - **3-24 hours**: Blend of yesterday's adjustment factor with today's
+
+  Additional attributes available:
+    - `yesterday_adjustment`: Yesterday's final in-day adjustment factor as a percentage
+    - `yesterday_weight`: The current blend weight applied to yesterday's factor as a percentage (100% at midnight, decreasing to 0% by 8 hours)
 
 ## 'Today' energy data
 
@@ -560,6 +567,10 @@ They are used in the daily cost-saving and total cost-savings charts - see [crea
 and only charging at the lowest import rate in the 24 hour period
 - predbat.savings_yesterday_pvbat - A sensor which tells you how much money you saved from using Predbat
 vs not having a PV and battery system at all and all house load being met from grid import
+
+Note: The savings using Predbat are calculated by default compared to having one fixed nightly charge slot set to charge at the lowest import rate with a target of 100%
+You can change the number of simulated charge slots in apps.yaml by setting **calculate_savings_max_charge_slots** to the number of slots to allow.
+If set to 0 then Demand (ECO) mode will be used as the baseline or if non-zero then the maximum number of slots can be set (e.g. 2).
 
 ## Solar forecast data
 

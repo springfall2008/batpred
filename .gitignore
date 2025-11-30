@@ -46,8 +46,6 @@ htmlcov/
 dmypy.json
 
 # Generated test files
-test_*.html
-test_*.py
 *_test.html
 *_test.py
 

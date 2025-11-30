@@ -10,7 +10,7 @@
 # pyright: reportAttributeAccessIssue=false
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data
+from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 
@@ -95,7 +95,7 @@ class Fetch:
         values = {}
         cloud_diff = 0
 
-        for minute in range(0, self.forecast_minutes + 30, step):
+        for minute in range(0, self.forecast_minutes + self.plan_interval_minutes, step):
             value = 0
             minute_absolute = minute + minutes_now
 
@@ -129,7 +129,7 @@ class Fetch:
                 for offset in range(step):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
             if load_adjust:
-                load_extra += load_adjust.get(minute_absolute, 0) * step / 30.0  # The kWh figure is for the 30 minute period in question so divide by 30 and times by step
+                load_extra += load_adjust.get(minute_absolute, 0) * step / float(self.plan_interval_minutes)  # The kWh figure is for the plan interval period, so divide by plan_interval_minutes and times by step
             load_extra = max(load_extra, -value)  # Don't allow going to negative load values
             values[minute] = dp4((value + load_extra) * scaling_dynamic * scale_today * scale_fixed)
 
@@ -236,7 +236,7 @@ class Fetch:
             del self.days_previous_weight[min_sum_day_idx]
 
         # Gap filling
-        gap_size = max(self.get_arg("load_filter_threshold", 30), 5)
+        gap_size = max(self.get_arg("load_filter_threshold", self.plan_interval_minutes), 5)
         for days in days_list:
             use_days = max(min(days, self.load_minutes_age), 1)
             num_gaps = 0
@@ -396,7 +396,7 @@ class Fetch:
             except (ValueError, TypeError):
                 history = []
 
-            if history:
+            if isinstance(history, list) and history and history[0]:
                 item = history[0][0]
                 try:
                     last_updated_time = str2time(item["last_updated"])
@@ -430,10 +430,15 @@ class Fetch:
             age_days = 0
         return load_minutes, age_days
 
-    def fetch_sensor_data(self):
+    def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
         """
+
+        prev_octopus_slots = self.octopus_slots.copy()
+        prev_octopus_saving_slots = self.octopus_saving_slots.copy()
+        prev_octopus_free_slots = self.octopus_free_slots.copy()
+
         self.rate_import = {}
         self.rate_import_replicated = {}
         self.rate_export = {}
@@ -459,8 +464,6 @@ class Fetch:
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
-        self.octopus_free_slots = {}
-        self.octopus_saving_slots = {}
         curr = self.currency_symbols[1]
 
         # Alert feed if enabled
@@ -487,7 +490,7 @@ class Fetch:
             if "load_today" in self.args:
                 self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
-                self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
+                self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             else:
                 if self.load_forecast:
@@ -503,21 +506,21 @@ class Fetch:
             # Load import today data
             if "import_today" in self.args:
                 self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
+                self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
                 self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-                self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
+                self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
                 self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-                self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
+                self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous PV data")
 
@@ -565,11 +568,11 @@ class Fetch:
             entity_id = self.get_arg("metric_octopus_gas", None, indirect=False)
             self.rate_gas = self.fetch_octopus_rates(entity_id)
             if not self.rate_gas:
-                self.log("Error: metric_octopus_gas is not set correctly in apps.yaml, or no energy rates can be read")
-                self.record_status(message="Error: rate_import_gas not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
-                raise ValueError
-            self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
-            self.rate_scan_gas(self.rate_gas, print=True)
+                self.log("Warn: metric_octopus_gas is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Warn: rate_import_gas not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+            else:
+                self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+                self.rate_scan_gas(self.rate_gas, print=True)
         elif "rates_gas" in self.args:
             self.rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "rates_gas")
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
@@ -638,10 +641,19 @@ class Fetch:
                 # Extract vehicle data if we can get it
                 size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
                 rate = self.get_state_wrapper(entity_id=entity_id, attribute="charge_point_power_in_kw")
+                try:
+                    size = float(size)
+                except (ValueError, TypeError):
+                    size = None
+                try:
+                    rate = float(rate)
+                except (ValueError, TypeError):
+                    rate = None
                 if size:
                     self.car_charging_battery_size[0] = size
                 if rate:
-                    self.car_charging_rate[0] = rate
+                    # Take the max as Octopus over reports
+                    self.car_charging_rate[0] = max(rate, self.car_charging_rate[0])
 
                 # Get car charging limit again from car based on new battery size
                 self.car_charging_limit[0] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0)
@@ -685,8 +697,9 @@ class Fetch:
         self.car_charging_soc = [0.0 for car_n in range(self.num_cars)]
         self.car_charging_soc_next = [None for car_n in range(self.num_cars)]
         for car_n in range(self.num_cars):
-            if (car_n == 0) and self.car_charging_manual_soc:
-                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh")
+            if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
+                car_postfix = "" if car_n == 0 else "_" + str(car_n)
+                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh" + car_postfix, 0.0)
             else:
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
@@ -729,6 +742,7 @@ class Fetch:
         if self.rate_import:
             self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
+            self.rate_import_no_io = self.rate_import.copy()
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
@@ -736,6 +750,7 @@ class Fetch:
             self.rate_import = self.apply_manual_rates(self.rate_import, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
             self.rate_scan(self.rate_import, print=True)
         else:
+            self.rate_import_no_io = {}
             self.log("Warning: No import rate data provided")
             self.record_status(message="Error: No import rate data provided", had_errors=True)
 
@@ -826,7 +841,7 @@ class Fetch:
 
         # Work out cost today
         if self.import_today:
-            self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes)
+            self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes, save=save)
 
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
@@ -838,9 +853,21 @@ class Fetch:
 
         # Load today vs actual
         if self.load_minutes:
-            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
+            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save)
         else:
             self.load_inday_adjustment = 1.0
+
+        force_replan = False
+        if str(prev_octopus_slots) != str(self.octopus_slots):
+            self.log("Octopus slots changed from {} to {}".format(prev_octopus_slots, self.octopus_slots))
+            force_replan = True
+        if str(prev_octopus_saving_slots) != str(self.octopus_saving_slots):
+            self.log("Octopus saving slots changed from {} to {}".format(prev_octopus_saving_slots, self.octopus_saving_slots))
+            force_replan = True
+        if str(prev_octopus_free_slots) != str(self.octopus_free_slots):
+            self.log("Octopus free slots changed from {} to {}".format(prev_octopus_free_slots, self.octopus_free_slots))
+            force_replan = True
+        return force_replan
 
     def fetch_pv_forecast(self):
         """
@@ -946,32 +973,32 @@ class Fetch:
         self.export_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.pv_today, _ = minute_data(mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
 
-        self.load_minutes_now = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0)
+        self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
         self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
-        self.import_today_now = self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0)
-        self.export_today_now = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0)
-        self.pv_today_now = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0)
+        self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
+        self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
+        self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
 
         # More up to date sensors for current values if set
         if "load_today" in self.args:
             load_minutes, load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh", load_scaling=self.load_scaling, interpolate=True)
-            self.load_minutes_now = max(load_minutes.get(0, 0) - load_minutes.get(self.minutes_now, 0), 0)
+            self.load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
             self.load_last_period = (load_minutes.get(0, 0) - load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
             self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
 
         if "import_today" in self.args:
             import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.import_today_now = max(import_today.get(0, 0) - import_today.get(self.minutes_now, 0), 0)
+            self.import_today_now = get_now_from_cumulative(import_today, self.minutes_now, backwards=True)
 
         # Load export today data
         if "export_today" in self.args:
             export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
-            self.export_today_now = max(export_today.get(0, 0) - export_today.get(self.minutes_now, 0), 0)
+            self.export_today_now = get_now_from_cumulative(export_today, self.minutes_now, backwards=True)
 
         # PV today data
         if "pv_today" in self.args:
             pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
-            self.pv_today_now = max(pv_today.get(0, 0) - pv_today.get(self.minutes_now, 0), 0)
+            self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_now, backwards=True)
 
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
@@ -997,7 +1024,7 @@ class Fetch:
                 else:
                     minute_mod = minute % (24 * 60)
 
-                if (minute_mod in rate_io) and rate_io[minute_mod]:
+                if rate_io and (minute_mod in rate_io) and rate_io[minute_mod]:
                     # Dont replicate Intelligent rates into the next day as it will be different
                     rate_offset = self.rate_max
                 elif minute_mod in rates:
@@ -1045,7 +1072,6 @@ class Fetch:
         rate_low_count = 0
         alternate_rate_boundary = False
         alt_rate_last = None
-        alt_rate_last = None
 
         # Work out alternate rate threshold
         alt_rate_max = max(alt_rates.values()) if alt_rates else 0
@@ -1075,11 +1101,11 @@ class Fetch:
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (rate_low_start in self.manual_all_times or minute in self.manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
+                    if (rate_low_start in self.manual_all_times or minute in self.manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.plan_interval_minutes):
                         # Manual slot
                         rate_low_end = minute
                         break
-                    if find_high and (rate_low_start >= 0) and (((minute - rate_low_start) >= 60 * 24) or (((minute - rate_low_start) >= 30) and alternate_rate_boundary)):
+                    if find_high and (rate_low_start >= 0) and (((minute - rate_low_start) >= 60 * 24) or (((minute - rate_low_start) >= self.plan_interval_minutes) and alternate_rate_boundary)):
                         # Export slot can never be bigger than 4 hours
                         rate_low_end = minute
                         break
@@ -1193,12 +1219,12 @@ class Fetch:
                         try:
                             day = int(day)
                         except (ValueError, TypeError):
-                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 0-6".format(day_of_week))
-                            self.record_status("Bad day_of_week {} provided in energy rates, should be 0-6".format(day_of_week), had_errors=True)
+                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 1-7".format(day_of_week))
+                            self.record_status("Bad day_of_week {} provided in energy rates, should be 1-7".format(day_of_week), had_errors=True)
                             continue
                         if day < 1 or day > 7:
-                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 0-6".format(day))
-                            self.record_status("Bad day_of_week {} provided in energy rates, should be 0-6".format(day), had_errors=True)
+                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 1-7".format(day))
+                            self.record_status("Bad day_of_week {} provided in energy rates, should be 1-7".format(day), had_errors=True)
                             continue
                         # Store as Python day of week
                         day_of_week.append(day - 1)
@@ -1386,15 +1412,21 @@ class Fetch:
         curr = self.currency_symbols[1]
 
         have_alerts = len(self.alert_active_keep) > 0
+        car_planning_on_rates = self.num_cars > 0 and not self.octopus_intelligent_charging
+        car_charging_max_price = max(self.car_charging_plan_max_price[: self.num_cars]) if car_planning_on_rates else 0.0
 
         if self.rate_low_threshold > 0:
             self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts or self.num_cars > 0:
+            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts:
                 self.rate_import_cost_threshold = self.rate_max + 0.1
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
+
+        # When we plan car on the rates we need to include all the rates up to the max car price
+        if car_planning_on_rates:
+            self.rate_import_cost_threshold = max(self.rate_import_cost_threshold, car_charging_max_price + 0.1)
 
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
@@ -1607,6 +1639,7 @@ class Fetch:
 
         self.num_cars = self.get_arg("num_cars", 1)
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
+        self.calculate_savings_max_charge_slots = self.get_arg("calculate_savings_max_charge_slots", 1)
 
         self.log("Configuration: forecast_hours {}, num_cars {}, debug enable is {}, calculate_plan_every {} minutes".format(forecast_hours, self.num_cars, self.debug_enable, self.calculate_plan_every))
 
@@ -1724,8 +1757,8 @@ class Fetch:
         self.best_soc_max = self.get_arg("best_soc_max")
         self.best_soc_keep = self.get_arg("best_soc_keep")
         self.best_soc_keep_weight = self.get_arg("best_soc_keep_weight")
-        self.set_soc_minutes = 30
-        self.set_window_minutes = 30
+        self.set_soc_minutes = self.plan_interval_minutes
+        self.set_window_minutes = self.plan_interval_minutes
         self.inverter_set_charge_before = self.get_arg("inverter_set_charge_before")
         if not self.inverter_set_charge_before:
             self.set_soc_minutes = 0
@@ -1739,8 +1772,8 @@ class Fetch:
         self.combine_rate_threshold = self.get_arg("combine_rate_threshold")
         self.combine_export_slots = self.get_arg("combine_export_slots")
         self.combine_charge_slots = self.get_arg("combine_charge_slots")
-        self.charge_slot_split = 30
-        self.export_slot_split = 30
+        self.charge_slot_split = self.plan_interval_minutes
+        self.export_slot_split = self.plan_interval_minutes
         self.calculate_best = True
         self.set_read_only = self.get_arg("set_read_only")
 
@@ -1849,7 +1882,10 @@ class Fetch:
 
         # Car options
         self.car_charging_hold = self.get_arg("car_charging_hold")
-        self.car_charging_manual_soc = self.get_arg("car_charging_manual_soc")
+        self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
+        for car_n in range(self.num_cars):
+            car_postfix = "" if car_n == 0 else "_" + str(car_n)
+            self.car_charging_manual_soc[car_n] = self.get_arg("car_charging_manual_soc" + car_postfix, False)
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold")) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale")
 

@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2025 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -24,6 +24,7 @@ from datetime import datetime, timezone, timedelta
 import asyncio
 import os
 
+
 COMPONENT_LIST = {
     "db": {
         "class": DatabaseManager,
@@ -34,6 +35,7 @@ COMPONENT_LIST = {
         },
         "can_restart": False,
         "phase": 0,
+        "new": True,
     },
     "ha": {
         "class": HAInterface,
@@ -48,18 +50,12 @@ COMPONENT_LIST = {
         "can_restart": False,
         "phase": 0,
     },
-    "ha_history": {
-        "class": HAHistory,
-        "name": "Home Assistant History",
-        "args": {},
-        "can_restart": False,
-        "phase": 0,
-    },
+    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0, "new": True},
     "web": {
         "class": WebInterface,
         "name": "Web Interface",
         "args": {
-            "port": {"required": False, "config": "web_port", "default": 5052},
+            "web_port": {"required": False, "config": "web_port", "default": 5052},
         },
         "phase": 0,
     },
@@ -78,7 +74,7 @@ COMPONENT_LIST = {
         "name": "Solar API",
         "args": {
             "prefix": {"required": True, "config": "prefix", "default": "predbat"},
-            "solcast_host": {"required": False, "config": "solcast_host"},
+            "solcast_host": {"required": False, "config": "solcast_host", "default": "https://api.solcast.com.au/"},
             "solcast_api_key": {"required": False, "config": "solcast_api_key"},
             "solcast_sites": {"required": False, "config": "solcast_sites"},
             "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8},
@@ -265,7 +261,7 @@ class Components:
                     have_all_args = False
             if have_all_args:
                 self.log(f"Initializing {component_info['name']} interface")
-                self.components[component_name] = component_info["class"](*arg_dict.values(), self.base)
+                self.components[component_name] = component_info["class"](self.base, **arg_dict)
 
     def start(self, only=None, phase=0):
         """Start all initialized components"""
@@ -300,6 +296,7 @@ class Components:
             if component:
                 self.log(f"Stopping {component_name} interface")
                 await component.stop()
+                self.log(f"Stopped {component_name} interface")
                 self.component_tasks[component_name] = None
                 self.components[component_name] = None
 

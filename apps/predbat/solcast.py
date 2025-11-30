@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import asyncio
 import hashlib
 import json
 import os
@@ -16,16 +15,16 @@ import requests
 import traceback
 import pytz
 from datetime import datetime, timedelta, timezone
-from config import PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SOLCAST, TIME_FORMAT_FORECAST_SOLAR
+from config import TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
-import time
+from component_base import ComponentBase
 
 """
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
 """
 
 
-class SolarAPI:
+class SolarAPI(ComponentBase):
     """
     SolarAPI is responsible for managing and aggregating solar forecast data from multiple sources,
     including Solcast, Forecast.Solar, and direct sensor inputs. It periodically fetches, processes,
@@ -34,8 +33,8 @@ class SolarAPI:
     for system optimization and decision-making.
     """
 
-    def __init__(self, prefix, solcast_host, solcast_api_key, solcast_sites, solcast_poll_hours, forecast_solar, forecast_solar_max_age, pv_forecast_today, pv_forecast_tomorrow, pv_forecast_d3, pv_forecast_d4, pv_scaling, base):
-        self.prefix = prefix
+    def initialize(self, solcast_host, solcast_api_key, solcast_sites, solcast_poll_hours, forecast_solar, forecast_solar_max_age, pv_forecast_today, pv_forecast_tomorrow, pv_forecast_d3, pv_forecast_d4, pv_scaling):
+        """Initialize the Solar API component"""
         self.solcast_host = solcast_host
         self.solcast_api_key = solcast_api_key
         self.solcast_sites = solcast_sites
@@ -47,70 +46,21 @@ class SolarAPI:
         self.pv_forecast_d3 = pv_forecast_d3
         self.pv_forecast_d4 = pv_forecast_d4
         self.pv_scaling = pv_scaling
-        self.base = base
-        self.log = base.log
-        self.api_started = False
-        self.api_stop = False
-        self.last_success_timestamp = None
         self.solcast_requests_total = 0
         self.solcast_failures_total = 0
         self.forecast_solar_requests_total = 0
         self.forecast_solar_failures_total = 0
-        self.config_root = base.config_root
+        self.solcast_last_success_timestamp = None
+        self.forecast_solar_last_success_timestamp = None
         self.forecast_days = 4
 
-    async def start(self):
+    async def run(self, seconds, first):
         """
-        Start the Solar API
+        Run the Solar API
         """
-        seconds = 0
-        while not self.api_stop:
-            if seconds % (30 * 60) == 0:  # Every 30 minutes
-                try:
-                    self.fetch_pv_forecast()
-                except Exception as e:
-                    self.log("Error: Solcast API fetch_pv_forecast exception {}".format(e))
-                    self.log("Error: " + traceback.format_exc())
-
-            if not self.api_started:
-                self.api_started = True
-                self.log("SolarAPI started")
-            await asyncio.sleep(10)
-            seconds += 10
-
-        self.log("Solar API stopped")
-
-    async def stop(self):
-        """
-        Stop the Solar API
-        """
-        self.api_stop = True
-
-    def wait_api_started(self):
-        """
-        Wait for the API to start
-        """
-        self.log("SolarAPI: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < 240:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: SolarAPI: Failed to start")
-            return False
+        if seconds % (self.plan_interval_minutes * 60) == 0:  # Every plan_interval_minutes
+            self.fetch_pv_forecast()
         return True
-
-    def is_alive(self):
-        """
-        Check if the API is alive
-        """
-        return self.api_started
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
 
     def cache_get_url(self, url, params, max_age=8 * 60):
         # Check if this is a Solcast API call for metrics tracking
@@ -195,8 +145,8 @@ class SolarAPI:
                 json.dump(data, f)
         return data
 
-    URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}"
-    URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}"
+    URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
+    URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
 
     def convert_azimuth(self, az):
         """
@@ -279,14 +229,12 @@ class SolarAPI:
 
             current_time = info.get("time", None)
             current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
-            current_time_offset = current_time_stamp.utcoffset()
 
             period_start_stamp = None
             forecast_watt_data = {}
             for period_end in watts:
-                period_end_stamp = datetime.strptime(period_end, TIME_FORMAT_FORECAST_SOLAR)
+                period_end_stamp = datetime.strptime(period_end, TIME_FORMAT)
                 # Convert period_end_stamp to a offset aware time using current_time_offset as the timezone
-                period_end_stamp = period_end_stamp.replace(tzinfo=pytz.utc) - current_time_offset
                 pv50 = watts[period_end] * efficiency  # Apply efficiency to the watt hours
                 if period_start_stamp:
                     if period_end_stamp - period_start_stamp > timedelta(minutes=60):
@@ -303,11 +251,11 @@ class SolarAPI:
 
                 period_start_stamp = period_end_stamp
 
-            for minute in range(0, days_data * 24 * 60, 30):
+            for minute in range(0, days_data * 24 * 60, self.plan_interval_minutes):
                 pv50 = 0
-                for offset in range(0, 30, 1):
+                for offset in range(0, self.plan_interval_minutes, 1):
                     pv50 += dp4(forecast_watt_data.get(minute + offset, 0) / 1000.0)
-                pv50 /= 30
+                pv50 /= self.plan_interval_minutes
                 period_start_stamp = self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)
                 data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}
                 if period_start_stamp in period_data:
@@ -477,11 +425,11 @@ class SolarAPI:
             # in newer solcast plugins only forecast is used
             attribute = "detailedForecast"
             if entity_id:
-                result = self.base.get_state_wrapper(entity_id=entity_id, attribute=attribute)
+                result = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
                 if not result:
                     attribute = "forecast"
                 try:
-                    data = self.base.get_state_wrapper(entity_id=entity_id, attribute=attribute)
+                    data = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
                 except (ValueError, TypeError):
                     self.log("Warn: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(entity_id, argname))
 
@@ -491,7 +439,7 @@ class SolarAPI:
                 for entry in data:
                     total_data += entry["pv_estimate"]
                 total_data = dp2(total_data)
-                total_sensor = self.base.get_state_wrapper(entity_id=entity_id, default=1.0)
+                total_sensor = self.get_state_wrapper(entity_id=entity_id, default=1.0)
                 try:
                     total_sensor = dp2(float(total_sensor))
                 except (ValueError, TypeError):
@@ -524,7 +472,7 @@ class SolarAPI:
             forecast_day[day] = []
 
         midnight_today = self.midnight_utc
-        now = self.now_utc
+        now = self.now_utc_exact
 
         power_scale = 60 / period  # Scale kwh to power
         power_now = 0
@@ -611,7 +559,7 @@ class SolarAPI:
                         dp2(total_left_todayCL),
                     )
                 )
-                self.base.dashboard_item(
+                self.dashboard_item(
                     "sensor." + self.prefix + "_pv_today",
                     state=dp2(total_day[day]),
                     attributes={
@@ -631,7 +579,7 @@ class SolarAPI:
                         "detailedForecast": forecast_day[day],
                     },
                 )
-                self.base.dashboard_item(
+                self.dashboard_item(
                     "sensor." + self.prefix + "_pv_forecast_h0",
                     state=dp2(power_now),
                     attributes={
@@ -650,7 +598,7 @@ class SolarAPI:
                 day_name_long = day_name if day == 1 else "day {}".format(day)
                 self.log("PV Forecast for day {} is {} ({} 10%, {} 90%, {} calibrated) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day])))
 
-                self.base.dashboard_item(
+                self.dashboard_item(
                     "sensor." + self.prefix + "_pv_" + day_name,
                     state=dp2(total_day[day]),
                     attributes={
@@ -677,10 +625,10 @@ class SolarAPI:
 
         days = 10
         pv_power_hist, pv_power_hist_days = history_attribute_to_minute_data(
-            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", days, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
         )
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
-            self.now_utc, prune_today(history_attribute(self.base.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            self.now_utc_exact, prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False)), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True)
         )
 
         hist_days = min(pv_power_hist_days, pv_forecast_hist_days)
@@ -695,13 +643,12 @@ class SolarAPI:
         pv_forecast_by_slot_count = {}
         past_day_forecast = {}
         past_day_actual = {}
-
         for minute in pv_power_hist:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
                 slot_abs = minute_absolute % (24 * 60)
-                slot = int(slot_abs / 30) * 30
+                slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
                 pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
                 pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
                 past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
@@ -714,7 +661,7 @@ class SolarAPI:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
                 slot_abs = minute_absolute % (24 * 60)
-                slot = int(slot_abs / 30) * 30
+                slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
                 pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute]
                 pv_forecast_by_slot_count[slot] = pv_forecast_by_slot_count.get(slot, 0) + 1
 
@@ -744,17 +691,17 @@ class SolarAPI:
                 pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_count[slot])
 
         total_production = 0
-        for slot in range(0, 24 * 60, 30):
+        for slot in range(0, 24 * 60, self.plan_interval_minutes):
             total_production += pv_power_hist_by_slot.get(slot, 0)
 
         total_forecast = 0
-        for slot in range(0, 24 * 60, 30):
+        for slot in range(0, 24 * 60, self.plan_interval_minutes):
             total_forecast += pv_forecast_by_slot.get(slot, 0)
 
         pv_distribution = {}
         forecast_distribution = {}
         slot_adjustment = {}
-        for slot in range(0, 24 * 60, 30):
+        for slot in range(0, 24 * 60, self.plan_interval_minutes):
             pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0 else 0)
             forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
 
@@ -775,18 +722,18 @@ class SolarAPI:
         pv_forecast_minute_adjusted = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1):
             pv_value = pv_forecast_minute.get(minute, 0)
-            slot = (int(minute / 30) * 30) % (24 * 60)
+            slot = (int(minute / self.plan_interval_minutes) * self.plan_interval_minutes) % (24 * 60)
             pv_forecast_minute_adjusted[minute] = pv_value * slot_adjustment.get(slot, 1.0)
 
         pv_estimateCL = {}
         pv_estimate10 = {}
         pv_estimate90 = {}
-        for minute in range(0, max(pv_forecast_minute.keys()) + 1, 30):
+        for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
-            for offset in range(0, 30, 1):
+            for offset in range(0, self.plan_interval_minutes, 1):
                 pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
             # Force timezone to UTC
-            pv_estimateCL[minute] = min(dp4(pv_value), max_kwh / 2)  # Clamp to max_kwh, divide max by 2 due to 30 minute slots
+            pv_estimateCL[minute] = min(dp4(pv_value), max_kwh / 2)  # Clamp to max_kwh, divide max by 2 due to plan_interval_minutes slots
             pv_estimate10[minute] = min(dp4(pv_value * worst_day_scaling), max_kwh / 2)
             pv_estimate90[minute] = min(dp4(pv_value * best_day_scaling), max_kwh / 2)
 
@@ -794,7 +741,7 @@ class SolarAPI:
             period_start = entry.get("period_start", "")
             if period_start:
                 minutes_since_midnight = (datetime.strptime(period_start, TIME_FORMAT) - self.midnight_utc).total_seconds() / 60
-                slot = int(minutes_since_midnight / 30) * 30
+                slot = int(minutes_since_midnight / self.plan_interval_minutes) * self.plan_interval_minutes
                 calibrated = pv_estimateCL.get(slot, None)
                 calibrated10 = pv_estimate10.get(slot, None)
                 calibrated90 = pv_estimate90.get(slot, None)
@@ -816,7 +763,7 @@ class SolarAPI:
             self.log("PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {}".format(dp2(worst_day_scaling)))
 
         # Do we use calibrated or raw data?
-        if self.base.get_arg("metric_pv_calibration_enable", default=True):
+        if self.get_arg("metric_pv_calibration_enable", default=True):
             self.log("PV Calibration: Using calibrated PV data")
             return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_data
         else:
@@ -841,7 +788,7 @@ class SolarAPI:
 
         current_pv_power = dp4(pv_forecast_minute.get(self.minutes_now, 0))
 
-        self.base.dashboard_item(
+        self.dashboard_item(
             "sensor." + self.prefix + "_pv_forecast_raw",
             state=current_pv_power,
             attributes={"friendly_name": "PV Forecast minute data", "icon": "mdi:solar-power", "forecast": pv_forecast_pack, "forecast10": pv_forecast_pack10, "unit_of_measurement": "kW", "device_class": "power", "state_class": "measurement"},
@@ -860,16 +807,12 @@ class SolarAPI:
         create_pv10 = False
         max_kwh = 9999
 
-        self.now_utc = datetime.now(timezone.utc)
-        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = int((self.now_utc - self.midnight_utc).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
-
         if self.forecast_solar:
             self.log("Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
-        elif self.solcast_host:
+        elif self.solcast_host and self.solcast_api_key:
             self.log("Obtaining solar forecast from Solcast API")
             pv_forecast_data = self.download_solcast_data()
             divide_by = 30.0
@@ -930,6 +873,6 @@ class SolarAPI:
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / 30.0, max_kwh)
             self.publish_pv_stats(pv_forecast_data, divide_by / 30.0, 30)
             self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
-            self.last_success_timestamp = datetime.now(timezone.utc)
+            self.update_success_timestamp()
         else:
             self.log("Warn: No solar data has been configured.")

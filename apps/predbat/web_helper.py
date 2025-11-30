@@ -3822,6 +3822,63 @@ def get_plan_css():
         }
     }
 
+    // Function to show error message as a modal popup
+    function showErrorMessage(message) {
+        // Create modal overlay
+        const overlay = document.createElement('div');
+        overlay.style.position = 'fixed';
+        overlay.style.top = '0';
+        overlay.style.left = '0';
+        overlay.style.width = '100%';
+        overlay.style.height = '100%';
+        overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+        overlay.style.zIndex = '9999';
+        overlay.style.display = 'flex';
+        overlay.style.justifyContent = 'center';
+        overlay.style.alignItems = 'center';
+
+        // Create modal dialog
+        const modal = document.createElement('div');
+        modal.style.backgroundColor = 'white';
+        modal.style.padding = '30px';
+        modal.style.borderRadius = '8px';
+        modal.style.maxWidth = '500px';
+        modal.style.width = '90%';
+        modal.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.3)';
+        modal.style.position = 'relative';
+
+        // Create error icon and message container
+        const content = document.createElement('div');
+        content.style.marginBottom = '20px';
+        content.innerHTML = '<div style="color: #f44336; font-size: 48px; text-align: center; margin-bottom: 15px;">⚠</div>' +
+                           '<div style="color: #333; font-size: 16px; line-height: 1.5; text-align: center;"><strong>Error</strong><br>' + message + '</div>';
+
+        // Create dismiss button
+        const button = document.createElement('button');
+        button.textContent = 'Dismiss';
+        button.style.width = '100%';
+        button.style.padding = '12px';
+        button.style.backgroundColor = '#f44336';
+        button.style.color = 'white';
+        button.style.border = 'none';
+        button.style.borderRadius = '4px';
+        button.style.fontSize = '16px';
+        button.style.cursor = 'pointer';
+        button.style.fontWeight = 'bold';
+        button.onmouseover = function() { this.style.backgroundColor = '#d32f2f'; };
+        button.onmouseout = function() { this.style.backgroundColor = '#f44336'; };
+        button.onclick = function() { overlay.remove(); };
+
+        // Allow clicking overlay to close
+        overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+        // Assemble modal
+        modal.appendChild(content);
+        modal.appendChild(button);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+    }
+
     // Handle rate override option function
     function handleRateOverride(time, rate, action, clear) {
         console.log("Rate override:", time, "Rate:", rate, "Action:", action);
@@ -3835,12 +3892,7 @@ def get_plan_css():
             method: 'POST',
             body: formData
         })
-        .then(response => {
-            if (response.ok) {
-                return response.json();
-            }
-            throw new Error('Failed to set rate override');
-        })
+        .then(response => response.json())
         .then(data => {
             if (data.success) {
                 // Show success message
@@ -3870,12 +3922,12 @@ def get_plan_css():
                 // Reload the page to show the updated plan
                 setTimeout(() => location.reload(), 1000);
             } else {
-                alert('Error setting rate override: ' + (data.message || 'Unknown error'));
+                showErrorMessage(data.message || 'Unknown error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            alert('Error setting rate override: ' + (error.message || 'Unknown error'));
+            showErrorMessage(error.message || 'Unknown error');
         });
         // Close dropdown after selection
         closeDropdowns();
@@ -3895,12 +3947,7 @@ def get_plan_css():
             method: 'POST',
             body: formData
         })
-        .then(response => {
-            if (response.ok) {
-                return response.json();
-            }
-            throw new Error('Failed to set rate override');
-        })
+        .then(response => response.json())
         .then(data => {
             if (data.success) {
                 // Show success message
@@ -3930,12 +3977,12 @@ def get_plan_css():
                 // Reload the page to show the updated plan
                 setTimeout(() => location.reload(), 1000);
             } else {
-                alert('Error setting load adjustment override: ' + (data.message || 'Unknown error'));
+                showErrorMessage(data.message || 'Unknown error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            alert('Error setting load adjustment override: ' + (error.message || 'Unknown error'));
+            showErrorMessage(error.message || 'Unknown error');
         });
         // Close dropdown after selection
         closeDropdowns();
@@ -3957,12 +4004,7 @@ def get_plan_css():
             method: 'POST',
             body: formData
         })
-        .then(response => {
-            if (response.ok) {
-                return response.json();
-            }
-            throw new Error('Failed to set plan override');
-        })
+        .then(response => response.json())
         .then(data => {
             if (data.success) {
                 // Show success message
@@ -3988,12 +4030,12 @@ def get_plan_css():
                 // Reload the page to show the updated plan
                 setTimeout(() => location.reload(), 1000);
             } else {
-                alert('Error setting override: ' + (data.message || 'Unknown error'));
+                showErrorMessage(data.message || 'Unknown error');
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            alert('Error setting override: ' + error.message);
+            showErrorMessage(error.message);
         });
 
         // Close dropdown after selection

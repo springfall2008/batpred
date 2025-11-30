@@ -14,7 +14,7 @@ import pytz
 import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
-from utils import calc_percent_limit, dp0, dp2, dp3, time_string_to_stamp, minute_data, minute_data_state
+from utils import calc_percent_limit, compute_window_minutes, dp0, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
@@ -134,11 +134,11 @@ class Inverter:
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
 
         self.reserve_max = 100
-        self.battery_rate_max_raw = 0
-        self.battery_rate_max_charge = 0
-        self.battery_rate_max_discharge = 0
-        self.battery_rate_max_charge_scaled = 0
-        self.battery_rate_max_discharge_scaled = 0
+        self.battery_rate_max_raw = 2600.0
+        self.battery_rate_max_charge = 2600.0 / MINUTE_WATT
+        self.battery_rate_max_discharge = 2600.0 / MINUTE_WATT
+        self.battery_rate_max_charge_scaled = 2600.0 / MINUTE_WATT
+        self.battery_rate_max_discharge_scaled = 2600.0 / MINUTE_WATT
         self.battery_temperature = 20
         self.battery_power = 0
         self.battery_voltage = 52.0
@@ -366,8 +366,15 @@ class Inverter:
             raise ValueError
 
         # Battery rate max charge, discharge (all converted to kW/min)
-        self.battery_rate_max_charge = min(self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
-        self.battery_rate_max_discharge = min(self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
+        inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
+        inverter_limit_discharge = self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id, required_unit="W")
+        inverter_limit_override = self.base.get_arg("inverter_limit_override", 0, index=self.id, required_unit="W")
+        if inverter_limit_override > 0:
+            self.log("Info: Inverter {} applying inverter_limit_override of {} W to charge and discharge limits".format(self.id, inverter_limit_override))
+            inverter_limit_charge = min(inverter_limit_override, inverter_limit_charge)
+            inverter_limit_discharge = min(inverter_limit_override, inverter_limit_discharge)
+        self.battery_rate_max_charge = min(inverter_limit_charge, self.battery_rate_max_raw) / MINUTE_WATT
+        self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_max_charge_scaled = self.battery_rate_max_charge * self.base.battery_rate_max_scaling
         self.battery_rate_max_discharge_scaled = self.battery_rate_max_discharge * self.base.battery_rate_max_scaling_discharge
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
@@ -577,7 +584,7 @@ class Inverter:
                         required_unit="%",
                     )
                     for entry in soc_kwh:
-                        soc_kwh[entry] = calc_percent_limit(soc_kwh[entry], self.soc_max)
+                        soc_kwh[entry] = dp4(soc_kwh[entry] * self.soc_max / 100.0)
                 else:
                     soc_kwh, ignore_io = minute_data(
                         soc_kwh_data[0],
@@ -644,9 +651,10 @@ class Inverter:
                 for data_point in search_range:
                     for minute in range(1, min_len):
                         # Start trigger is when the SoC just increased above the data point
+                        previous_point = soc_percent.get(minute - 1, 0)
                         if (
                             not discharge
-                            and soc_percent.get(minute - 1, 0) == (data_point + 1)
+                            and previous_point > data_point
                             and soc_percent.get(minute, 0) == data_point
                             and predbat_status.get(minute - 1, "") == "Charging"
                             and predbat_status.get(minute, "") == "Charging"
@@ -656,7 +664,7 @@ class Inverter:
                             and battery_power.get(minute, 0) < 0
                         ) or (
                             discharge
-                            and soc_percent.get(minute - 1, 0) == (data_point - 1)
+                            and previous_point < data_point
                             and soc_percent.get(minute, 0) == data_point
                             and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
                             and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
@@ -704,9 +712,9 @@ class Inverter:
                                         )
                                     # Store data points
                                     if discharge:
-                                        store_range = range(this_soc, data_point - 1, -1)
+                                        store_range = range(this_soc, previous_point, -1)
                                     else:
-                                        store_range = range(this_soc, data_point + 1)
+                                        store_range = range(this_soc, previous_point)
 
                                     for point in store_range:
                                         if point not in final_curve:
@@ -807,11 +815,7 @@ class Inverter:
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
         """
-        if "prefix" in self.base.args:
-            prefix = self.base.get_arg("prefix", indirect=False)
-        else:
-            prefix = "prefix"
-
+        prefix = self.base.prefix
         entity_id = f"sensor.{prefix}_{self.inverter_type}_{self.id}_{entity_name}"
 
         attributes = {
@@ -989,8 +993,7 @@ class Inverter:
             charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
 
             # Compute charge window minutes start/end just for the next charge window
-            self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
-            self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
+            self.charge_start_time_minutes, self.charge_end_time_minutes = compute_window_minutes(charge_start_time, charge_end_time, minutes_now)
 
             # Charge is off due to start/end time being same
             if not self.inv_has_charge_enable_time and not self.charge_enable_time:
@@ -998,18 +1001,6 @@ class Inverter:
                 self.charge_end_time_minutes = self.base.forecast_minutes
                 self.track_charge_start = "00:00:00"
                 self.track_charge_end = "00:00:00"
-
-            if self.charge_end_time_minutes < self.charge_start_time_minutes:
-                # As windows wrap, if end is in the future then move start back, otherwise forward
-                if self.charge_end_time_minutes > minutes_now:
-                    self.charge_start_time_minutes -= 60 * 24
-                else:
-                    self.charge_end_time_minutes += 60 * 24
-
-            # Window already passed, move it forward until the next one
-            if self.charge_end_time_minutes < minutes_now:
-                self.charge_start_time_minutes += 60 * 24
-                self.charge_end_time_minutes += 60 * 24
         else:
             # If charging is disabled set a fake window outside
             self.charge_start_time_minutes = self.base.forecast_minutes
@@ -1098,20 +1089,7 @@ class Inverter:
         discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
 
         # Compute discharge window minutes start/end just for the next discharge window
-        self.discharge_start_time_minutes = discharge_start.hour * 60 + discharge_start.minute
-        self.discharge_end_time_minutes = discharge_end.hour * 60 + discharge_end.minute
-
-        if self.discharge_end_time_minutes < self.discharge_start_time_minutes:
-            # As windows wrap, if end is in the future then move start back, otherwise forward
-            if self.discharge_end_time_minutes > minutes_now:
-                self.discharge_start_time_minutes -= 60 * 24
-            else:
-                self.discharge_end_time_minutes += 60 * 24
-
-        # Move forward if the window has passed
-        if self.discharge_end_time_minutes < minutes_now:
-            self.discharge_start_time_minutes += 60 * 24
-            self.discharge_end_time_minutes += 60 * 24
+        self.discharge_start_time_minutes, self.discharge_end_time_minutes = compute_window_minutes(discharge_start, discharge_end, minutes_now)
 
         if not quiet:
             self.base.log("Inverter {} scheduled discharge enable is {}".format(self.id, self.discharge_enable_time))
@@ -1140,30 +1118,15 @@ class Inverter:
         idle_start = self.base.get_arg("idle_start_time", index=self.id)
         idle_end = self.base.get_arg("idle_end_time", index=self.id)
 
-        # Convert to minutes
+        # Convert to minutes using helper function
         try:
-            # Get time
             idle_start_time = time_string_to_stamp(idle_start)
             idle_end_time = time_string_to_stamp(idle_end)
-            # Change to minutes
-            self.idle_start_minutes = idle_start_time.hour * 60 + idle_start_time.minute
-            self.idle_end_minutes = idle_end_time.hour * 60 + idle_end_time.minute
+            self.idle_start_minutes, self.idle_end_minutes = compute_window_minutes(idle_start_time, idle_end_time, minutes_now)
         except (ValueError, TypeError):
             self.base.log("Warn: Inverter {} unable to read idle start/end time, check your setting of idle_start_time/idle_end_time".format(self.id))
             self.idle_start_minutes = 0
             self.idle_end_minutes = 0
-
-        if self.idle_end_minutes < self.idle_start_minutes:
-            # As windows wrap, if end is in the future then move start back, otherwise forward
-            if self.idle_end_minutes > minutes_now:
-                self.idle_start_minutes -= 60 * 24
-            else:
-                self.idle_end_minutes += 60 * 24
-
-        # Window already passed, move it forward until the next one
-        if self.idle_end_minutes < minutes_now:
-            self.idle_start_minutes += 60 * 24
-            self.idle_end_minutes += 60 * 24
 
         self.base.log("Inverter {} idle time is {}-{}".format(self.id, self.base.time_abs_str(self.idle_start_minutes), self.base.time_abs_str(self.idle_end_minutes)))
 
@@ -1743,8 +1706,8 @@ class Inverter:
         self.log("Adjust idle time, charge {}-{} discharge {}-{}".format(self.track_charge_start, self.track_charge_end, self.track_discharge_start, self.track_discharge_end))
 
         minutes_now = self.base.minutes_now
-        charge_start_minutes, charge_end_minutes = self.window2minutes(self.track_charge_start, self.track_charge_end, minutes_now)
-        discharge_start_minutes, discharge_end_minutes = self.window2minutes(self.track_discharge_start, self.track_discharge_end, minutes_now)
+        charge_start_minutes, charge_end_minutes = window2minutes(self.track_charge_start, self.track_charge_end, minutes_now)
+        discharge_start_minutes, discharge_end_minutes = window2minutes(self.track_discharge_start, self.track_discharge_end, minutes_now)
 
         # Idle from now (or previous idle time) until midnight
         idle_start_minutes = max(min(minutes_now, self.idle_start_minutes), 0)
@@ -1806,28 +1769,6 @@ class Inverter:
                 self.base.log("Inverter {} set new demand (idle) end time to {} was {}".format(self.id, idle_end, old_end))
                 self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
                 self.idle_end_minutes = idle_end_minutes
-
-    def window2minutes(self, start, end, minutes_now):
-        """
-        Convert time start/end window string into minutes
-        """
-        start = time_string_to_stamp(start)
-        end = time_string_to_stamp(end)
-        start_minute = start.hour * 60 + start.minute
-        end_minute = end.hour * 60 + end.minute
-
-        if end_minute < start_minute:
-            # As windows wrap, if end is in the future then move start back, otherwise forward
-            if end_minute > minutes_now:
-                start_minute -= 60 * 24
-            else:
-                end_minute += 60 * 24
-
-        # Window already passed, move it forward until the next one
-        if end_minute < minutes_now:
-            start_minute += 60 * 24
-            end_minute += 60 * 24
-        return start_minute, end_minute
 
     def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
         """
@@ -1995,8 +1936,9 @@ class Inverter:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
             self.log("Inverter {} Turning on scheduled export".format(self.id))
 
-        if ((new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable)) and self.inv_time_button_press:
-            self.press_and_poll_button()
+        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable):
+            if self.inv_time_button_press:
+                self.press_and_poll_button()
 
         # Force export, turn it on after we change the window
         if force_export:
@@ -2060,14 +2002,20 @@ class Inverter:
 
             self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
 
-        # Reset charge window to midnight if there is no charge enable time
-        if not self.inv_has_charge_enable_time:
-            self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
+            # Reset charge window to midnight if there is no charge enable time
+            if not self.inv_has_charge_enable_time:
+                self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
+            else:
+                # Press button if needed
+                if self.inv_time_button_press:
+                    self.press_and_poll_button()
 
         # Updated cached status to disabled
-        self.charge_enable_time = False
-        self.charge_start_time_minutes = self.base.forecast_minutes
-        self.charge_end_time_minutes = self.base.forecast_minutes
+        # Don't do it if notify is not set as this is just a temporary call when setting the charge window
+        if notify:
+            self.charge_enable_time = False
+            self.charge_start_time_minutes = self.base.forecast_minutes
+            self.charge_end_time_minutes = self.base.forecast_minutes
 
     def alt_charge_discharge_enable(self, direction, enable):
         """
@@ -2316,6 +2264,14 @@ class Inverter:
             old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
         else:
             self.log("Warn: Inverter {} unable read charge window as neither REST or discharge_start_time".format(self.id))
+            old_charge_schedule_enable = "off"
+
+        # Normalize old charge schedule enable
+        if old_charge_schedule_enable in ["off", "disable"]:
+            old_charge_schedule_enable = "off"
+
+        # Store the new start/end minutes using helper to handle midnight-spanning windows
+        self.charge_start_time_minutes, self.charge_end_time_minutes = compute_window_minutes(charge_start_time, charge_end_time, minutes_now)
 
         # Apply clock skew
         charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
@@ -2327,15 +2283,12 @@ class Inverter:
 
         # Disable scheduled charge during change of window to avoid a blip in charging if not required
         have_disabled = False
-        in_new_window = False
-
-        # Work out window time in minutes from midnight
-        new_start_minutes = charge_start_time.hour * 60 + charge_start_time.minute
-        new_end_minutes = charge_end_time.hour * 60 + charge_end_time.minute
 
         # If we are in the new window no need to disable
-        if minutes_now >= new_start_minutes and minutes_now < new_end_minutes:
+        if minutes_now >= self.charge_start_time_minutes and minutes_now < self.charge_end_time_minutes:
             in_new_window = True
+        else:
+            in_new_window = False
 
         # Some inverters have an idle time setting
         self.adjust_idle_time(charge_start=new_start, charge_end=new_end)
@@ -2389,8 +2342,8 @@ class Inverter:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
 
-        if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable" or have_disabled:
-            # Enable scheduled charge if not turned on
+        if (old_charge_schedule_enable == "off" or have_disabled) and (new_start != new_end):
+            # Enable scheduled charge if not turned on, unless the start and end are the same (disabled)
             if self.rest_data:
                 self.rest_enableChargeSchedule(True)
             elif "scheduled_charge_enable" in self.base.args:
@@ -2401,19 +2354,19 @@ class Inverter:
             else:
                 self.log("Warn: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
 
-            if new_start != old_start or new_end != old_end or (self.inv_charge_time_format in ["H M", "H:M-H:M"]):
-                # For Solis inverters and fox we also have to press the update_charge_discharge button to send the times to the inverter
-                if self.inv_time_button_press:
-                    self.press_and_poll_button()
-
             # Only notify if it's a real change and not a temporary one
-            if (old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable") and self.base.set_inverter_notify:
+            if old_charge_schedule_enable == "off" and self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Enabling scheduled charging at {}".format(self.id, self.base.time_now_str()))
 
             self.charge_enable_time = True
 
-            if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable":
+            if old_charge_schedule_enable == "off":
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
+
+        if (new_start != old_start) or (new_end != old_end) or (old_charge_schedule_enable == "off"):
+            # For Solis inverters and fox we also have to press the update_charge_discharge button to send the times to the inverter
+            if self.inv_time_button_press:
+                self.press_and_poll_button()
 
     def press_and_poll_button(self):
         """

@@ -245,6 +245,15 @@ such as 30 or 36 if you have a small battery and thus don't need to forecast 2 d
   forecast_hours: 48
 ```
 
+### plan_random_delay
+
+Can set the maximum number of seconds of delay when recalculating the plan after it expires. The exact delay will be between 0 and this value.
+The default is 0.
+
+```yaml
+  plan_random_delay: 30
+```
+
 ## Inverter information
 
 The template `apps.yaml` for each inverter type comes pre-configured with regular expressions that should auto-discover the Home Assistant entity names for that inverter type.
@@ -1045,7 +1054,7 @@ configured to take Octopus Intelligent car charging slots from Ohme (rather than
 ```yaml
   ohme_login: "user@domain"
   ohme_password: "xxxxxxxxx"
-  ohme_automatic: true
+  ohme_automatic_octopus_intelligent: true
 ```
 
 ## Watch List - automatically start Predbat execution
@@ -1233,10 +1242,10 @@ The are calculated by default by comparing Predbat's activity to you having one 
 You can change the number of simulated charge slots for this comparison by setting:
 
 ```yaml
-  calculate_savings_max_charge_slots: slots
+  calculate_savings_max_charge_slots: 1
 ```
 
-If set to 0 then Demand (Eco) mode will be used as the baseline, or if non-zero then the maximum number of slots can be set (e.g. 2).
+If set to 0 then Demand (Eco) mode will be used as the baseline, or if non-zero then the maximum number of charging slots can be set (e.g. 2).
 
 ## Automatic restarts
 

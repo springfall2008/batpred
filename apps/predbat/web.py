@@ -14,11 +14,10 @@ from aiohttp import web
 import asyncio
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import json
 import shutil
 import html as html_module
-import time
 from web_helper import (
     get_header_html,
     get_plan_css,
@@ -43,39 +42,19 @@ from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_o
 from config import TIME_FORMAT, TIME_FORMAT_DAILY
 from predbat import THIS_VERSION
 import urllib.parse
+from component_base import ComponentBase
 
 ROOT_YAML_KEY = "pred_bat"
 
 
-class WebInterface:
-    def __init__(self, web_port, base) -> None:
-        self.abort = False
-        self.base = base
-        self.log = base.log
+class WebInterface(ComponentBase):
+    def initialize(self, web_port):
         self.default_page = "./dash"
-        self.pv_power_hist = {}
-        self.pv_forecast_hist = {}
-        self.cost_today_hist = {}
-        self.compare_hist = {}
-        self.cost_yesterday_hist = {}
-        self.cost_yesterday_car_hist = {}
-        self.cost_yesterday_no_car = {}
         self.web_port = web_port
         self.default_log = "warnings"
-        self.api_started = False
-        self.last_success_timestamp = None
 
         # Plugin registration system
         self.registered_endpoints = []
-
-    async def select_event(self, entity_id, value):
-        pass
-
-    async def number_event(self, entity_id, value):
-        pass
-
-    async def switch_event(self, entity_id, service):
-        pass
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -100,36 +79,6 @@ class WebInterface:
             else:
                 results[key] = hist1[key]
         return results
-
-    def history_update(self):
-        """
-        Update the history data
-        """
-        self.log("Web interface history update")
-        self.pv_power_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7, required=False))
-        self.pv_forecast_hist = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False))
-        self.pv_forecast_histCL = history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
-        self.cost_today_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2, required=False))
-        self.cost_hour_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2, required=False))
-        self.cost_yesterday_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
-
-        if self.base.num_cars > 0:
-            self.cost_yesterday_car_hist = history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
-            self.cost_yesterday_no_car = self.subtract_daily(self.cost_yesterday_hist, self.cost_yesterday_car_hist)
-        else:
-            self.cost_yesterday_no_car = self.cost_yesterday_hist
-
-        compare_list = self.base.get_arg("compare_list", [])
-        for item in compare_list:
-            id = item.get("id", None)
-            if id and self.base.comparison:
-                self.compare_hist[id] = {}
-                result = self.base.comparison.get_comparison(id)
-                if result:
-                    self.compare_hist[id]["cost"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28, required=False), daily=True, pounds=True)
-                    self.compare_hist[id]["metric"] = history_attribute(self.base.get_history_wrapper(result["entity_id"], 28, required=False), state_key="metric", attributes=True, daily=True, pounds=True)
-
-        self.last_success_timestamp = datetime.now(timezone.utc)
 
     async def start(self):
         # Start the web server
@@ -188,40 +137,16 @@ class WebInterface:
 
         print("Web interface started")
         self.api_started = True
-        while not self.abort:
+        count = 0
+        while not self.api_stop:
             await asyncio.sleep(1)
+            if count % 60 == 0:
+                self.update_success_timestamp()
+            count += 1
         await runner.cleanup()
 
         self.api_started = False
         print("Web interface stopped")
-
-    async def stop(self):
-        print("Web interface stop called")
-        self.abort = True
-        await asyncio.sleep(1)
-
-    def wait_api_started(self):
-        """
-        Wait for the API to start
-        """
-        self.log("Web: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < 240:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: Web: Failed to start")
-            return False
-        return True
-
-    def is_alive(self):
-        return self.api_started
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
 
     def get_attributes_html(self, entity, from_db=False):
         """
@@ -230,7 +155,7 @@ class WebInterface:
         text = ""
         attributes = {}
         if from_db:
-            history = self.base.get_history_wrapper(entity, 1, required=False)
+            history = self.get_history_wrapper(entity, 1, required=False)
             if history and len(history) >= 1:
                 history = history[0]
                 if history:
@@ -483,9 +408,9 @@ class WebInterface:
             text += "<h2>Loading please wait...</h2>"
             return text
 
-        debug_enable, ignore = self.base.get_ha_config("debug_enable", None)
-        read_only, ignore = self.base.get_ha_config("set_read_only", None)
-        mode, ignore = self.base.get_ha_config("mode", None)
+        debug_enable, ignore = self.get_ha_config("debug_enable", None)
+        read_only, ignore = self.get_ha_config("set_read_only", None)
+        mode, ignore = self.get_ha_config("mode", None)
 
         # Create a two-column layout for Status and Debug tables
         text += '<div style="display: flex; gap: 5px; margin-bottom: 20px; max-width: 800px;">\n'
@@ -501,7 +426,7 @@ class WebInterface:
             self.log("Error checking if Predbat is running: {}".format(e))
             is_running = False
 
-        last_updated = self.base.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
+        last_updated = self.get_state_wrapper("predbat.status", attribute="last_updated", default=None)
         if status and (("Warn:" in status) or ("Error:" in status)):
             text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
         elif not is_running:
@@ -535,8 +460,8 @@ class WebInterface:
         toggle_class = "toggle-switch active" if read_only else "toggle-switch"
         text += f'<button class="{toggle_class}" type="button" onclick="toggleSwitch(this, \'set_read_only\')"></button>'
         text += "</form></td></tr>\n"
-        if self.base.arg_errors:
-            count_errors = len(self.base.arg_errors)
+        if self.arg_errors:
+            count_errors = len(self.arg_errors)
             text += "<tr><td>Config</td><td bgcolor=#ff7777>apps.yaml has {} errors</td></tr>\n".format(count_errors)
         else:
             text += "<tr><td>Config</td><td>OK</td></tr>\n"
@@ -565,7 +490,8 @@ class WebInterface:
         # Text description of the plan
         text += "<h2>Plan textual description</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>{}</td></tr>\n".format(self.base.text_plan)
+        text_plan = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="text", default="No plan available")
+        text += "<tr><td>{}</td></tr>\n".format(text_plan)
         text += "</table>\n"
 
         # Form the app list
@@ -608,9 +534,9 @@ class WebInterface:
                 state = "None"
             text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format(icon, entity, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
         else:
-            state = self.base.get_state_wrapper(entity_id=entity)
-            unit_of_measurement = self.base.get_state_wrapper(entity_id=entity, attribute="unit_of_measurement")
-            friendly_name = self.base.get_state_wrapper(entity_id=entity, attribute="friendly_name")
+            state = self.get_state_wrapper(entity_id=entity)
+            unit_of_measurement = self.get_state_wrapper(entity_id=entity, attribute="unit_of_measurement")
+            friendly_name = self.get_state_wrapper(entity_id=entity, attribute="friendly_name")
             text += '<tr><td> {} </td><td> <a href="./entity?entity_id={}"> {} </a></td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n'.format("", entity, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity, from_db=True))
         return text
 
@@ -753,8 +679,8 @@ class WebInterface:
 
             text += "<h2>History Chart</h2>\n"
             text += '<div id="chart"></div>'
-            now_str = self.base.now_utc.strftime(TIME_FORMAT)
-            history = self.base.get_history_wrapper(entity, days, required=False, tracked=False)
+            now_str = self.now_utc.strftime(TIME_FORMAT)
+            history = self.get_history_wrapper(entity, days, required=False, tracked=False)
             history_chart = history_attribute(history)
             series_data = []
             series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "3", "stroke_curve": "stepline"})
@@ -848,7 +774,7 @@ class WebInterface:
         elif domain in ["number", "input_number"]:
             return True, "number", None
         elif domain in ["select", "input_select"]:
-            options = self.base.get_state_wrapper(entity_id=entity_id, attribute="options", default=[])
+            options = self.get_state_wrapper(entity_id=entity_id, attribute="options", default=[])
             return True, "select", options
 
         return False, None, None
@@ -857,7 +783,7 @@ class WebInterface:
         """
         Generate HTML control for writable entities
         """
-        current_value = self.base.get_state_wrapper(entity_id=entity_id)
+        current_value = self.get_state_wrapper(entity_id=entity_id)
 
         is_writable, control_type, options = self.is_entity_writable(entity_id)
 
@@ -886,10 +812,10 @@ class WebInterface:
             html += get_entity_toggle_js()
 
         elif control_type == "number":
-            min_val = self.base.get_state_wrapper(entity_id=entity_id, attribute="min", default=None)
-            max_val = self.base.get_state_wrapper(entity_id=entity_id, attribute="max", default=None)
-            step = self.base.get_state_wrapper(entity_id=entity_id, attribute="step", default=1)
-            unit = self.base.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
+            min_val = self.get_state_wrapper(entity_id=entity_id, attribute="min", default=None)
+            max_val = self.get_state_wrapper(entity_id=entity_id, attribute="max", default=None)
+            step = self.get_state_wrapper(entity_id=entity_id, attribute="step", default=1)
+            unit = self.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
 
             unit_display = f" {unit}" if unit else ""
 
@@ -930,11 +856,11 @@ class WebInterface:
         return results
 
     def get_header(self, title, refresh=0, codemirror=False):
-        calculating = self.base.get_arg("active", False)
+        calculating = self.get_arg("active", False)
         if self.base.update_pending:
             calculating = True
-        self.last_success_timestamp = datetime.now(timezone.utc)
-        return get_header_html(title, calculating, self.default_page, self.base.arg_errors, THIS_VERSION, self.get_battery_status_icon(), refresh, codemirror=codemirror)
+        self.update_success_timestamp()
+        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION, self.get_battery_status_icon(), refresh, codemirror=codemirror)
 
     def get_chart_series(self, name, results, chart_type, color):
         """
@@ -964,7 +890,7 @@ class WebInterface:
         """
         Render a chart
         """
-        midnight_str = (self.base.midnight_utc + timedelta(days=1)).strftime(TIME_FORMAT)
+        midnight_str = (self.midnight_utc + timedelta(days=1)).strftime(TIME_FORMAT)
         text = ""
         if daily_chart:
             text += """
@@ -1262,7 +1188,7 @@ var options = {
         state = json_data.get("state", None)
         attributes = json_data.get("attributes", {})
         if entity_id:
-            self.base.set_state_wrapper(entity_id, state, attributes=attributes)
+            self.set_state_wrapper(entity_id, state, attributes=attributes)
             return web.Response(content_type="application/json", text='{"result": "ok"}')
         else:
             return web.Response(content_type="application/json", text='{"result": "error"}')
@@ -1288,7 +1214,7 @@ var options = {
         JSON API
         """
         args = request.query
-        state_data = self.base.get_state_wrapper()
+        state_data = self.get_state_wrapper()
         if "entity_id" in args:
             text = json.dumps(state_data.get(args["entity_id"], {}))
             return web.Response(content_type="application/json", text=text)
@@ -1314,6 +1240,11 @@ var options = {
         Return the Predbat plan as an HTML page
         """
         self.default_page = "./plan"
+
+        # Get the view parameter from the request
+        args = request.query
+        view = args.get("view", "plan")  # Default to 'plan' view
+
         text = self.get_header("Predbat Plan", refresh=30)
 
         if not self.base.dashboard_index:
@@ -1329,9 +1260,35 @@ var options = {
         """
         text += get_plan_css()
 
-        # Process HTML table to add buttons to time cells
-        html_plan = self.base.html_plan
+        # Add view switcher buttons
+        text += '<div style="margin-bottom: 15px; display: flex; gap: 8px;">'
 
+        # Determine active button styling
+        plan_active = "background-color: #4CAF50; color: white;" if view == "plan" else "background-color: #f0f0f0; color: black;"
+        yesterday_active = "background-color: #4CAF50; color: white;" if view == "yesterday" else "background-color: #f0f0f0; color: black;"
+        baseline_active = "background-color: #4CAF50; color: white;" if view == "baseline" else "background-color: #f0f0f0; color: black;"
+
+        text += f'<a href="./plan?view=plan" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {plan_active}">Plan</a>'
+        text += f'<a href="./plan?view=yesterday" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {yesterday_active}">History</a>'
+        text += f'<a href="./plan?view=baseline" style="padding: 6px 12px; text-decoration: none; border-radius: 3px; font-size: 14px; border: 1px solid #ddd; {baseline_active}">Yesterday Without Predbat</a>'
+        text += "</div>"
+
+        # Select the appropriate HTML plan based on the view
+        if view == "yesterday":
+            html_plan = self.get_state_wrapper(entity_id=self.prefix + ".cost_yesterday", attribute="html", default="<p>No yesterday plan available</p>")
+            # Don't process buttons for yesterday view - just display the plan
+            text += html_plan + "</body></html>\n"
+            return web.Response(content_type="text/html", text=text)
+        elif view == "baseline":
+            html_plan = self.get_state_wrapper(entity_id=self.prefix + ".savings_yesterday_predbat", attribute="html", default="<p>No baseline plan available</p>")
+            # Don't process buttons for baseline view - just display the plan
+            text += html_plan + "</body></html>\n"
+            return web.Response(content_type="text/html", text=text)
+        else:
+            # Default to plan view with editing capabilities
+            html_plan = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
+
+        # Process HTML table to add buttons to time cells (only for plan view)
         # Regular expression to find time cells in the table
         time_pattern = r"<td id=time.*?>((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2})</td>"
         import_pattern = r"<td id=import data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"
@@ -1358,12 +1315,12 @@ var options = {
             dropdown_id = f"dropdown_{dropdown_counter}"
             dropdown_counter += 1
 
-            now_utc = self.base.now_utc
-            time_stamp = get_override_time_from_string(now_utc, time_text)
+            now_utc = self.now_utc
+            time_stamp = get_override_time_from_string(now_utc, time_text, self.plan_interval_minutes)
             if time_stamp is None:
                 return match.group(0)
 
-            minutes_from_midnight = (time_stamp - self.base.midnight_utc).total_seconds() / 60
+            minutes_from_midnight = (time_stamp - self.midnight_utc).total_seconds() / 60
             in_override = False
             cell_bg_color = "#FFFFFF"
             override_class = ""
@@ -1430,7 +1387,7 @@ var options = {
             import_rate = match.group(2).strip()
             import_tag = match.group(3).strip()
             import_rate_text = match.group(4).strip()
-            import_minute_to_time = self.base.midnight_utc + timedelta(minutes=int(import_minute))
+            import_minute_to_time = self.midnight_utc + timedelta(minutes=int(import_minute))
             import_minute_str = import_minute_to_time.strftime("%a %H:%M")
             override_active = False
             if is_import:
@@ -1451,7 +1408,7 @@ var options = {
                 button_html += f"""<a onclick="handleRateOverride('{import_minute_str}', '{import_rate}', '{action}', true)">{action}</a>"""
             else:
                 # Add input field for custom rate entry
-                default_rate = self.base.get_arg("manual_import_value", 0.0) if is_import else self.base.get_arg("manual_export_value", 0.0)
+                default_rate = self.get_arg("manual_import_value", 0.0) if is_import else self.get_arg("manual_export_value", 0.0)
                 action = "Set Import" if is_import else "Set Export"
                 button_html += f"""
                     <div style="padding: 12px 16px;">
@@ -1484,7 +1441,7 @@ var options = {
             load_minute = match.group(1)
             load_tag = match.group(2).strip()
             load_text = match.group(3).strip()
-            load_minute_to_time = self.base.midnight_utc + timedelta(minutes=int(load_minute))
+            load_minute_to_time = self.midnight_utc + timedelta(minutes=int(load_minute))
             load_minute_str = load_minute_to_time.strftime("%a %H:%M")
             override_active = False
             if int(load_minute) in manual_load_adjust:
@@ -1501,7 +1458,7 @@ var options = {
                 button_html += f"""<a onclick="handleLoadOverride('{load_minute_str}', '{load_adjust}', '{action}', true)">{action}</a>"""
             else:
                 # Add input field for custom rate entry
-                default_adjust = self.base.get_arg("manual_load_value", 0.0)
+                default_adjust = self.get_arg("manual_load_value", 0.0)
                 action = "Set Load"
                 button_html += f"""
                     <div style="padding: 12px 16px;">
@@ -1723,10 +1680,10 @@ var options = {
                 unit_of_measurement = ""
                 if "$" in entity_id:
                     entity_id, attribute = entity_id.split("$")
-                    state = self.base.get_state_wrapper(entity_id=entity_id, attribute=attribute, default=None)
+                    state = self.get_state_wrapper(entity_id=entity_id, attribute=attribute, default=None)
                 else:
-                    state = self.base.get_state_wrapper(entity_id=entity_id, default=None)
-                    unit_of_measurement = self.base.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
+                    state = self.get_state_wrapper(entity_id=entity_id, default=None)
+                    unit_of_measurement = self.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement", default="")
 
                 if state is not None:
                     text = '<a href="./entity?entity_id={}">{}</a> = {}{}'.format(entity_id, value, state, unit_of_measurement)
@@ -1768,7 +1725,7 @@ var options = {
         return await self.html_file_load("apps.yaml")
 
     async def html_debug_plan(self, request):
-        html_plan = self.base.html_plan
+        html_plan = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
         if not html_plan:
             html_plan = None
         return await self.html_file("predbat_plan.html", html_plan)
@@ -1796,11 +1753,11 @@ var options = {
             for key, value in data.items():
                 if key == "mode":
                     # Update mode - it's a select type
-                    entity_id = f"select.{self.base.prefix}_{key}"
+                    entity_id = f"select.{self.prefix}_{key}"
                     await self.base.ha_interface.set_state_external(entity_id, value)
                 elif key in ["debug_enable", "set_read_only"]:
                     # Update switches - convert to boolean
-                    entity_id = f"switch.{self.base.prefix}_{key}"
+                    entity_id = f"switch.{self.prefix}_{key}"
                     bool_value = value == "on"
                     await self.base.ha_interface.set_state_external(entity_id, bool_value)
 
@@ -1817,41 +1774,38 @@ var options = {
         """
         Return the HTML for a chart
         """
-        now_str = self.base.now_utc.strftime(TIME_FORMAT)
+        now_str = self.now_utc.strftime(TIME_FORMAT)
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
             hist = self.base.soc_kwh_history
-            for minute in range(0, self.base.minutes_now, 30):
-                minute_timestamp = self.base.midnight_utc + timedelta(minutes=minute)
+            for minute in range(0, self.minutes_now, self.plan_interval_minutes):
+                minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
-                soc_kw_h0[stamp] = hist.get(self.base.minutes_now - minute, 0)
+                soc_kw_h0[stamp] = hist.get(self.minutes_now - minute, 0)
         soc_kw_h0[now_str] = self.base.soc_kw
-        soc_kw = self.get_entity_results(self.base.prefix + ".soc_kw")
-        soc_kw_best = self.get_entity_results(self.base.prefix + ".soc_kw_best")
-        soc_kw_best10 = self.get_entity_results(self.base.prefix + ".soc_kw_best10")
-        soc_kw_base10 = self.get_entity_results(self.base.prefix + ".soc_kw_base10")
-        charge_limit_kw = self.get_entity_results(self.base.prefix + ".charge_limit_kw")
-        best_charge_limit_kw = self.get_entity_results(self.base.prefix + ".best_charge_limit_kw")
-        best_export_limit_kw = self.get_entity_results(self.base.prefix + ".best_export_limit_kw")
-        battery_power_best = self.get_entity_results(self.base.prefix + ".battery_power_best")
-        pv_power_best = self.get_entity_results(self.base.prefix + ".pv_power_best")
-        grid_power_best = self.get_entity_results(self.base.prefix + ".grid_power_best")
-        load_power_best = self.get_entity_results(self.base.prefix + ".load_power_best")
-        iboost_best = self.get_entity_results(self.base.prefix + ".iboost_best")
-        metric = self.get_entity_results(self.base.prefix + ".metric")
-        best_metric = self.get_entity_results(self.base.prefix + ".best_metric")
-        best10_metric = self.get_entity_results(self.base.prefix + ".best10_metric")
-        cost_today = self.get_entity_results(self.base.prefix + ".cost_today")
-        cost_today_export = self.get_entity_results(self.base.prefix + ".cost_today_export")
-        cost_today_import = self.get_entity_results(self.base.prefix + ".cost_today_import")
-        base10_metric = self.get_entity_results(self.base.prefix + ".base10_metric")
-        rates = self.get_entity_results(self.base.prefix + ".rates")
-        rates_export = self.get_entity_results(self.base.prefix + ".rates_export")
-        rates_gas = self.get_entity_results(self.base.prefix + ".rates_gas")
-        record = self.get_entity_results(self.base.prefix + ".record")
-
-        self.now_utc = self.base.now_utc
-        self.midnight_utc = self.base.midnight_utc
+        soc_kw = self.get_entity_results(self.prefix + ".soc_kw")
+        soc_kw_best = self.get_entity_results(self.prefix + ".soc_kw_best")
+        soc_kw_best10 = self.get_entity_results(self.prefix + ".soc_kw_best10")
+        soc_kw_base10 = self.get_entity_results(self.prefix + ".soc_kw_base10")
+        charge_limit_kw = self.get_entity_results(self.prefix + ".charge_limit_kw")
+        best_charge_limit_kw = self.get_entity_results(self.prefix + ".best_charge_limit_kw")
+        best_export_limit_kw = self.get_entity_results(self.prefix + ".best_export_limit_kw")
+        battery_power_best = self.get_entity_results(self.prefix + ".battery_power_best")
+        pv_power_best = self.get_entity_results(self.prefix + ".pv_power_best")
+        grid_power_best = self.get_entity_results(self.prefix + ".grid_power_best")
+        load_power_best = self.get_entity_results(self.prefix + ".load_power_best")
+        iboost_best = self.get_entity_results(self.prefix + ".iboost_best")
+        metric = self.get_entity_results(self.prefix + ".metric")
+        best_metric = self.get_entity_results(self.prefix + ".best_metric")
+        best10_metric = self.get_entity_results(self.prefix + ".best10_metric")
+        cost_today = self.get_entity_results(self.prefix + ".cost_today")
+        cost_today_export = self.get_entity_results(self.prefix + ".cost_today_export")
+        cost_today_import = self.get_entity_results(self.prefix + ".cost_today_import")
+        base10_metric = self.get_entity_results(self.prefix + ".base10_metric")
+        rates = self.get_entity_results(self.prefix + ".rates")
+        rates_export = self.get_entity_results(self.prefix + ".rates_export")
+        rates_gas = self.get_entity_results(self.prefix + ".rates_gas")
+        record = self.get_entity_results(self.prefix + ".record")
 
         text = ""
 
@@ -1897,10 +1851,13 @@ var options = {
                 {"name": "Base10", "data": base10_metric, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
                 {"name": "Best10", "data": best10_metric, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
             ]
-            text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
+            text += self.render_chart(series_data, self.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
-            cost_pkwh_today = prune_today(self.cost_today_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
-            cost_pkwh_hour = prune_today(self.cost_hour_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
+            cost_today_hist = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_today", 2, required=False))
+            cost_hour_hist = history_attribute(self.get_history_wrapper(self.prefix + ".ppkwh_hour", 2, required=False))
+
+            cost_pkwh_today = prune_today(cost_today_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
+            cost_pkwh_hour = prune_today(cost_hour_hist, self.now_utc, self.midnight_utc, prune=False, prune_future=False)
             series_data = [
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
@@ -1908,30 +1865,38 @@ var options = {
                 {"name": "Hourly p/kWh", "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
                 {"name": "Today p/kWh", "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
             ]
-            text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
+            text += self.render_chart(series_data, self.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
-            load_energy_actual = self.get_entity_results(self.base.prefix + ".load_energy_actual")
-            load_energy_predicted = self.get_entity_results(self.base.prefix + ".load_energy_predicted")
-            load_energy_adjusted = self.get_entity_results(self.base.prefix + ".load_energy_adjusted")
+            load_energy_actual = self.get_entity_results(self.prefix + ".load_energy_actual")
+            load_energy_predicted = self.get_entity_results(self.prefix + ".load_energy_predicted")
+            load_energy_adjusted = self.get_entity_results(self.prefix + ".load_energy_adjusted")
+            inday_adjust_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_inday_adjustment", 2, required=False), scale=0.01)
+            adjustment_factor = prune_today(inday_adjust_hist, self.now_utc, self.midnight_utc, prune=True)
 
             series_data = [
                 {"name": "Actual", "data": load_energy_actual, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
                 {"name": "Predicted", "data": load_energy_predicted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
                 {"name": "Adjusted", "data": load_energy_adjusted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "Adjustment Factor", "data": adjustment_factor, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
         elif chart == "PV" or chart == "PV7":
-            pv_power = prune_today(self.pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
-            pv_forecast = prune_today(self.pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
-            pv_forecastCL = prune_today(self.pv_forecast_histCL, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
-            pv_today_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
-            pv_today_forecast10 = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
-            pv_today_forecast90 = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
-            pv_today_forecastCL = prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
-            pv_today_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
-            pv_today_forecast10.update(prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
-            pv_today_forecast90.update(prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
-            pv_today_forecastCL.update(prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_tomorrow", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
+            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
+            pv_forecast_hist = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False))
+            pv_forecast_histCL = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", 7, required=False), attributes=True, state_key="nowCL")
+
+            pv_forecast = prune_today(pv_forecast_hist, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
+            pv_forecastCL = prune_today(pv_forecast_histCL, self.now_utc, self.midnight_utc, prune=chart == "PV", intermediate=True)
+            pv_today_forecast = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            pv_today_forecast10 = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            pv_today_forecast90 = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            pv_today_forecastCL = prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_today", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True)
+            pv_today_forecast.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            pv_today_forecast10.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate10"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            pv_today_forecast90.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimate90"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+            pv_today_forecastCL.update(prune_today(self.get_entity_detailedForecast("sensor." + self.prefix + "_pv_tomorrow", "pv_estimateCL"), self.now_utc, self.midnight_utc, prune=False, intermediate=True))
+
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
                 {"name": "Forecast History", "data": pv_forecast, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7", "chart_type": "area"},
@@ -2034,7 +1999,7 @@ var options = {
         text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
 
         # all_states has all the HA entities and their states
-        all_states_data = self.base.get_state_wrapper()
+        all_states_data = self.get_state_wrapper()
         all_states = {}
         for entity in all_states_data:
             all_states[entity] = {"state": all_states_data[entity].get("state", ""), "unit_of_measurement": all_states_data[entity].get("attributes", {}).get("unit_of_measurement", "")}
@@ -2043,7 +2008,7 @@ var options = {
         try:
             all_states_json = json.dumps(all_states)
         except (TypeError, ValueError) as e:
-            self.base.log(f"Error serializing all_states for web interface: {e}")
+            self.log(f"Error serializing all_states for web interface: {e}")
             all_states_json = "{}"
 
         # Add CSS styles for edit functionality
@@ -2074,7 +2039,7 @@ var options = {
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><th>Actions</th></tr>\n"
 
-        args = self.base.args
+        args = self.args
         row_id = 0
         # Initialize nested values tracking and row counter
         self._nested_values = {}
@@ -2243,7 +2208,7 @@ var options = {
                     # Handle nested paths like "battery_charge_low.normal"
                     try:
                         self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
-                        self._update_nested_yaml_value(self.base.args, path_or_arg, converted_value)
+                        self._update_nested_yaml_value(self.args, path_or_arg, converted_value)
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     except (KeyError, TypeError) as e:
                         return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})
@@ -2251,7 +2216,7 @@ var options = {
                     # Handle top-level arguments
                     if path_or_arg in data[ROOT_YAML_KEY]:
                         data[ROOT_YAML_KEY][path_or_arg] = converted_value
-                        self.base.args[path_or_arg] = converted_value  # Update the base args as well
+                        self.args[path_or_arg] = converted_value  # Update the base args as well
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     else:
                         return web.json_response({"success": False, "message": f"Argument {path_or_arg} not found in apps.yaml"})
@@ -2394,7 +2359,7 @@ var options = {
                 service_data = {}
                 service_data["domain"] = "switch"
                 service_data["service"] = "turn_on"
-                service_data["service_data"] = {"entity_id": "switch.{}_compare_active".format(self.base.prefix)}
+                service_data["service_data"] = {"entity_id": "switch.{}_compare_active".format(self.prefix)}
                 await self.base.trigger_callback(service_data)
 
         return await self.html_compare(request)
@@ -2406,7 +2371,7 @@ var options = {
         res = ""
         if cost:
             # Convert cost into pounds in format
-            res = self.base.currency_symbols[0] + "{:.2f}".format(cost / 100.0)
+            res = self.currency_symbols[0] + "{:.2f}".format(cost / 100.0)
             # Pad with leading spaces to align to 6 characters
             res = res.rjust(6)
             # Convert space to &nbsp;
@@ -2429,7 +2394,7 @@ var options = {
         text += "</style>\n"
 
         text += '<form class="form-inline" action="./compare" method="post" enctype="multipart/form-data" id="compareform">\n'
-        active = self.base.get_arg("compare_active", False)
+        active = self.get_arg("compare_active", False)
 
         if not active:
             text += '<button type="submit" form="compareform" value="run">Compare now</button>\n'
@@ -2447,7 +2412,28 @@ var options = {
             text += "<th>Carbon</th>"
         text += "<th>Result</th>\n"
 
-        compare_list = self.base.get_arg("compare_list", [])
+        """
+        Update the history data
+        """
+        cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+        if self.base.num_cars > 0:
+            cost_yesterday_car_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday_car", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            cost_yesterday_no_car = self.subtract_daily(cost_yesterday_hist, cost_yesterday_car_hist)
+        else:
+            cost_yesterday_no_car = cost_yesterday_hist
+
+        compare_list = self.get_arg("compare_list", [])
+        compare_hist = {}
+        for item in compare_list:
+            id = item.get("id", None)
+            if id and self.base.comparison:
+                compare_hist[id] = {}
+                result = self.base.comparison.get_comparison(id)
+                if result:
+                    compare_hist[id]["cost"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), daily=True, pounds=True)
+                    compare_hist[id]["metric"] = history_attribute(self.get_history_wrapper(result["entity_id"], 28), state_key="metric", attributes=True, daily=True, pounds=True)
+
+        compare_list = self.get_arg("compare_list", [])
 
         for compare in compare_list:
             name = compare.get("name", "")
@@ -2477,12 +2463,12 @@ var options = {
                 stamp = None
 
             # Save current datapoint for today
-            if stamp and (id in self.compare_hist):
-                if "metric" not in self.compare_hist[id]:
-                    self.compare_hist[id]["metric"] = {}
-                    self.compare_hist[id]["cost"] = {}
-                self.compare_hist[id]["metric"][stamp] = dp2(metric / 100)
-                self.compare_hist[id]["cost"][stamp] = dp2(cost / 100.0)
+            if stamp and (id in compare_hist):
+                if "metric" not in compare_hist[id]:
+                    compare_hist[id]["metric"] = {}
+                    compare_hist[id]["cost"] = {}
+                compare_hist[id]["metric"][stamp] = dp2(metric / 100)
+                compare_hist[id]["cost"][stamp] = dp2(cost / 100.0)
 
             selected = '<font style="background-color:#FFaaaa;>"> Best </font>' if best else ""
             if existing_tariff:
@@ -2507,15 +2493,15 @@ var options = {
         for compare in compare_list:
             name = compare.get("name", "")
             id = compare.get("id", "")
-            series_data.append({"name": name, "data": self.compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
-        series_data.append({"name": "Actual", "data": self.cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
+            series_data.append({"name": name, "data": compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
+        series_data.append({"name": "Actual", "data": cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
         if self.base.car_charging_hold:
-            series_data.append({"name": "Actual (no car)", "data": self.cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
+            series_data.append({"name": "Actual (no car)", "data": cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
 
-        now_str = self.base.now_utc.strftime(TIME_FORMAT)
+        now_str = self.now_utc.strftime(TIME_FORMAT)
 
-        if self.compare_hist:
-            text += self.render_chart(series_data, self.base.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
+        if compare_hist:
+            text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
@@ -2801,15 +2787,15 @@ var options = {
                 self.log("ERROR: Missing required parameters for override")
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
 
-            now_utc = self.base.now_utc
-            override_time = get_override_time_from_string(now_utc, time_str)
+            now_utc = self.now_utc
+            override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 17 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 17 hours from now."}, status=400)
+            if minutes_from_now >= 48 * 60:
+                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
 
-            selection_option = "{}={}".format(override_time.strftime("%H:%M:%S"), rate)
-            clear_option = "[{}={}]".format(override_time.strftime("%H:%M:%S"), rate)
+            selection_option = "{}={}".format(override_time.strftime("%a %H:%M"), rate)
+            clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), rate)
             if action == "Clear Import":
                 await self.base.async_manual_select("manual_import_rates", clear_option)
             elif action == "Set Import":
@@ -2861,17 +2847,17 @@ var options = {
             if not time_str or not action:
                 return web.json_response({"success": False, "message": "Missing required parameters"}, status=400)
 
-            now_utc = self.base.now_utc
-            override_time = get_override_time_from_string(now_utc, time_str)
+            now_utc = self.now_utc
+            override_time = get_override_time_from_string(now_utc, time_str, self.plan_interval_minutes)
             if not override_time:
                 return web.json_response({"success": False, "message": "Invalid time format"}, status=400)
 
             minutes_from_now = (override_time - now_utc).total_seconds() / 60
-            if minutes_from_now >= 17 * 60:
-                return web.json_response({"success": False, "message": "Override time must be within 17 hours from now."}, status=400)
+            if minutes_from_now >= 48 * 60:
+                return web.json_response({"success": False, "message": "Override time must be within 48 hours from now."}, status=400)
 
-            selection_option = "{}".format(override_time.strftime("%H:%M:%S"))
-            clear_option = "[{}]".format(override_time.strftime("%H:%M:%S"))
+            selection_option = "{}".format(override_time.strftime("%a %H:%M"))
+            clear_option = "[{}]".format(override_time.strftime("%a %H:%M"))
             if action == "Clear":
                 await self.base.async_manual_select("manual_demand", selection_option)
                 await self.base.async_manual_select("manual_demand", clear_option)
@@ -2907,7 +2893,7 @@ var options = {
         count = 0
         try:
             # Get all entities from Home Assistant
-            all_entities = self.base.get_state_wrapper()
+            all_entities = self.get_state_wrapper()
             if all_entities:
                 for entity_id in all_entities.keys():
                     if event_filter in entity_id:
@@ -2984,7 +2970,7 @@ var options = {
                     default = arg_info.get("default", "")
 
                     # Get current value
-                    current_value = self.base.get_arg(config_key, default, indirect=False)
+                    current_value = self.get_arg(config_key, default, indirect=False)
 
                     if isinstance(current_value, (dict, list)):
                         current_value = "{...}"

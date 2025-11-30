@@ -14,6 +14,24 @@ from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
+def get_now_from_cumulative(data, minutes_now, backwards):
+    """
+    Get current value from cumulative data
+    """
+    if backwards:
+        # Work out the lowest value in a 5 minute period between minutes_now and minutes_now - 5
+        lowest = 9999999999
+        for minute in range(0, 5):
+            lowest = min(data.get(minutes_now - minute, lowest), lowest)
+        value = data.get(0, 0) - lowest
+    else:
+        lowest = 9999999999
+        for minute in range(0, 5):
+            lowest = min(data.get(minute, lowest), lowest)
+        value = data.get(minutes_now, 0) - lowest
+    return max(value, 0)
+
+
 def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, intermediate=False):
     """
     Remove data from before today
@@ -86,6 +104,9 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
             state = float(state) * scale
             if pounds:
                 state = dp2(state / 100)
+            else:
+                state = dp4(state)
+
         except (ValueError, TypeError):
             if isinstance(state, str):
                 if state.lower() in ["on", "true", "yes"]:
@@ -121,7 +142,7 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
     return results
 
 
-def get_override_time_from_string(now_utc, time_str):
+def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     """
     Convert a time string like "Sun 13:00" into a datetime object
     """
@@ -129,25 +150,37 @@ def get_override_time_from_string(now_utc, time_str):
     # Format is Sun 13:00
     try:
         override_time = datetime.strptime(time_str, "%a %H:%M")
+        day_of_week_text = time_str.split()[0].lower()
+        day_of_week = DAY_OF_WEEK_MAP.get(day_of_week_text, 0)
+        has_day = True
     except ValueError:
-        return None
+        try:
+            override_time = datetime.strptime(time_str, "%H:%M")
+            day_of_week = now_utc.weekday()
+            has_day = False
+        except ValueError:
+            return None
 
     # Convert day of week text to a number (0=Monday, 6=Sunday)
-    day_of_week_text = time_str.split()[0].lower()
-    day_of_week = DAY_OF_WEEK_MAP.get(day_of_week_text, 0)
     day_of_week_today = now_utc.weekday()
 
     override_time = now_utc.replace(hour=override_time.hour, minute=override_time.minute, second=0, microsecond=0)
+
+    # Ensure minutes are rounded down to the nearest plan_interval_minutes (e.g., 15 or 10)
+    minute = (override_time.minute // plan_interval_minutes) * plan_interval_minutes
+    override_time = override_time.replace(minute=minute)
+
+    # Calculate days to add
     add_days = day_of_week - day_of_week_today
+
+    # If the day has passed this week then use next week
     if add_days < 0:
         add_days += 7
+    elif not has_day and override_time <= now_utc:
+        add_days += 1
+
     override_time += timedelta(days=add_days)
 
-    # Ensure minutes are either 0 or 30
-    if override_time.minute >= 30:
-        override_time = override_time.replace(minute=30)
-    else:
-        override_time = override_time.replace(minute=0)
     return override_time
 
 
@@ -190,15 +223,16 @@ def minute_data_state(history, days, now, state_key, last_updated_key, prev_last
         minutes = int(timed.seconds / 60) + int(timed.days * 60 * 24)
 
         minute = minutes
-        while minute < minutes_to:
+        while minute <= minutes_to:
             mdata[minute] = last_state
             minute += 1
+        mdata[minutes] = state
 
         # Store previous state
         prev_last_updated_time = last_updated_time
         last_state = state
 
-        if minutes < newest_age:
+        if minutes <= newest_age:
             newest_age = minutes
             newest_state = state
 
@@ -260,7 +294,7 @@ def minute_data(
     """
     mdata = {}
     adata = {}
-    io_adjusted = None
+    io_adjusted = {}
     newest_state = 0
     prev_state = 0
     newest_age = 999999
@@ -672,6 +706,47 @@ def time_string_to_stamp(time_string):
         time_string += ":00"
 
     return datetime.strptime(time_string, "%H:%M:%S")
+
+
+def compute_window_minutes(start_time, end_time, minutes_now):
+    """
+    Convert start/end times to minutes and adjust for midnight-spanning windows and past windows.
+
+    Args:
+        start_time: Start time (datetime, time, or object with hour/minute attributes)
+        end_time: End time (datetime, time, or object with hour/minute attributes)
+        minutes_now: Current time in minutes from midnight
+
+    Returns:
+        Tuple of (start_minute, end_minute) adjusted for midnight spanning and current time
+    """
+    start_minute = start_time.hour * 60 + start_time.minute
+    end_minute = end_time.hour * 60 + end_time.minute
+
+    if end_minute < start_minute:
+        # Window spans midnight - adjust based on current time
+        if end_minute > minutes_now:
+            # We're past midnight but before end - move start back
+            start_minute -= 24 * 60
+        else:
+            # End has passed - move end forward
+            end_minute += 24 * 60
+
+    # Window already passed, move it forward until the next one
+    if end_minute <= minutes_now:
+        start_minute += 24 * 60
+        end_minute += 24 * 60
+
+    return start_minute, end_minute
+
+
+def window2minutes(start, end, minutes_now):
+    """
+    Convert time start/end window string into minutes
+    """
+    start = time_string_to_stamp(start)
+    end = time_string_to_stamp(end)
+    return compute_window_minutes(start, end, minutes_now)
 
 
 def minutes_since_yesterday(now):

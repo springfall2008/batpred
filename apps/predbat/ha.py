@@ -19,6 +19,7 @@ import threading
 import time
 from utils import str2time
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
+from component_base import ComponentBase
 
 
 class RunThread(threading.Thread):
@@ -45,42 +46,14 @@ def run_async(coro):
         return asyncio.run(coro)
 
 
-class HAHistory:
+class HAHistory(ComponentBase):
     """
     Home Assistant History Data
     """
 
-    def __init__(self, base):
-        self.base = base
-        self.log = base.log
+    def initialize(self):
         self.history_entities = {}
         self.history_data = {}
-        self.api_started = False
-        self.api_stop = False
-        self.last_success_timestamp = None
-
-    def is_alive(self):
-        return self.api_started
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
-
-    def wait_api_started(self):
-        """
-        Wait for the API to start
-        """
-        self.log("HAHistory: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < 240:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: HAHistory: Failed to start")
-            return False
-        return True
 
     def add_entity(self, entity_id, days):
         """
@@ -106,7 +79,7 @@ class HAHistory:
             if tracked:
                 self.add_entity(entity_id, days)
                 days = self.history_entities[entity_id]
-            history_data = ha_interface.get_history(entity_id, datetime.now(timezone.utc), days=days)
+            history_data = ha_interface.get_history(entity_id, datetime.now(self.local_tz), days=days)
             if history_data and len(history_data) > 0:
                 history_data = history_data[0]
                 if tracked:
@@ -148,7 +121,7 @@ class HAHistory:
 
         # Filter useless data from history data
         for entry in new_history_data:
-            if "attributes" in entry:
+            if entry.get("attributes"):
                 for attr in FILTER_ATTRIBUTES:
                     entry["attributes"].pop(attr, None)
             for entry_attr in FILTER_ENTRIES:
@@ -179,60 +152,46 @@ class HAHistory:
             self.history_data[entity_id] = new_history_data
 
         # Update last success timestamp
-        self.last_success_timestamp = datetime.now(timezone.utc)
+        self.update_success_timestamp()
 
-    async def start(self):
-        self.log("Info: Starting HAHistory")
+    async def run(self, seconds, first):
+        if first:
+            self.log("Info: Starting HAHistory")
+
         ha_interface = self.base.components.get_component("ha")
         if not ha_interface:
             self.log("Error: HAHistory: No HAInterface available, cannot start history updates")
-            return
+            return False
 
-        self.api_started = True
-        seconds = 0
-        while not self.api_stop:
-            try:
-                if seconds % (2 * 60) == 0:
-                    # Update history data every 2 minutes
-                    now = datetime.now(timezone.utc)
-                    for entity_id in self.history_entities:
-                        # self.log("HAHistory: Updating history for {}".format(entity_id))
-                        current_history_data = self.history_data.get(entity_id, None)
-                        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
-                        if last_updated:
-                            history_data = ha_interface.get_history(entity_id, now, days=1, from_time=str2time(last_updated))
-                            if history_data and len(history_data) > 0:
-                                history_data = history_data[0]
-                                self.update_entity(entity_id, history_data)
-                        else:
-                            history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
-                            if history_data and len(history_data) > 0:
-                                history_data = history_data[0]
-                                self.update_entity(entity_id, history_data)
-                if seconds % (60 * 60) == 0:
-                    # Prune history data every hour
-                    self.log("Info: HAHistory: Pruning history data")
-                    now = datetime.now(timezone.utc)
-                    self.prune_history(now)
+        if first or (seconds % (2 * 60) == 0):
+            # Update history data every 2 minutes
+            now = datetime.now(self.local_tz)
+            for entity_id in list(self.history_entities.keys()):
+                # self.log("HAHistory: Updating history for {}".format(entity_id))
+                current_history_data = self.history_data.get(entity_id, None)
+                last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
+                if last_updated:
+                    history_data = ha_interface.get_history(entity_id, now, days=1, from_time=str2time(last_updated))
+                    if history_data and len(history_data) > 0:
+                        history_data = history_data[0]
+                        self.update_entity(entity_id, history_data)
+                else:
+                    history_data = ha_interface.get_history(entity_id, now, days=self.history_entities[entity_id])
+                    if history_data and len(history_data) > 0:
+                        history_data = history_data[0]
+                        self.update_entity(entity_id, history_data)
 
-            except Exception as e:
-                self.log("Error: HAHistory exception in update loop: {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-            await asyncio.sleep(5)
-            seconds += 5
-        self.api_started = False
-
-    async def stop(self):
-        self.api_stop = True
+        if first or (seconds % (60 * 60) == 0):
+            # Prune history data every hour
+            self.log("Info: HAHistory: Pruning history data")
+            self.prune_history(datetime.now(self.local_tz))
+        return True
 
 
-class HAInterface:
+class HAInterface(ComponentBase):
     """
     Direct interface to Home Assistant
     """
-
-    def is_active(self):
-        return self.is_alive()
 
     def is_alive(self):
         if not self.api_started:
@@ -240,12 +199,6 @@ class HAInterface:
         if self.ha_key and not self.websocket_active:
             return False
         return True
-
-    def last_updated_time(self):
-        """
-        Get the last successful update time
-        """
-        return self.last_success_timestamp
 
     def wait_api_started(self):
         """
@@ -261,7 +214,7 @@ class HAInterface:
             return False
         return True
 
-    def __init__(self, ha_url, ha_key, db_enable, db_mirror_ha, db_primary, base):
+    def initialize(self, ha_url, ha_key, db_enable, db_mirror_ha, db_primary):
         """
         Initialize the interface to Home Assistant.
         """
@@ -276,12 +229,8 @@ class HAInterface:
         self.db_cursor = None
         self.websocket_active = False
         self.api_errors = 0
-        self.stop_thread = False
-        self.api_started = False
         self.last_success_timestamp = None
 
-        self.base = base
-        self.log = base.log
         self.state_data = {}
         self.slug = None
 
@@ -322,15 +271,13 @@ class HAInterface:
             self.log("Info: Starting Dummy HA interface")
             seconds = 0
             self.api_started = True
-            while not self.stop_thread:
+            while not self.api_stop:
                 if seconds % 60 == 0:
                     self.last_success_timestamp = datetime.now(timezone.utc)
                 await asyncio.sleep(5)
                 seconds += 5
         self.api_started = False
-
-    async def stop(self):
-        self.stop_thread = True
+        self.log("Info: HA interface stopped")
 
     def get_slug(self):
         """
@@ -364,7 +311,7 @@ class HAInterface:
                     await websocket.send_json({"id": id, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
 
                     async for message in websocket:
-                        if self.stop_thread:
+                        if self.api_stop:
                             self.log("Info: Web socket stopping")
                             break
 
@@ -395,7 +342,7 @@ class HAInterface:
 
         if self.api_errors >= 10:
             self.log("Error: Too many API errors, stopping")
-            self.base.fatal_error = True
+            self.fatal_error_occurred()
 
         return response
 
@@ -406,12 +353,12 @@ class HAInterface:
         error_count = 0
 
         while True:
-            if self.stop_thread or self.base.fatal_error:
+            if self.api_stop or self.fatal_error:
                 self.log("Info: Web socket stopping")
                 break
-            if self.base.hass_api_version >= 2 and error_count >= 10:
+            if error_count >= 10:
                 self.log("Error: Web socket failed 10 times, stopping")
-                self.fatal_error = True
+                self.fatal_error_occurred()
                 break
 
             url = "{}/api/websocket".format(self.ha_url)
@@ -447,7 +394,7 @@ class HAInterface:
                         self.api_started = True
 
                         async for message in websocket:
-                            if self.stop_thread:
+                            if self.api_stop or self.fatal_error:
                                 self.log("Info: Web socket stopping")
                                 break
 
@@ -496,7 +443,7 @@ class HAInterface:
                                         else:
                                             self.log("Info: Web Socket unknown message {}".format(data))
 
-                                        self.last_success_timestamp = datetime.now(timezone.utc)
+                                        self.update_success_timestamp()
 
                                 except Exception as e:
                                     self.log("Error: Web Socket exception in update loop: {}".format(e))
@@ -516,15 +463,17 @@ class HAInterface:
                     self.log("Error: " + traceback.format_exc())
                     error_count += 1
 
-            if not self.stop_thread:
+            if not self.api_stop:
                 self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds - error count {}".format(error_count))
                 await asyncio.sleep(5)
 
         self.api_started = False
-        if not self.stop_thread:
+        if not self.api_stop:
             self.log("Error: Web Socket failed to reconnect, stopping....")
             self.websocket_active = False
-            raise Exception("Web Socket failed to reconnect")
+            self.fatal_error_occurred()
+
+        self.log("Info: Web Socket stopped")
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
@@ -809,6 +758,6 @@ class HAInterface:
 
         if self.api_errors >= 10:
             self.log("Error: Too many API errors, stopping")
-            self.base.fatal_error = True
+            self.fatal_error_occurred()
 
         return data

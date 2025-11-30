@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2025 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 import traceback
 import sys
 import gc
+import random
+import time
 
 # from memory_profiler import profile
 
@@ -25,10 +27,10 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.27.0"
+THIS_VERSION = "v8.29.1"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py"]
+PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -334,10 +336,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.text_plan = "Computing please wait..."
         self.prediction_cache_enable = True
         self.base_load = 0
+        self.plan_interval_minutes = self.args.get("plan_interval_minutes", 30)
         self.db_manager = None
         self.plan_debug = False
         self.arg_errors = {}
         self.ha_interface = None
+        self.num_cars = 0
         self.fatal_error = False
         self.components = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
@@ -345,22 +349,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.predheat = None
         self.predbat_mode = "Monitor"
         self.soc_kwh_history = {}
-        self.html_plan = "<body><h1>Please wait calculating...</h1></body>"
         self.unmatched_args = {}
         self.define_service_list()
         self.stop_thread = False
-        self.solcast_api_limit = None
-        self.solcast_api_used = None
-
-        # Solcast API request metrics for monitoring
-        self.solcast_requests_total = 0
-        self.solcast_failures_total = 0
-        self.solcast_last_success_timestamp = None
 
         # Forecast.solar API request metrics for monitoring
-        self.forecast_solar_requests_total = 0
-        self.forecast_solar_failures_total = 0
-        self.forecast_solar_last_success_timestamp = None
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.pool = None
         self.watch_list = []
@@ -425,6 +418,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.dynamic_load_baseline = {}
         self.iboost_value_scaling = 1.0
         self.rate_import = {}
+        self.rate_import_no_io = {}
         self.rate_export = {}
         self.rate_gas = {}
         self.rate_slots = []
@@ -433,6 +427,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.octopus_slots = []
+        self.octopus_free_slots = []
+        self.octopus_saving_slots = []
         self.car_charging_slots = []
         self.reserve = 0
         self.reserve_current = 0
@@ -508,7 +504,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
-        self.car_charging_manual_soc = False
+        self.car_charging_manual_soc = []
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.octopus_intelligent_charging = False
@@ -553,16 +549,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.savings_today_predbat_soc = 0.0
         self.savings_today_pvbat = 0.0
         self.savings_today_actual = 0.0
+        self.savings_last_updated = None
         self.cost_yesterday_car = 0.0
         self.cost_total_car = 0.0
-        self.yesterday_load_step = {}
-        self.yesterday_pv_step = {}
         self.rate_import = {}
         self.rate_import_replicated = {}
         self.rate_export = {}
         self.rate_export_replicated = {}
         self.rate_slots = []
-        self.io_adjusted = {}
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = []
@@ -601,7 +595,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.last_service_hash = {}
         self.count_inverter_writes = {}
         self.rate_slots = []
-        self.io_adjusted = {}
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = []
@@ -624,6 +617,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.config_root = "./"
         self.inverter_can_charge_during_export = True
         self.octopus_last_joined_try = None
+        self.calculate_savings_max_charge_slots = 1
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -664,7 +658,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         recompute = False
         status_extra = ""
         self.had_errors = False
-        self.dashboard_index = []
 
         self.update_time()
         self.save_current_config()
@@ -679,7 +672,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         self.expose_config("active", True)
         self.fetch_config_options()
-        self.fetch_sensor_data()
+        sensor_force_replan = self.fetch_sensor_data()
+        if sensor_force_replan:
+            self.log("Sensor changes require a replan, will recompute the plan")
+            recompute = True
         self.fetch_inverter_data()
         if self.dynamic_load():
             self.log("Dynamic load adjustment changed, will recompute the plan")
@@ -711,6 +707,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
             if (plan_age_minutes + RUN_EVERY) > self.calculate_plan_every:
                 self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} minutes before the next run".format(dp1(plan_age_minutes), self.calculate_plan_every))
+                plan_random_delay = self.get_arg("plan_random_delay", 0)
+                if plan_random_delay > 0:
+                    delay = random.uniform(0, plan_random_delay)
+                    self.log("Adding a random delay of {:.1f} seconds before recalculating the plan....".format(delay))
+                    time.sleep(delay)
                 # Calculate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
                 self.fetch_inverter_data()
@@ -759,6 +760,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 savings_total_predbat = float(savings_total_predbat)
             except (ValueError, TypeError):
                 savings_total_predbat = 0.0
+            savings_total_last_updated = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat", attribute="last_updated")
+            savings_total_start_date = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat", attribute="start_date")
+            todays_date = self.now_utc_real.strftime("%Y-%m-%d")
+            if not savings_total_start_date:
+                savings_total_start_date = todays_date
+
+            # As last updated date is new we assume if we already have data then its been updated for today
+            if not savings_total_last_updated and savings_total_predbat > 0.0:
+                savings_total_last_updated = todays_date
 
             savings_total_pvbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_pvbat")
             try:
@@ -787,8 +797,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             else:
                 cost_total_car = 0
 
-            # Increment total at midnight for next day
-            if (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every) and scheduled and recompute:
+            # Increment total at midnight for next day, don't do if in read-only mode
+            if savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and recompute and not self.set_read_only:
                 savings_total_predbat += self.savings_today_predbat
                 savings_total_pvbat += self.savings_today_pvbat
                 savings_total_soc = self.savings_today_predbat_soc
@@ -804,6 +814,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "unit_of_measurement": self.currency_symbols[1],
                     "pounds": dp2(savings_total_predbat / 100.0),
                     "icon": "mdi:cash-multiple",
+                    "start_date": savings_total_start_date,
+                    "last_updated": todays_date,
                 },
             )
             self.dashboard_item(
@@ -814,6 +826,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "state_class": "measurement",
                     "unit_of_measurement": "kWh",
                     "icon": "mdi:battery-50",
+                    "start_date": savings_total_start_date,
+                    "last_updated": todays_date,
                 },
             )
             self.dashboard_item(
@@ -825,6 +839,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "unit_of_measurement": self.currency_symbols[1],
                     "pounds": dp2(savings_total_actual / 100.0),
                     "icon": "mdi:cash-multiple",
+                    "start_date": savings_total_start_date,
+                    "last_updated": todays_date,
                 },
             )
             self.dashboard_item(
@@ -836,6 +852,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "unit_of_measurement": self.currency_symbols[1],
                     "pounds": dp2(savings_total_pvbat / 100.0),
                     "icon": "mdi:cash-multiple",
+                    "start_date": savings_total_start_date,
+                    "last_updated": todays_date,
                 },
             )
             if self.num_cars > 0:
@@ -848,16 +866,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                         "unit_of_measurement": self.currency_symbols[1],
                         "pounds": dp2(cost_total_car / 100.0),
                         "icon": "mdi:cash-multiple",
+                        "start_date": savings_total_start_date,
+                        "last_updated": todays_date,
                     },
                 )
 
         # Car SoC increment
         if scheduled:
             for car_n in range(self.num_cars):
-                if (car_n == 0) and self.car_charging_manual_soc:
-                    self.log("Car charging Manual SoC current is {} next is {}".format(self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
+                if car_n < len(self.car_charging_manual_soc) and self.car_charging_manual_soc[car_n]:
+                    car_postfix = "" if car_n == 0 else "_" + str(car_n)
+                    self.log("Car {} charging Manual SoC current is {} next is {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
                     if self.car_charging_soc_next[car_n] is not None:
-                        self.expose_config("car_charging_manual_soc_kwh", dp3(self.car_charging_soc_next[car_n]))
+                        self.expose_config("car_charging_manual_soc_kwh" + car_postfix, dp3(self.car_charging_soc_next[car_n]))
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0 and self.minutes_now < RUN_EVERY:
@@ -896,6 +917,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.comparison.publish_only()
         else:
             self.expose_config("compare_active", False)
+
+        # Free memory
+        if not self.debug_enable:
+            self.load_minutes_step = {}
+            self.load_minutes_step10 = {}
+            self.pv_forecast_minute_step = {}
+            self.pv_forecast_minute10_step = {}
 
         gc.collect()
 
@@ -1307,9 +1335,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         Setup the app, called once each time the app starts
         """
         self.pool = None
-        if "hass_api_version" not in self.__dict__:
-            self.hass_api_version = 1
-        self.log("Predbat: Startup {} hass version {}".format(__name__, self.hass_api_version))
+        self.log("Predbat: Startup {}".format(__name__))
         self.update_time(print=False)
         run_every = RUN_EVERY * 60
         now = self.now
@@ -1414,10 +1440,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.stop_thread = True
         if self.components:
             await self.components.stop()
+        self.log("Info: Components stopped")
 
         await asyncio.sleep(0)
         if hasattr(self, "pool"):
             if self.pool:
+                self.log("Info: Terminating thread pool...")
                 try:
                     self.pool.close()
                     self.pool.join()

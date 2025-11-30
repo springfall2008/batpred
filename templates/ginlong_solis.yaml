@@ -20,7 +20,12 @@ pred_bat:
   # however if you have two inverters only set one of them as they will both read the same.
   #
 
+  # comment out for firmware version fb00 or later:
   inverter_type: "GS"
+
+  # un-comment for firmware version fb00 or later:
+  #inverter_type: "GS_fb00"
+
   solax_modbus_new: True   # Set to True if you have integration version 2024.03.2 or beyond
 
   num_inverters: 1
@@ -77,8 +82,25 @@ pred_bat:
     - sensor.solis_battery_minimum_soc
 
   # With the Solax integration we need to press a button to send the time to
+  # comment out for firmware version fb00 or later:
   charge_discharge_update_button:
     - button.solis_update_charge_discharge_times
+
+  # un-comment for firmware version fb00 or later:
+  #charge_update_button:
+  #  - button.solis_inverter_update_charge_times
+  #discharge_update_button:
+  #  - button.solis_inverter_update_discharge_times
+
+  # un-comment for firmware version fb00 or later:
+  #scheduled_charge_enable:
+  #   - switch.inverter_timed_charge_slot_1_enable
+  #scheduled_discharge_enable:
+  #   - switch.inverter_timed_discharge_slot_1_enable
+
+  # un-comment for firmware version fb00 or later:
+  # charge_limit:
+  #     - number.solis_inverter_timed_charge_soc
 
   timed_charge_current:
     - number.solis_timed_charge_current
