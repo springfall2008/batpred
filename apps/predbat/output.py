@@ -1736,7 +1736,7 @@ class Output:
                     curr,
                     dp2(hour_cost_car),
                     curr,
-                    dp2(hour_carbon_g / 1000.0)
+                    dp2(hour_carbon_g / 1000.0),
                 )
             )
 
@@ -1959,16 +1959,7 @@ class Output:
             )
             self.log(
                 "Today's energy total net {}kWh, import {}kWh, export {}kWh, cost {}{}, import {}{}, export {}{}, carbon {}kg".format(
-                    dp2(day_energy_total),
-                    dp2(day_energy),
-                    dp2(day_energy_export),
-                    dp2(day_cost),
-                    curr,
-                    dp2(day_cost_import),
-                    curr,
-                    dp2(day_cost_export),
-                    curr,
-                    dp2(carbon_g / 1000.0)
+                    dp2(day_energy_total), dp2(day_energy), dp2(day_energy_export), dp2(day_cost), curr, dp2(day_cost_import), curr, dp2(day_cost_export), curr, dp2(carbon_g / 1000.0)
                 )
             )
         return day_cost, carbon_g
@@ -2476,29 +2467,11 @@ class Output:
         if save:
             self.log(
                 "Today's load divergence {}%, in-day adjustment {}%, damping {}x, yesterday {}% today {}% blend {}%".format(
-                    dp2(difference * 100.0),
-                    dp2(difference_cap * 100.0),
-                    self.metric_inday_adjust_damping,
-                    dp2(yesterday_adjustment * 100.0),
-                    dp2(today_damped_factor * 100.0) if self.calculate_inday_adjustment else 100.0,
-                    dp2(yesterday_weight * 100.0)
+                    dp2(difference * 100.0), dp2(difference_cap * 100.0), self.metric_inday_adjust_damping, dp2(yesterday_adjustment * 100.0), dp2(today_damped_factor * 100.0) if self.calculate_inday_adjustment else 100.0, dp2(yesterday_weight * 100.0)
                 )
             )
-            self.log(
-                "Today's predicted so far {}kWh with {}kWh car/iBoost excluded, {}kWh import ignored, and {}kWh forecast extra.".format(
-                    dp2(load_total_pred_now),
-                    dp2(car_total_pred),
-                    dp2(import_ignored_load_pred),
-                    dp2(total_forecast_value_pred_now)
-                )
-            )
-            self.log(
-                "Today's actual load so far {}kWh with {}kWh car/iBoost excluded, and {}kWh import ignored.".format(
-                    dp2(actual_total_now),
-                    dp2(car_total_actual),
-                    dp2(import_ignored_load_actual)
-                )
-            )
+            self.log("Today's predicted so far {}kWh with {}kWh car/iBoost excluded, {}kWh import ignored, and {}kWh forecast extra.".format(dp2(load_total_pred_now), dp2(car_total_pred), dp2(import_ignored_load_pred), dp2(total_forecast_value_pred_now)))
+            self.log("Today's actual load so far {}kWh with {}kWh car/iBoost excluded, and {}kWh import ignored.".format(dp2(actual_total_now), dp2(car_total_actual), dp2(import_ignored_load_actual)))
 
         # Create adjusted curve
         load_adjusted_stamp = {}
@@ -2947,7 +2920,7 @@ class Output:
                 dp2(battery_cycle),
                 dp2(soc_yesterday),
                 dp2(final_soc),
-                dp2(battery_value_baseline)
+                dp2(battery_value_baseline),
             )
         )
         self.savings_today_predbat = saving
@@ -3045,7 +3018,7 @@ class Output:
                 dp2(saving_no_pvbat_adjusted / 100),
                 dp2(import_kwh_house + import_kwh_battery),
                 dp2(export_kwh),
-                dp2(battery_value_no_pvbat)
+                dp2(battery_value_no_pvbat),
             )
         )
 
