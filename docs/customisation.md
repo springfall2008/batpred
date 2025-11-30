@@ -86,12 +86,11 @@ You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (def
 
 If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's quite CPU intensive and provides very little improvement for most systems.
 
-You can turn on **combine_charge_slots** and **combine_export_slots** to speed up planning.
-Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with
-longer periods of fixed rates but can limit the planning ability in some cases.
+You can turn on **switch.predbat_combine_charge_slots** and **switch._combine_export_slots** to speed up planning.
+Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with longer periods of fixed rates but can limit the planning ability in some cases.
 
-The number of threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading
-if you don't have multiple CPUs available or set it to 'auto' (the default) to use one thread per CPU. It is recommended you don't set this to an odd number of threads.
+The number of CPU threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading if you don't have multiple CPUs available,
+or set it to 'auto' (the default) to use one thread per CPU. It is recommended you don't set this to an odd number of threads.
 
 ## Battery loss options
 
@@ -272,7 +271,9 @@ A value of 0kWh (the default) disables this feature.
 **input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or export slots into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
 
-**switch.predbat_combine_charge_slots** Controls if charge slots of > the slot duration (default 30 minutes) can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.
+**switch.predbat_combine_charge_slots** Controls if charge slots of > the slot duration (default 30 minutes) can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.<BR>
+Turn this On combines charge slots together into a single block, useful to dissuade Predbat from repeatedly charging and discharging the battery to maximise income when the export rate is higher than the import rate,
+e.g. EV tariffs with a long overnight cheap rate.<BR>
 Turn this Off if you want to enable ad-hoc import during long periods of higher rates but you wouldn't charge normally in that period (e.g. pre-charge at the day rate before
 a saving session).
 
