@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from tests.test_infra import reset_rates
 from utils import dp2
 import json

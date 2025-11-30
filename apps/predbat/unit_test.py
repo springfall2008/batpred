@@ -56,7 +56,6 @@ from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
 
 
 # Mock the components and plugin system
-from unittest.mock import MagicMock, patch
 
 KEEP_SCALE = 0.5
 
