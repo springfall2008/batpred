@@ -12,6 +12,7 @@
 from gecloud import GECloudDirect
 import time
 
+
 def run_test_ge_cloud(my_predbat):
     """
     GE Cloud test

@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_rates2, reset_inverter
 
+
 def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_power=1, min_length=0, expect_cost=0, expect_kwh=0, expect_time=0):
     failed = False
     print("**** Running Test: {} ****".format(test_name))
@@ -46,6 +47,7 @@ def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_powe
     my_predbat.iboost_today = 0
 
     return failed
+
 
 def run_iboost_smart_tests(my_predbat):
     """

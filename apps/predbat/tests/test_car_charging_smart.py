@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_rates2, reset_inverter
 
+
 def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=8.0, soc=0, rate=10.0, loss=1.0, max_price=99, smart=True, plan_time="00:00:00", expect_cost=0, expect_kwh=0):
     """
     Run a car charging smart test
@@ -46,6 +47,7 @@ def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=
         failed = True
 
     return failed
+
 
 def run_car_charging_smart_tests(my_predbat):
     """

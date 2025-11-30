@@ -11,6 +11,7 @@ import json
 import yaml
 from datetime import datetime, timedelta
 
+
 def test_energydataservice(my_predbat):
     """
     Test the energy data service

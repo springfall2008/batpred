@@ -12,6 +12,7 @@ import time
 import requests
 from components import Components
 
+
 def run_test_web_if(my_predbat):
     """
     Test the web interface

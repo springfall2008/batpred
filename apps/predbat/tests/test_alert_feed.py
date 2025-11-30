@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from alertfeed import AlertFeed
 import json
 
+
 def test_alert_feed(my_predbat):
     """
     Test the alert feed

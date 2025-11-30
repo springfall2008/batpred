@@ -11,6 +11,7 @@
 from datetime import datetime
 from utils import minute_data, dp4
 
+
 def test_minute_data(my_predbat):
     """
     Test the minute_data function from the Fetch class

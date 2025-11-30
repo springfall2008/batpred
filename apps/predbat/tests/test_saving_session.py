@@ -11,6 +11,7 @@ import yaml
 import json
 from datetime import datetime, timedelta
 
+
 def test_saving_session(my_predbat):
     """
     Test the octopus saving session

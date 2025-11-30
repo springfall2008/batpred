@@ -11,6 +11,7 @@
 from utils import dp2, dp4
 from config import PREDICT_STEP
 
+
 def add_incrementing_sensor_total(data):
     max_entry = max(data.keys()) if data else 0
     total = 0
@@ -18,6 +19,7 @@ def add_incrementing_sensor_total(data):
         increment = max(data.get(minute, 0) - data.get(minute + PREDICT_STEP, 0), 0)
         total += increment
     return total
+
 
 def test_previous_days_modal_filter(my_predbat):
     """

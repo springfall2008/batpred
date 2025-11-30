@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
 def run_test_manual_api(my_predbat):
     failed = 0
     print("Test manual API")

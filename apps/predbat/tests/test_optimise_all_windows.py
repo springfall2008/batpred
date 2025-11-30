@@ -1,4 +1,3 @@
-
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2024 - All Rights Reserved
@@ -13,6 +12,7 @@ from utils import calc_percent_limit
 from tests.test_infra import reset_rates, reset_inverter, update_rates_import, update_rates_export
 from prediction import Prediction
 from compare import Compare
+
 
 def run_optimise_all_windows(
     name,
@@ -121,6 +121,7 @@ def run_optimise_all_windows(
         print("Wrote plan to plan.html")
 
     return failed
+
 
 def run_optimise_all_windows_tests(my_predbat):
     print("**** Running Optimise all windows tests ****")
