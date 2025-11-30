@@ -10,6 +10,7 @@
 
 from datetime import datetime
 
+
 def assert_rates(rates, start_minute, end_minute, expect_rate):
     """
     Assert rates

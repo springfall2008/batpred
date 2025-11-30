@@ -1,4 +1,3 @@
-
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2024 - All Rights Reserved
@@ -10,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from utils import history_attribute
+
 
 def test_history_attribute(my_predbat):
     """

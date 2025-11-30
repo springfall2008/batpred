@@ -10,6 +10,7 @@
 
 from tests.test_infra import reset_rates, reset_inverter, simple_scenario, reset_rates2
 
+
 def run_model_tests(my_predbat):
     print("**** Running Model tests ****")
     reset_inverter(my_predbat)
@@ -1616,4 +1617,3 @@ def run_model_tests(my_predbat):
     if failed:
         print("**** ERROR: Some Model tests failed ****")
     return failed
-
