@@ -286,10 +286,10 @@ syscmd
 tabindex
 tasmota
 TCWORLD
-Teslemetry
 tdata
 tdiff
 temperation
+Teslemetry
 testname
 thirdparty
 timea

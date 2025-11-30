@@ -250,7 +250,7 @@ sequence:
   - variables:
       defaultPower: "{{ 200 }}"
       mode: |-
-        {% set map = { 
+        {% set map = {
            'Disabled': 'Disabled',
            'Force Charge': 'Enabled Battery Control',
            'Force Discharge': 'Enabled Battery Control',
@@ -263,7 +263,7 @@ sequence:
 
         {% set dischargePower = (0 - chargePower) %}
 
-        {% set map = { 
+        {% set map = {
            'Disabled': 0,
            'Force Charge': chargePower,
            'Force Discharge': dischargePower,
@@ -345,7 +345,7 @@ sequence:
       maxPvPower: "{{ 12000 }}"
       defaultPower: "{{ 200 }}"
       mode: |-
-        {% set map = { 
+        {% set map = {
            'Disabled': 'Disabled',
            'Force Charge': 'Mode 8 - PV and BAT control - Duration',
            'Force Discharge': 'Mode 8 - PV and BAT control - Duration',
@@ -355,7 +355,7 @@ sequence:
       activeP: >-
         {% set dischargePower = (power | int(defaultPower)) if power is defined
         else defaultPower %} {% set chargePower = (0 - dischargePower) %} {% set map
-        = { 
+        = {
            'Disabled': 0,
            'Force Charge': chargePower,
            'Force Discharge': dischargePower,
@@ -579,7 +579,7 @@ You will need to make a number of changes to the solaredge apps.yaml, replacing 
     # Template sensor for Max Battery Charge rate
     # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
     # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
-    # Remove all 'B3' entries if you only have two batteries, or follow the same pattern for adding 'B4', etc if you have more than 3 batteries 
+    # Remove all 'B3' entries if you only have two batteries, or follow the same pattern for adding 'B4', etc if you have more than 3 batteries
     - name: "Calc Power - Batteries Max Charge Power"
       unique_id: calc_power_batteries_max_charge_power
       unit_of_measurement: "W"

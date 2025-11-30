@@ -62,13 +62,13 @@ pred_bat:
   battery_rate_max:
     - 6000
 
-  # Set your battery capacity in kWh  
+  # Set your battery capacity in kWh
   soc_max:
     - 10.2
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
-  inverter_limit: 
+  inverter_limit:
     - 6000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
@@ -105,7 +105,7 @@ pred_bat:
 
   # Set the reserve entity based upon which work mode the inverter is set to:
   reserve:
-  # for inverter work mode "Self Use Mode", set reserve to selfuse_discharge_min_soc 
+  # for inverter work mode "Self Use Mode", set reserve to selfuse_discharge_min_soc
     - re:(number.solax([a-z_]+|)_selfuse_discharge_min_soc)
   # for inverter work mode "Backup Mode", set reserve to backup_discharge_min_soc
   #  - re:(number.solax([a-z_]+|)_backup_discharge_min_soc)
@@ -134,12 +134,12 @@ pred_bat:
 
   charge_discharge_update_button:
     - re:(button.solax([a-z_]+|)_battery_awaken)
-  
+
   # don't believe this is required for custom Solax
   #
   # energy_control_switch:
   #   - select.solax_remotecontrol_power_control
-  
+
   # Services for start/stop/freeze charge and discharge
   #
   # Predbat calls the supplied Solax automation script to set the appropriate inverter controls directly.

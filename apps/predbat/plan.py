@@ -1126,13 +1126,7 @@ class Plan:
 
             self.log(
                 "Best charging limit SoC's {}kWh, export {}kWh gives import battery {}kWh, house {}kWh, export {}kWh, metric {}{}, metric10 {}{}".format(
-                    self.charge_limit_best,
-                    self.export_limits_best,
-                    dp2(import_kwh_battery),
-                    dp2(import_kwh_house),
-                    dp2(export_kwh),
-                    dp2(best_metric), curr,
-                    dp2(best_metric10), curr
+                    self.charge_limit_best, self.export_limits_best, dp2(import_kwh_battery), dp2(import_kwh_house), dp2(export_kwh), dp2(best_metric), curr, dp2(best_metric10), curr
                 )
             )
 
@@ -2335,7 +2329,9 @@ class Plan:
                 selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export = self.run_prediction_metric(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                 )
-                self.log("Swap export optimisation started metric {}{}, cost {}{}, battery_value {}kWh, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_battery_value), self.metric_min_improvement_swap, curr))
+                self.log(
+                    "Swap export optimisation started metric {}{}, cost {}{}, battery_value {}kWh, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_battery_value), self.metric_min_improvement_swap, curr)
+                )
                 swapped = False
 
                 for window_n_target in range(record_export_windows - 1, 0, -1):
@@ -2373,8 +2369,10 @@ class Plan:
                                         export_limit_target,
                                         self.time_abs_str(self.export_window_best[window_n_target]["start"]),
                                         self.time_abs_str(self.export_window_best[window_n_target]["end"]),
-                                        best_metric_drop, curr,
-                                        dp2(best_cost_drop), curr,
+                                        best_metric_drop,
+                                        curr,
+                                        dp2(best_cost_drop),
+                                        curr,
                                         dp2(best_keep_drop),
                                         dp2(best_cycle_drop),
                                         dp0(best_carbon_drop),
@@ -2504,10 +2502,13 @@ class Plan:
                                             window_n_target,
                                             self.time_abs_str(self.export_window_best[window_n_target]["start"]),
                                             self.time_abs_str(self.export_window_best[window_n_target]["end"]),
-                                            best_metric, curr,
-                                            selected_metric, curr,
+                                            best_metric,
+                                            curr,
+                                            selected_metric,
+                                            curr,
                                             self.metric_min_improvement_swap,
-                                            dp2(best_cost), curr,
+                                            dp2(best_cost),
+                                            curr,
                                             dp2(best_keep),
                                             dp2(best_cycle),
                                             dp0(best_carbon),
@@ -2533,7 +2534,11 @@ class Plan:
                                 self.export_limits_best[window_n_target] = export_limit_target
                                 self.export_window_best[window_n_target]["start"] = window_start_target
 
-            self.log("Swap export optimisation finished metric {}{}, cost {}{}, metric_keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_keep), dp2(selected_cycle), dp0(selected_carbon), dp2(selected_import)))
+            self.log(
+                "Swap export optimisation finished metric {}{}, cost {}{}, metric_keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(
+                    dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_keep), dp2(selected_cycle), dp0(selected_carbon), dp2(selected_import)
+                )
+            )
 
     def allow_this_charge_window(self, charge_window_n):
         """
@@ -2657,12 +2662,7 @@ class Plan:
         curr = self.currency_symbols[1]
         self.log(
             "Starting detailed optimisation end_record {}, best_price_charge {}{}, best_price_export {}{}. lowest_price_charge {}{} with charge limits {}kWh and export limits {}kWh".format(
-                self.time_abs_str(self.end_record + self.minutes_now),
-                best_price_charge, curr,
-                best_price_export, curr,
-                lowest_price_charge, curr,
-                self.charge_limit_best,
-                self.export_limits_best
+                self.time_abs_str(self.end_record + self.minutes_now), best_price_charge, curr, best_price_export, curr, lowest_price_charge, curr, self.charge_limit_best, self.export_limits_best
             )
         )
 
@@ -2713,13 +2713,18 @@ class Plan:
                             if not printed_set:
                                 self.log(
                                     "Optimise price set {}{}, pass {}, price {}{}, start_at_low {}, best_price_charge {}{}, best_metric {}{}, best_cost {}{}, best_cycle {}kWh, best_carbon {}kg, best_import {}kWh".format(
-                                        price_key, curr,
+                                        price_key,
+                                        curr,
                                         pass_type,
-                                        price, curr,
+                                        price,
+                                        curr,
                                         start_at_low,
-                                        best_price_charge, curr,
-                                        dp2(best_metric), curr,
-                                        dp2(best_cost), curr,
+                                        best_price_charge,
+                                        curr,
+                                        dp2(best_metric),
+                                        curr,
+                                        dp2(best_cost),
+                                        curr,
                                         dp2(best_cycle),
                                         dp0(best_carbon),
                                         dp2(best_import),
@@ -2766,15 +2771,18 @@ class Plan:
                                             window_n,
                                             self.time_abs_str(self.charge_window_best[window_n]["start"]),
                                             self.time_abs_str(self.charge_window_best[window_n]["end"]),
-                                            average, curr,
+                                            average,
+                                            curr,
                                             dp2(best_soc),
                                             dp2(best_soc_min),
                                             self.time_abs_str(best_soc_min_minute),
                                             self.best_soc_margin,
                                             self.best_soc_min,
                                             self.best_soc_max,
-                                            dp2(best_metric), curr,
-                                            dp2(best_cost), curr,
+                                            dp2(best_metric),
+                                            curr,
+                                            dp2(best_cost),
+                                            curr,
                                             dp2(best_cycle),
                                             dp0(best_carbon),
                                             dp2(best_import),
@@ -2822,14 +2830,20 @@ class Plan:
                             if not printed_set:
                                 self.log(
                                     "Optimise price set {}{}, pass {}, price {}{}, start_at_low {}, best_price_export {}{}, level {}{}, best_metric {}{}, best_cost {}{}, best_cycle {}kWh, best_carbon {}kg, best_import {}kWh".format(
-                                        price_key, curr,
+                                        price_key,
+                                        curr,
                                         pass_type,
-                                        price, curr,
+                                        price,
+                                        curr,
                                         start_at_low,
-                                        best_price_export, curr,
-                                        best_price_export_level, curr,
-                                        dp2(best_metric), curr,
-                                        dp2(best_cost), curr,
+                                        best_price_export,
+                                        curr,
+                                        best_price_export_level,
+                                        curr,
+                                        dp2(best_metric),
+                                        curr,
+                                        dp2(best_cost),
+                                        curr,
                                         dp2(best_cycle),
                                         dp0(best_carbon),
                                         dp2(best_import),
@@ -2881,14 +2895,17 @@ class Plan:
                                             window_n,
                                             self.time_abs_str(self.export_window_best[window_n]["start"]),
                                             self.time_abs_str(self.export_window_best[window_n]["end"]),
-                                            price, curr,
+                                            price,
+                                            curr,
                                             best_soc,
                                             dp2(best_soc_min),
                                             self.time_abs_str(best_soc_min_minute),
                                             self.best_soc_margin,
                                             self.best_soc_min,
-                                            dp2(best_metric), curr,
-                                            dp2(best_cost), curr,
+                                            dp2(best_metric),
+                                            curr,
+                                            dp2(best_cost),
+                                            curr,
                                             dp2(best_cycle),
                                             dp0(best_carbon),
                                             dp2(best_import),
@@ -2898,8 +2915,10 @@ class Plan:
             if self.calculate_best_charge:
                 self.log(
                     "Best charge windows best_metric {}{}, best_cost {}{}, best_carbon {}kg, best_import {}kWh, metric_keep {}kWh, end_record {}, windows {}".format(
-                        dp2(best_metric), curr,
-                        dp2(best_cost), curr,
+                        dp2(best_metric),
+                        curr,
+                        dp2(best_cost),
+                        curr,
                         dp0(best_carbon),
                         dp2(best_import),
                         dp2(best_keep),
@@ -2911,8 +2930,10 @@ class Plan:
             if self.calculate_best_export:
                 self.log(
                     "Best export windows best_metric {}{}, best_cost {}{}, best_carbon {}kg, best_import {}kWh, metric_keep {}kWh, end_record {}, windows {}".format(
-                        dp2(best_metric), curr,
-                        dp2(best_cost), curr,
+                        dp2(best_metric),
+                        curr,
+                        dp2(best_cost),
+                        curr,
                         dp0(best_carbon),
                         dp2(best_import),
                         dp2(best_keep),
@@ -3056,15 +3077,7 @@ class Plan:
         curr = self.currency_symbols[1]
         self.log(
             "Set best_price_charge_level {}{}, best_price_export_level {}{}, best_price_charge {}{}, best_cost_export {}{}, best_metric {}{}, best_keep {}kWh, best_cycle {}kWh, best_carbon {}kg, best_import {}kWh".format(
-                dp2(best_price_charge_level), curr,
-                dp2(best_price_export_level), curr,
-                dp2(best_price_charge), curr,
-                dp2(best_price_export), curr,
-                dp2(best_metric), curr,
-                dp2(best_keep),
-                dp2(best_cycle),
-                dp0(best_carbon),
-                dp2(best_import)
+                dp2(best_price_charge_level), curr, dp2(best_price_export_level), curr, dp2(best_price_charge), curr, dp2(best_price_export), curr, dp2(best_metric), curr, dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)
             )
         )
         self.plan_write_debug(debug_mode, "plan_levels.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)

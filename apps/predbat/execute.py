@@ -21,10 +21,10 @@ Execute Predbat plan
 
 class Execute:
     def execute_plan(self):
-        status_extra = ""              # extra status text added to Predbat notifications
-        status_hold_car = ""           # car hold status text
-        status_hold_iboost = ""        # iBoost hold status text
-        status_freeze_export = ""      # freeze export during demand status text
+        status_extra = ""  # extra status text added to Predbat notifications
+        status_hold_car = ""  # car hold status text
+        status_hold_iboost = ""  # iBoost hold status text
+        status_freeze_export = ""  # freeze export during demand status text
 
         in_alert = self.alert_active_keep.get(self.minutes_now, 0)
 

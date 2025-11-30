@@ -92,7 +92,7 @@ pred_bat:
     - 14
 
   # Services to charge/discharge
-  charge_start_service: 
+  charge_start_service:
     - service: huawei_solar.forcible_charge_soc
       target_soc: 100
       power: "{inverter_limit_charge}"
@@ -108,7 +108,7 @@ pred_bat:
   discharge_stop_service:
     - service: huawei_solar.stop_forcible_charge
       device_id: "{device_id}"
-  
+
   # You must set Home Assistant's device_id for the Huawei Batteries
   #
   # Click on Developer Tools / Actions and choose "Huawei Solar: Forcible Charge" or any other battery related action.

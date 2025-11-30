@@ -271,7 +271,9 @@ class Fetch:
                 else:
                     real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
                     average_day /= real_data_percent
-                    self.log("Warn: Historical day {} has {} minutes of gap in the load history data, filled from {}kWh to make new average {}kWh (percent {}%)".format(days, num_gaps, dp2(sum_days_id[days]), dp2(average_day), dp0(real_data_percent * 100.0)))
+                    self.log(
+                        "Warn: Historical day {} has {} minutes of gap in the load history data, filled from {}kWh to make new average {}kWh (percent {}%)".format(days, num_gaps, dp2(sum_days_id[days]), dp2(average_day), dp0(real_data_percent * 100.0))
+                    )
 
                 # Do the filling
                 per_minute_increment = average_day / (24 * 60)
@@ -829,10 +831,14 @@ class Fetch:
             self.log(
                 "iBoost iboost_solar {}, rate threshold import {}{}, rate threshold export {}{}, iboost_gas {}{}, iboost_gas_export {}{}, iboost_smart {}, min_length {}, plan is: {}".format(
                     self.iboost_solar,
-                    self.iboost_rate_threshold, curr,
-                    self.iboost_rate_threshold_export, curr,
-                    self.iboost_gas, curr,
-                    self.iboost_gas_export, curr,
+                    self.iboost_rate_threshold,
+                    curr,
+                    self.iboost_rate_threshold_export,
+                    curr,
+                    self.iboost_gas,
+                    curr,
+                    self.iboost_gas_export,
+                    curr,
                     self.iboost_smart,
                     self.iboost_smart_min_length,
                     self.iboost_plan,
@@ -1276,7 +1282,9 @@ class Fetch:
                     start_minutes += delta_minutes
                     end_minutes += delta_minutes
 
-                self.log("Adding rate {}: {}{} => {} to {} @ {}{}, date {}, day_of_week {}, increment {}{}".format(rtype, this_rate, curr, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, curr, date, day_of_week, rate_increment, curr))
+                self.log(
+                    "Adding rate {}: {}{} => {} to {} @ {}{}, date {}, day_of_week {}, increment {}{}".format(rtype, this_rate, curr, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, curr, date, day_of_week, rate_increment, curr)
+                )
 
                 day_of_week_midnight = self.midnight.weekday()
 
@@ -1523,7 +1531,8 @@ class Fetch:
                     self.car_charging_planned,
                     self.car_charging_now,
                     self.car_charging_plan_smart,
-                    self.car_charging_plan_max_price, self.currency_symbols[1],
+                    self.car_charging_plan_max_price,
+                    self.currency_symbols[1],
                     self.car_charging_plan_time,
                     self.car_charging_battery_size,
                     self.car_charging_limit,
