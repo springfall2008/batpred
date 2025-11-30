@@ -1259,7 +1259,6 @@ class FoxAPI(ComponentBase):
 class MockBase:
     """Mock base class for testing"""
 
-
     def __init__(self):
         self.local_tz = datetime.now().astimezone().tzinfo
         self.prefix = "predbat"
@@ -1291,18 +1290,18 @@ async def test_fox_api(api_key):
     fox_api = FoxAPI(mock_base, **args)
     device_List = await fox_api.get_device_list()
     print(f"Device List: {device_List}")
-    #return(1)
+    # return(1)
     # await fox_api.start()
-    #res = await fox_api.get_device_settings(sn)
-    #print(res)
-    #res = await fox_api.get_battery_charging_time(sn)
-    #print("Battery Charging Time:")
-    #print(res)
-    #return 1
-    #res = await fox_api.get_device_detail(sn)
-    #print(res)
-    #res = await fox_api.get_scheduler(sn, checkBattery=False)
-    #print(res)
+    # res = await fox_api.get_device_settings(sn)
+    # print(res)
+    # res = await fox_api.get_battery_charging_time(sn)
+    # print("Battery Charging Time:")
+    # print(res)
+    # return 1
+    # res = await fox_api.get_device_detail(sn)
+    # print(res)
+    # res = await fox_api.get_scheduler(sn, checkBattery=False)
+    # print(res)
     # res = await fox_api.compute_schedule(sn)
     # res = await fox_api.publish_data()
     # res = await fox_api.set_device_setting(sn, "dummy", 42)
@@ -1310,7 +1309,7 @@ async def test_fox_api(api_key):
 
     res = await fox_api.get_scheduler(sn, checkBattery=False)
     print(res)
-    groups = res.get('groups', [])
+    groups = res.get("groups", [])
     # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
     # new_slot = groups[0].copy()
     new_slot = {}

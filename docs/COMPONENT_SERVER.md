@@ -21,26 +21,26 @@ predbat:
   module: predbat
   class: PredBat
   # ... other configuration ...
-  
+
   # Component server configuration (infrastructure settings)
   component_server:
     # URL of the component server
     url: "http://componentserver:5053"
-    
+
     # List of components to run remotely (component names from components.py)
     components:
       - octopus
-    
+
     # Callback URL where this Predbat instance can be reached by the server
     # If not specified, server will use X-Forwarded-For or remote IP
     callback_url: "http://predbat:5054"
-    
+
     # Port for callback server (default: 5054)
     callback_port: 5054
-    
+
     # How often client pings server (seconds, default: 300)
     poll_interval: 300
-    
+
     # Component timeout - server stops component after this many seconds of no pings (default: 1800)
     timeout: 1800
 ```
@@ -96,6 +96,7 @@ cd apps/predbat
 ## Supported Components
 
 Currently registered for remote execution:
+
 - OctopusAPI
 
 To add more components, edit `COMPONENT_CLASSES` in `run_component_server.py`.
@@ -185,6 +186,7 @@ spec:
 The feature is optional - Predbat works normally when `component_server_components` is empty or `component_server_url` is not set.
 
 To test:
+
 1. Start component server manually
 2. Configure Predbat with server URL and component list
 3. Restart Predbat
