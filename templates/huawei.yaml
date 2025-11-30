@@ -19,7 +19,7 @@ pred_bat:
   #ha_url: 'http://homeassistant.local:8123'
   #ha_key: 'xxx'
 
-  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
+  # Currency, symbol for main currency and second symbol for 1/100s e.g. $ and c, £ and p or € and c
   currency_symbols:
     - '£'
     - 'p'
@@ -28,7 +28,7 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  # Sensors, more than one can be specified and they will be summed up automatically
+  # Energy today (not power) sensors, more than one can be specified and they will be summed up automatically
   #
   # For two inverters the load today would normally be the master load sensor only (to cover the entire house)
   # If you have three phase and one inverter per phase then you would need three load sensors
@@ -64,6 +64,8 @@ pred_bat:
     - number.battery_maximum_discharging_power
   battery_power:
     - sensor.battery_charge_discharge_power
+  battery_power_invert:
+    - True
   pv_power:
     - sensor.inverter_input_power
   load_power:
@@ -74,6 +76,8 @@ pred_bat:
   # It has no impact on battery planning
   grid_power:
     - sensor.power_meter_active_power
+  grid_power_invert:
+    - False
   soc_percent:
     - sensor.battery_state_of_capacity
   #soc_kw:

@@ -15,7 +15,7 @@ pred_bat:
   # Timezone to work in
   timezone: Europe/London
 
-  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
+  # Currency, symbol for main currency and second symbol for 1/100s e.g. $ c, £ p or € c
   currency_symbols:
    - '£'
    - 'p'
@@ -38,7 +38,7 @@ pred_bat:
   load_filter_threshold: 30
 
   #
-  # Sensors, more than one can be specified and they will be summed up automatically
+  # Energy today (not power) sensors, more than one can be specified and they will be summed up automatically
   #
   # For two inverters the load today would normally be the master load sensor only (to cover the entire house)
   # If you have three phase and one inverter per phase then you would need three load sensors

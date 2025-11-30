@@ -110,7 +110,7 @@ timezone: Europe/London
 
 ### currency_symbols
 
-Sets your symbol to use for your main currency e.g. £ or $ and for 1/100th unit e.g. p or c
+Sets your symbol to use for your main currency e.g. £, € or $ and for 1/100th unit e.g. p or c. You must define both currency_symbol entries.
 
 ```yaml
   currency_symbols:
@@ -344,7 +344,7 @@ If you have a 3-phase electricity supply and one inverter (and battery) on each 
 for each of the 3 phases.
 
 If you have a single-phase electricity supply and multiple inverters on the phase then you will need to add one line for each of the load and PV sensors.
-You don't need multiple lines for the import or export sensors as each inverter will give the total import or export information.
+You don't need multiple lines for the import or export sensors as each inverter will give the same total import or export information.
 
 Edit if necessary if you have non-standard sensor names:
 
@@ -355,11 +355,13 @@ Edit if necessary if you have non-standard sensor names:
 If you have an AC-coupled inverter then enter the Home Assistant sensor for your PV inverter.<BR>
 If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
+Note: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.
+
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
 If you have multiple inverters then you may find that the load_today figures are incorrect as the inverters share the house load between them.
 In this circumstance, one solution is to create a Home Assistant template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.
-The example below is defined in configuration.yaml (not the HA user interface) so it only updates every 5 minutes rather than on every underlying sensor state change:
+The example below is defined in `configuration.yaml` (not the HA user interface) so it only updates every 5 minutes rather than on every underlying sensor state change:
 
 e.g.
 
