@@ -17,6 +17,7 @@ import yaml
 from config import TIME_FORMAT
 import json
 import pytz
+import traceback
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -337,6 +338,7 @@ class OctopusAPI(ComponentBase):
         if not os.path.exists(self.cache_path):
             os.makedirs(self.cache_path)
         self.cache_file = self.cache_path + "/octopus.yaml"
+        self.log("Octopus API: Initialized with account ID {} cache {}".format(self.account_id, self.cache_file))
 
     async def select_event(self, entity_id, value):
         if entity_id == self.get_entity_name("select", "intelligent_target_time"):
@@ -364,6 +366,7 @@ class OctopusAPI(ComponentBase):
         """
         Main run loop
         """
+        self.log("Octopus API: enter seconds {} first {}".format(seconds, first))
         if first:
             # Load cached data
             await self.load_octopus_cache()
