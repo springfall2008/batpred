@@ -282,7 +282,7 @@ class ComponentClient:
         if time.time() - self.last_ping_time > poll_interval:
             return await self._send_ping()
         return True
-    
+
     async def _send_ping(self):
         """Send health check ping to server."""
         try:
@@ -307,11 +307,11 @@ class ComponentClient:
                     self.log(f"Warn: Remote component reports not alive")
                     return False
                 return True
-                    
+
         except Exception as e:
             self.log(f"Warn: Failed to ping server: {e}")
             return False
-    
+
     async def final(self):
         """
         Final cleanup before stopping.

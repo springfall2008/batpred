@@ -58,7 +58,7 @@ class BaseMock:
         # Config root
         self.config_root = self.component_name + "_" + self.client_id
         os.makedirs(self.config_root, exist_ok=True)
-    
+
     async def _remote_call(self, method, *args, **kwargs):
         """
         Make a remote call to the client's base object.
@@ -77,7 +77,7 @@ class BaseMock:
                 "args": args,
                 "kwargs": kwargs
             }, protocol=4)
-            
+
             # Get or create session for current event loop
             try:
                 loop = asyncio.get_running_loop()
@@ -89,7 +89,7 @@ class BaseMock:
             except RuntimeError:
                 # No running loop, use default session
                 session = self.session
-            
+
             async with session.post(
                 f"{self.callback_url}/base/call",
                 data=request_data,
@@ -171,10 +171,10 @@ class BaseMock:
             # Use a new thread to run asyncio.run to avoid blocking the event loop
             import threading
             import queue
-            
+
             result_queue = queue.Queue()
             exception_queue = queue.Queue()
-            
+
             def run_in_thread():
                 try:
                     # Create a new event loop in this thread
@@ -187,17 +187,17 @@ class BaseMock:
                         new_loop.close()
                 except Exception as e:
                     exception_queue.put(e)
-            
+
             thread = threading.Thread(target=run_in_thread, daemon=True)
             thread.start()
             thread.join(timeout=2*60)  # 2 minute timeout
-            
+
             if not exception_queue.empty():
                 raise exception_queue.get()
-            
+
             if not result_queue.empty():
                 return result_queue.get()
-            
+
             raise TimeoutError("Async operation timed out after 30 seconds")
 
     def get_arg(self, *args, **kwargs):
@@ -354,7 +354,7 @@ class ComponentServer:
 
                 self.logger.info(f"Component {instance_key} started successfully")
                 component.api_started = True
-                
+
                 return aiohttp.web.Response(
                     body=pickle.dumps({"success": True}, protocol=4)
                 )
