@@ -450,7 +450,7 @@ def minute_data(
             else:
                 if smoothing:
                     # Reset to zero, sometimes not exactly zero
-                    if clean_increment and (state < last_state) and ((last_state - state) >= 1.0):
+                    if clean_increment and (state < last_state):
                         while minute < minutes_to:
                             if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = state
