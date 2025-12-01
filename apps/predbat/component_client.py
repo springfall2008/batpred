@@ -27,14 +27,14 @@ import aiohttp
 class ComponentClient:
     """
     Client proxy that forwards component operations to a remote ComponentServer.
-    
+
     This class inherits from ComponentBase and acts as a transparent proxy for
     remote components, handling all communication with the component server.
     """
     def __init__(self, base, server_url, remote_class, **component_kwargs):
         """
         Initialize the component client.
-        
+
         Args:
             base: The main Predbat base object
             server_url: URL of the component server
@@ -50,7 +50,7 @@ class ComponentClient:
         self.last_ping_time = 0
         self.restart_lock = asyncio.Lock()
         self.component_started = False
-        
+
         # Initialize base attributes (mimic ComponentBase)
         self.base = base
         self.log = base.log
@@ -75,11 +75,11 @@ class ComponentClient:
                 return False
             time.sleep(1)
         return True
-    
+
     async def start(self):
         """
         Start the component client.
-        
+
         This method:
         1. Gets or creates a client ID
         2. Creates HTTP session
@@ -90,12 +90,12 @@ class ComponentClient:
             # Get or create client ID
             client_id_entity = f"{self.prefix}.client_id"
             self.client_id = self.base.get_state_wrapper(client_id_entity, default=None)
-            
+
             if not self.client_id:
                 # Generate new client ID
                 self.client_id = str(uuid.uuid4())
                 self.log(f"ComponentClient: Generated new client ID: {self.client_id}")
-                
+
                 # Save client ID
                 self.base.set_state_wrapper(
                     client_id_entity,
@@ -107,16 +107,16 @@ class ComponentClient:
                 )
             else:
                 self.log(f"ComponentClient: Using existing client ID: {self.client_id}")
-            
+
             # Get callback URL from config
             callback_url = self.base.get_arg("component_client_callback_url", "http://localhost:5054")
-            
+
             # Create HTTP session
             self.session = aiohttp.ClientSession()
-            
+
             # Start remote component
             await self._start_remote_component(callback_url)
-            
+
             # Run main loop (same as ComponentBase.start())
             seconds = 0
             first = True
@@ -133,31 +133,31 @@ class ComponentClient:
                 except Exception as e:
                     self.log(f"Error: ComponentClient ({self.remote_class}): {e}")
                     self.log("Error: " + traceback.format_exc())
-                
+
                 seconds += 5
                 await asyncio.sleep(5)
-            
+
             self.log(f"ComponentClient ({self.remote_class}): Finalizing...")
             await self.final()
-            
+
             self.api_started = False
             self.log(f"ComponentClient ({self.remote_class}): Stopped")
-            
+
         except Exception as e:
             self.log(f"Error: ComponentClient.start() failed: {e}")
             self.log("Error: " + traceback.format_exc())
             self.api_started = False
-    
+
     async def _start_remote_component(self, callback_url):
         """
         Start the component on the remote server.
-        
+
         Args:
             callback_url: URL for server to call back to
         """
         try:
             self.log(f"ComponentClient: Starting remote component {self.remote_class} on {self.server_url} with callback {callback_url} args {self.component_kwargs}")
-            
+
             # Prepare request
             request_data = pickle.dumps({
                 "client_id": self.client_id,
@@ -165,7 +165,7 @@ class ComponentClient:
                 "callback_url": callback_url,
                 "init_kwargs": self.component_kwargs
             }, protocol=4)
-            
+
             # Send start request
             timeout = aiohttp.ClientTimeout(total=30)
             async with self.session.post(
@@ -175,37 +175,37 @@ class ComponentClient:
             ) as resp:
                 response_data = await resp.read()
                 result = pickle.loads(response_data)
-                
+
                 # Check for error
                 if isinstance(result, dict) and "error" in result:
                     error_msg = f"Failed to start remote component: {result['error']}"
                     self.log(f"Error: {error_msg}")
                     raise RuntimeError(error_msg)
-                
+
                 self.component_started = True
                 self.log(f"ComponentClient: Remote component {self.remote_class} started successfully")
-                
+
         except Exception as e:
             self.log(f"Error: Failed to start remote component: {e}")
             self.log("Error: " + traceback.format_exc())
             raise
-    
+
     async def _call_remote_with_retry(self, method, *args, **kwargs):
         """
         Call a remote method with retry logic.
-        
+
         Args:
             method: Method name to call
             *args: Positional arguments
             **kwargs: Keyword arguments
-            
+
         Returns:
             Result from remote call, or False on failure
         """
         start_time = time.time()
         backoff = 1
         timeout_config = self.base.get_arg("component_server_timeout", 1800)
-        
+
         while True:
             try:
                 # Prepare request
@@ -216,7 +216,7 @@ class ComponentClient:
                     "args": args,
                     "kwargs": kwargs
                 }, protocol=4)
-                
+
                 # Send request
                 timeout = aiohttp.ClientTimeout(total=30)
                 async with self.session.post(
@@ -226,54 +226,54 @@ class ComponentClient:
                 ) as resp:
                     response_data = await resp.read()
                     result = pickle.loads(response_data)
-                    
+
                     # Check for "Component not found" error - trigger restart
                     if isinstance(result, dict) and "error" in result:
                         if "Component not found" in result["error"]:
                             self.log(f"Warn: Remote component not found, restarting...")
-                            
+
                             # Use lock to prevent duplicate restarts
                             async with self.restart_lock:
                                 # Double-check component is still missing
                                 if not self.component_started:
                                     callback_url = self.base.get_arg("component_client_callback_url", "http://localhost:5054")
                                     await self._start_remote_component(callback_url)
-                            
+
                             # Retry the call
                             continue
                         else:
                             # Other error
                             self.log(f"Error: Remote call {method} failed: {result['error']}")
                             return False
-                    
+
                     # Success
                     return result
-                    
+
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 # Check if we've exceeded total timeout
                 elapsed = time.time() - start_time
                 if elapsed > timeout_config:
                     self.log(f"Error: Remote call {method} timed out after {elapsed}s")
                     return False
-                
+
                 # Log and retry with backoff
                 self.log(f"Warn: Remote call {method} failed ({e}), retrying in {backoff}s...")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30)  # Exponential backoff, max 30s
-                
+
             except Exception as e:
                 self.log(f"Error: Remote call {method} failed: {e}")
                 self.log("Error: " + traceback.format_exc())
                 return False
-    
+
     async def run(self, seconds, first):
         """
         Run method called by the main loop.
-        
+
         Args:
             seconds: Seconds since start
             first: True if first run
-            
+
         Returns:
             True on success, False on failure
         """
@@ -290,7 +290,7 @@ class ComponentClient:
                 "client_id": self.client_id,
                 "component_class": self.remote_class
             }, protocol=4)
-            
+
             timeout = aiohttp.ClientTimeout(total=10)
             async with self.session.post(
                 f"{self.server_url}/component/ping",
@@ -299,9 +299,9 @@ class ComponentClient:
             ) as resp:
                 response_data = await resp.read()
                 result = pickle.loads(response_data)
-                
+
                 self.last_ping_time = time.time()
-                
+
                 # Log if component is not alive
                 if isinstance(result, dict) and not result.get("alive", True):
                     self.log(f"Warn: Remote component reports not alive")
@@ -322,7 +322,7 @@ class ComponentClient:
                 "client_id": self.client_id,
                 "component_class": self.remote_class
             }, protocol=4)
-            
+
             timeout = aiohttp.ClientTimeout(total=10)
             async with self.session.post(
                 f"{self.server_url}/component/stop",
@@ -330,14 +330,14 @@ class ComponentClient:
                 timeout=timeout
             ) as resp:
                 await resp.read()
-                
+
         except Exception as e:
             self.log(f"Warn: Failed to stop remote component: {e}")
-        
+
         # Close session
         if self.session:
             await self.session.close()
-    
+
     async def stop(self):
         """
         Stop the component gracefully.
@@ -345,34 +345,34 @@ class ComponentClient:
         self.api_stop = True
         self.api_started = False
         await asyncio.sleep(0.1)
-    
+
     @property
     def fatal_error(self):
         """Check if a fatal error has occurred."""
         return self.base.fatal_error
-    
+
     def is_alive(self):
         """Check if component is alive."""
         return self.api_started
-    
+
     def last_updated_time(self):
         """Get last updated time."""
         return self.last_success_timestamp
-    
+
     def update_success_timestamp(self):
         """Update last success timestamp."""
         self.last_success_timestamp = datetime.now(timezone.utc)
-    
+
     # Event handlers - forward to remote component
-    
+
     async def select_event(self, entity_id, value):
         """Handle select entity event."""
         await self._call_remote_with_retry("select_event", entity_id, value)
-    
+
     async def number_event(self, entity_id, value):
         """Handle number entity event."""
         await self._call_remote_with_retry("number_event", entity_id, value)
-    
+
     async def switch_event(self, entity_id, service):
         """Handle switch entity event."""
         await self._call_remote_with_retry("switch_event", entity_id, service)

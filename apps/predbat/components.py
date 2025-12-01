@@ -228,13 +228,13 @@ class Components:
 
     def initialize(self, only=None, phase=0):
         """Initialize components without starting them"""
-        
+
         # Initialize callback server for remote components (phase 0 only)
         if phase == 0 and only is None:
             # Get component_server config from args (apps.yaml)
             component_server_config = self.base.args.get("component_server", {})
             component_server_components = component_server_config.get("components", [])
-            
+
             if component_server_components:
                 server_url = component_server_config.get("url", "")
                 if not server_url:
@@ -255,7 +255,7 @@ class Components:
                         self.log(f"Components: Error: Failed to start callback server: {e}")
                         self.callback_server = None
                         component_server_components = []
-        
+
         for component_name, component_info in COMPONENT_LIST.items():
             if only and component_name != only:
                 continue
@@ -291,11 +291,11 @@ class Components:
                     have_all_args = False
             if have_all_args:
                 self.log(f"Initializing {component_info['name']} interface")
-                
+
                 # Check if this component should run remotely
                 component_server_config = self.base.args.get("component_server", {})
                 component_server_components = component_server_config.get("components", [])
-                
+
                 if component_name in component_server_components and self.callback_server:
                     # Create remote component client
                     server_url = component_server_config.get("url", "")
@@ -305,7 +305,7 @@ class Components:
                     timeout = component_server_config.get("timeout", 1800)
 
                     args_data = {"callback_url": callback_url, "callback_port": callback_port, "poll_interval": poll_interval, "timeout": timeout, "component_args": arg_dict}
-                    
+
                     self.log(f"Creating remote component client for {component_name} at {server_url}")
                     self.components[component_name] = ComponentClient(
                         self.base,
@@ -348,7 +348,7 @@ class Components:
             self.log("Stopping component callback server")
             await self.callback_server.stop()
             self.callback_server = None
-        
+
         for component_name, component_info in reversed(list(self.components.items())):
             if only and component_name != only:
                 continue
