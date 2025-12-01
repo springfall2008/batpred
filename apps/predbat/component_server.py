@@ -24,7 +24,7 @@ import traceback
 from datetime import datetime, timezone
 import aiohttp
 import aiohttp.web
-
+import os
 class BaseMock:
     """
     Mock base object that forwards all calls back to the client's Predbat instance.
@@ -52,9 +52,12 @@ class BaseMock:
         self.prefix = await self._remote_call("get_local_attr", "prefix")
         self.args = await self._remote_call("get_local_attr", "args")
         self.currency_symbols = await self._remote_call("get_local_attr", "currency_symbols")
-        self.config_root = await self._remote_call("get_local_attr", "config_root")
         self.num_cars = await self._remote_call("get_local_attr", "num_cars")
         self.plan_interval_minutes = await self._remote_call("get_local_attr", "plan_interval_minutes")
+
+        # Config root
+        self.config_root = self.component_name + "_" + self.client_id
+        os.makedirs(self.config_root, exist_ok=True)
     
     async def _remote_call(self, method, *args, **kwargs):
         """
@@ -75,7 +78,19 @@ class BaseMock:
                 "kwargs": kwargs
             }, protocol=4)
             
-            async with self.session.post(
+            # Get or create session for current event loop
+            try:
+                loop = asyncio.get_running_loop()
+                if not hasattr(self, '_loop_sessions'):
+                    self._loop_sessions = {}
+                if loop not in self._loop_sessions:
+                    self._loop_sessions[loop] = aiohttp.ClientSession()
+                session = self._loop_sessions[loop]
+            except RuntimeError:
+                # No running loop, use default session
+                session = self.session
+            
+            async with session.post(
                 f"{self.callback_url}/base/call",
                 data=request_data,
                 timeout=aiohttp.ClientTimeout(total=30)
@@ -130,19 +145,19 @@ class BaseMock:
 
     @property
     async def async_now_utc(self):
-        return await self._remote_call("now_utc")
+        return await self._remote_call("get_local_attr", "now_utc")
 
     @property
     async def async_midnight_utc(self):
-        return await self._remote_call("midnight_utc")
+        return await self._remote_call("get_local_attr", "midnight_utc")
 
     @property
     async def async_minutes_now(self):
-        return await self._remote_call("minutes_now")
+        return await self._remote_call("get_local_attr", "minutes_now")
 
     @property
     async def async_arg_errors(self):
-        return await self._remote_call("arg_errors")
+        return await self._remote_call("get_local_attr", "arg_errors")
 
     # Sync wrappers (for non-async contexts only)
     def _run_async(self, coro):
@@ -152,27 +167,38 @@ class BaseMock:
             # No running loop, safe to use asyncio.run
             return asyncio.run(coro)
         else:
-            # Already in an event loop
-            # If called from async context, we must be inside a coroutine, so we must await
-            # But since this is a sync wrapper, we must detect and run a nested task and wait for it
-            # This is a hack, but works for most cases
+            # Already in an event loop - must schedule and wait
+            # Use a new thread to run asyncio.run to avoid blocking the event loop
             import threading
-            if threading.current_thread() is threading.main_thread() and asyncio.current_task(loop=loop):
-                # Called from async context, so we must block until done
-                fut = loop.create_task(coro)
-                import concurrent.futures
-                # Block until result is ready
-                done = concurrent.futures.Future()
-                def _set_result(f):
+            import queue
+            
+            result_queue = queue.Queue()
+            exception_queue = queue.Queue()
+            
+            def run_in_thread():
+                try:
+                    # Create a new event loop in this thread
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
                     try:
-                        done.set_result(f.result())
-                    except Exception as e:
-                        done.set_exception(e)
-                fut.add_done_callback(_set_result)
-                return done.result()
-            else:
-                # Called from sync context in a running loop (rare), fallback
-                return loop.run_until_complete(coro)
+                        result = new_loop.run_until_complete(coro)
+                        result_queue.put(result)
+                    finally:
+                        new_loop.close()
+                except Exception as e:
+                    exception_queue.put(e)
+            
+            thread = threading.Thread(target=run_in_thread, daemon=True)
+            thread.start()
+            thread.join(timeout=2*60)  # 2 minute timeout
+            
+            if not exception_queue.empty():
+                raise exception_queue.get()
+            
+            if not result_queue.empty():
+                return result_queue.get()
+            
+            raise TimeoutError("Async operation timed out after 30 seconds")
 
     def get_arg(self, *args, **kwargs):
         return self._run_async(self.async_get_arg(*args, **kwargs))
@@ -214,6 +240,11 @@ class BaseMock:
     async def cleanup(self):
         """Cleanup session"""
         await self.session.close()
+        # Clean up per-loop sessions
+        if hasattr(self, '_loop_sessions'):
+            for session in self._loop_sessions.values():
+                await session.close()
+            self._loop_sessions.clear()
 
 
 class ComponentServer:
@@ -270,8 +301,9 @@ class ComponentServer:
             instance_key = f"{client_id}_{component_class}"
 
             if instance_key in self.components:
+                self.logger.info(f"Component {instance_key} already started")
                 return aiohttp.web.Response(
-                    body=pickle.dumps({"error": "Component already started"}, protocol=4)
+                    body=pickle.dumps({"success": True}, protocol=4)
                 )
             
             self.logger.info(f"Starting component {component_class} for client {client_id} class {component_class} with callback {callback_url} args {init_kwargs}")
@@ -321,6 +353,7 @@ class ComponentServer:
                 }
                 
                 self.logger.info(f"Component {instance_key} started successfully")
+                component.api_started = True
                 
                 return aiohttp.web.Response(
                     body=pickle.dumps({"success": True}, protocol=4)

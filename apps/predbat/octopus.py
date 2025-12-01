@@ -338,6 +338,7 @@ class OctopusAPI(ComponentBase):
         if not os.path.exists(self.cache_path):
             os.makedirs(self.cache_path)
         self.cache_file = self.cache_path + "/octopus.yaml"
+        self.log("Octopus API: Initialized with account ID {} cache {}".format(self.account_id, self.cache_file))
 
     async def select_event(self, entity_id, value):
         if entity_id == self.get_entity_name("select", "intelligent_target_time"):

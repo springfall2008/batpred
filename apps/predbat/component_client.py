@@ -63,16 +63,17 @@ class ComponentClient:
         self.currenty_symbols = base.currency_symbols
         self.count_errors = 0
 
-    def wait_api_started(self, timeout=60):
+    def wait_api_started(self, timeout=5*60):
         """
         Wait for the component's API to be started (self.api_started == True).
         Returns True if started, False if timeout.
         """
         start = time.time()
+        self.log(f"ComponentClient: Waiting for API to start (timeout {timeout}s)...")
         while not self.api_started:
             if time.time() - start > timeout:
                 return False
-            time.sleep(0.5)
+            time.sleep(1)
         return True
     
     async def start(self):
@@ -278,9 +279,9 @@ class ComponentClient:
         """
         # Send ping if needed
         poll_interval = self.base.get_arg("component_server_poll_interval", 300)
-        while not self.api_stop and not self.fatal_error:
-            if time.time() - self.last_ping_time > poll_interval:
-                await self._send_ping()
+        if time.time() - self.last_ping_time > poll_interval:
+            return await self._send_ping()
+        return True
     
     async def _send_ping(self):
         """Send health check ping to server."""
@@ -304,9 +305,12 @@ class ComponentClient:
                 # Log if component is not alive
                 if isinstance(result, dict) and not result.get("alive", True):
                     self.log(f"Warn: Remote component reports not alive")
+                    return False
+                return True
                     
         except Exception as e:
             self.log(f"Warn: Failed to ping server: {e}")
+            return False
     
     async def final(self):
         """
