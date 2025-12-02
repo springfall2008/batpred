@@ -848,128 +848,171 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 - The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
 
 ```yaml
-    input_select:
-      predbat_requested_mode:
-        name: "Predbat Requested Mode"
-        options:
-          - "Demand"
-          - "Charging"
-          - "Freeze Charging"
-          - "Discharging"
-          - "Freeze Discharging"
-        initial: "Demand"
-        icon: mdi:battery-unknown
+input_select:
+  predbat_requested_mode:
+    name: "Predbat Requested Mode"
+    options:
+      - "Demand"
+      - "Charging"
+      - "Freeze Charging"
+      - "Discharging"
+      - "Freeze Discharging"
+    initial: "Demand"
+    icon: mdi:battery-unknown
 
-    input_number:
-      charge_rate:
-        name: Battery charge rate
-        initial: 6950
-        min: 0
-        max: 20000
-        step: 1
-        mode: box
-        unit_of_measurement: W
+input_number:
+  charge_rate:
+    name: Battery charge rate
+    initial: 6950
+    min: 0
+    max: 20000
+    step: 1
+    mode: box
+    unit_of_measurement: W
 
-      discharge_rate:
-        name: Battery discharge rate
-        initial: 8000
-        min: 0
-        max: 20000
-        step: 1
-        mode: box
-        unit_of_measurement: W
+  discharge_rate:
+    name: Battery discharge rate
+    initial: 8000
+    min: 0
+    max: 20000
+    step: 1
+    mode: box
+    unit_of_measurement: W
+```
 
-    automation:
-      - id: predbat_requested_mode_action
-        alias: "Predbat Requested Mode Action"
-        description: "Acts as a mapper for the input_select.predbat_requested_mode to the select.sigen_plant_remote_ems_control_mode"
-        mode: restart
-        triggers:
-          - trigger: state
-            entity_id:
-              - input_select.predbat_requested_mode
-        conditions: []
-        actions:
-          - action: select.select_option
-            metadata: {}
-            target:
-              entity_id: select.sigen_plant_remote_ems_control_mode
-            data:
-              option: >
-                {% if is_state('input_select.predbat_requested_mode', "Demand") %}Maximum Self Consumption
-                {% elif is_state('input_select.predbat_requested_mode', "Charging") %}Command Charging (PV First)
-                {% elif is_state('input_select.predbat_requested_mode', "Freeze Charging") %}Maximum Self Consumption
-                {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
-                {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
-                {% endif %}
-          - choose:
-              # Set charging limit to 0 when requested mode is Freeze Charging
-              # Docs:
-              #  Freeze charging - The battery is charging but the current battery level (SoC) is frozen (held). Think of it
-              #  as a charge to the current battery level. The grid or solar covers any house load. If there is a shortfall of
-              #  Solar power to meet house load, the excess house load is met from grid import, but if there is excess Solar
-              #  power above the house load, the excess solar will be used to charge the battery
-              # In Sigenergy, this is effectively "self consumption" mode with discharging prohibited
-              - conditions:
-                  - condition: state
-                    entity_id: input_select.predbat_requested_mode
-                    state: "Freeze Charging"
-                sequence:
-                  - service: number.set_value
-                    data_template:
-                      entity_id: number.sigen_plant_ess_max_discharging_limit
-                      value: 0
+Add the following automations to `automations.yaml` (or configure via the UI):
 
-              # Set charging limit to 0 when requested mode is Freeze Discharging
-              # Docs:
-              #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
-              #  but with charging disabled. The battery or solar covers the house load. As charging is disabled, if there is
-              #  excess solar generated, the current SoC level will be held and the excess solar will be exported. If there is
-              #  a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
-              # In Sigenergy, this is effectively "self consumption" mode with charging prohibited
-              - conditions:
-                  - condition: state
-                    entity_id: input_select.predbat_requested_mode
-                    state: "Freeze Discharging"
-                sequence:
-                  - service: number.set_value
-                    data_template:
-                      entity_id: number.sigen_plant_ess_max_charging_limit
-                      value: 0
+```yaml
+- id: predbat_requested_mode_action
+  alias: "Predbat Requested Mode Action"
+  description: "Acts as a mapper for the input_select.predbat_requested_mode to the select.sigen_plant_remote_ems_control_mode"
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id:
+        - input_select.predbat_requested_mode
+  conditions: []
+  actions:
+    - action: select.select_option
+      metadata: {}
+      target:
+        entity_id: select.sigen_plant_remote_ems_control_mode
+      data:
+        option: >
+          {% if is_state('input_select.predbat_requested_mode', "Demand") %}Maximum Self Consumption
+          {% elif is_state('input_select.predbat_requested_mode', "Charging") %}Command Charging (PV First)
+          {% elif is_state('input_select.predbat_requested_mode', "Freeze Charging") %}Maximum Self Consumption
+          {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
+          {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
+          {% endif %}
+    
+    - choose:
+        # Freeze Charging
+        # Docs:
+        #  Freeze charging - The battery is charging but the current battery level (SoC) is frozen (held). Think of it
+        #  as a charge to the current battery level. The grid or solar covers any house load. If there is a shortfall of
+        #  Solar power to meet house load, the excess house load is met from grid import, but if there is excess Solar
+        #  power above the house load, the excess solar will be used to charge the battery
+        # In Sigenergy, this is effectively "self consumption" mode with discharging prohibited
+        - conditions:
+            - condition: state
+              entity_id: input_select.predbat_requested_mode
+              state: "Freeze Charging"
+          sequence:
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+                value: 100
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+                value: 100
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_grid_import_limitation
+                value: 0
 
-      - id: "automation_sigen_ess_max_charging_limit_input_number_action"
-        alias: "Predbat max charging limit action"
-        description: "Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit"
-        triggers:
-          - trigger: state
-            entity_id: input_number.charge_rate
-        action:
-          - action: number.set_value
-            target:
-              entity_id: number.sigen_plant_ess_max_charging_limit
-            data:
-              value: >-
-                "{{ [(states('input_number.charge_rate') | float / 1000) | round(2),
-                states('sensor.sigen_inverter_ess_rated_charging_power') | float] | min}}"
-              value: "{{ (states('input_number.charge_rate')| float / 1000) | round(2) }}"
-        mode: single
+        # Freeze Discharging
+        # Docs:
+        #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
+        #  but with charging disabled. The battery or solar covers the house load. As charging is disabled, if there is
+        #  excess solar generated, the current SoC level will be held and the excess solar will be exported. If there is
+        #  a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
+        # In Sigenergy, this is effectively "self consumption" mode with charging prohibited
+        - conditions:
+            - condition: state
+              entity_id: input_select.predbat_requested_mode
+              state: "Freeze Discharging"
+          sequence:
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+                value: 0
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+                value: 0
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_grid_import_limitation
+                value: 0
 
-      - id: "automation_sigen_ess_max_discharging_limit_input_number_action"
-        alias: "Predbat max discharging limit action"
-        description: "Mapper from input_number.discharge_rate to number.sigen_plant_ess_max_discharging_limit"
-        triggers:
-          - trigger: state
-            entity_id: input_number.discharge_rate
-        action:
-          - action: number.set_value
-            target:
-              entity_id: number.sigen_plant_ess_max_discharging_limit
-            data:
-              value: >-
-                "{{ [(states('input_number.discharge_rate') | float / 1000) | round(2),
-                states('sensor.sigen_inverter_ess_rated_discharging_power') | float] | min}}"
+        # If neither of the above conditions are met, set the limits to the input numbers
+        - conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.predbat_requested_mode
+                state: "Freeze Charging"
+              - condition: state
+                entity_id: input_select.predbat_requested_mode
+                state: "Freeze Discharging"
+          sequence:
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+                value: 100
+            - action: number.set_value
+              data_template:  
+                entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge  
+                value: "{{ states('input_number.predbat_set_reserve_min') | float(10) }}"  
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_grid_import_limitation
+                value: 100
 
-        mode: single
+- id: "automation_sigen_ess_max_charging_limit_input_number_action"
+  alias: "Predbat max charging limit action"
+  description: "Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit"
+  triggers:
+    - trigger: state
+      entity_id: input_number.charge_rate
+  action:
+    - action: number.set_value
+      target:
+        entity_id: number.sigen_plant_ess_max_charging_limit
+      data:
+        value: >-
+          "{{ [(states('input_number.charge_rate') | float / 1000) | round(2),
+          states('sensor.sigen_inverter_ess_rated_charging_power') | float] | min}}"
+        value: "{{ (states('input_number.charge_rate')| float / 1000) | round(2) }}"
+  mode: single
+
+- id: "automation_sigen_ess_max_discharging_limit_input_number_action"
+  alias: "Predbat max discharging limit action"
+  description: "Mapper from input_number.discharge_rate to number.sigen_plant_ess_max_discharging_limit"
+  triggers:
+    - trigger: state
+      entity_id: input_number.discharge_rate
+  action:
+    - action: number.set_value
+      target:
+        entity_id: number.sigen_plant_ess_max_discharging_limit
+      data:
+        value: >-
+          "{{ [(states('input_number.discharge_rate') | float / 1000) | round(2),
+          states('sensor.sigen_inverter_ess_rated_discharging_power') | float] | min}}"
+  mode: single
 ```
 
 ## Tesla Powerwall
