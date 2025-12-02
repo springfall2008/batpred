@@ -179,8 +179,9 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     elif not has_day and override_time <= now_utc:
         # Check if override_time is within the current active time slot
         # A slot is active if it started within plan_interval_minutes ago
-        minutes_diff = (now_utc - override_time).total_seconds() / 60
-        if minutes_diff >= plan_interval_minutes:
+        minutes_since_override = (now_utc - override_time).total_seconds() / 60
+        is_outside_current_slot = minutes_since_override >= plan_interval_minutes
+        if is_outside_current_slot:
             # Not in current slot, use tomorrow
             add_days += 1
         # else: override_time is within current active slot, use today (add_days stays 0)
