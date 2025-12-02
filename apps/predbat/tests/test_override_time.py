@@ -65,10 +65,10 @@ def test_get_override_time_from_string(my_predbat):
         print("ERROR: Test 5 failed - expected {} got {}".format(expected, result))
         failed = True
 
-    # Test 6: Time-only format - exact current time (should go to tomorrow)
-    print("Test 6: Time-only format - exact current time")
+    # Test 6: Time-only format - exact current time (should use current slot if within it)
+    print("Test 6: Time-only format - exact current time within current slot")
     result = get_override_time_from_string(now, "14:23", 30)
-    expected = datetime(2024, 11, 27, 14, 0, 0, tzinfo=utc)  # Tomorrow, rounded down to 14:00
+    expected = datetime(2024, 11, 26, 14, 0, 0, tzinfo=utc)  # Today, rounded down to 14:00 (current slot)
     if result != expected:
         print("ERROR: Test 6 failed - expected {} got {}".format(expected, result))
         failed = True
