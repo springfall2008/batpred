@@ -600,7 +600,7 @@ def clean_incrementing_reverse(data, max_increment=0):
                 increment += nxt - last
             last = nxt
         elif nxt < last:
-            if nxt <= 0 or ((last - nxt) >= (1.0)):
+            if nxt <= 0 or nxt < last:
                 last = nxt
         new_data[rindex] = increment
 
