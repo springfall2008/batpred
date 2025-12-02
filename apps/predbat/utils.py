@@ -450,16 +450,13 @@ def minute_data(
             else:
                 if smoothing:
                     # Reset to zero, sometimes not exactly zero
-                    if clean_increment and (state < last_state):
+                    # This ignores all drops in strictly incrementing data sensors
+                    if clean_increment and state < last_state:
                         while minute < minutes_to:
                             if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = state
                             minute += 1
                     else:
-                        # Incrementing data can't go backwards
-                        if clean_increment and state < last_state:
-                            state = last_state
-
                         # Create linear function
                         diff = (state - last_state) / (minutes_to - minute)
 
