@@ -432,6 +432,7 @@ def minute_data(
         minutes = int(timed.total_seconds() / 60)
         if to_time:
             minutes_to = int(timed_to.total_seconds() / 60)
+            minutes_delta = (timed_to.total_seconds() - timed.total_seconds()) / 60.0
 
         if minutes < newest_age:
             newest_age = minutes
@@ -440,7 +441,7 @@ def minute_data(
 
         # Power to Energy
         if integrate and to_time:
-            total_minutes = abs(minutes_to - minutes)
+            total_minutes = abs(minutes_delta)
             state = last_state + state * total_minutes / 60.0
 
         if to_time:
@@ -458,7 +459,7 @@ def minute_data(
                             minute += 1
                     else:
                         # Create linear function
-                        diff = (state - last_state) / (minutes_to - minute)
+                        diff = (state - last_state) / minutes_delta
 
                         # If the spike is too big don't smooth it, it will removed in the clean function later
                         if clean_increment and max_increment > 0 and diff > max_increment:
