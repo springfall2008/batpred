@@ -905,7 +905,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
           {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
           {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
           {% endif %}
-    
+
     - choose:
         # Freeze Charging
         # Docs:
