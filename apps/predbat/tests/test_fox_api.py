@@ -58,17 +58,31 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.mock_responses = {}
         self.request_log = []  # Track all requests made
         
+        # Mock HA state values - keyed by entity_id
+        self.mock_ha_states = {}
+        
+        # Track dashboard_item calls - keyed by entity_id
+        self.dashboard_items = {}
+        
     def log(self, message):
         """Mock log method"""
         pass
         
     def dashboard_item(self, entity_id, state, attributes, app):
-        """Mock dashboard_item method"""
-        pass
+        """Mock dashboard_item method - tracks calls"""
+        self.dashboard_items[entity_id] = {
+            "state": state,
+            "attributes": attributes,
+            "app": app
+        }
         
     def get_state_wrapper(self, entity_id, default=None):
-        """Mock get_state_wrapper method"""
-        return default
+        """Mock get_state_wrapper method - returns mock HA state or default"""
+        return self.mock_ha_states.get(entity_id, default)
+        
+    def set_mock_ha_state(self, entity_id, value):
+        """Set a mock HA state value for a specific entity_id"""
+        self.mock_ha_states[entity_id] = value
         
     def update_success_timestamp(self):
         """Mock update_success_timestamp method"""
@@ -1708,6 +1722,411 @@ def test_api_set_scheduler_disable_when_empty(my_predbat):
     return False
 
 
+def test_api_get_schedule_settings_ha(my_predbat):
+    """
+    Test get_schedule_settings_ha reads schedule settings from HA entities
+    """
+    print("  - test_api_get_schedule_settings_ha")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device settings for minSocOnGrid
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    
+    # Set mock HA states for schedule entities
+    fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_reserve", 15)
+    
+    # Charge schedule settings
+    fox.set_mock_ha_state("select.predbat_fox_test123456_battery_schedule_charge_start_time", "02:30:00")
+    fox.set_mock_ha_state("select.predbat_fox_test123456_battery_schedule_charge_end_time", "05:30:00")
+    fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_charge_soc", 100)
+    fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_charge_power", 8000)
+    fox.set_mock_ha_state("switch.predbat_fox_test123456_battery_schedule_charge_enable", "on")
+    
+    # Discharge schedule settings
+    fox.set_mock_ha_state("select.predbat_fox_test123456_battery_schedule_discharge_start_time", "16:00:00")
+    fox.set_mock_ha_state("select.predbat_fox_test123456_battery_schedule_discharge_end_time", "19:00:00")
+    fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_discharge_soc", 20)
+    fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_discharge_power", 5000)
+    fox.set_mock_ha_state("switch.predbat_fox_test123456_battery_schedule_discharge_enable", "on")
+    
+    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    
+    # Verify reserve was read at top level
+    assert fox.local_schedule[deviceSN]["reserve"] == 15
+    
+    # Verify charge schedule structure and values
+    assert "charge" in fox.local_schedule[deviceSN]
+    assert fox.local_schedule[deviceSN]["charge"]["start_time"] == "02:30:00"
+    assert fox.local_schedule[deviceSN]["charge"]["end_time"] == "05:30:00"
+    assert fox.local_schedule[deviceSN]["charge"]["soc"] == 100
+    assert fox.local_schedule[deviceSN]["charge"]["power"] == 8000
+    assert fox.local_schedule[deviceSN]["charge"]["enable"] == 1
+    
+    # Verify discharge schedule structure and values
+    assert "discharge" in fox.local_schedule[deviceSN]
+    assert fox.local_schedule[deviceSN]["discharge"]["start_time"] == "16:00:00"
+    assert fox.local_schedule[deviceSN]["discharge"]["end_time"] == "19:00:00"
+    assert fox.local_schedule[deviceSN]["discharge"]["soc"] == 20
+    assert fox.local_schedule[deviceSN]["discharge"]["power"] == 5000
+    assert fox.local_schedule[deviceSN]["discharge"]["enable"] == 1
+    
+    return False
+
+
+def test_api_get_schedule_settings_ha_defaults(my_predbat):
+    """
+    Test get_schedule_settings_ha uses defaults when HA entities don't exist
+    """
+    print("  - test_api_get_schedule_settings_ha_defaults")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device settings for minSocOnGrid
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    
+    # Don't set any mock HA states - should use defaults
+    
+    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    
+    # Reserve should default to minSocOnGrid (10) since 0 < 10
+    assert fox.local_schedule[deviceSN]["reserve"] == 10
+    
+    # Verify charge schedule default values
+    assert "charge" in fox.local_schedule[deviceSN]
+    assert fox.local_schedule[deviceSN]["charge"]["start_time"] == "00:00:00"
+    assert fox.local_schedule[deviceSN]["charge"]["end_time"] == "00:00:00"
+    assert fox.local_schedule[deviceSN]["charge"]["soc"] == 100  # Charge soc defaults to 100
+    assert fox.local_schedule[deviceSN]["charge"]["power"] == 8000  # Power defaults to fdpwr_max
+    assert fox.local_schedule[deviceSN]["charge"]["enable"] == 0  # Enable defaults to 0 (off)
+    
+    # Verify discharge schedule default values
+    assert "discharge" in fox.local_schedule[deviceSN]
+    assert fox.local_schedule[deviceSN]["discharge"]["start_time"] == "00:00:00"
+    assert fox.local_schedule[deviceSN]["discharge"]["end_time"] == "00:00:00"
+    assert fox.local_schedule[deviceSN]["discharge"]["soc"] == 10  # Discharge soc defaults to fdsoc_min
+    assert fox.local_schedule[deviceSN]["discharge"]["power"] == 8000  # Power defaults to fdpwr_max
+    assert fox.local_schedule[deviceSN]["discharge"]["enable"] == 0  # Enable defaults to 0 (off)
+    
+    return False
+
+
+def test_api_get_schedule_settings_ha_reserve_clamped(my_predbat):
+    """
+    Test get_schedule_settings_ha clamps reserve to minSocOnGrid
+    """
+    print("  - test_api_get_schedule_settings_ha_reserve_clamped")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device with minSocOnGrid = 15
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 15}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 15
+    
+    # Set reserve to a value below minSocOnGrid
+    fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_reserve", 5)
+    
+    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    
+    # Reserve should be clamped to minSocOnGrid (15), not 5
+    assert fox.local_schedule[deviceSN]["reserve"] == 15
+    
+    return False
+
+
+def test_api_get_schedule_settings_ha_enable_off(my_predbat):
+    """
+    Test get_schedule_settings_ha correctly handles enable switch set to off
+    """
+    print("  - test_api_get_schedule_settings_ha_enable_off")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device settings
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    
+    # Set enable to "off"
+    fox.set_mock_ha_state("switch.predbat_fox_test123456_battery_schedule_charge_enable", "off")
+    fox.set_mock_ha_state("switch.predbat_fox_test123456_battery_schedule_discharge_enable", "off")
+    
+    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    
+    # Enable should be 0 for both charge and discharge
+    assert fox.local_schedule[deviceSN]["charge"]["enable"] == 0
+    assert fox.local_schedule[deviceSN]["discharge"]["enable"] == 0
+    
+    return False
+
+
+def test_api_get_schedule_settings_ha_invalid_values(my_predbat):
+    """
+    Test get_schedule_settings_ha handles invalid numeric values
+    """
+    print("  - test_api_get_schedule_settings_ha_invalid_values")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device settings
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    
+    # Set invalid numeric value for reserve
+    fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_reserve", "invalid")
+    
+    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    
+    # Reserve should fall back to minSocOnGrid (10) since invalid value becomes 0, then clamped to 10
+    assert fox.local_schedule[deviceSN]["reserve"] == 10
+    
+    return False
+
+
+def test_api_publish_schedule_settings_ha(my_predbat):
+    """
+    Test publish_schedule_settings_ha publishes all schedule entities to HA
+    """
+    print("  - test_api_publish_schedule_settings_ha")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device with battery
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    
+    # Setup local schedule with values
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {
+            "start_time": "02:30:00",
+            "end_time": "05:30:00",
+            "soc": 100,
+            "power": 8000,
+            "enable": 1,
+        },
+        "discharge": {
+            "start_time": "16:00:00",
+            "end_time": "19:00:00",
+            "soc": 20,
+            "power": 5000,
+            "enable": 1,
+        },
+    }
+    
+    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    
+    # Verify reserve entity was published
+    reserve_entity = "number.predbat_fox_test123456_battery_schedule_reserve"
+    assert reserve_entity in fox.dashboard_items
+    assert fox.dashboard_items[reserve_entity]["state"] == 15
+    assert fox.dashboard_items[reserve_entity]["attributes"]["min"] == 10
+    assert fox.dashboard_items[reserve_entity]["attributes"]["max"] == 100
+    assert fox.dashboard_items[reserve_entity]["app"] == "fox"
+    
+    # Verify charge schedule entities were published
+    charge_start = "select.predbat_fox_test123456_battery_schedule_charge_start_time"
+    assert charge_start in fox.dashboard_items
+    assert fox.dashboard_items[charge_start]["state"] == "02:30:00"
+    
+    charge_end = "select.predbat_fox_test123456_battery_schedule_charge_end_time"
+    assert charge_end in fox.dashboard_items
+    assert fox.dashboard_items[charge_end]["state"] == "05:30:00"
+    
+    charge_soc = "number.predbat_fox_test123456_battery_schedule_charge_soc"
+    assert charge_soc in fox.dashboard_items
+    assert fox.dashboard_items[charge_soc]["state"] == 100
+    
+    charge_power = "number.predbat_fox_test123456_battery_schedule_charge_power"
+    assert charge_power in fox.dashboard_items
+    assert fox.dashboard_items[charge_power]["state"] == 8000
+    assert fox.dashboard_items[charge_power]["attributes"]["max"] == 8000
+    
+    charge_enable = "switch.predbat_fox_test123456_battery_schedule_charge_enable"
+    assert charge_enable in fox.dashboard_items
+    assert fox.dashboard_items[charge_enable]["state"] == "on"
+    
+    charge_write = "switch.predbat_fox_test123456_battery_schedule_charge_write"
+    assert charge_write in fox.dashboard_items
+    assert fox.dashboard_items[charge_write]["state"] == "off"  # Write always off
+    
+    # Verify discharge schedule entities were published
+    discharge_start = "select.predbat_fox_test123456_battery_schedule_discharge_start_time"
+    assert discharge_start in fox.dashboard_items
+    assert fox.dashboard_items[discharge_start]["state"] == "16:00:00"
+    
+    discharge_end = "select.predbat_fox_test123456_battery_schedule_discharge_end_time"
+    assert discharge_end in fox.dashboard_items
+    assert fox.dashboard_items[discharge_end]["state"] == "19:00:00"
+    
+    discharge_soc = "number.predbat_fox_test123456_battery_schedule_discharge_soc"
+    assert discharge_soc in fox.dashboard_items
+    assert fox.dashboard_items[discharge_soc]["state"] == 20
+    
+    discharge_power = "number.predbat_fox_test123456_battery_schedule_discharge_power"
+    assert discharge_power in fox.dashboard_items
+    assert fox.dashboard_items[discharge_power]["state"] == 5000
+    
+    discharge_enable = "switch.predbat_fox_test123456_battery_schedule_discharge_enable"
+    assert discharge_enable in fox.dashboard_items
+    assert fox.dashboard_items[discharge_enable]["state"] == "on"
+    
+    discharge_write = "switch.predbat_fox_test123456_battery_schedule_discharge_write"
+    assert discharge_write in fox.dashboard_items
+    assert fox.dashboard_items[discharge_write]["state"] == "off"  # Write always off
+    
+    return False
+
+
+def test_api_publish_schedule_settings_ha_no_battery(my_predbat):
+    """
+    Test publish_schedule_settings_ha does nothing when device has no battery
+    """
+    print("  - test_api_publish_schedule_settings_ha_no_battery")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device without battery
+    fox.device_detail[deviceSN] = {"hasBattery": False}
+    
+    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    
+    # No dashboard items should have been published
+    assert len(fox.dashboard_items) == 0
+    
+    return False
+
+
+def test_api_publish_schedule_settings_ha_defaults(my_predbat):
+    """
+    Test publish_schedule_settings_ha uses defaults when local_schedule is empty
+    """
+    print("  - test_api_publish_schedule_settings_ha_defaults")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device with battery but empty local_schedule
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.local_schedule[deviceSN] = {}
+    
+    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    
+    # Verify reserve defaults to 0
+    reserve_entity = "number.predbat_fox_test123456_battery_schedule_reserve"
+    assert reserve_entity in fox.dashboard_items
+    assert fox.dashboard_items[reserve_entity]["state"] == 0
+    
+    # Verify charge start_time defaults to "00:00:00"
+    charge_start = "select.predbat_fox_test123456_battery_schedule_charge_start_time"
+    assert charge_start in fox.dashboard_items
+    assert fox.dashboard_items[charge_start]["state"] == "00:00:00"
+    
+    # Verify charge enable defaults to "off" (0 becomes "off")
+    charge_enable = "switch.predbat_fox_test123456_battery_schedule_charge_enable"
+    assert charge_enable in fox.dashboard_items
+    assert fox.dashboard_items[charge_enable]["state"] == "off"
+    
+    return False
+
+
+def test_api_publish_schedule_settings_ha_enable_off(my_predbat):
+    """
+    Test publish_schedule_settings_ha correctly publishes enable=0 as "off"
+    """
+    print("  - test_api_publish_schedule_settings_ha_enable_off")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device with battery
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    
+    # Setup local schedule with enable=0
+    fox.local_schedule[deviceSN] = {
+        "reserve": 10,
+        "charge": {
+            "start_time": "02:30:00",
+            "end_time": "05:30:00",
+            "soc": 100,
+            "power": 8000,
+            "enable": 0,
+        },
+        "discharge": {
+            "start_time": "16:00:00",
+            "end_time": "19:00:00",
+            "soc": 20,
+            "power": 5000,
+            "enable": 0,
+        },
+    }
+    
+    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    
+    # Verify charge enable is "off"
+    charge_enable = "switch.predbat_fox_test123456_battery_schedule_charge_enable"
+    assert fox.dashboard_items[charge_enable]["state"] == "off"
+    
+    # Verify discharge enable is "off"
+    discharge_enable = "switch.predbat_fox_test123456_battery_schedule_discharge_enable"
+    assert fox.dashboard_items[discharge_enable]["state"] == "off"
+    
+    return False
+
+
+def test_api_publish_schedule_settings_ha_invalid_time(my_predbat):
+    """
+    Test publish_schedule_settings_ha handles invalid time values
+    """
+    print("  - test_api_publish_schedule_settings_ha_invalid_time")
+    
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    
+    # Setup device with battery
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    
+    # Setup local schedule with invalid time value
+    fox.local_schedule[deviceSN] = {
+        "reserve": 10,
+        "charge": {
+            "start_time": "invalid_time",
+            "end_time": "05:30:00",
+            "soc": 100,
+            "power": 8000,
+            "enable": 1,
+        },
+    }
+    
+    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    
+    # Invalid time should be replaced with "00:00:00"
+    charge_start = "select.predbat_fox_test123456_battery_schedule_charge_start_time"
+    assert fox.dashboard_items[charge_start]["state"] == "00:00:00"
+    
+    return False
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -1767,6 +2186,20 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_get_battery_charging_time_no_battery(my_predbat)
         failed |= test_api_set_scheduler_no_change(my_predbat)
         failed |= test_api_set_scheduler_disable_when_empty(my_predbat)
+        
+        # get_schedule_settings_ha tests
+        failed |= test_api_get_schedule_settings_ha(my_predbat)
+        failed |= test_api_get_schedule_settings_ha_defaults(my_predbat)
+        failed |= test_api_get_schedule_settings_ha_reserve_clamped(my_predbat)
+        failed |= test_api_get_schedule_settings_ha_enable_off(my_predbat)
+        failed |= test_api_get_schedule_settings_ha_invalid_values(my_predbat)
+        
+        # publish_schedule_settings_ha tests
+        failed |= test_api_publish_schedule_settings_ha(my_predbat)
+        failed |= test_api_publish_schedule_settings_ha_no_battery(my_predbat)
+        failed |= test_api_publish_schedule_settings_ha_defaults(my_predbat)
+        failed |= test_api_publish_schedule_settings_ha_enable_off(my_predbat)
+        failed |= test_api_publish_schedule_settings_ha_invalid_time(my_predbat)
     except Exception as e:
         print(f"ERROR: Fox API test failed with exception: {e}")
         import traceback

@@ -870,7 +870,7 @@ class FoxAPI(ComponentBase):
 
                 if attribute in ["start_time", "end_time"]:
                     value = self.get_state_wrapper(entity_id_select, default="00:00:00")
-                    self.local_schedule[deviceSN][attribute] = value
+                    self.local_schedule[deviceSN][direction][attribute] = value
                 elif attribute in ["soc", "power"]:
                     default_value = 0
                     if attribute == "soc" and direction == "charge":
@@ -884,10 +884,10 @@ class FoxAPI(ComponentBase):
                         value = int(float(value))
                     except ValueError:
                         value = 0
-                    self.local_schedule[deviceSN][attribute] = value
+                    self.local_schedule[deviceSN][direction][attribute] = value
                 elif attribute == "enable":
                     value = self.get_state_wrapper(entity_id_switch, default="off")
-                    self.local_schedule[deviceSN][attribute] = 1 if value == "on" else 0
+                    self.local_schedule[deviceSN][direction][attribute] = 1 if value == "on" else 0
 
     async def get_scheduler(self, deviceSN, checkBattery=True):
         """
