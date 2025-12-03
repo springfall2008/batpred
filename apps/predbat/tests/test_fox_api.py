@@ -1502,11 +1502,23 @@ def test_api_set_device_setting(my_predbat):
 def test_api_get_device_settings(my_predbat):
     """
     Test get_device_settings (plural) - fetches all FOX_SETTINGS for a device
+    Also tests initialize() method for coverage
     """
     print("  - test_api_get_device_settings")
 
     fox = MockFoxAPIWithRequests()
     deviceSN = "TEST123456"
+
+    # Call initialize to cover that method
+    fox.initialize(key="test_api_key", automatic=True)
+
+    # Verify initialize set up the expected attributes
+    assert fox.key == "test_api_key"
+    assert fox.automatic == True
+    assert fox.failures_total == 0
+    assert fox.device_list == []
+    assert fox.device_detail == {}
+    assert fox.device_settings == {}
 
     # Setup device with battery (required for get_device_settings)
     fox.device_detail[deviceSN] = {"hasBattery": True}
