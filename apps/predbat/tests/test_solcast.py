@@ -180,6 +180,7 @@ class TestSolarAPI:
 
         # No mock found - simulate connection error
         from requests.exceptions import ConnectionError
+
         raise ConnectionError(f"No mock for URL: {url}")
 
 
@@ -206,13 +207,13 @@ def test_convert_azimuth(my_predbat):
     try:
         # Test cases: (solcast_azimuth, expected_forecast_solar_azimuth)
         test_cases = [
-            (0, 180),      # North -> North (180 in forecast.solar)
-            (180, 0),      # South -> South (0 in forecast.solar)
-            (90, 90),      # West -> West
-            (-90, -90),    # East -> East
-            (45, 135),     # NW -> NW
-            (-45, -135),   # NE -> NE
-            (-180, 0),     # South (negative) -> South
+            (0, 180),  # North -> North (180 in forecast.solar)
+            (180, 0),  # South -> South (0 in forecast.solar)
+            (90, 90),  # West -> West
+            (-90, -90),  # East -> East
+            (45, 135),  # NW -> NW
+            (-45, -135),  # NE -> NE
+            (-180, 0),  # South (negative) -> South
         ]
 
         for solcast_az, expected in test_cases:
@@ -651,11 +652,7 @@ def test_download_forecast_solar_data(my_predbat):
                     "2025-06-15T13:00:00+0000": 700,
                 }
             },
-            "message": {
-                "info": {
-                    "time": "2025-06-15T11:30:00+0000"
-                }
-            }
+            "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
         }
         test_api.set_mock_response("forecast.solar", forecast_response, 200)
 
@@ -713,9 +710,7 @@ def test_download_forecast_solar_data_with_postcode(my_predbat):
                     "2025-06-15T12:00:00+0000": 500,
                 }
             },
-            "message": {
-                "info": {"time": "2025-06-15T11:30:00+0000"}
-            }
+            "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
         }
         test_api.set_mock_response("forecast.solar", forecast_response, 200)
 
@@ -760,12 +755,7 @@ def test_download_forecast_solar_data_personal_api(my_predbat):
             }
         ]
 
-        forecast_response = {
-            "result": {
-                "watt_hours_period": {"2025-06-15T12:00:00+0000": 500}
-            },
-            "message": {"info": {"time": "2025-06-15T11:30:00+0000"}}
-        }
+        forecast_response = {"result": {"watt_hours_period": {"2025-06-15T12:00:00+0000": 500}}, "message": {"info": {"time": "2025-06-15T11:30:00+0000"}}}
         test_api.set_mock_response("forecast.solar", forecast_response, 200)
 
         with patch("solcast.requests.get", test_api.mock_requests_get):
@@ -800,13 +790,16 @@ def test_fetch_pv_datapoints_detailed_forecast(my_predbat):
     test_api = create_test_solar_api()
     try:
         # Setup mock sensor with detailedForecast attribute
-        test_api.set_mock_ha_state("sensor.solcast_forecast_today", {
-            "state": "5.5",
-            "detailedForecast": [
-                {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 1.0},
-                {"period_start": "2025-06-15T12:30:00+0000", "pv_estimate": 1.5},
-            ]
-        })
+        test_api.set_mock_ha_state(
+            "sensor.solcast_forecast_today",
+            {
+                "state": "5.5",
+                "detailedForecast": [
+                    {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 1.0},
+                    {"period_start": "2025-06-15T12:30:00+0000", "pv_estimate": 1.5},
+                ],
+            },
+        )
 
         data, total_data, total_sensor = test_api.solar.fetch_pv_datapoints("pv_forecast_today", "sensor.solcast_forecast_today")
 
@@ -857,12 +850,15 @@ def test_fetch_pv_datapoints_forecast_fallback(my_predbat):
     test_api = create_test_solar_api()
     try:
         # Setup mock sensor with only 'forecast' attribute (old format)
-        test_api.set_mock_ha_state("sensor.solcast_forecast_today", {
-            "state": "4.0",
-            "forecast": [
-                {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 2.0},
-            ]
-        })
+        test_api.set_mock_ha_state(
+            "sensor.solcast_forecast_today",
+            {
+                "state": "4.0",
+                "forecast": [
+                    {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 2.0},
+                ],
+            },
+        )
 
         data, total_data, total_sensor = test_api.solar.fetch_pv_datapoints("pv_forecast_today", "sensor.solcast_forecast_today")
 
@@ -985,7 +981,7 @@ def test_publish_pv_stats_remaining_calculation(my_predbat):
         ]
 
         # Mock now_utc_exact property to return our fixed time
-        with patch.object(type(test_api.solar), 'now_utc_exact', new_callable=lambda: property(lambda self: noon_utc)):
+        with patch.object(type(test_api.solar), "now_utc_exact", new_callable=lambda: property(lambda self: noon_utc)):
             test_api.solar.publish_pv_stats(pv_forecast_data, divide_by=1.0, period=30)
 
         today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
@@ -1162,9 +1158,7 @@ def test_fetch_pv_forecast_forecast_solar(my_predbat):
         # Configure for Forecast.Solar API
         test_api.solar.solcast_host = None
         test_api.solar.solcast_api_key = None
-        test_api.solar.forecast_solar = [
-            {"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}
-        ]
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
 
         forecast_response = {
             "result": {
@@ -1173,7 +1167,7 @@ def test_fetch_pv_forecast_forecast_solar(my_predbat):
                     "2025-06-15T12:30:00+0000": 600,
                 }
             },
-            "message": {"info": {"time": "2025-06-15T11:30:00+0000"}}
+            "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
         }
         test_api.set_mock_response("forecast.solar", forecast_response, 200)
 
@@ -1214,19 +1208,25 @@ def test_fetch_pv_forecast_ha_sensors(my_predbat):
         test_api.solar.pv_forecast_tomorrow = "sensor.solcast_pv_forecast_tomorrow"
 
         # Setup mock sensors
-        test_api.set_mock_ha_state("sensor.solcast_pv_forecast_today", {
-            "state": "5.5",
-            "detailedForecast": [
-                {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 2.0},
-                {"period_start": "2025-06-15T12:30:00+0000", "pv_estimate": 2.5},
-            ]
-        })
-        test_api.set_mock_ha_state("sensor.solcast_pv_forecast_tomorrow", {
-            "state": "6.0",
-            "detailedForecast": [
-                {"period_start": "2025-06-16T12:00:00+0000", "pv_estimate": 3.0},
-            ]
-        })
+        test_api.set_mock_ha_state(
+            "sensor.solcast_pv_forecast_today",
+            {
+                "state": "5.5",
+                "detailedForecast": [
+                    {"period_start": "2025-06-15T12:00:00+0000", "pv_estimate": 2.0},
+                    {"period_start": "2025-06-15T12:30:00+0000", "pv_estimate": 2.5},
+                ],
+            },
+        )
+        test_api.set_mock_ha_state(
+            "sensor.solcast_pv_forecast_tomorrow",
+            {
+                "state": "6.0",
+                "detailedForecast": [
+                    {"period_start": "2025-06-16T12:00:00+0000", "pv_estimate": 3.0},
+                ],
+            },
+        )
 
         with patch("solcast.requests.get", test_api.mock_requests_get):
             test_api.solar.fetch_pv_forecast()
