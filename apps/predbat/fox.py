@@ -32,6 +32,30 @@ OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 # Dummy attribute table for testing
 fox_attribute_table = {"mode": {}}
 
+def schedules_are_equal(time_now, schedule1, schedule2):
+    """
+    Docstring for schedules_are_equal
+    
+    :param time_now: Datetime object
+    :param schedule1: Schedule to compare
+    :param schedule2: Schedule to compare
+    """
+    schedule1 = sort_schedule_by_start_time(time_now, schedule1)
+    schedule2 = sort_schedule_by_start_time(time_now, schedule2)
+
+    same = True
+    if len(schedule1) != len(schedule2):
+        same = False
+    else:
+        for i in range(0, len(schedule2)):
+            for key in schedule2[i]:
+                if schedule2[i][key] != schedule1[i].get(key, None):
+                    same = False
+                    break
+            if not same:
+                break
+    return same
+
 def end_minute_inclusive_to_exclusive(end_hour, end_minute):
     """
     Adjust end minute that is inclusive to exclusive (add 1 minute).
@@ -82,13 +106,23 @@ def minutes_to_schedule_time(hour, minute, minutes_now):
         total_minutes += 24 * 60
     return total_minutes - minutes_now
 
-def validate_schedule(local_tz, new_schedule, reserve, fdPwr_max):
+def schedule_strip_disabled(schedule):
+    new_schedule = []
+    for entry in schedule:
+        if entry.get("enable", 0) == 1:
+            new_schedule.append(entry)
+    return new_schedule
+
+def sort_schedule_by_start_time(time_now, schedule):
+    minutes_now = time_now.hour * 60 + time_now.minute
+    schedule = schedule_strip_disabled(schedule)
+    schedule = sorted(schedule, key=lambda x: (minutes_to_schedule_time(x["startHour"], x["startMinute"], minutes_now)))
+    return schedule
+
+def validate_schedule(time_now, new_schedule, reserve, fdPwr_max):
     # Avoid more than one schedule as fox seems to error out, so take the first only
     # First should be the next upcoming schedule, starting now not the one closest to midnight
-    time_now = datetime.now(local_tz)
-    minutes_now = time_now.hour * 60 + time_now.minute
-
-    new_schedule = sorted(new_schedule, key=lambda x: (minutes_to_schedule_time(x["startHour"], x["startMinute"], minutes_now)))
+    new_schedule = sort_schedule_by_start_time(time_now, new_schedule)
     if not new_schedule:
         # No schedule entries so disable
         new_schedule = [
@@ -704,18 +738,7 @@ class FoxAPI(ComponentBase):
                 await self.set_scheduler_enabled(deviceSN, False)
         else:
             # Compare old and new schedule to see if it needs setting
-            same = True
-            if len(current_groups) != len(groups):
-                same = False
-            else:
-                for i in range(0, len(groups)):
-                    for key in groups[i]:
-                        if groups[i][key] != current_groups[i].get(key, None):
-                            same = False
-                            break
-                    if not same:
-                        break
-
+            same = schedules_are_equal(datetime.now(), current_groups, groups)
             self.log("Fox: Debug: Setting scheduler for {} same={} current_enable={} current_groups={} new_groups={}".format(deviceSN, same, current_enable, current_groups, groups))
             if not same:
                 result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
@@ -1365,7 +1388,7 @@ class FoxAPI(ComponentBase):
                             "minSocOnGrid": reserve
                         }
                     )
-        new_schedule = validate_schedule(self.local_tz, new_schedule, reserve, fdPwr_max)
+        new_schedule = validate_schedule(datetime.now(self.local_tz), new_schedule, reserve, fdPwr_max)
         self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
         result = await self.set_scheduler(serial, new_schedule)
         if result is not None:
@@ -1423,7 +1446,7 @@ class FoxAPI(ComponentBase):
         self.set_arg("load_power", [f"sensor.predbat_fox_{device}_loadspower" for device in batteries])
         self.set_arg("soc_percent", [f"sensor.predbat_fox_{device}_soc" for device in batteries])
         self.set_arg("soc_max", [f"sensor.predbat_fox_{device}_battery_capacity" for device in batteries])
-        self.set_arg("reserve", [f"number.predbat_fox_{device}_reserve" for device in batteries])
+        self.set_arg("reserve", [f"number.predbat_fox_{device}_battery_schedule_reserve" for device in batteries])
         self.set_arg("battery_min_soc", [f"sensor.predbat_fox_{device}_battery_reserve_min" for device in batteries])
         self.set_arg("charge_start_time", [f"select.predbat_fox_{device}_battery_schedule_charge_start_time" for device in batteries])
         self.set_arg("charge_end_time", [f"select.predbat_fox_{device}_battery_schedule_charge_end_time" for device in batteries])
@@ -1519,7 +1542,7 @@ async def test_fox_api(api_key):
     new_schedule = [new_slot, new_slot2]
     
     #new_schedule = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 1, "endMinute": 0, "workMode": "SelfUse", "fdSoc": minSocOnGrid, "maxSoc": minSocOnGrid, "fdPwr": fdPwr_max, "minSocOnGrid": minSocOnGrid}]
-    new_schedule = validate_schedule(fox_api.local_tz, new_schedule, minSocOnGrid, fdPwr_max)
+    new_schedule = validate_schedule(datetime.now(fox_api.local_tz), new_schedule, minSocOnGrid, fdPwr_max)
     print("Validated schedule")
     print(new_schedule)
     return(1)
