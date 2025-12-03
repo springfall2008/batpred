@@ -15,6 +15,7 @@ from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusiv
 class MockFoxAPI:
     """Mock FoxAPI class for testing compute_schedule"""
 
+
     def __init__(self):
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
