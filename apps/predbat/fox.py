@@ -836,9 +836,14 @@ class FoxAPI(ComponentBase):
         """
         Get the MinSocOnGrid setting for the device
         """
-        return self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
+        value = self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
+        try:
+            value = int(float(value))
+        except ValueError:
+            value = 10
+        return value
 
-    async def get_schedule_settings_ha(self, deviceSN):
+    async def get_schedule_settings_ha(self, deviceSN): 
         """
         Get the current schedule from HA database
         """
@@ -1301,6 +1306,8 @@ class FoxAPI(ComponentBase):
                 value = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
             self.local_schedule[serial]["reserve"] = value
             await self.publish_schedule_settings_ha(serial)
+            # Changing reserve impacts idle slots so re-apply full schedule
+            await self.apply_battery_schedule(serial)
             return
 
         if not direction:
