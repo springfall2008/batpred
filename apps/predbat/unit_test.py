@@ -53,6 +53,7 @@ from tests.test_prune_today import test_prune_today
 from tests.test_cumulative import test_get_now_from_cumulative
 from tests.test_octopus_url import test_download_octopus_url_wrapper
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
+from tests.test_fox_api import run_fox_api_tests
 
 
 # Mock the components and plugin system
@@ -143,6 +144,7 @@ def main():
         ("energydataservice", test_energydataservice, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
+        ("fox_api", run_fox_api_tests, "Fox API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),

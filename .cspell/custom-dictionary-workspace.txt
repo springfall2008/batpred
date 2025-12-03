@@ -292,6 +292,7 @@ timeday
 timedelta
 timekey
 timelapse
+timenow
 timeobj
 timestr
 timezone
