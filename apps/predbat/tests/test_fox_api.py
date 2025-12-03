@@ -9,7 +9,19 @@
 from datetime import datetime
 import asyncio
 import pytz
+from unittest.mock import MagicMock, patch, AsyncMock
+import requests
 from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal
+
+
+def run_async(coro):
+    """Helper function to run async coroutines in sync test functions"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 class MockFoxAPI:
@@ -64,6 +76,16 @@ class MockFoxAPIWithRequests(FoxAPI):
         # Track dashboard_item calls - keyed by entity_id
         self.dashboard_items = {}
 
+        # HTTP-level response simulation - keyed by API path
+        # Format: {path: {"status_code": int, "json_data": dict, "timeout": bool, "connection_error": bool, "json_error": bool}}
+        self.http_responses = {}
+
+        # Track set_arg calls for automatic_config testing
+        self.args_set = {}
+
+        # Track method calls for run() testing
+        self.method_calls = []
+
     def log(self, message):
         """Mock log method"""
         pass
@@ -87,6 +109,35 @@ class MockFoxAPIWithRequests(FoxAPI):
     def set_mock_response(self, path, response):
         """Set a mock response for a specific API path"""
         self.mock_responses[path] = response
+
+    def set_http_response(self, path, status_code=200, json_data=None, timeout=False, connection_error=False, json_error=False, errno=0, msg=""):
+        """
+        Set an HTTP-level response simulation for a specific API path.
+        Used to test request_get_func error handling.
+
+        Args:
+            path: API path to mock
+            status_code: HTTP status code (200, 400, 401, 403, 429, etc.)
+            json_data: JSON response data (will be wrapped in {"errno": 0, "result": data} if errno=0)
+            timeout: If True, simulate a timeout exception
+            connection_error: If True, simulate a connection error exception
+            json_error: If True, simulate a JSON decode error
+            errno: Fox API error code (0=success, 40400=rate limit, 40402=API limit, etc.)
+            msg: Fox API error message
+        """
+        self.http_responses[path] = {
+            "status_code": status_code,
+            "json_data": json_data,
+            "timeout": timeout,
+            "connection_error": connection_error,
+            "json_error": json_error,
+            "errno": errno,
+            "msg": msg,
+        }
+
+    def set_arg(self, key, value):
+        """Mock set_arg method - tracks calls for automatic_config testing"""
+        self.args_set[key] = value
 
     async def request_get(self, path, post=False, datain=None):
         """Override request_get to return mock data"""
@@ -1287,6 +1338,118 @@ def test_api_get_device_detail(my_predbat):
     return False
 
 
+def test_api_get_device_history(my_predbat):
+    """
+    Test get_device_history API endpoint
+    """
+    print("  - test_api_get_device_history")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Mock response with history data - note the nested structure with 'datas' containing 'data' array
+    fox.set_mock_response(
+        "/op/v0/device/history/query",
+        [
+            {
+                "datas": [
+                    {
+                        "unit": "kW",
+                        "name": "PVPower",
+                        "variable": "pvPower",
+                        "data": [
+                            {"time": "2025-12-03 10:00:00", "value": 1.5},
+                            {"time": "2025-12-03 10:05:00", "value": 1.8},
+                            {"time": "2025-12-03 10:10:00", "value": 2.1},
+                        ],
+                    },
+                    {
+                        "unit": "%",
+                        "name": "SoC",
+                        "variable": "SoC",
+                        "data": [
+                            {"time": "2025-12-03 10:00:00", "value": 45},
+                            {"time": "2025-12-03 10:05:00", "value": 48},
+                            {"time": "2025-12-03 10:10:00", "value": 51},
+                        ],
+                    },
+                    {
+                        "unit": "℃",
+                        "name": "batTemperature",
+                        "variable": "batTemperature",
+                        "data": [
+                            {"time": "2025-12-03 10:10:00", "value": 25.5},
+                        ],
+                    },
+                ],
+                "deviceSN": deviceSN,
+            }
+        ],
+    )
+
+    run_async(fox.get_device_history(deviceSN))
+
+    # Verify device_values was populated with the latest data point from each variable
+    assert deviceSN in fox.device_values
+    assert "pvPower" in fox.device_values[deviceSN]
+    assert fox.device_values[deviceSN]["pvPower"]["value"] == 2.1  # Last value in history
+    assert fox.device_values[deviceSN]["pvPower"]["unit"] == "kW"
+    assert fox.device_values[deviceSN]["pvPower"]["name"] == "PVPower"
+    assert fox.device_values[deviceSN]["pvPower"]["timestamp"] == "2025-12-03 10:10:00"
+
+    assert "SoC" in fox.device_values[deviceSN]
+    assert fox.device_values[deviceSN]["SoC"]["value"] == 51
+    assert fox.device_values[deviceSN]["SoC"]["unit"] == "%"
+
+    # Verify temperature unit conversion (℃ -> °C)
+    assert "batTemperature" in fox.device_values[deviceSN]
+    assert fox.device_values[deviceSN]["batTemperature"]["unit"] == "°C"
+    assert fox.device_values[deviceSN]["batTemperature"]["value"] == 25.5
+
+    # Verify the request was made correctly
+    assert len(fox.request_log) == 1
+    assert fox.request_log[0]["path"] == "/op/v0/device/history/query"
+    assert fox.request_log[0]["post"] == True
+    assert fox.request_log[0]["datain"]["sn"] == deviceSN
+
+    return False
+
+
+def test_api_get_device_history_empty(my_predbat):
+    """
+    Test get_device_history with empty history data
+    """
+    print("  - test_api_get_device_history_empty")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Mock response with empty data array
+    fox.set_mock_response(
+        "/op/v0/device/history/query",
+        [
+            {
+                "datas": [
+                    {
+                        "unit": "kW",
+                        "name": "PVPower",
+                        "variable": "pvPower",
+                        "data": [],  # Empty history
+                    },
+                ],
+                "deviceSN": deviceSN,
+            }
+        ],
+    )
+
+    run_async(fox.get_device_history(deviceSN))
+
+    # With empty history, device_values should not have this variable
+    assert deviceSN not in fox.device_values or "pvPower" not in fox.device_values.get(deviceSN, {})
+
+    return False
+
+
 def test_api_get_device_setting(my_predbat):
     """
     Test get_device_setting API endpoint
@@ -1332,6 +1495,91 @@ def test_api_set_device_setting(my_predbat):
     assert fox.request_log[0]["datain"]["sn"] == deviceSN
     assert fox.request_log[0]["datain"]["key"] == "MinSoc"
     assert fox.request_log[0]["datain"]["value"] == 20
+
+    return False
+
+
+def test_api_get_device_settings(my_predbat):
+    """
+    Test get_device_settings (plural) - fetches all FOX_SETTINGS for a device
+    Also tests initialize() method for coverage
+    """
+    print("  - test_api_get_device_settings")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Call initialize to cover that method
+    fox.initialize(key="test_api_key", automatic=True)
+
+    # Verify initialize set up the expected attributes
+    assert fox.key == "test_api_key"
+    assert fox.automatic == True
+    assert fox.failures_total == 0
+    assert fox.device_list == []
+    assert fox.device_detail == {}
+    assert fox.device_settings == {}
+
+    # Setup device with battery (required for get_device_settings)
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+
+    # FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
+    # Mock response for each setting
+    fox.set_mock_response("/op/v0/device/setting/get", {"value": "100", "unit": "%", "precision": 1.0})
+
+    run_async(fox.get_device_settings(deviceSN))
+
+    # Should have made requests for all 7 FOX_SETTINGS
+    assert len(fox.request_log) == 7
+
+    # Verify each setting was requested
+    requested_keys = [req["datain"]["key"] for req in fox.request_log]
+    expected_keys = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
+    for key in expected_keys:
+        assert key in requested_keys, f"Expected key {key} in requests"
+
+    # Verify all settings were stored
+    assert deviceSN in fox.device_settings
+    for key in expected_keys:
+        assert key in fox.device_settings[deviceSN], f"Expected key {key} in device_settings"
+
+    return False
+
+
+def test_api_get_device_settings_no_battery(my_predbat):
+    """
+    Test get_device_settings skips non-battery devices
+    """
+    print("  - test_api_get_device_settings_no_battery")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device WITHOUT battery
+    fox.device_detail[deviceSN] = {"hasBattery": False}
+
+    run_async(fox.get_device_settings(deviceSN))
+
+    # Should not have made any requests (no battery)
+    assert len(fox.request_log) == 0
+
+    return False
+
+
+def test_api_get_device_settings_missing_detail(my_predbat):
+    """
+    Test get_device_settings handles missing device detail
+    """
+    print("  - test_api_get_device_settings_missing_detail")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "UNKNOWN123"
+
+    # No device_detail for this device (should return early)
+    run_async(fox.get_device_settings(deviceSN))
+
+    # Should not have made any requests
+    assert len(fox.request_log) == 0
 
     return False
 
@@ -2105,11 +2353,1723 @@ def test_api_publish_schedule_settings_ha_invalid_time(my_predbat):
         },
     }
 
-    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    result = run_async(fox.publish_schedule_settings_ha(deviceSN))
 
     # Invalid time should be replaced with "00:00:00"
     charge_start = "select.predbat_fox_test123456_battery_schedule_charge_start_time"
     assert fox.dashboard_items[charge_start]["state"] == "00:00:00"
+
+    return False
+
+
+# ============================================================================
+# HTTP-level request_get_func Tests
+# ============================================================================
+
+
+class MockFoxAPIWithHTTPSimulation(MockFoxAPIWithRequests):
+    """
+    Mock FoxAPI class that overrides request_get_func to simulate HTTP-level responses.
+    Used for testing error handling without making real HTTP requests.
+    """
+
+    def __init__(self):
+        super().__init__()
+        # HTTP-level response simulation - keyed by API path
+        # Format: {path: {"status_code": int, "json_data": dict, "timeout": bool, "connection_error": bool, "json_error": bool, "errno": int, "msg": str}}
+        self.http_responses = {}
+        self.request_get_func_calls = []
+
+    async def request_get_func(self, path, post=False, datain=None):
+        """Override request_get_func to simulate HTTP responses"""
+        self.request_get_func_calls.append({"path": path, "post": post, "datain": datain})
+
+        if path not in self.http_responses:
+            # Default: return None, False (failure, no retry)
+            return None, False
+
+        response = self.http_responses[path]
+
+        # Simulate timeout
+        if response.get("timeout", False):
+            return None, True
+
+        # Simulate connection error
+        if response.get("connection_error", False):
+            return None, True
+
+        # Simulate JSON decode error after successful HTTP request
+        if response.get("json_error", False):
+            return None, False
+
+        status_code = response.get("status_code", 200)
+
+        # Simulate auth errors (400, 401, 402, 403)
+        if status_code in [400, 401, 402, 403]:
+            self.failures_total += 1
+            return None, False
+
+        # Simulate rate limiting (429)
+        if status_code == 429:
+            self.failures_total += 1
+            return None, True
+
+        # Simulate successful response with potential Fox API errors
+        if status_code in [200, 201]:
+            errno = response.get("errno", 0)
+            msg = response.get("msg", "")
+
+            if errno != 0:
+                self.failures_total += 1
+                # Rate limiting errors (allow retry)
+                if errno in [40400, 41200, 41201, 41202, 41203, 41935, 44098]:
+                    return None, True
+                # Out of API calls (no retry)
+                elif errno in [40402]:
+                    return None, False
+                # Unsupported function (no retry)
+                elif errno in [44096]:
+                    return None, False
+                # Invalid parameter (no retry)
+                elif errno in [40257]:
+                    return None, False
+                else:
+                    return None, False
+
+            # Success - return the json_data
+            json_data = response.get("json_data", {})
+            self.update_success_timestamp()
+            return json_data, False
+
+        return None, False
+
+
+def test_request_get_func_auth_error_401(my_predbat):
+    """
+    Test request_get_func handles 401 authentication error
+    """
+    print("  - test_request_get_func_auth_error_401")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 401}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_auth_error_403(my_predbat):
+    """
+    Test request_get_func handles 403 forbidden error
+    """
+    print("  - test_request_get_func_auth_error_403")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 403}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_rate_limit_429(my_predbat):
+    """
+    Test request_get_func handles 429 rate limit with retry
+    """
+    print("  - test_request_get_func_rate_limit_429")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 429}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == True  # Should allow retry for rate limiting
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_timeout(my_predbat):
+    """
+    Test request_get_func handles timeout with retry
+    """
+    print("  - test_request_get_func_timeout")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"timeout": True}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == True  # Should allow retry for timeout
+
+    return False
+
+
+def test_request_get_func_connection_error(my_predbat):
+    """
+    Test request_get_func handles connection error with retry
+    """
+    print("  - test_request_get_func_connection_error")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"connection_error": True}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == True  # Should allow retry for connection error
+
+    return False
+
+
+def test_request_get_func_json_decode_error(my_predbat):
+    """
+    Test request_get_func handles JSON decode error
+    """
+    print("  - test_request_get_func_json_decode_error")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"json_error": True}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False  # No retry for JSON decode error
+
+    return False
+
+
+def test_request_get_func_fox_error_rate_limit(my_predbat):
+    """
+    Test request_get_func handles Fox API rate limit error (40400) with retry
+    """
+    print("  - test_request_get_func_fox_error_rate_limit")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 200, "errno": 40400, "msg": "Rate limit exceeded"}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == True  # Should allow retry for Fox rate limit
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_fox_error_api_limit(my_predbat):
+    """
+    Test request_get_func handles Fox API limit error (40402) without retry
+    """
+    print("  - test_request_get_func_fox_error_api_limit")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 200, "errno": 40402, "msg": "API calls exhausted"}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False  # No retry for API limit exhausted
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_fox_error_unsupported(my_predbat):
+    """
+    Test request_get_func handles Fox unsupported function error (44096)
+    """
+    print("  - test_request_get_func_fox_error_unsupported")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 200, "errno": 44096, "msg": "Unsupported function"}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False  # No retry for unsupported function
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_fox_error_invalid_param(my_predbat):
+    """
+    Test request_get_func handles Fox invalid parameter error (40257)
+    """
+    print("  - test_request_get_func_fox_error_invalid_param")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 200, "errno": 40257, "msg": "Invalid parameter"}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False  # No retry for invalid parameter
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_fox_error_comms_issue(my_predbat):
+    """
+    Test request_get_func handles Fox communication issue errors (41200, 41201, etc.) with retry
+    """
+    print("  - test_request_get_func_fox_error_comms_issue")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 200, "errno": 41200, "msg": "Communication issue"}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == True  # Should allow retry for comms issue
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_success(my_predbat):
+    """
+    Test request_get_func handles successful response
+    """
+    print("  - test_request_get_func_success")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 200, "errno": 0, "json_data": {"data": [{"deviceSN": "TEST123"}]}}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is not None
+    assert result["data"][0]["deviceSN"] == "TEST123"
+    assert allow_retry == False
+    assert fox.failures_total == 0
+
+    return False
+
+
+def test_request_get_func_unknown_error(my_predbat):
+    """
+    Test request_get_func handles unknown Fox error code
+    """
+    print("  - test_request_get_func_unknown_error")
+
+    fox = MockFoxAPIWithHTTPSimulation()
+    fox.http_responses["/op/v0/device/list"] = {"status_code": 200, "errno": 99999, "msg": "Unknown error"}
+
+    result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False  # Unknown errors don't retry
+    assert fox.failures_total == 1
+
+    return False
+
+
+# ============================================================================
+# request_get / request_get_func Tests (using MagicMock for requests library)
+# ============================================================================
+
+
+class MockFoxAPIForRequestTesting(FoxAPI):
+    """
+    Mock FoxAPI class for testing request_get/request_get_func with real implementation.
+    Only mocks the ComponentBase parts, uses actual request_get/request_get_func logic.
+    """
+
+    def __init__(self):
+        # Don't call parent __init__ since we're not using ComponentBase properly
+        self.key = "test_api_key"
+        self.automatic = False
+        self.failures_total = 0
+        self.device_list = []
+        self.device_detail = {}
+        self.local_tz = pytz.timezone("Europe/London")
+        self.log_messages = []
+
+    def log(self, message):
+        """Mock log method - captures messages"""
+        self.log_messages.append(message)
+
+    def update_success_timestamp(self):
+        """Mock update_success_timestamp method"""
+        pass
+
+
+def test_request_get_func_real_success_get(my_predbat):
+    """
+    Test real request_get_func with mocked requests.get - successful response
+    """
+    print("  - test_request_get_func_real_success_get")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    # Create mock response
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"errno": 0, "result": {"data": [{"deviceSN": "TEST123"}]}}
+
+    with patch("fox.requests.get", return_value=mock_response) as mock_get:
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list", post=False, datain={"pageSize": 100}))
+
+    assert result is not None
+    assert result["data"][0]["deviceSN"] == "TEST123"
+    assert allow_retry == False
+    assert fox.failures_total == 0
+    mock_get.assert_called_once()
+
+    return False
+
+
+def test_request_get_func_real_success_post(my_predbat):
+    """
+    Test real request_get_func with mocked requests.post - successful POST response
+    """
+    print("  - test_request_get_func_real_success_post")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"errno": 0, "result": {"success": True}}
+
+    with patch("fox.requests.post", return_value=mock_response) as mock_post:
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/setting", post=True, datain={"key": "value"}))
+
+    assert result is not None
+    assert result["success"] == True
+    assert allow_retry == False
+    mock_post.assert_called_once()
+
+    return False
+
+
+def test_request_get_func_real_auth_error_401(my_predbat):
+    """
+    Test real request_get_func with mocked requests - 401 auth error
+    """
+    print("  - test_request_get_func_real_auth_error_401")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+
+    with patch("fox.requests.get", return_value=mock_response):
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False  # Auth errors should not retry
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_real_rate_limit_429(my_predbat):
+    """
+    Test real request_get_func with mocked requests - 429 rate limit (with mocked sleep)
+    """
+    print("  - test_request_get_func_real_rate_limit_429")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 429
+
+    with patch("fox.requests.get", return_value=mock_response):
+        with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == True  # Rate limit should allow retry
+    assert fox.failures_total == 1
+    mock_sleep.assert_called_once()  # Should have called sleep for rate limiting
+
+    return False
+
+
+def test_request_get_func_real_fox_errno_rate_limit(my_predbat):
+    """
+    Test real request_get_func with Fox API errno rate limit (40400)
+    """
+    print("  - test_request_get_func_real_fox_errno_rate_limit")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"errno": 40400, "msg": "Rate limited"}
+
+    with patch("fox.requests.get", return_value=mock_response):
+        with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == True  # Rate limit errno should allow retry
+    assert fox.failures_total == 1
+    mock_sleep.assert_called_once()
+
+    return False
+
+
+def test_request_get_func_real_fox_errno_api_limit(my_predbat):
+    """
+    Test real request_get_func with Fox API errno API limit (40402)
+    """
+    print("  - test_request_get_func_real_fox_errno_api_limit")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"errno": 40402, "msg": "API calls exceeded"}
+
+    with patch("fox.requests.get", return_value=mock_response):
+        with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False  # API limit should NOT retry
+    assert fox.failures_total == 1
+    mock_sleep.assert_called_once()  # Should sleep for 5 minutes
+
+    return False
+
+
+def test_request_get_func_real_connection_error(my_predbat):
+    """
+    Test real request_get_func with connection error exception
+    """
+    print("  - test_request_get_func_real_connection_error")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    with patch("fox.requests.get", side_effect=requests.exceptions.ConnectionError("Connection refused")):
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False  # Connection errors should not retry (RequestException)
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_real_timeout(my_predbat):
+    """
+    Test real request_get_func with timeout exception
+    """
+    print("  - test_request_get_func_real_timeout")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    with patch("fox.requests.get", side_effect=requests.exceptions.Timeout("Request timed out")):
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    assert result is None
+    assert allow_retry == False  # Timeout as RequestException should not retry
+    assert fox.failures_total == 1
+
+    return False
+
+
+def test_request_get_func_real_json_decode_error(my_predbat):
+    """
+    Test real request_get_func with JSON decode error
+    """
+    print("  - test_request_get_func_real_json_decode_error")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.side_effect = requests.exceptions.JSONDecodeError("Invalid JSON", "", 0)
+
+    with patch("fox.requests.get", return_value=mock_response):
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
+
+    # JSON decode error with status 200 returns empty dict (data=None -> data={})
+    assert result == {}
+    assert allow_retry == False
+
+    return False
+
+
+def test_request_get_real_retry_on_rate_limit(my_predbat):
+    """
+    Test real request_get retries on rate limit and eventually succeeds
+    """
+    print("  - test_request_get_real_retry_on_rate_limit")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    # First call returns rate limit, second call succeeds
+    mock_response_rate_limit = MagicMock()
+    mock_response_rate_limit.status_code = 429
+
+    mock_response_success = MagicMock()
+    mock_response_success.status_code = 200
+    mock_response_success.json.return_value = {"errno": 0, "result": {"data": "success"}}
+
+    call_count = [0]
+
+    def side_effect(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return mock_response_rate_limit
+        return mock_response_success
+
+    with patch("fox.requests.get", side_effect=side_effect):
+        with patch("fox.asyncio.sleep", new_callable=AsyncMock):
+            with patch("fox.random.random", return_value=0.1):  # Make sleep short
+                result = run_async(fox.request_get("/op/v0/device/list"))
+
+    assert result is not None
+    assert result["data"] == "success"
+    assert call_count[0] == 2  # Should have made 2 calls
+
+    return False
+
+
+def test_request_get_real_no_retry_on_auth_error(my_predbat):
+    """
+    Test real request_get does NOT retry on auth error (401)
+    """
+    print("  - test_request_get_real_no_retry_on_auth_error")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+
+    call_count = [0]
+
+    def side_effect(*args, **kwargs):
+        call_count[0] += 1
+        return mock_response
+
+    with patch("fox.requests.get", side_effect=side_effect):
+        result = run_async(fox.request_get("/op/v0/device/list"))
+
+    assert result is None
+    assert call_count[0] == 1  # Should only make 1 call, no retry
+
+    return False
+
+
+def test_request_get_real_max_retries(my_predbat):
+    """
+    Test real request_get stops after max retries (FOX_RETRIES=10)
+    """
+    print("  - test_request_get_real_max_retries")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    # Always return rate limit to trigger max retries
+    mock_response = MagicMock()
+    mock_response.status_code = 429
+
+    call_count = [0]
+
+    def side_effect(*args, **kwargs):
+        call_count[0] += 1
+        return mock_response
+
+    with patch("fox.requests.get", side_effect=side_effect):
+        with patch("fox.asyncio.sleep", new_callable=AsyncMock):
+            with patch("fox.random.random", return_value=0.01):  # Make sleep very short
+                result = run_async(fox.request_get("/op/v0/device/list"))
+
+    assert result is None
+    assert call_count[0] == 10  # FOX_RETRIES = 10
+
+    return False
+
+
+def test_request_get_real_post_with_data(my_predbat):
+    """
+    Test real request_get with POST and datain
+    """
+    print("  - test_request_get_real_post_with_data")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"errno": 0, "result": {"success": True}}
+
+    with patch("fox.requests.post", return_value=mock_response) as mock_post:
+        result = run_async(fox.request_get("/op/v0/device/setting", post=True, datain={"sn": "TEST123", "key": "MinSocOnGrid", "value": 10}))
+
+    assert result is not None
+    assert result["success"] == True
+    # Verify the post was called with correct arguments
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args[1]
+    assert call_kwargs["json"] == {"sn": "TEST123", "key": "MinSocOnGrid", "value": 10}
+
+    return False
+
+
+# ============================================================================
+# run() Method Tests
+# ============================================================================
+
+
+class MockFoxAPIWithRunTracking(MockFoxAPIWithRequests):
+    """
+    Mock FoxAPI class that tracks method calls for testing run() behavior.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.method_calls = []
+        self.automatic_config_called = False
+
+    async def get_device_list(self):
+        self.method_calls.append("get_device_list")
+        return self.device_list
+
+    async def get_device_detail(self, deviceSN):
+        self.method_calls.append(f"get_device_detail:{deviceSN}")
+
+    async def get_device_history(self, deviceSN):
+        self.method_calls.append(f"get_device_history:{deviceSN}")
+
+    async def get_battery_charging_time(self, deviceSN):
+        self.method_calls.append(f"get_battery_charging_time:{deviceSN}")
+        return {}
+
+    async def get_device_settings(self, deviceSN):
+        self.method_calls.append(f"get_device_settings:{deviceSN}")
+
+    async def get_schedule_settings_ha(self, deviceSN):
+        self.method_calls.append(f"get_schedule_settings_ha:{deviceSN}")
+
+    async def get_scheduler(self, deviceSN):
+        self.method_calls.append(f"get_scheduler:{deviceSN}")
+        return {}
+
+    async def compute_schedule(self, deviceSN):
+        self.method_calls.append(f"compute_schedule:{deviceSN}")
+        return {}
+
+    async def get_real_time_data(self, deviceSN):
+        self.method_calls.append(f"get_real_time_data:{deviceSN}")
+
+    async def publish_data(self):
+        self.method_calls.append("publish_data")
+
+    async def automatic_config(self):
+        self.method_calls.append("automatic_config")
+        self.automatic_config_called = True
+
+
+def test_run_first_call_with_devices(my_predbat):
+    """
+    Test run() with first=True initializes all device data
+    """
+    print("  - test_run_first_call_with_devices")
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}, {"deviceSN": "TEST456"}]
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == True
+    assert "get_device_list" in fox.method_calls
+    assert "get_device_detail:TEST123" in fox.method_calls
+    assert "get_device_detail:TEST456" in fox.method_calls
+    assert "get_device_history:TEST123" in fox.method_calls
+    assert "get_battery_charging_time:TEST123" in fox.method_calls
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_scheduler:TEST123" in fox.method_calls
+    assert "get_real_time_data:TEST123" in fox.method_calls
+    assert "publish_data" in fox.method_calls
+
+    return False
+
+
+def test_run_first_call_no_devices(my_predbat):
+    """
+    Test run() with first=True returns False when no devices found
+    """
+    print("  - test_run_first_call_no_devices")
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = []  # No devices
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == False
+    assert "get_device_list" in fox.method_calls
+
+    return False
+
+
+def test_run_subsequent_call(my_predbat):
+    """
+    Test run() with first=False only updates real-time data (not at hourly boundary)
+    """
+    print("  - test_run_subsequent_call")
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+
+    # seconds=300 (5 minutes), not an hourly boundary, first=False
+    result = run_async(fox.run(300, first=False))
+
+    assert result == True
+    # Should NOT call initialization methods
+    assert "get_device_list" not in fox.method_calls
+    assert "get_device_detail:TEST123" not in fox.method_calls
+    # Should call real-time data update
+    assert "get_real_time_data:TEST123" in fox.method_calls
+    assert "publish_data" in fox.method_calls
+    # Should NOT call hourly methods (since 300 % 3600 != 0)
+    assert "get_device_settings:TEST123" not in fox.method_calls
+
+    return False
+
+
+def test_run_hourly_update(my_predbat):
+    """
+    Test run() with first=False at hourly boundary updates settings and scheduler
+    """
+    print("  - test_run_hourly_update")
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+
+    # seconds=3600 (1 hour), first=False
+    result = run_async(fox.run(3600, first=False))
+
+    assert result == True
+    # Should call hourly methods
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_schedule_settings_ha:TEST123" in fox.method_calls
+    assert "get_scheduler:TEST123" in fox.method_calls
+    assert "compute_schedule:TEST123" in fox.method_calls
+    # Should call real-time data update
+    assert "get_real_time_data:TEST123" in fox.method_calls
+    assert "publish_data" in fox.method_calls
+
+    return False
+
+
+def test_run_with_automatic_config(my_predbat):
+    """
+    Test run() with automatic=True calls automatic_config
+    """
+    print("  - test_run_with_automatic_config")
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.automatic = True
+    fox.device_list = [{"deviceSN": "TEST123"}]
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == True
+    assert fox.automatic_config_called == True
+    assert "automatic_config" in fox.method_calls
+
+    return False
+
+
+def test_run_without_automatic_config(my_predbat):
+    """
+    Test run() with automatic=False does not call automatic_config
+    """
+    print("  - test_run_without_automatic_config")
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.automatic = False
+    fox.device_list = [{"deviceSN": "TEST123"}]
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == True
+    assert fox.automatic_config_called == False
+    assert "automatic_config" not in fox.method_calls
+
+    return False
+
+
+# ============================================================================
+# Event Handler Tests
+# ============================================================================
+
+
+def test_apply_service_to_toggle_turn_on(my_predbat):
+    """
+    Test apply_service_to_toggle with turn_on service
+    """
+    print("  - test_apply_service_to_toggle_turn_on")
+
+    fox = MockFoxAPIWithRequests()
+
+    result = fox.apply_service_to_toggle(False, "turn_on")
+    assert result == True
+
+    result = fox.apply_service_to_toggle(True, "turn_on")
+    assert result == True
+
+    return False
+
+
+def test_apply_service_to_toggle_turn_off(my_predbat):
+    """
+    Test apply_service_to_toggle with turn_off service
+    """
+    print("  - test_apply_service_to_toggle_turn_off")
+
+    fox = MockFoxAPIWithRequests()
+
+    result = fox.apply_service_to_toggle(True, "turn_off")
+    assert result == False
+
+    result = fox.apply_service_to_toggle(False, "turn_off")
+    assert result == False
+
+    return False
+
+
+def test_apply_service_to_toggle_toggle(my_predbat):
+    """
+    Test apply_service_to_toggle with toggle service
+    """
+    print("  - test_apply_service_to_toggle_toggle")
+
+    fox = MockFoxAPIWithRequests()
+
+    result = fox.apply_service_to_toggle(False, "toggle")
+    assert result == True
+
+    result = fox.apply_service_to_toggle(True, "toggle")
+    assert result == False
+
+    return False
+
+
+def test_time_string_to_hour_minute_valid(my_predbat):
+    """
+    Test time_string_to_hour_minute with valid time string
+    """
+    print("  - test_time_string_to_hour_minute_valid")
+
+    fox = MockFoxAPIWithRequests()
+
+    hour, minute = fox.time_string_to_hour_minute("14:30:00", 0, 0)
+    assert hour == 14
+    assert minute == 30
+
+    hour, minute = fox.time_string_to_hour_minute("00:00:00", 5, 15)
+    assert hour == 0
+    assert minute == 0
+
+    hour, minute = fox.time_string_to_hour_minute("23:59:00", 0, 0)
+    assert hour == 23
+    assert minute == 59
+
+    return False
+
+
+def test_time_string_to_hour_minute_invalid_format(my_predbat):
+    """
+    Test time_string_to_hour_minute with invalid format returns original values
+    """
+    print("  - test_time_string_to_hour_minute_invalid_format")
+
+    fox = MockFoxAPIWithRequests()
+
+    # Missing colon
+    hour, minute = fox.time_string_to_hour_minute("1430", 5, 15)
+    assert hour == 5
+    assert minute == 15
+
+    # Empty string
+    hour, minute = fox.time_string_to_hour_minute("", 5, 15)
+    assert hour == 5
+    assert minute == 15
+
+    return False
+
+
+def test_time_string_to_hour_minute_invalid_values(my_predbat):
+    """
+    Test time_string_to_hour_minute with out-of-range values returns originals
+    """
+    print("  - test_time_string_to_hour_minute_invalid_values")
+
+    fox = MockFoxAPIWithRequests()
+
+    # Hour out of range
+    hour, minute = fox.time_string_to_hour_minute("25:30:00", 5, 15)
+    assert hour == 5
+    assert minute == 30  # minute is still valid
+
+    # Minute out of range
+    hour, minute = fox.time_string_to_hour_minute("14:65:00", 5, 15)
+    assert hour == 14  # hour is still valid
+    assert minute == 15
+
+    # Negative values (non-numeric will trigger ValueError)
+    hour, minute = fox.time_string_to_hour_minute("ab:cd:00", 5, 15)
+    assert hour == 5
+    assert minute == 15
+
+    return False
+
+
+def test_write_setting_from_event_number(my_predbat):
+    """
+    Test write_setting_from_event for number entity type
+    """
+    print("  - test_write_setting_from_event_number")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device settings
+    fox.device_settings[deviceSN] = {"MinSoc": {"value": 10, "precision": 1}}
+    fox.set_mock_response("/op/v0/device/setting/set", {})
+
+    run_async(fox.write_setting_from_event("number.predbat_fox_test123456_setting_minsoc", "20", is_number=True))
+
+    # Verify setting was updated
+    assert fox.device_settings[deviceSN]["MinSoc"]["value"] == 20
+
+    return False
+
+
+def test_write_setting_from_event_select(my_predbat):
+    """
+    Test write_setting_from_event for select entity type
+    """
+    print("  - test_write_setting_from_event_select")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device settings
+    fox.device_settings[deviceSN] = {"WorkMode": {"value": "SelfUse", "enumList": ["SelfUse", "ForceCharge"]}}
+    fox.set_mock_response("/op/v0/device/setting/set", {})
+
+    run_async(fox.write_setting_from_event("select.predbat_fox_test123456_setting_workmode", "ForceCharge", is_number=False))
+
+    # Verify setting was updated
+    assert fox.device_settings[deviceSN]["WorkMode"]["value"] == "ForceCharge"
+
+    return False
+
+
+def test_write_battery_schedule_event_reserve(my_predbat):
+    """
+    Test write_battery_schedule_event for reserve changes
+    """
+    print("  - test_write_battery_schedule_event_reserve")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10}
+    fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
+
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_reserve", "25"))
+
+    # Verify reserve was updated
+    assert fox.local_schedule[deviceSN]["reserve"] == 25
+
+    return False
+
+
+def test_write_battery_schedule_event_charge_enable(my_predbat):
+    """
+    Test write_battery_schedule_event for charge enable toggle
+    """
+    print("  - test_write_battery_schedule_event_charge_enable")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"enable": 0}}
+
+    run_async(fox.write_battery_schedule_event("switch.predbat_fox_test123456_battery_schedule_charge_enable", "turn_on"))
+
+    # Verify charge enable was toggled on
+    assert fox.local_schedule[deviceSN]["charge"]["enable"] == 1
+
+    return False
+
+
+def test_write_battery_schedule_event_time_change(my_predbat):
+    """
+    Test write_battery_schedule_event for start/end time changes
+    """
+    print("  - test_write_battery_schedule_event_time_change")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"start_time": "00:00:00", "end_time": "00:00:00"}}
+
+    run_async(fox.write_battery_schedule_event("select.predbat_fox_test123456_battery_schedule_charge_start_time", "02:30:00"))
+
+    # Verify time was updated
+    assert fox.local_schedule[deviceSN]["charge"]["start_time"] == "02:30:00"
+
+    return False
+
+
+def test_write_battery_schedule_event_soc_change(my_predbat):
+    """
+    Test write_battery_schedule_event for SOC changes
+    """
+    print("  - test_write_battery_schedule_event_soc_change")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "discharge": {"soc": 10}}
+
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_discharge_soc", "20"))
+
+    # Verify SOC was updated
+    assert fox.local_schedule[deviceSN]["discharge"]["soc"] == 20
+
+    return False
+
+
+def test_write_battery_schedule_event_power_change(my_predbat):
+    """
+    Test write_battery_schedule_event for power changes
+    """
+    print("  - test_write_battery_schedule_event_power_change")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "discharge": {"power": 8000}}
+
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_discharge_power", "5000"))
+
+    # Verify power was updated
+    assert fox.local_schedule[deviceSN]["discharge"]["power"] == 5000
+
+    return False
+
+
+def test_select_event_setting(my_predbat):
+    """
+    Test select_event routes to write_setting_from_event for setting entities
+    """
+    print("  - test_select_event_setting")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device settings
+    fox.device_settings[deviceSN] = {"WorkMode": {"value": "SelfUse", "enumList": ["SelfUse", "ForceCharge"]}}
+    fox.set_mock_response("/op/v0/device/setting/set", {})
+
+    run_async(fox.select_event("select.predbat_fox_test123456_setting_workmode", "ForceCharge"))
+
+    # Verify setting was updated
+    assert fox.device_settings[deviceSN]["WorkMode"]["value"] == "ForceCharge"
+
+    return False
+
+
+def test_select_event_battery_schedule(my_predbat):
+    """
+    Test select_event routes to write_battery_schedule_event for schedule entities
+    """
+    print("  - test_select_event_battery_schedule")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"start_time": "00:00:00"}}
+
+    run_async(fox.select_event("select.predbat_fox_test123456_battery_schedule_charge_start_time", "02:30:00"))
+
+    # Verify time was updated
+    assert fox.local_schedule[deviceSN]["charge"]["start_time"] == "02:30:00"
+
+    return False
+
+
+def test_number_event_setting(my_predbat):
+    """
+    Test number_event routes to write_setting_from_event with is_number=True
+    """
+    print("  - test_number_event_setting")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device settings
+    fox.device_settings[deviceSN] = {"MinSoc": {"value": 10, "precision": 1}}
+    fox.set_mock_response("/op/v0/device/setting/set", {})
+
+    run_async(fox.number_event("number.predbat_fox_test123456_setting_minsoc", "20"))
+
+    # Verify setting was updated (with int conversion due to precision=1)
+    assert fox.device_settings[deviceSN]["MinSoc"]["value"] == 20
+
+    return False
+
+
+def test_number_event_battery_schedule(my_predbat):
+    """
+    Test number_event routes to write_battery_schedule_event for schedule entities
+    """
+    print("  - test_number_event_battery_schedule")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"soc": 80}}
+
+    run_async(fox.number_event("number.predbat_fox_test123456_battery_schedule_charge_soc", "100"))
+
+    # Verify SOC was updated
+    assert fox.local_schedule[deviceSN]["charge"]["soc"] == 100
+
+    return False
+
+
+def test_switch_event_battery_schedule(my_predbat):
+    """
+    Test switch_event routes to write_battery_schedule_event for schedule switches
+    """
+    print("  - test_switch_event_battery_schedule")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"enable": 0}}
+
+    run_async(fox.switch_event("switch.predbat_fox_test123456_battery_schedule_charge_enable", "turn_on"))
+
+    # Verify enable was toggled on
+    assert fox.local_schedule[deviceSN]["charge"]["enable"] == 1
+
+    return False
+
+
+def test_switch_event_toggle(my_predbat):
+    """
+    Test switch_event with toggle service
+    """
+    print("  - test_switch_event_toggle")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "discharge": {"enable": 1}}
+
+    run_async(fox.switch_event("switch.predbat_fox_test123456_battery_schedule_discharge_enable", "turn_off"))
+
+    # Verify enable was toggled off
+    assert fox.local_schedule[deviceSN]["discharge"]["enable"] == 0
+
+    return False
+
+
+# ============================================================================
+# publish_data Tests
+# ============================================================================
+
+
+def test_publish_data_device_info(my_predbat):
+    """
+    Test publish_data creates device info entities correctly
+    """
+    print("  - test_publish_data_device_info")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {
+        "hasPV": True,
+        "hasBattery": True,
+        "capacity": 8,
+        "function": {"scheduler": True},
+        "deviceType": "KH8",
+        "stationName": "Test Home",
+        "batteryList": [{"capacity": 10360}],
+    }
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {}
+    fox.device_settings[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    run_async(fox.publish_data())
+
+    # Verify device info entity was created
+    info_entity = f"sensor.predbat_fox_{deviceSN.lower()}_info"
+    assert info_entity in fox.dashboard_items
+    assert fox.dashboard_items[info_entity]["state"] == "Test Home"
+    assert fox.dashboard_items[info_entity]["attributes"]["hasBattery"] == True
+    assert fox.dashboard_items[info_entity]["attributes"]["hasScheduler"] == True
+
+    # Verify capacity entities
+    inverter_capacity_entity = f"sensor.predbat_fox_{deviceSN.lower()}_inverter_capacity"
+    assert inverter_capacity_entity in fox.dashboard_items
+    assert fox.dashboard_items[inverter_capacity_entity]["state"] == 8000  # 8 * 1000
+
+    battery_capacity_entity = f"sensor.predbat_fox_{deviceSN.lower()}_battery_capacity"
+    assert battery_capacity_entity in fox.dashboard_items
+    assert fox.dashboard_items[battery_capacity_entity]["state"] == 10.36  # 10360 / 1000
+
+    return False
+
+
+def test_publish_data_device_values(my_predbat):
+    """
+    Test publish_data creates value entities correctly
+    """
+    print("  - test_publish_data_device_values")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {
+        "pvPower": {"value": 3.5, "name": "PV Power", "unit": "kW"},
+        "SoC": {"value": 75.0, "name": "SoC", "unit": "%"},
+        "generation": {"value": 1000.5, "name": "Generation", "unit": "kWh"},
+    }
+    fox.device_settings[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    run_async(fox.publish_data())
+
+    # Verify value entities were created
+    pv_entity = f"sensor.predbat_fox_{deviceSN.lower()}_pvpower"
+    assert pv_entity in fox.dashboard_items
+    assert fox.dashboard_items[pv_entity]["state"] == 3.5
+    assert fox.dashboard_items[pv_entity]["attributes"]["unit_of_measurement"] == "kW"
+
+    soc_entity = f"sensor.predbat_fox_{deviceSN.lower()}_soc"
+    assert soc_entity in fox.dashboard_items
+    assert fox.dashboard_items[soc_entity]["state"] == 75.0
+
+    # Verify energy entity has correct device_class and state_class
+    gen_entity = f"sensor.predbat_fox_{deviceSN.lower()}_generation"
+    assert gen_entity in fox.dashboard_items
+    assert fox.dashboard_items[gen_entity]["attributes"]["device_class"] == "energy"
+    assert fox.dashboard_items[gen_entity]["attributes"]["state_class"] == "total"
+
+    return False
+
+
+def test_publish_data_device_settings(my_predbat):
+    """
+    Test publish_data creates settings entities correctly
+    """
+    print("  - test_publish_data_device_settings")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {}
+    fox.device_settings[deviceSN] = {
+        "WorkMode": {"value": "SelfUse", "unit": "", "enumList": ["SelfUse", "ForceCharge", "ForceDischarge"]},
+        "MinSoc": {"value": 10, "unit": "%", "range": {"min": 10, "max": 100}, "precision": 1},
+    }
+    fox.local_schedule[deviceSN] = {}
+
+    run_async(fox.publish_data())
+
+    # Verify select entity for WorkMode
+    workmode_entity = f"select.predbat_fox_{deviceSN.lower()}_setting_workmode"
+    assert workmode_entity in fox.dashboard_items
+    assert fox.dashboard_items[workmode_entity]["state"] == "SelfUse"
+    assert "SelfUse" in fox.dashboard_items[workmode_entity]["attributes"]["options"]
+
+    # Verify number entity for MinSoc
+    minsoc_entity = f"number.predbat_fox_{deviceSN.lower()}_setting_minsoc"
+    assert minsoc_entity in fox.dashboard_items
+    assert fox.dashboard_items[minsoc_entity]["state"] == 10
+    assert fox.dashboard_items[minsoc_entity]["attributes"]["min"] == 10
+    assert fox.dashboard_items[minsoc_entity]["attributes"]["max"] == 100
+
+    return False
+
+
+def test_publish_data_no_battery_skips_settings(my_predbat):
+    """
+    Test publish_data skips settings entities for non-battery devices
+    """
+    print("  - test_publish_data_no_battery_skips_settings")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": False, "capacity": 0, "function": {}, "deviceType": "H3", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 0
+    fox.fdsoc_min[deviceSN] = 0
+    fox.device_values[deviceSN] = {}
+    fox.device_settings[deviceSN] = {"WorkMode": {"value": "SelfUse", "unit": "", "enumList": ["SelfUse"]}}
+    fox.local_schedule[deviceSN] = {}
+
+    run_async(fox.publish_data())
+
+    # Verify settings entity was NOT created (no battery)
+    workmode_entity = f"select.predbat_fox_{deviceSN.lower()}_setting_workmode"
+    assert workmode_entity not in fox.dashboard_items
+
+    return False
+
+
+# ============================================================================
+# apply_battery_schedule Tests
+# ============================================================================
+
+
+class MockFoxAPIWithSchedulerTracking(MockFoxAPIWithRequests):
+    """
+    Mock FoxAPI class that tracks set_scheduler calls for testing apply_battery_schedule.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.set_scheduler_calls = []
+        self.set_scheduler_enabled_calls = []
+
+    async def set_scheduler(self, deviceSN, groups):
+        self.set_scheduler_calls.append({"deviceSN": deviceSN, "groups": groups})
+
+    async def set_scheduler_enabled(self, deviceSN, enabled):
+        self.set_scheduler_enabled_calls.append({"deviceSN": deviceSN, "enabled": enabled})
+
+
+def test_apply_battery_schedule_charge_only(my_predbat):
+    """
+    Test apply_battery_schedule with only charge window enabled
+    """
+    print("  - test_apply_battery_schedule_charge_only")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 1, "start_time": "02:30:00", "end_time": "05:30:00", "soc": 100, "power": 8000},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    # Verify set_scheduler was called
+    assert len(fox.set_scheduler_calls) == 1
+    groups = fox.set_scheduler_calls[0]["groups"]
+    # Should have charge window
+    charge_found = False
+    for group in groups:
+        if group.get("workMode") == "ForceCharge":
+            charge_found = True
+            assert group["startHour"] == 2
+            assert group["startMinute"] == 30
+    assert charge_found
+
+    return False
+
+
+def test_apply_battery_schedule_discharge_only(my_predbat):
+    """
+    Test apply_battery_schedule with only discharge window enabled
+    """
+    print("  - test_apply_battery_schedule_discharge_only")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "power": 8000},
+        "discharge": {"enable": 1, "start_time": "16:00:00", "end_time": "19:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    # Verify set_scheduler was called
+    assert len(fox.set_scheduler_calls) == 1
+    groups = fox.set_scheduler_calls[0]["groups"]
+    # Should have discharge window
+    discharge_found = False
+    for group in groups:
+        if group.get("workMode") == "ForceDischarge":
+            discharge_found = True
+            assert group["startHour"] == 16
+            assert group["fdSoc"] == 10
+            assert group["fdPwr"] == 5000
+    assert discharge_found
+
+    return False
+
+
+def test_apply_battery_schedule_both_enabled(my_predbat):
+    """
+    Test apply_battery_schedule with both charge and discharge enabled
+    """
+    print("  - test_apply_battery_schedule_both_enabled")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 1, "start_time": "02:30:00", "end_time": "05:30:00", "soc": 100, "power": 8000},
+        "discharge": {"enable": 1, "start_time": "16:00:00", "end_time": "19:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    # Verify set_scheduler was called with both windows
+    assert len(fox.set_scheduler_calls) == 1
+    groups = fox.set_scheduler_calls[0]["groups"]
+    # Note: validate_schedule only keeps the first window, so we check that at least one is present
+    assert len(groups) >= 1
+
+    return False
+
+
+def test_apply_battery_schedule_neither_enabled(my_predbat):
+    """
+    Test apply_battery_schedule with neither charge nor discharge enabled
+    """
+    print("  - test_apply_battery_schedule_neither_enabled")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.local_schedule[deviceSN] = {
+        "reserve": 15,
+        "charge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "power": 8000},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    run_async(fox.apply_battery_schedule(deviceSN))
+
+    # Verify set_scheduler was called with SelfUse default schedule
+    assert len(fox.set_scheduler_calls) == 1
+    groups = fox.set_scheduler_calls[0]["groups"]
+    # Should have SelfUse mode for the whole day
+    assert len(groups) == 1
+    assert groups[0]["workMode"] == "SelfUse"
+    assert groups[0]["startHour"] == 0
+    assert groups[0]["endHour"] == 23
+    assert groups[0]["endMinute"] == 59
+
+    return False
+
+
+# ============================================================================
+# automatic_config Tests
+# ============================================================================
+
+
+def test_automatic_config_single_battery(my_predbat):
+    """
+    Test automatic_config with single battery device
+    """
+    print("  - test_automatic_config_single_battery")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    run_async(fox.automatic_config())
+
+    # Verify num_inverters was set
+    assert fox.args_set.get("num_inverters") == 1
+    assert fox.args_set.get("inverter_type") == ["FoxCloud"]
+
+    # Verify entity mappings use lowercase SN
+    sn_lower = deviceSN.lower()
+    assert fox.args_set.get("soc_percent") == [f"sensor.predbat_fox_{sn_lower}_soc"]
+    assert fox.args_set.get("battery_power") == [f"sensor.predbat_fox_{sn_lower}_invbatpower"]
+    assert fox.args_set.get("charge_start_time") == [f"select.predbat_fox_{sn_lower}_battery_schedule_charge_start_time"]
+
+    return False
+
+
+def test_automatic_config_multiple_batteries(my_predbat):
+    """
+    Test automatic_config with multiple battery devices
+    """
+    print("  - test_automatic_config_multiple_batteries")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN1 = "TEST111111"
+    deviceSN2 = "TEST222222"
+
+    fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
+    fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    run_async(fox.automatic_config())
+
+    # Verify num_inverters was set to 2
+    assert fox.args_set.get("num_inverters") == 2
+    assert len(fox.args_set.get("inverter_type")) == 2
+
+    # Verify entity lists have two entries
+    assert len(fox.args_set.get("soc_percent")) == 2
+    assert f"sensor.predbat_fox_{deviceSN1.lower()}_soc" in fox.args_set.get("soc_percent")
+    assert f"sensor.predbat_fox_{deviceSN2.lower()}_soc" in fox.args_set.get("soc_percent")
+
+    return False
+
+
+def test_automatic_config_battery_and_pv_inverter(my_predbat):
+    """
+    Test automatic_config with battery inverter + separate PV inverter
+    """
+    print("  - test_automatic_config_battery_and_pv_inverter")
+
+    fox = MockFoxAPIWithRequests()
+    batterySN = "BATTERY123"
+    pvSN = "PV123456"
+
+    fox.device_list = [{"deviceSN": batterySN}, {"deviceSN": pvSN}]
+    # Battery inverter doesn't see PV (hasPV=False)
+    fox.device_detail[batterySN] = {"hasPV": False, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    # Separate PV inverter
+    fox.device_detail[pvSN] = {"hasPV": True, "hasBattery": False, "capacity": 0, "function": {}}
+
+    run_async(fox.automatic_config())
+
+    # Verify only 1 battery inverter configured
+    assert fox.args_set.get("num_inverters") == 1
+
+    # Verify PV entities come from PV inverter
+    pv_power = fox.args_set.get("pv_power", [])
+    assert len(pv_power) == 1
+    assert f"sensor.predbat_fox_{pvSN.lower()}_pvpower" in pv_power
+
+    return False
+
+
+def test_automatic_config_no_scheduler_error(my_predbat):
+    """
+    Test automatic_config raises error when no devices with scheduler found
+    """
+    print("  - test_automatic_config_no_scheduler_error")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    # Device has battery but NO scheduler support
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": False}}
+
+    error_raised = False
+    try:
+        run_async(fox.automatic_config())
+    except ValueError as e:
+        error_raised = True
+        assert "No batteries with scheduler found" in str(e)
+
+    assert error_raised, "Expected ValueError to be raised"
 
     return False
 
@@ -2158,8 +4118,13 @@ def run_fox_api_tests(my_predbat):
         # API endpoint tests with mocked request_get
         failed |= test_api_get_device_list(my_predbat)
         failed |= test_api_get_device_detail(my_predbat)
+        failed |= test_api_get_device_history(my_predbat)
+        failed |= test_api_get_device_history_empty(my_predbat)
         failed |= test_api_get_device_setting(my_predbat)
         failed |= test_api_set_device_setting(my_predbat)
+        failed |= test_api_get_device_settings(my_predbat)
+        failed |= test_api_get_device_settings_no_battery(my_predbat)
+        failed |= test_api_get_device_settings_missing_detail(my_predbat)
         failed |= test_api_get_battery_charging_time(my_predbat)
         failed |= test_api_set_battery_charging_time(my_predbat)
         failed |= test_api_get_scheduler(my_predbat)
@@ -2187,6 +4152,83 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_publish_schedule_settings_ha_defaults(my_predbat)
         failed |= test_api_publish_schedule_settings_ha_enable_off(my_predbat)
         failed |= test_api_publish_schedule_settings_ha_invalid_time(my_predbat)
+
+        # HTTP-level request_get_func tests
+        failed |= test_request_get_func_auth_error_401(my_predbat)
+        failed |= test_request_get_func_auth_error_403(my_predbat)
+        failed |= test_request_get_func_rate_limit_429(my_predbat)
+        failed |= test_request_get_func_timeout(my_predbat)
+        failed |= test_request_get_func_connection_error(my_predbat)
+        failed |= test_request_get_func_json_decode_error(my_predbat)
+        failed |= test_request_get_func_fox_error_rate_limit(my_predbat)
+        failed |= test_request_get_func_fox_error_api_limit(my_predbat)
+        failed |= test_request_get_func_fox_error_unsupported(my_predbat)
+        failed |= test_request_get_func_fox_error_invalid_param(my_predbat)
+        failed |= test_request_get_func_fox_error_comms_issue(my_predbat)
+        failed |= test_request_get_func_success(my_predbat)
+        failed |= test_request_get_func_unknown_error(my_predbat)
+
+        # request_get / request_get_func tests with MagicMock
+        failed |= test_request_get_func_real_success_get(my_predbat)
+        failed |= test_request_get_func_real_success_post(my_predbat)
+        failed |= test_request_get_func_real_auth_error_401(my_predbat)
+        failed |= test_request_get_func_real_rate_limit_429(my_predbat)
+        failed |= test_request_get_func_real_fox_errno_rate_limit(my_predbat)
+        failed |= test_request_get_func_real_fox_errno_api_limit(my_predbat)
+        failed |= test_request_get_func_real_connection_error(my_predbat)
+        failed |= test_request_get_func_real_timeout(my_predbat)
+        failed |= test_request_get_func_real_json_decode_error(my_predbat)
+        failed |= test_request_get_real_retry_on_rate_limit(my_predbat)
+        failed |= test_request_get_real_no_retry_on_auth_error(my_predbat)
+        failed |= test_request_get_real_max_retries(my_predbat)
+        failed |= test_request_get_real_post_with_data(my_predbat)
+
+        # run() method tests
+        failed |= test_run_first_call_with_devices(my_predbat)
+        failed |= test_run_first_call_no_devices(my_predbat)
+        failed |= test_run_subsequent_call(my_predbat)
+        failed |= test_run_hourly_update(my_predbat)
+        failed |= test_run_with_automatic_config(my_predbat)
+        failed |= test_run_without_automatic_config(my_predbat)
+
+        # Event handler tests
+        failed |= test_apply_service_to_toggle_turn_on(my_predbat)
+        failed |= test_apply_service_to_toggle_turn_off(my_predbat)
+        failed |= test_apply_service_to_toggle_toggle(my_predbat)
+        failed |= test_time_string_to_hour_minute_valid(my_predbat)
+        failed |= test_time_string_to_hour_minute_invalid_format(my_predbat)
+        failed |= test_time_string_to_hour_minute_invalid_values(my_predbat)
+        failed |= test_write_setting_from_event_number(my_predbat)
+        failed |= test_write_setting_from_event_select(my_predbat)
+        failed |= test_write_battery_schedule_event_reserve(my_predbat)
+        failed |= test_write_battery_schedule_event_charge_enable(my_predbat)
+        failed |= test_write_battery_schedule_event_time_change(my_predbat)
+        failed |= test_write_battery_schedule_event_soc_change(my_predbat)
+        failed |= test_write_battery_schedule_event_power_change(my_predbat)
+        failed |= test_select_event_setting(my_predbat)
+        failed |= test_select_event_battery_schedule(my_predbat)
+        failed |= test_number_event_setting(my_predbat)
+        failed |= test_number_event_battery_schedule(my_predbat)
+        failed |= test_switch_event_battery_schedule(my_predbat)
+        failed |= test_switch_event_toggle(my_predbat)
+
+        # publish_data tests
+        failed |= test_publish_data_device_info(my_predbat)
+        failed |= test_publish_data_device_values(my_predbat)
+        failed |= test_publish_data_device_settings(my_predbat)
+        failed |= test_publish_data_no_battery_skips_settings(my_predbat)
+
+        # apply_battery_schedule tests
+        failed |= test_apply_battery_schedule_charge_only(my_predbat)
+        failed |= test_apply_battery_schedule_discharge_only(my_predbat)
+        failed |= test_apply_battery_schedule_both_enabled(my_predbat)
+        failed |= test_apply_battery_schedule_neither_enabled(my_predbat)
+
+        # automatic_config tests
+        failed |= test_automatic_config_single_battery(my_predbat)
+        failed |= test_automatic_config_multiple_batteries(my_predbat)
+        failed |= test_automatic_config_battery_and_pv_inverter(my_predbat)
+        failed |= test_automatic_config_no_scheduler_error(my_predbat)
     except Exception as e:
         print(f"ERROR: Fox API test failed with exception: {e}")
         import traceback

@@ -172,6 +172,7 @@ metricb
 metricmid
 minb
 minmax
+minsoc
 minsocongrid
 minuteb
 Mixergy
