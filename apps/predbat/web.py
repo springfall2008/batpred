@@ -1011,11 +1011,7 @@ var options = {
         text += "  },"
         if extra_yaxis:
             axis_list = extra_yaxis if isinstance(extra_yaxis, list) else [extra_yaxis]
-            primary_series_names = [
-                series.get("name")
-                for series in series_data
-                if series.get("data") and series.get("unit", yaxis_name) == yaxis_name
-            ]
+            primary_series_names = [series.get("name") for series in series_data if series.get("data") and series.get("unit", yaxis_name) == yaxis_name]
 
             primary_parts = [
                 "      title: {{ text: '{}' }}".format(yaxis_name),
@@ -1939,10 +1935,16 @@ var options = {
                 {"name": "Actual", "data": load_energy_actual, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
                 {"name": "Predicted", "data": load_energy_predicted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
                 {"name": "Adjusted", "data": load_energy_adjusted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
-                {"name": "Adjustment Factor", "data": adjustment_factor, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "%"}
+                {"name": "Adjustment Factor", "data": adjustment_factor, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "%"},
             ]
             secondary_axis = [
-                {"title": "%", "series_name": "Adjustment Factor", "decimals": 0, "opposite": True, "labels_formatter": "return val.toFixed(0) + '%';",                }
+                {
+                    "title": "%",
+                    "series_name": "Adjustment Factor",
+                    "decimals": 0,
+                    "opposite": True,
+                    "labels_formatter": "return val.toFixed(0) + '%';",
+                }
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str, extra_yaxis=secondary_axis)
         elif chart == "PV" or chart == "PV7":
