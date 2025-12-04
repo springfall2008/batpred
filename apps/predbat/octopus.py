@@ -17,7 +17,6 @@ import yaml
 from config import TIME_FORMAT
 import json
 import pytz
-import traceback
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -2017,6 +2016,9 @@ class Octopus:
         data_all = []
         rate_data = {}
 
+        # DEBUG: Always log octopus rate fetching
+        print(f"*** fetch_octopus_rates CALLED: entity_id={entity_id}, adjust_key={adjust_key} ***")
+
         if entity_id:
             # From 9.0.0 of the Octopus plugin the data is split between previous rate, current rate and next rate
             # and the sensor is replaced with an event - try to support the old settings and find the new events
@@ -2045,12 +2047,17 @@ class Octopus:
             else:
                 current_rate_id = entity_id
 
+            print(f"*** Fetching current rates from: {current_rate_id} ***")
+
             data_import = (
                 self.get_state_wrapper(entity_id=current_rate_id, attribute="rates")
                 or self.get_state_wrapper(entity_id=current_rate_id, attribute="all_rates")
                 or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
                 or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
             )
+
+            print(f"*** data_import result: {type(data_import)}, len={len(data_import) if data_import else 0} ***")
+
             if data_import:
                 data_all += data_import
             else:
@@ -2073,7 +2080,10 @@ class Octopus:
                 if data_import:
                     data_all += data_import
 
+        print(f"*** Total data_all accumulated: len={len(data_all)} ***")
+
         if data_all:
+            print(f"*** data_all[0] sample: {data_all[0]} ***")
             rate_key = "rate"
             from_key = "from"
             to_key = "to"
