@@ -117,7 +117,7 @@ COMPONENT_LIST = {
         "event_filter": "predbat_gecloud_",
         "args": {
             "ge_cloud_direct": {
-                "required_true": True,
+                "required": True,
                 "config": "ge_cloud_direct",
             },
             "api_key": {
@@ -137,7 +137,7 @@ COMPONENT_LIST = {
         "name": "GivEnergy Cloud Data",
         "args": {
             "ge_cloud_data": {
-                "required_true": True,
+                "required": True,
                 "config": "ge_cloud_data",
             },
             "ge_cloud_key": {
@@ -226,6 +226,19 @@ class Components:
         self.log = base.log
         self.callback_server = None
 
+    def register_component(self, name, component_info):
+        """
+        Register a new component dynamically.
+        Useful for overlays that want to add custom components without modifying COMPONENT_LIST.
+
+        Args:
+            name: Component name (string)
+            component_info: Component configuration dict (same format as COMPONENT_LIST entries)
+        """
+        global COMPONENT_LIST
+        COMPONENT_LIST[name] = component_info
+        self.log(f"Components: Registered custom component '{name}'")
+
     def initialize(self, only=None, phase=0):
         """Initialize components without starting them"""
 
@@ -278,8 +291,12 @@ class Components:
                     # Defer resolution of config value until later
                     arg_dict[arg] = arg_info["config"]
                     continue
-                elif required_true and not self.base.get_arg(arg_info["config"], False, indirect=False):
-                    have_all_args = False
+                elif required_true:
+                    # required_true is only for checking if component should be enabled
+                    # Don't pass it to __init__()
+                    if not self.base.get_arg(arg_info["config"], False, indirect=False):
+                        have_all_args = False
+                    continue
                 elif required and self.base.get_arg(arg_info["config"], None, indirect=False) is None:
                     have_all_args = False
                 else:
@@ -315,7 +332,15 @@ class Components:
                     )
                 else:
                     # Create local component
-                    self.components[component_name] = component_info["class"](self.base, **arg_dict)
+                    # Check if component inherits from ComponentBase
+                    from component_base import ComponentBase
+
+                    if issubclass(component_info["class"], ComponentBase):
+                        # New pattern: base first, then kwargs (which are processed by initialize())
+                        self.components[component_name] = component_info["class"](self.base, **arg_dict)
+                    else:
+                        # Legacy pattern: pass args, then base last
+                        self.components[component_name] = component_info["class"](**arg_dict, base=self.base)
 
     def start(self, only=None, phase=0):
         """Start all initialized components"""
