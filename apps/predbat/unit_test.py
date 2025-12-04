@@ -55,6 +55,7 @@ from tests.test_octopus_url import test_download_octopus_url_wrapper
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_solcast import run_solcast_tests
+from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 
 
 # Mock the components and plugin system
@@ -141,6 +142,7 @@ def main():
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
+        ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("energydataservice", test_energydataservice, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
