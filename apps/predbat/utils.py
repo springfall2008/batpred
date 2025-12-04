@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -287,6 +287,7 @@ def minute_data(
     attributes=False,
     max_increment=MAX_INCREMENT,
     interpolate=False,
+    debug=False,
 ):
     """
     Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -450,19 +451,29 @@ def minute_data(
                 mdata[minute] = state
             else:
                 if smoothing:
-                    # Reset to zero, sometimes not exactly zero
-                    # This ignores all drops in strictly incrementing data sensors
-                    if clean_increment and state < last_state:
+                    near_midnight = (last_updated_time.time() < time(0, 6)) or (last_updated_time.time() > time(23, 58))
+                    if clean_increment and state < last_state and (near_midnight or (last_state - state >= 1)):
+                        # If there is a large drop in the data or we are near the end of the day where the
+                        # sensor resets to zero, then smooth out the drop.
+                        if debug:
+                            print(f"Found drop at minute {minute}, where {state} < {last_state} (near midnight = {near_midnight}). Padding to {minutes_to}")
                         while minute < minutes_to:
                             if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = state
                             minute += 1
                     else:
-                        # Create linear function
+                        # Otherwise linearly interpolate between the two points, ignoring small dips in the data
+                        if clean_increment and state < last_state:
+                            state = last_state
                         diff = (state - last_state) / minutes_delta
+
+                        if debug:
+                            print(f"Smoothing from minute {minute} to {minutes_to}, where diff = {diff} = ({state} - {last_state}) / {minutes_delta}")
 
                         # If the spike is too big don't smooth it, it will removed in the clean function later
                         if clean_increment and max_increment > 0 and diff > max_increment:
+                            if debug:
+                                print(f"    Increment larger than max {max_increment}, setting diff to 0.")
                             diff = 0
 
                         index = 0
@@ -600,7 +611,7 @@ def clean_incrementing_reverse(data, max_increment=0):
                 increment += nxt - last
             last = nxt
         elif nxt < last:
-            if nxt <= 0 or nxt < last:
+            if nxt <= 0 or ((last - nxt) >= (1.0)):
                 last = nxt
         new_data[rindex] = increment
 
