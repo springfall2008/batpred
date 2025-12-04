@@ -48,10 +48,10 @@ template:
       device_class: energy
       state: >-
         {% set e = (states('input_number.sofar_battery_size') | float ) %}
-        {% set p  = (states('sensor.sofar_inverter_battery_SOC') | float ) %}
+        {% set p  = (states('sensor.sofar_inverter_battery_SoC') | float ) %}
         {{ e * p / (100) | float(0) }}
       availability: >
-        {{  states('sensor.sofar_inverter_battery_SOC') | is_number }}
+        {{  states('sensor.sofar_inverter_battery_SoC') | is_number }}
 
 
 mqtt:
@@ -179,7 +179,7 @@ mqtt:
       state_class: measurement
       value_template: "{{ value_json.battery_current /100}}"
 
-    - name: "sofar_inverter_battery_SOC"
+    - name: "sofar_inverter_battery_SoC"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "%"
       device_class: battery

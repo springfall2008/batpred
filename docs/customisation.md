@@ -31,7 +31,7 @@ Selecting any of the .yaml files you have created will restore your settings fro
 The mode that Predbat operates in will change the operation, this can be configured with **select.predbat_mode** drop-down menu as follows:
 
 - Monitor
-- Control SOC only
+- Control SoC only
 - Control charge
 - Control charge & discharge
 
@@ -48,9 +48,9 @@ _NOTE: Changing the Predbat mode or the read-only switch will cause Predbat to r
 In **Monitor** mode Predbat will not control or Plan any charging or discharging, inverter balancing will take place if enabled,
 and the plan will show just what is expected based on the current inverter configuration alone.
 
-### Predbat Control SOC only mode
+### Predbat Control SoC only mode
 
-In **Control SOC only** mode Predbat will adjust the target charge percentage (SoC target) according to the Best plan, but the charge
+In **Control SoC only** mode Predbat will adjust the target charge percentage (SoC target) according to the Best plan, but the charge
 window will not be modified.
 
 This mode can be useful if you just have one fixed charge slot per day and you only want Predbat to control the percentage the battery is charged based on solar generation
@@ -86,12 +86,11 @@ You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (def
 
 If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's quite CPU intensive and provides very little improvement for most systems.
 
-You can turn on **combine_charge_slots** and **combine_export_slots** to speed up planning.
-Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with
-longer periods of fixed rates but can limit the planning ability in some cases.
+You can turn on **switch.predbat_combine_charge_slots** and **switch._combine_export_slots** to speed up planning.
+Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with longer periods of fixed rates but can limit the planning ability in some cases.
 
-The number of threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading
-if you don't have multiple CPUs available or set it to 'auto' (the default) to use one thread per CPU. It is recommended you don't set this to an odd number of threads.
+The number of CPU threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading if you don't have multiple CPUs available,
+or set it to 'auto' (the default) to use one thread per CPU. It is recommended you don't set this to an odd number of threads.
 
 ## Battery loss options
 
@@ -139,21 +138,19 @@ This setting will not impact the real calculated costs and is only used for plan
 ## Scaling and weight options
 
 **switch.predbat_metric_dynamic_load_adjust** is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
-If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current 30-minute period, this preventing
+If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, this preventing
 and type of forced export in the plan.
-If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this 30-minute period
-thus allowing the plan to include potential export.
+If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this slot thus allowing the plan to include potential export.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example, a value of 0.95 would be 95% and indicate charging at 5% slower than reported.
 For GivEnergy inverters the charge rate reports the max AC rate and thus needs to be reduced by inverter losses.
-You can try computing your discharge curve and check recommendations for changing this figure in the logfile.
+You can try [computing your charge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
 The default is 1.0, i.e. no scaling.
 
 **input_number.predbat_battery_rate_max_scaling_discharge** is a percentage factor to adjust your maximum discharge rate from that reported by the inverter.
-For GivEnergy inverters the discharge rate is reported as the max AC rate and thus is fairly accurate.
-You can try computing your discharge curve and check recommendations for changing this figure in the logfile.
-The default is 1.0, i.e. no scaling.
+You can try [computing your discharge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
+The default is 1.05, i.e. battery discharges at 5% more power than the inverter reports.
 
 **switch.predbat_battery_capacity_nominal** - When set to On, Predbat uses the reported battery size from the GivTCP 'Battery Nominal Capacity' field rather than from the normal GivTCP reported 'Battery Capacity kWh' size.
 If your battery size is reported wrongly maybe try turning this on and see if it helps. Defaults to Off.
@@ -276,11 +273,13 @@ A value of 0kWh (the default) disables this feature.
 **input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or export slots into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
 
-**switch.predbat_combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.
+**switch.predbat_combine_charge_slots** Controls if charge slots of > the slot duration (default 30 minutes) can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.<BR>
+Turn this On combines charge slots together into a single block, useful to dissuade Predbat from repeatedly charging and discharging the battery to maximise income when the export rate is higher than the import rate,
+e.g. EV tariffs with a long overnight cheap rate.<BR>
 Turn this Off if you want to enable ad-hoc import during long periods of higher rates but you wouldn't charge normally in that period (e.g. pre-charge at the day rate before
 a saving session).
 
-**switch.predbat_combine_export_slots** (_expert mode_) Controls if export slots of > 30 minute can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.
+**switch.predbat_combine_export_slots** (_expert mode_) Controls if export slots of > the slot duration (default 30 minute) can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.
 
 **input_number.predbat_metric_min_improvement** (_expert mode_) sets the minimum cost improvement in pence that it's worth lowering the battery SoC % for.
 The default value is 0.0p which means this feature is disabled and the battery will be charged less if it's cost neutral.
@@ -289,14 +288,14 @@ Do not use it if you have multiple charge windows in a given period as it won't 
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
 
 **input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced export for.
-A value of 0.1p is the default which prevents any marginal exports as they must be worth at least 0.1 pence for a 30-minute slot (less for shorter slots).
+A value of 0.1p is the default which prevents any marginal exports as they must be worth at least 0.1 pence for a slot (less for shorter slots).
 If you increase this value (e.g. you only want to force export if very profitable), then exports will become less common.
-The value is in pence per 30 minutes of export time.
+The value is in pence per slot of export time.
 
 **input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum pence cost improvement it's worth doing an export freeze for.
-A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 pence for a 30-minute slot (less for shorter slots).
+A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 pence for a slot duration (less for shorter slots).
 If you increase this value (e.g. you only want to freeze export if very profitable), then freeze exports will become less common.
-The value is in pence per 30 minutes of export time.
+The value is in pence per slot of export time.
 
 **input_number.predbat_metric_min_improvement_swap** (_expert mode_) Sets the minimum improvement in cost to swap an export slot to a later time in the day.
 The default for this setting is -0.25p, meaning that export will be moved later even if it costs up to an extra 0.25p on the plan.
@@ -332,12 +331,12 @@ If you set this to a negative value then Predbat will assume unpublished export 
 A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_) (default 0.95) to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact).
 The in-day adjustment factor can be seen in **predbat.load_inday_adjustment** and charted with the [In-Day Adjustment chart](creating-charts.md).
 
-**switch.predbat_metric_pv_calibration_enable** When turned On, Predbat will use historical data to calibrate your PV production estimates on a 30 minute basis based on actual generation data.
+**switch.predbat_metric_pv_calibration_enable** When turned On, Predbat will use historical data to calibrate your PV production estimates on a slot duration (default 30 minute) basis based on actual generation data.
 This can be useful to adjust for your systems real performance.
 Default is Off.
 
 **input_number.predbat_carbon_metric** (_carbon enable_) When Carbon footprint tracking is turned On (**switch.predbat_carbon_enable**) (Off by default),
-you can specify a cost per Kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
+you can specify a cost per kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
 
 _Note: Carbon footprint tracking can only be turned on if `apps.yaml` is configured to point to the correct CO2 cost sensor_
 
@@ -349,7 +348,7 @@ _Note: Carbon footprint tracking can only be turned on if `apps.yaml` is configu
 Off by default.
 
 **switch.predbat_set_charge_low_power** Enables low-power charging mode where the max charge rate will be automatically determined by Predbat to be the
-lowest possible rate to meet the charge target. This is only really effective for charge windows longer than 30 minutes.
+lowest possible rate to meet the charge target. This is only really effective for charge windows longer than a single slot.
 If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#workarounds)
 as otherwise the low power charge may not reach the charge target in time.
 This setting is off by default.
@@ -374,15 +373,17 @@ If you have **switch.predbat_inverter_hybrid** set to Off then if **switch.predb
 target SoC % will be reset to 100% outside of a charge window. This may be required for the AIO inverter to ensure it charges from solar. The default for
 this switch is On but it can be disabled in expert mode if need be.
 
-**input_number.predbat_set_reserve_min** Defines the battery reserve percentage, i.e. the minimum charge level that should be retained in the battery,
+**input_number.predbat_set_reserve_min** Defines the battery reserve percentage for inverter 1, i.e. the minimum charge level that should be retained in the battery,
 a value of 4 is the default and minimum value and is recommended to make use of the full battery.
 When the battery level reaches the specified minimum level, your inverter will start importing from the grid to satisfy house load.
 If you want to pre-prepare the battery to retain extra charge in the event of a high likelihood of a grid power outage such as storms predicted,
 you can increase set_reserve_min to a higher value, and then change it back afterwards.<BR>
 (Obviously this is only any use if your inverter is wired to act as an Emergency Power Supply or whole-home backup 'island mode' on the GivEnergy AIO).
 
-Note that **input_number.predbat_set_reserve_min** is used by Predbat to stop the battery SoC dropping below the specified level but it is not used in planning battery charging.
-i.e. if you change the reserve min to a level higher than the current battery SoC then Predbat will not plan charging activity to increase the SoC to that level; you should set [manual charges](#manual-control) to increase the SoC level.
+**input_number.predbat_set_reserve_min_1** defines the same minimum battery reserve percentage for inverter 2. Likewise predbat_set_reserve_min_2 and set_reserve_min_3 are the reserve minimums for inverter 3 and 4.
+
+Note that the **input_number.predbat_set_reserve_min**'s are used by Predbat to stop the battery SoC dropping below the specified level but are not used in planning battery charging.
+i.e. if you change a reserve min to a level higher than the current battery SoC then Predbat will not plan charging activity to increase the SoC to that level; you should set [manual charges](#manual-control) to increase the SoC level.
 
 **switch.predbat_inverter_soc_reset**  (_expert mode_) When set to On (the default) the target SoC for the inverter(s) will be reset to 100% when a charge slot is not active,
 this can be used to workaround some firmware issues where the SoC target is used for solar charging as well as grid charging.
@@ -410,6 +411,21 @@ Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It i
 - **switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
 - **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SoC during charge before balancing, default is 1%
 - **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SoC during discharge before balancing, default is 1%
+
+## Freeze Export during Demand
+
+An alternative to Predbat's full [inverter balancing](#balance-inverters) option if you have multiple inverters that can cross charge when the inverter is in Eco/Demand mode, is **switch.predbat_set_freeze_export_during_demand** (_expert mode_).
+
+Typically overnight when there is no solar generation and inverters are just meeting house load (Demand mode),  multi-inverter setups will start cross charging from one inverter battery to another.
+
+If you turn On **switch.predbat_set_freeze_export_during_demand** then when Predbat is not charging or discharging, i.e. would be in Demand mode,
+then Predbat will override the normal Demand mode and set the inverters to Freeze Export mode which allows battery discharge, but not battery charging; thus preventing inverter cross-charging.
+
+It is recommended that you control **switch.predbat_set_freeze_export_during_demand** via an automation, such as turning it Off at sunrise and On at sunset so that the batteries can charge normally via solar generation.
+
+NB: Setting this switch to On has no affect on Predbat's planned Charging and Export activity, those will be executed normally, the switch only affects Demand mode.
+
+When the Freeze Export override is active, [Predbat status](what-does-predbat-do.md#predbat-status) will have '[Freeze exporting]' appended to the status.
 
 ## Cloud coverage and load variance
 
@@ -483,11 +499,11 @@ Only slots at or below the rate threshold will be selected.
 Note this option only applies when iboost_solar and iboost battery are both Off.
 
 - **input_number.predbat_iboost_smart_min_length** Sets the minimum slot length in minutes to iBoost (only applies for energy rate only modes).
-The default is 30 minutes but can be set in multiples of 30. Increasing this slot size could increase costs depending on your tariff.
+The default is 30 minutes but can be set in multiples of the slot duration (default 30 minutes). Increasing this slot size could increase costs depending on your tariff.
 
 - **switch.predbat_iboost_on_export** If set to On allows iBoost to run even if the battery is forced to export to the grid, otherwise it won't run in these circumstances.
 
-- **switch.iboost_prevent_discharge** When set to On will stop your battery from discharging when iBoost is active and thus prevent your battery from draining to the diverter.
+- **switch.predbat_iboost_prevent_discharge** When set to On will stop your battery from discharging when iBoost is active and thus prevent your battery from draining to the diverter.
 This switch will work in all modes and is not recommended to be used when iBoost Solar is On as it will prevent your battery from discharging during excess solar periods
 which could cause additional imports due to passing clouds.
 
@@ -556,6 +572,8 @@ Using the Home Assistant entity **input_number.predbat_holiday_days_left** you c
 The number will count down by 1 day at midnight until it gets back to zero.
 Whilst the holiday days left are non-zero, Predbat's 'holiday mode' is active.
 
+When Predbat is in 'Demand' mode (i.e. not actively charging or discharging) and 'holiday mode' is active, Predbat's status will show as 'Demand (Holiday)'.
+
 When Predbat's 'holiday mode' is active the historical load data will be taken from yesterday's data (1 day ago) rather than from the **days_previous** setting in `apps.yaml`.
 This means Predbat will adjust more quickly to the new usage pattern.
 
@@ -574,8 +592,8 @@ When going to read-only mode the inverter will be put back to the default settin
 
 A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:
 
-You can force the battery to be charged within a 30-minute slot by using the **select.predbat_manual_charge** selector.
-Pick the 30-minute slot you wish to charge in, and Predbat will change the plan to charge in the selected slot.
+You can force the battery to be charged within a single slot by using the **select.predbat_manual_charge** selector.
+Pick the slot you wish to charge in, and Predbat will change the plan to charge in the selected slot.
 You can select multiple slots by using the drop-down menu more than once.
 When Predbat updates the plan you will see the slots picked to be charging slots in the current value of this selector,
 and annotated in the [Predbat HTML plan](predbat-plan-card.md#displaying-the-predbat-plan) with an upside down 'F' symbol.
@@ -588,30 +606,29 @@ The **off** option at the bottom of the list will cancel all selected force char
 
 All the other **select.predbat_manual_XX** controls operate in the same way.
 
-The **select.predbat_manual_export** selector can be used to manually force an export within a 30-minute slot in the same way as the manual force charge feature.
+The **select.predbat_manual_export** selector can be used to manually force an export within a slot in the same way as the manual force charge feature.
 The force export takes priority over force charging.
 
-The **select.predbat_manual_demand** selector is used to force Predbat to demand mode during a 30-minute slot, this implies no forced grid charging or exporting of the battery.
+The **select.predbat_manual_demand** selector is used to force Predbat to demand mode for a slot, this implies no forced grid charging or exporting of the battery.
 House load will be supplied from solar, or the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
 This is described as 'ECO' Mode for GivEnergy inverters but other inverters use different terminology.
 
-The **select.predbat_manual_freeze_charge** selector is used to force Predbat to freeze charge during a 30-minute slot, this implies the battery will not discharge and
+The **select.predbat_manual_freeze_charge** selector is used to force Predbat to freeze charge during a slot, this implies the battery will not discharge and will
 hold at the current level. The grid may be used if solar is not enough to cover the load.
 
-The **select.predbat_manual_freeze_export** selector is used to force Predbat to freeze export during a 30-minute slot, this implies the battery will not charge but will
-still discharge for the house load. Any solar will be exported to the grid.
+The **select.predbat_manual_freeze_export** selector is used to force Predbat to freeze export during a slot, this implies the battery will not charge but will still discharge for the house load. Any solar will be exported to the grid.
 
-The **select.predbat_manual_import_rates** selector is used to override the import rates for a 30-minute slot, the rate selected will be that configured in **input_number.predbat_manual_import_value** (default 0p)
+The **select.predbat_manual_import_rates** selector is used to override the import rates for a slot, the rate selected will be that configured in **input_number.predbat_manual_import_value** (default 0p)
 which can be adjusted prior to making a selection. As with the other selectors the selection can be cleared by selecting the option in square brackets or by using **off**
 
 If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=rate e.g. 12:30:00=29.5
 
-The **select.predbat_manual_export_rates** selector is used to override the export rates for a 30-minute slot,
+The **select.predbat_manual_export_rates** selector is used to override the export rates for a slot,
 the rate selected will be that configured in **input_number.predbat_manual_export_value** (default 0p) which can be adjusted prior to making a selection.
 
 If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=rate e.g. 12:30:00=29.5
 
-The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load for a 30-minute slot, the adjustment in kWh (which is added to the predicted load) will be that
+The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load for a slot, the adjustment in kWh (which is added to the predicted load) will be that
 configured in **input_number.predbat_manual_load_value** which can be adjusted prior to making a selection (default 0.5kWh).
 
 If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=adjustment e.g. 12:30:00=0.5
@@ -637,7 +654,7 @@ This is described in detail in [Car Charging](manual-api.md) and is mentioned he
 
 **switch.predbat_debug_enable** When turned On will create lots of debugging information to aid diagnosis of Predbat issues. By default this is turned Off and its recommended that its only switched on when debug logs are requested. With the switch on:
 
-- Firstly Predbat prints lots of extra debug information in the predbat logfile which means the logfile will fill and swap to a new file more rapidly
+- Firstly Predbat prints lots of extra debug information in the Predbat logfile which means the logfile will fill and swap to a new file more rapidly
 - Secondly Predbat will create a debug output file 'debug/predbat_debug_HH_MM_SS.yaml' in a subfolder of the Predbat installation directory.
 This file contains a full export of your current Predbat config and is extremely useful to enable recreating your setup to diagnose issues. Any sensitive information such as Solcast or GivEnergy Cloud API keys are automatically removed.
 

@@ -480,7 +480,7 @@ class Prediction:
         charge_window_optimised = self.find_charge_window_optimised(charge_window, charge_limit)
         export_window_optimised = self.find_charge_window_optimised(export_window, export_limits, is_export=True)
 
-        # For the SOC calculation we need to stop 24 hours after the first charging window starts
+        # For the SoC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
         record = True
 
@@ -1023,7 +1023,7 @@ class Prediction:
                     for car_n in range(self.num_cars):
                         final_car_soc[car_n] = round(car_soc[car_n], 3)
                         if minute == 0:
-                            # Next car SOC
+                            # Next car SoC
                             car_charging_soc_next[car_n] = round(car_soc[car_n], 3)
 
                 final_metric = metric

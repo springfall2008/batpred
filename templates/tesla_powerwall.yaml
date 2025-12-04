@@ -5,134 +5,161 @@ pred_bat:
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
 
-  # XXX: This is a configuration template, delete this line once you edit your configuration
+  # Timezone to work in
+  timezone: Europe/London
+
+  # XXX: Template configuration, delete this line once you have set up for your system
   template: True
 
   # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
   #ha_url: 'http://homeassistant.local:8123'
   #ha_key: 'xxx'
 
-  # Timezone to work in
-  timezone: Europe/London
+  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
+  currency_symbols:
+    - '£'
+    - 'p'
 
-  #
-  # Sensors, currently more than one can be specified and they will be summed up automatically
-  # however if you have two inverters only set one of them as they will both read the same.
-  #
+  # Number of threads to use in plan calculation
+  # Can be auto for automatic, 0 for off or values 1-N for a fixed number
+  threads: auto
 
-  # comment out for firmware version fb00 or later:
-  inverter_type: "GS"
+  # Misc
+  charge_control_immediate: False
 
-  # un-comment for firmware version fb00 or later:
-  #inverter_type: "GS_fb00"
+  inverter_type: TESLA
+  inverter:
+    name: "Tesla Powerwall via Teslemetry"
+    has_rest_api: False
+    has_mqtt_api: False
+    output_charge_control: "none"
+    has_charge_enable_time: False
+    has_discharge_enable_time: False
+    has_target_soc: False
+    # While the Powerwall does have a reserve SoC, we don't need to
+    # leverage it for controlling charge/discharge
+    has_reserve_soc: False
+    has_ge_inverter_mode: False
+    charge_time_format: "S"
+    charge_time_entity_is_option: False
+    soc_units: "%"
+    num_load_entities: 1
+    time_button_press: False
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    write_and_poll_sleep: 2
+    has_time_window: False
+    support_charge_freeze: False
+    support_discharge_freeze: False
+    has_idle_time: False
 
-  solax_modbus_new: True   # Set to True if you have integration version 2024.03.2 or beyond
-
-  num_inverters: 1
-  #
-  # Controls/status - must by 1 per inverter
-  #
-
-  # Set the maximum charge/discharge rate of the battery
-  battery_rate_max:
-    - 3600
-
-  # Battery capacity in kWh
-  soc_max:
-    - 10
-
-  # Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
-
-  load_today:
-    - sensor.solis_house_load_today
-  import_today:
-    - sensor.solis_grid_import_today
-  export_today:
-    - sensor.solis_grid_export_today
-  pv_today:
-    - sensor.solis_power_generation_today
-
-  # This should be the maximum nominal voltage and not the current voltage
-  battery_voltage:
-    - 52
-
-  # This is disabled by default in the Solax integration so it must be manually enabled.
-  inverter_time:
-    - sensor.solis_rtc
-
-  # This is disabled by default in the Solax integration so it must be manually enabled.
+  # ---- Live power ----
   battery_power:
-    - sensor.solis_battery_power
+    - sensor.my_home_battery_power
+  battery_power_invert:
+    - False
+
   pv_power:
-    - sensor.solis_pv_total_power
+    - sensor.my_home_solar_power
 
-  # For Solis inverters we need to add the bypass (backup) load to the main house load. If not used the load_power_1 can be commented out
   load_power:
-    - sensor.solis_house_load
-  load_power_1:
-    - sensor.solis_bypass_load
+    - sensor.my_home_load_power
 
+  grid_power:
+    - sensor.my_home_grid_power
+  grid_power_invert:
+    - True
+
+  inverter_reserve_max: 80 #Anything between 80-100 will always be treated as 100
+
+  # ---- Daily energy (kWh, cumulative today) ----
+  load_today:
+    - sensor.my_home_home_usage
+  import_today:
+    - sensor.my_home_grid_imported
+  export_today:
+    - sensor.my_home_grid_exported
+
+  # Replace this with the total PV energy generated today from your inverter
+  pv_today: sensor.my_home_solar_generated
+
+  # ---- State of charge ----
   soc_percent:
-    - sensor.solis_battery_soc
+    - sensor.my_home_percentage_charged
+  soc_max:
+    - "13.5"  # ensure this matches your usable kWh
 
-  reserve:
-    - number.solis_backup_mode_soc
+  # ---- Powerwall controls via Teslemetry (must be writable) ----
+  allow_charge_from_grid:
+    - switch.my_home_allow_charging_from_grid
+  allow_export:
+    - select.my_home_allow_export
 
-  battery_min_soc:
-    - sensor.solis_battery_minimum_soc
+  # --- Predbat service hooks (Tesla / Teslemetry) ---
+  # These hooks are called when Predbat wants to change the current
+  # state of charge/discharge. They can tie-in to other HA entities.
+  #
+  # Tesla PW Operation modes can be one of:
+  # ['self_consumption','autonomous','backup']
+  #
+  # grid-charging=on, mode=backup: Powerwall will charge
+  # grid-charging=off, mode=backup: Powerwall will hold
+  # mode=self_consumption: Powerwall will discharge
 
-  # With the Solax integration we need to press a button to send the time to
-  # comment out for firmware version fb00 or later:
-  charge_discharge_update_button:
-    - button.solis_update_charge_discharge_times
-
-  # un-comment for firmware version fb00 or later:
-  #charge_update_button:
-  #  - button.solis_inverter_update_charge_times
-  #discharge_update_button:
-  #  - button.solis_inverter_update_discharge_times
-
-  # un-comment for firmware version fb00 or later:
-  #scheduled_charge_enable:
-  #   - switch.inverter_timed_charge_slot_1_enable
-  #scheduled_discharge_enable:
-  #   - switch.inverter_timed_discharge_slot_1_enable
-
-  # un-comment for firmware version fb00 or later:
-  # charge_limit:
-  #     - number.solis_inverter_timed_charge_soc
-
-  timed_charge_current:
-    - number.solis_timed_charge_current
-  charge_start_hour:
-    - number.solis_timed_charge_start_hours
-  charge_start_minute:
-    - number.solis_timed_charge_start_minutes
-  charge_end_hour:
-    - number.solis_timed_charge_end_hours
-  charge_end_minute:
-    - number.solis_timed_charge_end_minutes
-
-
-  timed_discharge_current:
-    - number.solis_timed_discharge_current
-
-  discharge_start_hour:
-    - number.solis_timed_discharge_start_hours
-  discharge_start_minute:
-    - number.solis_timed_discharge_start_minutes
-  discharge_end_hour:
-    - number.solis_timed_discharge_end_hours
-  discharge_end_minute:
-    - number.solis_timed_discharge_end_minutes
-
-
-  energy_control_switch:
-    - select.solis_energy_storage_control_switch
+  charge_start_service:
+    - service: select.select_option
+      entity_id: select.my_home_operation_mode
+      option: "autonomous"
+      repeat: True
+    - service: number.set_value
+      entity_id: number.my_home_backup_reserve
+      value: "100"
+    - service: select.select_option
+      entity_id: select.my_home_operation_mode
+      option: "backup"
+      repeat: True
+  charge_freeze_service:
+    - service: switch.turn_off
+      entity_id: switch.my_home_allow_charging_from_grid
+      repeat: True
+    - service: select.select_option
+      entity_id: select.my_home_operation_mode
+      option: "backup"
+      repeat: True
+  charge_stop_service:
+    - service: select.select_option
+      entity_id: select.my_home_operation_mode
+      option: "self_consumption"
+      repeat: True
+    - service: number.set_value
+      entity_id: number.my_home_backup_reserve
+      value: "0"
+      repeat: True
+  discharge_start_service:
+    - service: rest_command.powerwall_force_export_now
+      repeat: True
+    - service: select.select_option
+      entity_id: select.my_home_allow_export
+      option: "battery_ok"
+      repeat: True
+    - service: select.select_option
+      entity_id: select.my_home_operation_mode
+      option: "autonomous"
+      repeat: True
+  discharge_stop_service:
+    - service: rest_command.powerwall_api_set_iog_custom_tariff
+      repeat: True
+    - service: select.select_option
+      entity_id: select.my_home_allow_export
+      option: "never"
+      repeat: True
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
-  inverter_limit: 3600
+  inverter_limit: 11950 # For a 11kW inverter
+
+  # Set the maximum charge/discharge rate of the battery
+  battery_rate_max:
+    - 5000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
@@ -143,31 +170,10 @@ pred_bat:
   # The maximum rate the inverter can charge and discharge the battery can be overwritten, this will change
   # the register programming and thus cap the max rates. The default is to use the maximum supported rates (recommended)
   #
-  #inverter_limit_charge:
-  #  - 2000
-  #inverter_limit_discharge:
-  #  - 2600
-
-
-  # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
-  # The value can be set here in watts to model this (doesn't change operation)
-  inverter_battery_rate_min:
-    - 100
-
-  # Some batteries tail off their charge rate at high soc%
-  # enter the charging curve here as a % of the max charge rate for each soc percentage.
-  # the default is 1.0 (full power)
-  #battery_charge_power_curve:
-  #  91 : 0.91
-  #  92 : 0.81
-  #  93 : 0.71
-  #  94 : 0.62
-  #  95 : 0.52
-  #  96 : 0.43
-  #  97 : 0.33
-  #  98 : 0.24
-  #  99 : 0.24
-  #  100 : 0.24
+  inverter_limit_charge:
+    - 5000
+  inverter_limit_discharge:
+    - 11000
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
@@ -264,10 +270,6 @@ pred_bat:
   octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
   octopus_saving_session_octopoints_per_penny: 8
 
-  # Octopus free session points to the free session Sensor in the Octopus plugin
-  # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work
-  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
-
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
 
@@ -329,19 +331,18 @@ pred_bat:
   days_previous:
     - 7
 
-
   # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
   # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
   days_previous_weight:
     - 1
 
   # Number of hours forward to forecast, best left as-is unless you have specific reason
-  forecast_hours: 48
+  forecast_hours: 30
 
   # The number of hours ahead to count in charge planning (for cost estimates)
   # It's best to set this on your charge window repeat cycle (24) but you may want to set it higher for more variable
   # tariffs like Agile
-  forecast_plan_hours: 24
+  forecast_plan_hours: 30
 
   # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
   #notify_devices:
@@ -351,7 +352,7 @@ pred_bat:
   # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
   run_every: 5
 
-  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
+  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
   battery_scaling: 1.0
 
@@ -359,7 +360,7 @@ pred_bat:
   import_export_scaling: 1.0
 
   # Export triggers:
-  # For each trigger give a name, the minutes of export needed and the energy required in that time
+  # For each trigger give a name, the minutes of export needed and the energy required in that time
   # Multiple triggers can be set at once so in total you could use too much energy if all run
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger
@@ -382,6 +383,6 @@ pred_bat:
 
   # If you have a sensor that gives the energy consumed by your solar diverter then add it here
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not
-  # It's assumed to be in Kwh but scaling can be applied if need be
+  # It's assumed to be in kWh but scaling can be applied if need be
   #iboost_energy_today: 'sensor.xxxxx'
   #iboost_energy_scaling: 1.0

@@ -15,7 +15,7 @@ pred_bat:
   # Timezone to work in
   timezone: Europe/London
 
-  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
+  # Currency, symbol for main currency and second symbol for 1/100s e.g. $ c, £ p or € c
   currency_symbols:
    - '£'
    - 'p'
@@ -38,7 +38,7 @@ pred_bat:
   load_filter_threshold: 30
 
   #
-  # Sensors, more than one can be specified and they will be summed up automatically
+  # Energy today (not power) sensors, more than one can be specified and they will be summed up automatically
   #
   # For two inverters the load today would normally be the master load sensor only (to cover the entire house)
   # If you have three phase and one inverter per phase then you would need three load sensors
@@ -88,11 +88,11 @@ pred_bat:
   #auto_restart:
   #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
   #  - service: hassio/addon_restart
-  #    addon: a6a2857d_givtcp
-
+  #    addon: 533ea71a_givtcp
+  #
   #  Example on how to restart the inverter via GivTCP
-  #  - service: switch.turn_on
-  #    entity_id: switch.givtcp_{geserial}_reboot_invertor
+  #  - service: button.press
+  #    entity_id: button.givtcp_{geserial}_reboot_invertor
 
   # If not using REST then instead set the Control here (one for each inverter)
   # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
@@ -165,7 +165,7 @@ pred_bat:
    - select.givtcp_{geserial}_battery_pause_end_time_slot
    - select.givtcp2_{geserial2}_battery_pause_end_time_slot
 
-  # Only gen3 supports discharge target SOC, will be ignored if not present
+  # Only gen3 supports discharge target SoC, will be ignored if not present
   discharge_target_soc:
     - number.givtcp_{geserial}_discharge_target_soc_1
     - number.givtcp2_{geserial2}_discharge_target_soc_1
@@ -325,7 +325,7 @@ pred_bat:
   # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
   # If you have Intelligent Octopus the battery size and limit will be extracted from the Octopus Energy plugin directly.
-  # Set the car SOC% if you have it to give an accurate forecast of the cars battery levels.
+  # Set the car SoC% if you have it to give an accurate forecast of the cars battery levels.
   # One entry per car if you have multiple cars.
   #car_charging_battery_size:
   #  - 75

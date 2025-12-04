@@ -445,7 +445,7 @@ class WebInterface(ComponentBase):
             text += f'<option value="{option}" {selected}>{option}</option>'
         text += "</select></form></td></tr>\n"
 
-        text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
+        text += "<tr><td>SoC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
 
         # Editable Debug Enable field
         text += "<tr><td>Debug Enable</td><td>"
@@ -1889,7 +1889,7 @@ var options = {
                 {"name": "Best Export Limit", "data": best_export_limit_kw, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
                 {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "4", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
             ]
-            text += self.render_chart(series_data, "kWh", "Battery SOC Prediction", now_str)
+            text += self.render_chart(series_data, "kWh", "Battery SoC Prediction", now_str)
         elif chart == "Power":
             series_data = [
                 {"name": "battery", "data": battery_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
@@ -2472,7 +2472,7 @@ var options = {
         text += "</form>"
 
         text += "<table class='comparison-table'>\n"
-        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th>"
+        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SoC</th>"
         if self.base.iboost_enable:
             text += "<th>Iboost</th>"
         if self.base.carbon_enable:

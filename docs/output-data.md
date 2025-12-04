@@ -22,20 +22,19 @@ Depending on how you installed Predbat this predbat_dashboard.yaml file will be 
 
 - if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), it will be in the directory `/addon_configs/6adb4f0d_predbat/`,
 
-- if the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) was used, it's in `/addon_configs/46f69597_appdaemon-predbat/`,
-or
+or,
 
-- with the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/config/appdaemon/apps/batpred/config/`.
+- with the deprecated [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/config/appdaemon/apps/batpred/config/`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-ons) to open
 the predbat_dashboard.yaml file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
-Once opened, select and copy all the contents of the predbat_dashboard.yaml file and add the contents to a new dashboard page:
+Once opened, select and copy all the contents of the `predbat_dashboard.yaml` file and add the contents to a new dashboard page:
 
-- Go to System/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'
+- Go to Settings/Dashboards, double click an existing dashboard name or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then double click the newly created dashboard
 
-- Click the pencil icon in the top right corner, click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
-delete the template card configuration and paste the contents of the predbat_dashboard.yaml file copied earlier, then 'Save'.
+- Click the pencil icon in the top right corner, click the lower dashed box (Create section), click the solid blue boxed plus symbol to 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete all the template card configuration and paste the contents of the `predbat_dashboard.yaml` file copied earlier, then 'Save' and 'Done' in the top right.
 
 This will give you a simple Predbat control and output dashboard that you can then resequence and customise as you wish.
 
@@ -46,7 +45,7 @@ This will give you a simple Predbat control and output dashboard that you can th
 You can also create a dashboard page that's dynamically generated to automatically include all the Predbat control and output entities,
 so when new entities are added in future Predbat releases, you don't have to edit the dashboard.
 
-Firstly you need to [install HACS](install.md#hacs-install) if it isn't already installed, and then install two HACS front-end components:
+Firstly you need to install HACS if it isn't already installed, and then install two HACS front-end components:
 
 - Auto Entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
 automatically generates a list of entities that match a wildcard expression
@@ -56,7 +55,6 @@ wraps the entity lists within a drop-down toggle
 Installation steps:
 
 - Click the HACS icon on the left-hand side panel
-- Click 'Frontend'
 - Click the three dots in the top right corner then 'Custom Repositories'
 - Paste (or type) in the following repository name `https://github.com/RossMcMillan92/lovelace-collapsable-cards`, choose Type 'Dashboard', and click Add
 - Close the Custom Repositories dialogue
@@ -66,11 +64,11 @@ Installation steps:
 
 Now create the dynamic dashboard:
 
-- Go to Settings/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'
+- Go to Settings/Dashboards, double click an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then double click click the new dashboard
 - Click the pencil icon in the top right corner, then the plus symbol on the far right of the next row to create a new View
 - Enter a title of the View, then Save
-- Click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
-delete the template card configuration and copy/paste the following YAML into the dashboard and click 'Save':
+- Click the pencil icon in the top right corner, click the lower dashed box (Create section), click the solid blue boxed plus symbol to 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete all the template card configuration and copy/paste the following YAML into the dashboard and click 'Save':
 
 ```yaml
 type: vertical-stack
@@ -644,7 +642,7 @@ To create a new automation:
 - Three dots (top right corner) / Edit in YAML
 - Delete the existing (template) automation code and copy/paste the supplied automation code below
 
-### GivTCP activity monitor
+### GivTCP Activity Monitor
 
 This automation will raise an alert if any of the following occur:
 
@@ -654,7 +652,6 @@ This automation will raise an alert if any of the following occur:
 - The battery goes offline to the inverter for more than 15 minutes
 - GivTCP add-on is not running
 - Mosquitto broker add-on is not running
-- Predbat/AppDaemon-predbat or AppDaemon add-on (as appropriate) is not running
 
 The script will need to be customised for your inverter ID, battery ID and mobile details,
 and can be extended for multiple inverters and batteries by duplicating the triggers and adding appropriate battery and inverter IDs.
@@ -771,7 +768,7 @@ Restarting GivTCP does however lose the current GivTCP log-in Home Assistant.
 
 NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp'.
 
-### Predbat error monitor
+### Predbat Error Monitor
 
 This automation will raise an alert if Predbat's status turns to *Error* for more than 5 minutes.
 
@@ -779,7 +776,7 @@ In normal operation, Predbat will automatically run and update its forecast ever
 then an alert will be raised and the automation will restart the Predbat add-on to try to resolve a 'hung Predbat' issue.
 
 In the same way for the GivTCP and Mosquitto add-ons above, the last trigger requires you to enable a binary sensor that detects that the Predbat/AppDaemon add-on is running.
-Follow the same steps to enable the binary sensor for either the 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' add-on depending on which Predbat installation method you followed.
+Follow the same steps to enable the binary sensor for either the 'Predbat' or (deprecated) 'AppDaemon' add-on depending on which Predbat installation method you followed.
 
 The script will need to be customised for your mobile details.
 
@@ -850,12 +847,12 @@ triggers:
         Predbat plan is unknown for 20 minutes, possibly failed on startup,
         restarting
       restart_predbat: "Y"
-  - alias: "Heartbeat: check predbat has populated output entities OK"
+  - alias: "Heartbeat: check Predbat has populated output entities OK"
     trigger: time_pattern
     minutes: /30
     id: heartbeat
 actions:
-  - alias: Heartbeat, check predbat output variables are populated
+  - alias: Heartbeat, check Predbat output variables are populated
     if:
       - condition: trigger
         id:

@@ -22,6 +22,7 @@ class Compare:
         self.log = self.pb.log
         self.config_root = self.pb.config_root
         self.dashboard_item = self.pb.dashboard_item
+        self.currency_symbols = self.pb.currency_symbols
         self.prefix = self.pb.prefix
         self.comparisons = {}
         self.load_yaml()
@@ -162,7 +163,7 @@ class Compare:
             True,
             end_record=end_record,
         )
-        # Work out value of the battery at the start end end of the period to allow for the change in SOC
+        # Work out value of the battery at the start end end of the period to allow for the change in SoC
         metric_start, battery_value_start = my_predbat.compute_metric(end_record, my_predbat.soc_kw, my_predbat.soc_kw, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         metric_end, battery_value_end = my_predbat.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, 0, 0, 0, 0, 0, 0)
 
@@ -254,7 +255,7 @@ class Compare:
         result_data = self.run_scenario(end_record)
         result_data["existing_tariff"] = existing_tariff
         result_data["name"] = name
-        self.log("Scenario complete for tariff: {} cost {} metric {}".format(name, result_data["cost"], result_data["metric"]))
+        self.log("Scenario complete for tariff: {}, cost {}{}, metric {}{}".format(name, result_data["cost"], self.currency_symbols[1], result_data["metric"], self.currency_symbols[1]))
         if debug:
             with open("compare_{}.html".format(tariff_id), "w") as f:
                 f.write(result_data["html"])
@@ -279,7 +280,7 @@ class Compare:
         for result_id in results:
             results[result_id]["best"] = result_id == best_selected
 
-        self.log("Compare, best tariff: {} metric {}".format(best_selected, best_metric))
+        self.log("Compare, best tariff: {} metric {}{}".format(best_selected, best_metric, self.currency_symbols[1]))
 
     def get_comparison(self, tariff_id):
         """
@@ -382,7 +383,7 @@ class Compare:
                 my_predbat.car_charging_limit[car_n] = my_predbat.car_charging_battery_size[car_n]
 
             if my_predbat.car_charging_planned[car_n] or my_predbat.car_charging_now[car_n]:
-                self.log("Re-plan car {} for charing to {}".format(car_n, my_predbat.car_charging_limit[car_n]))
+                self.log("Re-plan car {} for charging to {}".format(car_n, my_predbat.car_charging_limit[car_n]))
                 my_predbat.car_charging_plan_smart[car_n] = True
                 my_predbat.car_charging_slots[car_n] = my_predbat.plan_car_charging(car_n, my_predbat.low_rates)
 

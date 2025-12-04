@@ -30,7 +30,7 @@ import asyncio
 THIS_VERSION = "v8.29.1"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py"]
+PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -147,7 +147,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     self.releases["latest_beta_body"] = release.get("body", "Unknown")
                     found_latest_beta = True
 
-            self.log("Predbat {} version {} currently running, latest version is {} latest beta {}".format(__file__, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]))
+            self.log("Predbat {} version {} currently running, latest version is {}, latest beta is {}".format(__file__, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]))
             PREDBAT_UPDATE_OPTIONS = ["main"]
             this_tag = THIS_VERSION
             new_version = False
@@ -1049,7 +1049,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                             errors += 1
                             continue
                     elif required_entries > 1:
-                        self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list but requires {} entries based on {}".format(name, required_entries, entries))
+                        self.log("Warn: Validation of apps.yaml found configuration item '{}' is not a list, but requires {} entries based on {}".format(name, required_entries, entries))
                         self.arg_errors[name] = "Invalid type, expected list"
                         errors += 1
                         continue
@@ -1176,7 +1176,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                             matches = True
                             for item in value:
                                 if not isinstance(item, dict):
-                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not an dict".format(name, item))
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} is not a dict. Must be in the format 'item: value'".format(name, item))
                                     self.arg_errors[name] = "Invalid type, element {} expected dict".format(item)
                                     errors += 1
                                     break
@@ -1185,12 +1185,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                             matches = True
                             for key in value:
                                 if not self.validate_is_int(key):
-                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} value {} is not a int => float".format(name, key, value))
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {}, value {} is not a int => float value".format(name, key, value))
                                     self.arg_errors[name] = "Invalid element key {} expected int".format(key)
                                     errors += 1
                                     break
                                 if not self.validate_is_float(value[key]):
-                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} value {} is not a int => float".format(name, key, value))
+                                    self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} value {} is not a int => float value".format(name, key, value))
                                     self.arg_errors[name] = "Invalid element key {} value {}, expected int => float".format(key, value[key])
                                     errors += 1
                                     break
@@ -1244,7 +1244,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                                             # We can ignore predbat generated sensors as they are control placeholders
                                             pass
                                         else:
-                                            self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} can not be modified".format(name, sensor))
+                                            self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} which cannot be modified".format(name, sensor))
                                             self.arg_errors[name] = "Invalid entity_id in element {}, can not be modified".format(sensor)
                                             errors += 1
                                             break
@@ -1256,7 +1256,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                                         # Allow None values for sensors
                                         continue
                                     else:
-                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} returned value None".format(name, sensor))
+                                        self.log("Warn: Validation of apps.yaml found configuration item '{}' element {} returned value 'None', not a valid value".format(name, sensor))
                                         self.arg_errors[name] = "Invalid value None in element {}".format(sensor)
                                         errors += 1
                                         break

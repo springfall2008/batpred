@@ -54,9 +54,8 @@ pred_bat:
   # Data must be in the format of 'last_updated' timestamp and 'energy' for incrementing kWh
   #load_forecast:
   #  - predheat.heat_energy$external
-  #
+
   # Controls/status - must by 1 per inverter
-  #
   num_inverters: 1
   inverter_type: LuxPower
   inverter:
@@ -81,20 +80,27 @@ pred_bat:
     write_and_poll_sleep: 10
     has_time_window: False
     support_charge_freeze: False
+  # if you have a LuxPower inverter with 'Charge Last' feature then change support_discharge_freeze to True
     support_discharge_freeze: False
 
   charge_start_service:
-    service: switch.turn_on
-    entity_id: "switch.lux_ac_charge_enable"
+    - service: switch.turn_on
+      entity_id: "switch.lux_ac_charge_enable"
   charge_stop_service:
-    service: switch.turn_off
-    entity_id: "switch.lux_ac_charge_enable"
+    - service: switch.turn_off
+      entity_id: "switch.lux_ac_charge_enable"
   discharge_start_service:
-    service: switch.turn_on
-    entity_id: "switch.lux_force_discharge_enable"
+    - service: switch.turn_on
+      entity_id: "switch.lux_force_discharge_enable"
   discharge_stop_service:
-    service: switch.turn_off
-    entity_id: "switch.lux_force_discharge_enable"
+    - service: switch.turn_off
+      entity_id: "switch.lux_force_discharge_enable"
+  # if you have a LuxPower inverter with 'Charge Last' feature then to take advantage of discharge freeze, uncomment the following five lines
+  # - service: switch.turn_off
+  #   entity_id: "switch.lux_charge_last"
+  # discharge_freeze_service:
+  #   - service: switch.turn_on
+  #     entity_id: "switch.lux_charge_last"
 
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   # balance_inverters_seconds: 60
@@ -254,7 +260,7 @@ pred_bat:
   # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
   # If you have Intelligent Octopus the battery size and limit will be extracted from the Octopus Energy plugin directly.
-  # Set the car SOC% if you have it to give an accurate forecast of the cars battery levels.
+  # Set the car SoC% if you have it to give an accurate forecast of the cars battery levels.
   # One entry per car if you have multiple cars.
   #car_charging_battery_size:
   #  - 75

@@ -3,10 +3,9 @@
 Predbat needs to know what your Import and (optionally) Export rates are so it can plan the optimal way to use your battery.
 Your Import and Export rates can be simple flat rates,
 more complex time-of-day tariffs (e.g. Economy 7, Octopus Flux),
-or daily/half-hourly rates that track electricity market prices (e.g. Octopus Agile or Tracker).
+or daily/half-hourly/quarter-hour rates that track electricity market prices (e.g. Octopus Agile or Tracker).
 
-Energy rates are all configured in the `apps.yaml` file that's stored in either the directory `/addon_configs/6adb4f0d_predbat` or `/config/appdaemon/apps/batpred/config/` directory
-depending on [what type of Predbat installation method you have used](apps-yaml.md#appsyaml-settings).
+Energy rates are all configured in the `apps.yaml` file that's stored in a directory name that depends on [what type of Predbat installation method you have used](apps-yaml.md#appsyaml-settings).
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-ons)
 to edit this file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
@@ -16,6 +15,16 @@ using the [Octopus Energy Integration](#octopus-energy-home-assistant-integratio
 or manually [defining your rates and time periods](#rate-bands-to-manually-configure-energy-rates).
 
 At least one of these methods must be used to define your import and export rates. If you don't then Predbat will assume zero for your energy rates.
+
+## Plan Interval
+
+By default Predbat will plan and execute its plan based upon 30 minute time intervals. Energy rates need to be provided that align to :30 and :00 minutes past the hour.
+
+If your energy provider prices on the basis of smaller (or larger) intervals then the 30 minute interval duration can be overwritten by setting in `apps.yaml`:
+
+```yaml
+  plan_interval_minutes: duration
+```
 
 ## Octopus Energy direct
 
@@ -236,7 +245,7 @@ Configuring the Octopus rates URL is an expert feature as Octopus change the ava
 If your electricity supplier provides data through the Energi Data Service, you can use the Energidataservice integration to fetch real-time and future electricity pricing data.
 This integration allows you to automatically retrieve rates and apply them within your energy management system, including optional tariff adjustments for greater accuracy.
 
-The integration processes hourly pricing data and converts it into 30-minute intervals, making it ideal for scheduling and optimizing energy usage.
+The integration processes hourly pricing data and converts it into (by default) 30-minute intervals, making it ideal for scheduling and optimising energy usage.
 
 ### Configuring Predbat to Use the Energidataservice Integration
 
@@ -337,7 +346,9 @@ Add the following entries to apps.yaml to define the pattern of rates over 24 ho
 ```
 
 **start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally, i.e. end with ":30:00" or ":00:00".
-Make sure the start and end times for the different rates cover the whole 24 hour period with no gaps!
+If you have set a different [plan interval duration](#plan-interval) for your energy provider, e.g. 15 minute intervals, then make sure the start and end times align with the interval periods.
+
+The start and end times for the different rates **must** cover the whole 24 hour period with no gaps!
 **rate** is in pence e.g. 4.2
 
 **day_of_week** Can also be used to control rates on specific days. You can specify one day or multiple days split by a comma.

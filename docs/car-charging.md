@@ -45,13 +45,9 @@ This can be useful if Octopus does not know your car battery's state of charge b
 Predbat will still assume all Octopus charging slots are low rates even if some are not used by your car.
 
 - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) (default value is off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
-This will only work correctly if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in
+This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
 
 - Let the Octopus app control when your car charges.
-
-_TIP:_ If you have a Zappi EV charger then you have to set it to Eco+ mode for IOG to control it.
-If Predbat starts exporting your battery (e.g. prior to the IOG cheap overnight period) then the Zappi can treat the exported energy as excess solar and start charging the EV battery with it!<BR>
-To prevent this happening, in the Zappi configuration set the Export Margin to 8000W so that the Zappi will only charge the EV from excess solar when more than 8000W is being exported (which should never happen).
 
 ### Predbat-led charging
 
@@ -67,7 +63,7 @@ For multiple cars, use **switch.predbat_car_charging_manual_soc_1/2/3** and **in
 You will need to manually set this to the car's current charge level before charging, Predbat will increment it during charging sessions but will not reset it automatically.<BR>
 NB: **input_number.predbat_car_charging_manual_soc_kwh** must be set to the current kWh value of your car battery NOT a percentage SoC figure
 otherwise, Predbat won't know how much energy there currently is in the battery.<BR>
-NB2: If you have **car_charging_soc** set and working for your car SoC sensor in apps.yaml, **switch.predbat_car_charging_manual_soc** must be set to Off as otherwise the car SoC sensor will be ignored
+NB2: If you have **car_charging_soc** set and working for your car SoC sensor in `apps.yaml`, **switch.predbat_car_charging_manual_soc** must be set to Off as otherwise the car SoC sensor will be ignored
 
 - Ensure **switch.predbat_octopus_intelligent_charging** in Home Assistant is set to Off
 
@@ -85,7 +81,8 @@ This may mean you need to use expert mode and change your low-rate threshold to 
 
 - _WARNING: Do not set **car_charging_now** in `apps.yaml` or you will create a circular dependency._
 
-- Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged; you will need to write a Home Assistant automation based on this sensor to control when your car charges.<BR>
+- Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged; you will need to write a Home Assistant automation based on this sensor to control when your car charges.
+
 A sample automation to start/stop car charging using a Zappi car charger and the [MyEnergi Zappi integration](https://github.com/CJNE/ha-myenergi) is as follows,
 this should be adapted for your charger type and how it controls starting/stopping car charging:
 
@@ -127,7 +124,7 @@ NOTE: [Multiple cars](apps-yaml.md#multiple-electric-cars) can be planned with P
 
 ## Additional Car charging configurations
 
-- If you have one charger and multiple cars configured in Predbat then set **car_charging_exclusive** in apps.yaml to `True` to indicate that only one
+- If you have one charger and multiple cars configured in Predbat then set **car_charging_exclusive** in `apps.yaml` to `True` to indicate that only one
 car may charge at once (the first car reporting as plugged in will be considered as charging). If you set this to `False` then it is assumed each car
 can charge independently and hence two or more could charge at once
 
@@ -138,7 +135,7 @@ can charge independently and hence two or more could charge at once
 ```
 
 - See [Car charging filtering](apps-yaml.md#car-charging-filtering) and [Planned car charging](apps-yaml.md#planned-car-charging)
-in the [apps.yaml settings](apps-yaml.md) section of the documentation.
+in the [apps.yaml settings](apps-yaml.md) section of the documentation for further car charging setup details.
 
 - **switch.predbat_car_charging_from_battery** - When set to On the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
 When set to Off home battery discharge will be prevented when your car charges, and all load from the car and home will be from the grid.
@@ -219,7 +216,7 @@ Create a helper entity (Settings / Devices & Services / Helpers) of type 'Integr
 
 Please look into [Integration - Riemann sum integral](URL) to convert kW into kWh.
 
-And add your custom car charging energy sensor in apps.yaml in place of the template Wallbox and Zappi regular expression:
+And add your custom car charging energy sensor in `apps.yaml` in place of the template Wallbox and Zappi regular expression:
 
 **Example**
 
