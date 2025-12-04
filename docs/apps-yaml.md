@@ -985,6 +985,10 @@ Predbat uses the time entity (time.octopus_energy_{{ACCOUNT_ID}}_intelligent_tar
 - **octopus_slot_low_rate** - Default is True, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If False the existing rates only will be used
 which is only suitable for tariffs other than IOG.
 
+- **octopus_slot_max** - Default is 12 (6 hours of 30-minute slots). Sets the maximum number of 30-minute cheap rate slots per 24-hour period.
+Octopus Intelligent limits users to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
+Set to a higher value if you have a different limit or want to disable the check.
+
 If you don't use Intelligent Octopus then the above 3 Octopus Intelligent configuration lines in `apps.yaml` can be commented out or deleted,
 and there are a number of other `apps.yaml` configuration items that should be set:
 

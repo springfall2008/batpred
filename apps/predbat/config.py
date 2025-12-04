@@ -1975,6 +1975,7 @@ APPS_SCHEMA = {
     "octopus_ready_time": {"type": "sensor", "sensor_type": "string"},
     "octopus_charge_limit": {"type": "sensor", "sensor_type": "float"},
     "octopus_slot_low_rate": {"type": "boolean"},
+    "octopus_slot_max": {"type": "integer"},
     "octopus_saving_session_octopoints_per_penny": {"type": "integer"},
     "octopus_free_url": {"type": "string", "empty": False},
     "metric_octopus_import": {"type": "sensor", "sensor_type": "float"},
