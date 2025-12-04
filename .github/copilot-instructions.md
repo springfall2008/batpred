@@ -25,11 +25,9 @@ All changes MUST be submitted via Pull Requests to the `main` branch. Follow the
 Before committing code, ALWAYS run pre-commit hooks to ensure code quality:
 
 ```bash
-# Install pre-commit if not already installed
-python3 -m pip install pre-commit
-
-# Run all pre-commit checks
-python3 -m pre_commit run --all-files
+cd coverage
+source venv/bin/activate 
+pre-commit run --all-files
 ```
 
 Common pre-commit checks:
@@ -175,6 +173,8 @@ cd coverage/
 ./run_all
 ```
 
+Use --quick argument to skip long tests:
+
 **Test structure**: 9994-line `unit_test.py` contains ALL tests. Uses custom `TestHAInterface` mock, not pytest/unittest.
 
 **Key test patterns**:
@@ -191,7 +191,7 @@ cd coverage/
 
 ```bash
 cd coverage/
-./run_cov  # Generates htmlcov/index.html
+./run_cov  --quick # Generates htmlcov/index.html
 ```
 
 ### Test Data
@@ -314,6 +314,7 @@ Web interface in `apps/predbat/web.py` runs on port 5052 (configurable via `web_
 - `fetch.py` - Data fetching (solar, rates, history)
 - `output.py` - Entity/sensor publishing
 - `userinterface.py` - HA UI components (selects, switches, numbers)
+- `unit_tests.py` - Unit test runner, imports tests from tests/*
 
 **External integrations**:
 
