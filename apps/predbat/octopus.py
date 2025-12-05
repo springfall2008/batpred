@@ -74,10 +74,6 @@ api_token_query = """mutation {{
 }}"""
 
 account_query = """query {{
-  octoplusAccountInfo(accountNumber: "{account_id}") {{
-    isOctoplusEnrolled
-  }}
-  octoHeatPumpControllerEuids(accountNumber: "{account_id}")
   account(accountNumber: "{account_id}") {{
     electricityAgreements(active: true) {{
 			meterPoint {{
@@ -448,6 +444,14 @@ class OctopusAPI(ComponentBase):
                 self.saving_sessions = data.get("saving_sessions", {})
                 self.url_cache = data.get("url_cache", {})
                 self.intelligent_device = data.get("intelligent_device", {})
+            if self.tariffs is None:
+                self.tariffs = {}
+            if self.account_data is None:
+                self.account_data = {}
+            if self.saving_sessions is None:
+                self.saving_sessions = {}
+            if self.intelligent_device is None:
+                self.intelligent_device = {}
 
     async def save_octopus_cache(self):
         """
@@ -714,11 +718,18 @@ class OctopusAPI(ComponentBase):
         return_joined_events = []
         return_available_events = []
 
+        print(self.saving_sessions)
+
         available_events = self.saving_sessions.get("events", [])
         joined_events = self.saving_sessions.get("account", {}).get("joinedEvents", [])
+        has_joined = self.saving_sessions.get("account", {}).get("hasJoinedCampaign", False)
         joined_ids = {}
         event_reward = {}
         event_code = {}
+
+        if not has_joined:
+            self.log("Octopus API: User has not joined Octopus saving sessions campaign")
+            available_events = []
 
         for event in joined_events:
             event_id = event.get("eventId", None)
@@ -786,11 +797,17 @@ class OctopusAPI(ComponentBase):
         """
         Get the saving sessions
         """
-        response_data = await self.async_graphql_query(octoplus_saving_session_query.format(account_id=self.account_id), "get-saving-sessions")
+        response_data = await self.async_graphql_query(octoplus_saving_session_query.format(account_id=self.account_id), "get-saving-sessions", ignore_errors=True)
         if response_data is None:
             return self.saving_sessions
         else:
-            return response_data.get("savingSessions", {})
+            savingSessions = response_data.get("savingSessions", {})
+            if savingSessions is None:
+                savingSessions = {}
+            if "account" in savingSessions:
+                if savingSessions["account"] is None:
+                    savingSessions["account"] = {}
+            return savingSessions
 
     async def async_get_day_night_rates(self, url):
         """
@@ -1023,7 +1040,7 @@ class OctopusAPI(ComponentBase):
             self.log(f"Warn: Octopus API: Failed to extract response json: {e} - {url} - {text}")
             return None
 
-        if "graphql" in url and "errors" in data_as_json and ignore_errors == False:
+        if ("graphql" in url) and ("errors" in data_as_json) and (ignore_errors == False):
             msg = f'Warn: Octopus API: Errors in request ({url}): {data_as_json["errors"]}'
             errors = list(map(lambda error: error["message"], data_as_json["errors"]))
             self.log(msg)
@@ -1085,9 +1102,10 @@ class OctopusAPI(ComponentBase):
                     self.update_success_timestamp()
                     return response_body["data"]
                 else:
-                    self.failures_total += 1
-                    if returns_data:
-                        self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
+                    if not ignore_errors:
+                        self.failures_total += 1
+                        if returns_data:
+                            self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
                     return None
         except TimeoutError:
             self.failures_total += 1
@@ -1978,7 +1996,7 @@ class Octopus:
         # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
-        octopus_slot_max = self.get_arg("octopus_slot_max", 12)  # Max 30-min slots per 24-hour period (6 hours = 12 slots)
+        octopus_slot_max = self.get_arg("octopus_slot_max", 48)  # Default to 48 so no limit
 
         # Track slots per 24-hour period (keyed by day offset from midnight)
         # Day 0 = today (minutes 0 to 1440), Day -1 = yesterday (minutes -1440 to 0), etc.
