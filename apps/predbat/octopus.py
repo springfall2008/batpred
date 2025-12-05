@@ -804,9 +804,9 @@ class OctopusAPI(ComponentBase):
             savingSessions = response_data.get("savingSessions", {})
             if savingSessions is None:
                 savingSessions = {}
-            if 'account' in savingSessions:
-                if savingSessions['account'] is None:
-                    savingSessions['account'] = {}
+            if "account" in savingSessions:
+                if savingSessions["account"] is None:
+                    savingSessions["account"] = {}
             return savingSessions
 
     async def async_get_day_night_rates(self, url):
