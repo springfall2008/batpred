@@ -1591,11 +1591,10 @@ class Fetch:
                 )
 
                 if load_forecast:
-                    self.log("Loaded load forecast from {} load sensor; from midnight {}kWh to now {}kWh to midnight {}kwh".format(entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
+                    self.log("Loaded the load forecast from {} load sensor; from midnight {}kWh to now {}kWh to midnight {}kwh".format(entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
+                    load_forecast_array.append(load_forecast)
                 else:
-                    self.log("Warn: Unable to load load forecast from {}".format(entity_id))
-
-                load_forecast_array.append(load_forecast)
+                    self.log("Warn: Unable to load the load forecast from {}. Skipping forecast source.".format(entity_id))
 
         # Add all the load forecasts together
         for load in load_forecast_array:
