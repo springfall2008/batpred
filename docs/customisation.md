@@ -175,7 +175,7 @@ The default is 1.0, i.e. no change to load in saving sessions.
 
 **input_number.predbat_load_scaling_free** is a percentage Scaling factor applied to historical load only during Free electricity sessions.
 This can be used to model your household increasing house load in a free electricity session (e.g. extra washing, cooking, tumble dryer, etc).
-The default is 1.2, i.e. 20% extra load in saving sessions.
+The default is 1.2, i.e. 20% extra load in free electricity sessions.
 
 ## Solar PV adjustment options
 
