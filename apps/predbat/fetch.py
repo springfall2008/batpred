@@ -1704,6 +1704,7 @@ class Fetch:
         self.pv_metric10_weight = self.get_arg("pv_metric10_weight")
         self.load_scaling = self.get_arg("load_scaling")
         self.load_scaling10 = self.get_arg("load_scaling10")
+        self.charge_scaling10 = self.get_arg("charge_scaling10")
         self.load_scaling_saving = self.get_arg("load_scaling_saving")
         self.load_scaling_free = self.get_arg("load_scaling_free")
         self.battery_rate_max_scaling = self.get_arg("battery_rate_max_scaling")

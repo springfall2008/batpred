@@ -127,6 +127,18 @@ CONFIG_ITEMS = [
         "default": 1.1,
     },
     {
+        "name": "charge_scaling10",
+        "friendly_name": "Charge Scaling PV10%",
+        "type": "input_number",
+        "min": 0.1,
+        "max": 1.0,
+        "step": 0.1,
+        "unit": "*",
+        "icon": "mdi:multiplication",
+        "default": 0.8,
+        "enable": "expert_mode",
+    },
+    {
         "name": "load_scaling_saving",
         "friendly_name": "Load Scaling for saving sessions",
         "type": "input_number",

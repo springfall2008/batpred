@@ -369,6 +369,73 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("load_pv", my_predbat, 1, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv10_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv10=True)
+
+    # Test charge_scaling10 feature - battery charge rate is de-rated in PV10 mode
+    # With pv10=False, battery charges at full 1kW rate, so 10kWh battery charges in 10 hours
+    # Cost = 10kWh * import_rate = 100 pence
+    failed |= simple_scenario(
+        "charge_scaling10_baseline",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 10,
+        assert_final_soc=10,
+        with_battery=True,
+        charge=10,
+        battery_size=10,
+        pv10=False,
+        charge_scaling10=0.5,
+    )
+    # With pv10=True and charge_scaling10=0.5, battery charges at 0.5kW rate
+    # In 24 hours at 0.5kW, we can charge 12kWh, but battery is only 10kWh so it fills up
+    # Cost = 10kWh * import_rate = 100 pence (same as baseline as battery still fills)
+    failed |= simple_scenario(
+        "charge_scaling10_pv10_full_charge",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 10,
+        assert_final_soc=10,
+        with_battery=True,
+        charge=10,
+        battery_size=10,
+        pv10=True,
+        charge_scaling10=0.5,
+    )
+    # With pv10=True and charge_scaling10=0.5 and a limited charge window (12 hours)
+    # At 0.5kW rate we can only charge 6kWh in 12 hours
+    # pv10=False baseline: 12 hours * 1kW = 12kWh but battery is 10kWh so charges full
+    failed |= simple_scenario(
+        "charge_scaling10_limited_window_baseline",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 10,
+        assert_final_soc=10,
+        with_battery=True,
+        charge=10,
+        battery_size=10,
+        pv10=False,
+        charge_scaling10=0.5,
+        charge_period_divide=2,
+    )
+    # With pv10=True and charge_scaling10=0.5 and 12 hour window
+    # At 0.5kW rate we can only charge 6kWh in 12 hours
+    failed |= simple_scenario(
+        "charge_scaling10_limited_window_pv10",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 6,
+        assert_final_soc=6,
+        with_battery=True,
+        charge=10,
+        battery_size=10,
+        pv10=True,
+        charge_scaling10=0.5,
+        charge_period_divide=2,
+    )
+
     failed |= simple_scenario("pv_only_loss_ac", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, inverter_loss=0.5)
     failed |= simple_scenario("pv_only_loss_hybrid", my_predbat, 0, 1, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=0, with_battery=False, inverter_loss=0.5, hybrid=True)
     failed |= simple_scenario("pv_only_bat", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=24, with_battery=True)
