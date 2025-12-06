@@ -2,7 +2,9 @@
 
 Predbat is a home battery automation program.
 
-It automatically runs every 5 minutes and will update its prediction for the home battery levels for the next period, up to a maximum of 48 hours ahead.
+It runs every 5 minutes and, by default, forecasts 48 hours ahead (configurable via forecast_hours),
+with the plan typically covering at least 24 hours after the first charge slot (forecast_plan_hours).
+
 Predbat will automatically decide when to charge and discharge your battery to achieve the best (lowest) cost spend within the parameters you have set.
 It uses the solar production forecast from Solcast combined with your historical energy usage to make this prediction.
 
@@ -10,7 +12,7 @@ It uses the solar production forecast from Solcast combined with your historical
 - Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Energy integration
     - Both import and export rates are supported.
     - Intelligent Octopus is also supported and takes into account allocated charging slots.  
-- The solar forecast used is the central scenario from Solcast (50%) with a configurable weighting towards the more pessimistic (10%) scenario.
+- The solar forecast used is the central scenario from Solcast/Forecast.solar (50%) with a configurable weighting towards the more pessimistic (10%) scenario.
 - Predbat automatically programs your inverter with the appropriate charging and discharging controls. Both Hybrid inverters and AC-coupled inverters are supported by Predbat.
 - Automatic planning of export slots is also supported, when enabled Predbat can start a forced discharge of the battery if the export rates are high and you have spare capacity.
 - Historical load data is used to predict your consumption, optionally car charging load can be filtered out of this data.

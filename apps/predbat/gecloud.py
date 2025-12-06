@@ -745,6 +745,7 @@ class GECloudDirect(ComponentBase):
             ems = devices["ems"]
             self.set_arg("inverter_type", ["GEE" for _ in range(num_inverters)])
             self.set_arg("ge_cloud_serial", ems)
+            self.set_arg("ge_cloud_data", False)
             self.set_arg("load_today", ["sensor.predbat_gecloud_" + ems + "_consumption_today"])
             self.set_arg("import_today", ["sensor.predbat_gecloud_" + ems + "_grid_import_today"])
             self.set_arg("export_today", ["sensor.predbat_gecloud_" + ems + "_grid_export_today"])
@@ -1346,6 +1347,7 @@ class GECloudData(ComponentBase):
         self.ge_cloud_serial = None
         self.api_fatal = False
         self.ge_url_cache = {}
+        self.ge_cloud_data = ge_cloud_data
         self.mdata = []
 
         # API request metrics for monitoring
@@ -1377,6 +1379,13 @@ class GECloudData(ComponentBase):
         """
         Run the client
         """
+
+        # Component can be disabled if GECloud detects an EMS system (see async_automatic_config)
+        ge_cloud_data = self.get_arg("ge_cloud_data", default=self.ge_cloud_data)
+        if not ge_cloud_data:
+            self.update_success_timestamp()
+            return True
+
         if first:
             self.max_days_previous = max(self.days_previous) + 1
             # Resolve any templated values

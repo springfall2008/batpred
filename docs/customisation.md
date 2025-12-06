@@ -86,7 +86,7 @@ You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (def
 
 If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's quite CPU intensive and provides very little improvement for most systems.
 
-You can turn on **switch.predbat_combine_charge_slots** and **switch._combine_export_slots** to speed up planning.
+You can turn on **switch.predbat_combine_charge_slots** and **switch.predbat_combine_export_slots** (_expert mode_) to speed up planning.
 Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with longer periods of fixed rates but can limit the planning ability in some cases.
 
 The number of CPU threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading if you don't have multiple CPUs available,
@@ -175,7 +175,7 @@ The default is 1.0, i.e. no change to load in saving sessions.
 
 **input_number.predbat_load_scaling_free** is a percentage Scaling factor applied to historical load only during Free electricity sessions.
 This can be used to model your household increasing house load in a free electricity session (e.g. extra washing, cooking, tumble dryer, etc).
-The default is 1.2, i.e. 20^ extra load in saving sessions.
+The default is 1.2, i.e. 20% extra load in free electricity sessions.
 
 ## Solar PV adjustment options
 
@@ -231,7 +231,7 @@ The default of 24 hours is the recommended value (to match energy rate cycles). 
 
 **switch.predbat_calculate_export_oncharge** (_expert mode_) When turned On, calculated export slots will disable or move charge slots, allowing them to intermix in the plan. When Off (the default) export slots will never be placed into charge slots.
 
-**switch.predbat_set_discharge_during_charge** - When turned On disables inverter discharge during charge slots, useful for multi-inverter setups to avoid cross-charging when batteries are out of balance. Default is Off.
+**switch.predbat_set_discharge_during_charge** - When turned On disables inverter discharge during charge slots, useful for multi-inverter setups to avoid cross-charging when batteries are out of balance. Default is On.
 
 **switch.predbat_inverter_set_charge_before** - (_expert_mode_) When turned On (the default), charge slots will be programmed before their start time, when Off they will only be configured when the charging time starts.
 
@@ -339,7 +339,7 @@ The in-day adjustment factor can be seen in **predbat.load_inday_adjustment** an
 
 **switch.predbat_metric_pv_calibration_enable** When turned On, Predbat will use historical data to calibrate your PV production estimates on a slot duration (default 30 minute) basis based on actual generation data.
 This can be useful to adjust for your systems real performance.
-Default is Off.
+Default is On.
 
 **input_number.predbat_carbon_metric** (_carbon enable_) When Carbon footprint tracking is turned On (**switch.predbat_carbon_enable**) (Off by default),
 you can specify a cost per kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
@@ -368,7 +368,7 @@ this defaults to 10 but can be changed between 0 and 30.
 **switch.predbat_set_reserve_enable** (_expert_mode_) When turned On (the default) the battery reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit.
 
-**switch.predbat_set_charge_freeze** (_expert mode_) When turned On will allow Predbat to hold the current battery level while drawing from the grid/solar as an alternative to charging. Off by default.
+**switch.predbat_set_charge_freeze** (_expert mode_) When turned On will allow Predbat to hold the current battery level while drawing from the grid/solar as an alternative to charging. On by default.
 
 **switch.predbat_set_export_freeze** When turned On (the default) will allow Predbat to export Solar to the grid rather than charging the battery.
 
