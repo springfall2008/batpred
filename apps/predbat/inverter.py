@@ -313,10 +313,12 @@ class Inverter:
                     self.soc_max = self.nominal_capacity * self.battery_scaling
 
             if self.rest_v3:
-                # GivTCP v3 indicates battery is being calibrated via [inverter serial no].battery_calibration_status
-                soc_force_adjust = idetails["Battery_Calibration_Status"]
-                if soc_force_adjust != "Off":
-                    self.in_calibration = True
+                # GivTCP v3 indicates battery is being calibrated via [Control][Battery_Calibration]
+                if ("Control" in self.rest_data) and ("Battery_Calibration" in self.rest_data["Control"]):
+                    soc_force_adjust = self.rest_data["Control"]["Battery_Calibration"]
+                    self.log("Warn: battery_calibration={}".format(soc_force_adjust))
+                    if soc_force_adjust != "Off":
+                        self.in_calibration = True
             else:
                 # older GivTCP uses soc_force_adjust to indicate battery calibration
                 soc_force_adjust = raw_data.get("invertor", {}).get("soc_force_adjust", None)
