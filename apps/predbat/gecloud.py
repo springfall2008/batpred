@@ -1380,7 +1380,7 @@ class GECloudData(ComponentBase):
         Run the client
         """
 
-        # Disabled later on, probably by GECloud knowing its an EMS
+        # Component can be disabled if GECloud detects an EMS system (see async_automatic_config)
         ge_cloud_data = self.get_arg("ge_cloud_data", default=self.ge_cloud_data)
         if not ge_cloud_data:
             self.update_success_timestamp()
