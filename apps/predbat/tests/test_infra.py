@@ -13,6 +13,7 @@ from prediction import wrapped_run_prediction_single, Prediction
 from matplotlib import pyplot as plt
 import numpy as np
 
+
 class DummyInverter:
     def __init__(self, log, inverter_id=0):
         self.soc_kw = 0
