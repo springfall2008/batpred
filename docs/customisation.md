@@ -86,7 +86,7 @@ You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (def
 
 If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's quite CPU intensive and provides very little improvement for most systems.
 
-You can turn on **switch.predbat_combine_charge_slots** (_expert_mode_) and **switch.predbat_combine_export_slots** to speed up planning.
+You can turn on **switch.predbat_combine_charge_slots** and **switch.predbat_combine_export_slots** (_expert mode_) to speed up planning.
 Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with longer periods of fixed rates but can limit the planning ability in some cases.
 
 The number of CPU threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading if you don't have multiple CPUs available,
