@@ -534,7 +534,7 @@ class GECloudDirect(ComponentBase):
                         await self.publish_registers(device, self.settings[device], select_key=key)
                         return True
                     else:
-                        self.log("GECloud: Failed to set export SoC percent limit for {}".format(device))
+                        self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
                         return False
             if "ac_charge_upper_percent_limit" in ha_name:
                 if value and value != 100:
