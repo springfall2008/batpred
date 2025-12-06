@@ -182,6 +182,7 @@ class Prediction:
             self.prediction_cache_enable = base.prediction_cache_enable
             self.prediction_cache = {}
             self.plan_interval_minutes = base.plan_interval_minutes
+            self.charge_scaling10 = base.charge_scaling10
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -521,6 +522,12 @@ class Prediction:
         carbon_intensity = self.carbon_intensity
         set_discharge_during_charge = self.set_discharge_during_charge
 
+        # For the PV10 case we apply some de-rating to the battery charge rate to be more pessimistic
+        if pv10:
+            battery_rate_max_scaling = self.battery_rate_max_scaling * self.charge_scaling10
+        else:
+            battery_rate_max_scaling = self.battery_rate_max_scaling
+
         # Get PV step for the current step itself
         pv_forecast_minute_step_flat = {}
         load_minutes_step_flat = {}
@@ -727,7 +734,7 @@ class Prediction:
                     discharge_rate_now = battery_rate_min
 
             # Current real charge rate
-            charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, soc_max, battery_rate_max_charge, self.battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_charge_curve) * self.battery_rate_max_scaling
+            charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, soc_max, battery_rate_max_charge, self.battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_charge_curve) * battery_rate_max_scaling
             charge_rate_now_curve_step = charge_rate_now_curve * step
             discharge_rate_now_curve = (
                 get_discharge_rate_curve(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, self.battery_discharge_power_curve, battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
@@ -823,7 +830,7 @@ class Prediction:
                     set_charge_low_power,
                     self.charge_low_power_margin,
                     battery_rate_min,
-                    self.battery_rate_max_scaling,
+                    battery_rate_max_scaling,
                     battery_loss,
                     None,
                     battery_temperature,

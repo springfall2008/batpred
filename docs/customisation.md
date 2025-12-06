@@ -152,6 +152,12 @@ The default is 1.0, i.e. no scaling.
 You can try [computing your discharge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
 The default is 1.05, i.e. battery discharges at 5% more power than the inverter reports.
 
+**input_number.predbat_charge_scaling10** (_expert mode_) is a percentage factor applied to the battery charge rate specifically for the PV10% pessimistic scenario.
+This allows the PV10% prediction to model a slower battery charge rate to account for worst-case conditions (e.g. cold weather, battery degradation).
+For example, a value of 0.8 (the default) means the PV10% scenario assumes the battery will only charge at 80% of its normal rate.
+This setting only affects the PV10% scenario calculations and does not change the actual charge rate commands sent to your inverter.
+Use a lower value to be more pessimistic about charging capability in the worst-case scenario. The valid range is 0.1 to 1.0.
+
 **switch.predbat_battery_capacity_nominal** - When set to On, Predbat uses the reported battery size from the GivTCP 'Battery Nominal Capacity' field rather than from the normal GivTCP reported 'Battery Capacity kWh' size.
 If your battery size is reported wrongly maybe try turning this on and see if it helps. Defaults to Off.
 
