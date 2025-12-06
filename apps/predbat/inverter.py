@@ -316,7 +316,6 @@ class Inverter:
                 # GivTCP v3 indicates battery is being calibrated via [Control][Battery_Calibration]
                 if ("Control" in self.rest_data) and ("Battery_Calibration" in self.rest_data["Control"]):
                     soc_force_adjust = self.rest_data["Control"]["Battery_Calibration"]
-                    self.log("Warn: battery_calibration={}".format(soc_force_adjust))
                     if soc_force_adjust != "Off":
                         self.in_calibration = True
             else:
