@@ -453,8 +453,8 @@ def minute_data(
                 if smoothing:
                     near_midnight = (last_updated_time.time() < time(0, 6)) or (last_updated_time.time() > time(23, 58))
                     if clean_increment and state < last_state and (near_midnight or (last_state - state >= 1)):
-                        # If there is a large drop in the data or we are near the end of the day where the
-                        # sensor resets to zero, then smooth out the drop.
+                        # If there is a large drop in the data or we are near midnight where the sensor resets to zero,
+                        # then smooth out the drop.
                         if debug:
                             print(f"Found drop at minute {minute}, where {state} < {last_state} (near midnight = {near_midnight}). Padding to {minutes_to}")
                         while minute < minutes_to:
