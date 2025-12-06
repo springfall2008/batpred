@@ -348,5 +348,36 @@ def test_minute_data(my_predbat):
         print("ERROR: Unsupported unit test failed - no data returned")
         failed = True
 
+    # Test 21: clean_increment works with days with <1kWh of energy
+    print("Test 21: smoothing works with days with <1kWh of energy #2925")
+    history_small_day = [
+        {"state": "0", "last_updated": "2024-10-03T00:00:03.337Z"},
+        {"state": "0.1", "last_updated": "2024-10-03T10:15:05.447Z"},
+        {"state": "0.2", "last_updated": "2024-10-03T10:40:50.523Z"},
+        {"state": "0.3", "last_updated": "2024-10-03T10:56:05.601Z"},
+        {"state": "0.4", "last_updated": "2024-10-03T11:19:35.675Z"},
+        {"state": "0.5", "last_updated": "2024-10-03T11:45:50.757Z"},
+        {"state": "0.6", "last_updated": "2024-10-03T12:16:06.460Z"},
+        {"state": "0.7", "last_updated": "2024-10-03T12:41:36.553Z"},
+        {"state": "0", "last_updated": "2024-10-04T00:00:10.437Z"},
+        {"state": "0.1", "last_updated": "2024-10-04T07:10:59.088Z"},
+        {"state": "0.2", "last_updated": "2024-10-04T08:00:44.250Z"},
+        {"state": "0.3", "last_updated": "2024-10-04T08:29:29.324Z"},
+        {"state": "0.4", "last_updated": "2024-10-04T08:55:44.430Z"},
+        {"state": "0.5", "last_updated": "2024-10-04T09:28:14.534Z"},
+        {"state": "0.6", "last_updated": "2024-10-04T10:05:45.016Z"},
+        {"state": "0.7", "last_updated": "2024-10-04T10:45:15.217Z"},
+        {"state": "0.8", "last_updated": "2024-10-04T11:12:45.405Z"},
+        {"state": "0.9", "last_updated": "2024-10-04T11:37:15.525Z"},
+        {"state": "1", "last_updated": "2024-10-04T12:00:00.612Z"},
+    ]
+    small_day_result, ignore_io = minute_data(history=history_small_day, days=2, now=now, state_key="state", last_updated_key="last_updated", backwards=True, smoothing=True, clean_increment=True)
+    if len(small_day_result) == 0:
+        print("ERROR: smoothing with low energy day failed - no data returned")
+        failed = True
+    elif small_day_result.get(0) != 1.7:
+        print(f"ERROR: smoothing with low energy day failed - expected second day total of 1.7kWh, but got {small_day_result.get(0)} ")
+        failed = True
+
     print("**** minute_data tests completed ****")
     return failed
