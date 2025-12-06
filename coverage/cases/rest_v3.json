@@ -67,7 +67,6 @@
         "Temp_Pause_Discharge_Num": 0
     },
     "EA2303G082": {
-        "Battery_Calibration_Status": "Off",
         "Battery_Capacity_kWh": 9.52,
         "Battery_Type": "Lithium",
         "Export_Limit": 6000,
