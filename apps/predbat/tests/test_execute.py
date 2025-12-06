@@ -2246,4 +2246,25 @@ def run_execute_tests(my_predbat):
         assert_soc_target=100,
     )
 
+    # Test for bug fix: charge_limit_best[0] comparison and unit conversion
+    # Bug 1: self.charge_limit_best != self.reserve was comparing list to scalar (always True)
+    # Bug 2: self.soc_kw was used directly instead of calc_percent_limit(self.soc_kw, self.soc_max)
+    # This test verifies freeze charge works correctly with proper percent conversion
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_target_soc_percent_conversion",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,  # [1] = reserve, triggers freeze charge
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=5,  # 5 kWh current level
+        soc_max=10,  # 10 kWh max -> 50% SoC
+        assert_status="Freeze charging",
+        assert_pause_discharge=True,
+        assert_soc_target=100,  # Freeze charge sets target to 100%
+        assert_immediate_soc_target=50,  # Current SoC% should be 50%, not 5%
+    )
+    if failed:
+        return failed
+
     return failed
