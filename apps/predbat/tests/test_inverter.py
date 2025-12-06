@@ -492,7 +492,7 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     return failed
 
 
-def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, isCharging, isExporting, expect_soc=None):
+def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, isCharging, isExporting, expect_soc=None, has_inv_time_button_press=False, expect_button_press=False):
     """
     Test the adjust_battery_target function
     """
@@ -504,10 +504,19 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
 
     # Non-REST Mode
     inv.rest_data = None
+    inv.inv_time_button_press = has_inv_time_button_press
     ha.dummy_items["number.charge_limit"] = prev_soc
+    ha.dummy_items["switch.inverter_button"] = "off"
     inv.adjust_battery_target(soc, isCharging=isCharging, isExporting=isExporting)
     if ha.get_state("number.charge_limit") != expect_soc:
         print("ERROR: Charge limit should be {} got {}".format(expect_soc, ha.get_state("number.charge_limit")))
+        failed = True
+
+    # Check button was pressed if expected (for Fox inverters)
+    button_state = ha.get_state("switch.inverter_button")
+    expected_button_state = "on" if expect_button_press else "off"
+    if button_state != expected_button_state:
+        print("ERROR: Button state should be {} got {}".format(expected_button_state, button_state))
         failed = True
 
     # REST Mode
@@ -1354,11 +1363,11 @@ def run_inverter_tests(my_predbat_dummy):
     if failed:
         return failed
 
-    failed |= test_adjust_battery_target("adjust_target50", ha, inv, dummy_rest, 0, 50, True, False, 50)
-    failed |= test_adjust_battery_target("adjust_target0", ha, inv, dummy_rest, 10, 0, True, False, 4)
-    failed |= test_adjust_battery_target("adjust_target100", ha, inv, dummy_rest, 99, 100, True, False, 100)
-    failed |= test_adjust_battery_target("adjust_target100r", ha, inv, dummy_rest, 100, 100, True, False, 100)
-    failed |= test_adjust_battery_target("adjust_target0x", ha, inv, dummy_rest, 50, 0, False, True, 50)
+    failed |= test_adjust_battery_target("adjust_target50", ha, inv, dummy_rest, 0, 50, True, False, 50, has_inv_time_button_press=True, expect_button_press=True)
+    failed |= test_adjust_battery_target("adjust_target0", ha, inv, dummy_rest, 10, 0, True, False, 4, has_inv_time_button_press=True, expect_button_press=True)
+    failed |= test_adjust_battery_target("adjust_target100", ha, inv, dummy_rest, 99, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=True)
+    failed |= test_adjust_battery_target("adjust_target100r", ha, inv, dummy_rest, 100, 100, True, False, 100, has_inv_time_button_press=True, expect_button_press=False)  # No change, no button press
+    failed |= test_adjust_battery_target("adjust_target0x", ha, inv, dummy_rest, 50, 0, False, True, 50, has_inv_time_button_press=False, expect_button_press=False)  # No button press feature
     if failed:
         return failed
 

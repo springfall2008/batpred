@@ -106,7 +106,7 @@ class Execute:
                     self.log("Inverter {} Charge window will be: {} - {} - current SoC {}%, target {}%".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        target_soc = self.charge_limit_percent_best[0] if self.charge_limit_best != self.reserve else self.soc_kw
+                        target_soc = self.charge_limit_percent_best[0] if self.charge_limit_best[0] != self.reserve else calc_percent_limit(self.soc_kw, self.soc_max)
                         inv_target_soc = self.adjust_battery_target_multi(inverter, target_soc, True, False, check=True)
 
                         current_charge_rate = inverter.get_current_charge_rate()
@@ -466,13 +466,6 @@ class Execute:
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
             if resetCharge:
                 inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
-
-            # Commented this block out as clm is never used after being set. Redundant code?
-            #
-            # if self.charge_limit_best:
-            #    clm = self.charge_limit_best[0]
-            # else:
-            #     clm = 0
 
             # Set the SoC just before or within the charge window
             if self.set_soc_enable:
