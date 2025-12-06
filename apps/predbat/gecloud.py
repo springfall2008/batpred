@@ -524,18 +524,29 @@ class GECloudDirect(ComponentBase):
             reg_name = registers[key].get("name", "")
             value = registers[key].get("value", None)
             ha_name = regname_to_ha(reg_name)
-            if "inverter_max_output_active_power_percent" in ha_name:
-                if value and value != 100:
-                    self.log("GECloud: Setting inverter max output active power percent to 100 for {} was {}".format(device, value))
+
+            if ("export_soc_percent_limit" in ha_name) or ("discharge_soc_percent_limit" in ha_name):
+                if not value or value > 4:
+                    self.log("GECloud: Setting {} to 4 for {} was {}".format(ha_name, device, value))
+                    result = await self.async_write_inverter_setting(device, key, 4)
+                    if result and ("value" in result):
+                        registers[key]["value"] = result["value"]
+                        await self.publish_registers(device, self.settings[device], select_key=key)
+                        return True
+                    else:
+                        self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
+                        return False
+            if ("inverter_max_output_active_power_percent" in ha_name) or ("ac_charge_upper_percent_limit" in ha_name):
+                if not value or value < 100:
+                    self.log("GECloud: Setting {} to 100 for {} was {}".format(ha_name, device, value))
                     result = await self.async_write_inverter_setting(device, key, 100)
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
                         return True
                     else:
-                        self.log("GECloud: Failed to set inverter max output active power percent for {}".format(device))
+                        self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
                         return False
-
             if "real_time_control" in ha_name:
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
