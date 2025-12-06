@@ -1394,6 +1394,10 @@ class Inverter:
             else:
                 self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id, required_unit="%"), soc)
 
+            # For inverters that need a button press to apply changes (e.g., Fox), press the button now
+            if self.inv_time_button_press:
+                self.press_and_poll_button()
+
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Target SoC has been changed to {}% at {}".format(self.id, soc, self.base.time_now_str()))
             self.mqtt_message(topic="set/target_soc", payload=soc)

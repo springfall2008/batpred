@@ -467,13 +467,6 @@ class Execute:
             if resetCharge:
                 inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
 
-            # Commented this block out as clm is never used after being set. Redundant code?
-            #
-            # if self.charge_limit_best:
-            #    clm = self.charge_limit_best[0]
-            # else:
-            #     clm = 0
-
             # Set the SoC just before or within the charge window
             if self.set_soc_enable:
                 if isExporting:
