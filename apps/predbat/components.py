@@ -339,6 +339,12 @@ class Components:
         """Check if a component is alive, or check if all are alive"""
         return all(self.is_alive(name) for name in self.components.keys())
 
+    def is_active(self, name):
+        """Check if a single component is active (initialized)"""
+        if name not in self.components:
+            return False
+        return self.components[name] is not None
+
     def is_alive(self, name):
         """Check if a single component is alive"""
         if name not in self.components:

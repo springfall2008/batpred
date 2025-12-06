@@ -718,8 +718,6 @@ class OctopusAPI(ComponentBase):
         return_joined_events = []
         return_available_events = []
 
-        print(self.saving_sessions)
-
         available_events = self.saving_sessions.get("events", [])
         joined_events = self.saving_sessions.get("account", {}).get("joinedEvents", [])
         has_joined = self.saving_sessions.get("account", {}).get("hasJoinedCampaign", False)
