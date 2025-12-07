@@ -830,6 +830,36 @@ def str2time(str):
     return tdata
 
 
+def get_curve_value(curve, key, default=1.0):
+    """
+    Get a value from a battery power curve dictionary.
+    Supports both integer and string keys for compatibility with YAML configurations.
+
+    Args:
+        curve: Dictionary containing the power curve (e.g., battery_charge_power_curve)
+        key: Integer SOC percentage to look up
+        default: Default value if key not found (default: 1.0)
+
+    Returns:
+        The curve value at the given SOC percentage, or default if not found
+
+    Note:
+        This function handles both integer keys (100, 99, 98) and string keys ("100", "99", "98")
+        to support YAML configurations that require string keys for encryption (e.g., SOPS).
+    """
+    # Try integer key first (most common case)
+    if key in curve:
+        return curve[key]
+
+    # Try string key for YAML configs with string-based keys
+    str_key = str(key)
+    if str_key in curve:
+        return curve[str_key]
+
+    # Return default if neither found
+    return default
+
+
 def calc_percent_limit(charge_limit, soc_max):
     """
     Calculate a charge limit in percent
@@ -916,7 +946,7 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
     Compute true charging rate from SoC and charge rate setting
     """
     soc_percent = calc_percent_limit(soc, soc_max)
-    max_charge_rate = battery_rate_max_charge * battery_charge_power_curve.get(soc_percent, 1.0)
+    max_charge_rate = battery_rate_max_charge * get_curve_value(battery_charge_power_curve, soc_percent, 1.0)
 
     # Temperature cap
     max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_charge)
@@ -936,7 +966,7 @@ def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_
     Compute true discharging rate from SoC and charge rate setting
     """
     soc_percent = calc_percent_limit(soc, soc_max)
-    max_discharge_rate = battery_rate_max_discharge * battery_discharge_power_curve.get(soc_percent, 1.0)
+    max_discharge_rate = battery_rate_max_discharge * get_curve_value(battery_discharge_power_curve, soc_percent, 1.0)
     max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_discharge)
     max_discharge_rate = min(max_discharge_rate, max_rate_cap)
 
