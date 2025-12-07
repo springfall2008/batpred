@@ -987,11 +987,11 @@ class Execute:
             elif self.balance_inverters_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross charging during discharge, attempting to balance it".format(this_inverter))
                 if soc_low[this_inverter] and can_power_house[other_inverter]:
-                    balance_reset_discharge[this_inverter] = True
+                    balance_reset_charge[this_inverter] = True
                     inverters[this_inverter].adjust_charge_rate(0, notify=False)
                 else:
-                    balance_reset_charge[this_inverter] = True
-                    inverters[this_inverter].adjust_discharge_rate(0, notify=False)
+                    balance_reset_discharge[other_inverter] = True
+                    inverters[other_inverter].adjust_discharge_rate(0, notify=False)
             elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
                 balance_reset_discharge[this_inverter] = True
