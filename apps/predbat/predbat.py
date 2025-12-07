@@ -310,6 +310,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         else:
             history = self.ha_interface.get_history(entity_id, days=days, now=self.now_utc)
 
+        if history and isinstance(history, list):
+            ## Get default units and patch it into missing entries in the history
+            unit_of_measurement = self.get_state_wrapper(entity_id, attribute="unit_of_measurement")
+            if unit_of_measurement:
+                for record in history[0]:
+                    if "attributes" not in record or not record["attributes"]:
+                        record["attributes"] = {}
+                    if "unit_of_measurement" not in record["attributes"]:
+                        record["attributes"]["unit_of_measurement"] = unit_of_measurement
+
         if required and (history is None):
             self.log("Error: Failure to fetch history for {}".format(entity_id))
             raise ValueError

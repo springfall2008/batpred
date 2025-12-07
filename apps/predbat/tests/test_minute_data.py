@@ -379,5 +379,68 @@ def test_minute_data(my_predbat):
         print(f"ERROR: smoothing with low energy day failed - expected second day total of 1.7kWh, but got {small_day_result.get(0)} ")
         failed = True
 
+    # Test 22: kW to W conversion (matching find_charge_curve parameters)
+    print("Test 22: kW to W unit conversion with backwards=True, smoothing=False")
+
+    # Use a specific time for this test (12:00 exactly) to make minute calculations clear
+    now_test22 = datetime(2024, 10, 4, 12, 0, 0, tzinfo=utc)
+
+    # Create test history data in kW units
+    # With backwards=True and smoothing=False, each value holds until the next timestamp
+    history_kw = [
+        {"state": "2.5", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
+        {"state": "3.0", "last_updated": "2024-10-04T11:30:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
+        {"state": "3.5", "last_updated": "2024-10-04T11:45:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
+    ]
+
+    # Call minute_data with the same parameters as find_charge_curve
+    result_data, ignore_io = minute_data(
+        history=history_kw,
+        days=1,
+        now=now_test22,
+        state_key="state",
+        last_updated_key="last_updated",
+        backwards=True,
+        clean_increment=False,
+        smoothing=False,
+        divide_by=1.0,
+        scale=1.0,
+        required_unit="W",
+    )
+
+    # Check that we got data
+    if len(result_data) == 0:
+        print("ERROR: kW to W conversion test failed - no data returned")
+        failed = True
+    else:
+        # With backwards=True and smoothing=False, value holds from timestamp until next timestamp
+        # So minute 15-29 holds the value from 11:30 (3.0 kW)
+        # minute 30-59 holds the value from 11:00 (2.5 kW)
+        # minute 60+ holds nothing (first data point has no to_time initially)
+
+        # Check at minute 15 (between 11:45 and 11:30) should hold 11:30 value: 3.0 kW = 3000 W
+        if 15 not in result_data:
+            print("ERROR: kW to W conversion test failed - no data at minute 15")
+            failed = True
+        elif result_data[15] != 3000.0:
+            print("ERROR: kW to W conversion test failed - expected 3000 W at minute 15, got {}".format(result_data[15]))
+            failed = True
+
+        # Check at minute 30 (between 11:30 and 11:00) should hold 11:00 value: 2.5 kW = 2500 W
+        if 30 not in result_data:
+            print("ERROR: kW to W conversion test failed - no data at minute 30")
+            failed = True
+        elif result_data[30] != 2500.0:
+            print("ERROR: kW to W conversion test failed - expected 2500 W at minute 30, got {}".format(result_data[30]))
+            failed = True
+
+        # Check at minute 45 should also be 2500 W (still in the 11:00 to 11:30 range)
+        if 45 not in result_data:
+            print("ERROR: kW to W conversion test failed - no data at minute 45")
+            failed = True
+        elif result_data[45] != 2500.0:
+            print("ERROR: kW to W conversion test failed - expected 2500 W at minute 45, got {}".format(result_data[45]))
+            failed = True
+
     print("**** minute_data tests completed ****")
     return failed
