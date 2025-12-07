@@ -840,7 +840,7 @@ class Execute:
             },
         )
 
-    def balance_inverters(self):
+    def balance_inverters(self, test_mode=False):
         """
         Attempt to balance multiple inverters
         """
@@ -864,8 +864,11 @@ class Execute:
 
         inverters = []
         for id in range(num_inverters):
-            inverter = Inverter(self, id, quiet=True)
-            inverter.update_status(self.minutes_now, quiet=True)
+            if test_mode:
+                inverter = self.inverters[id]
+            else:
+                inverter = Inverter(self, id, quiet=True)
+                inverter.update_status(self.minutes_now, quiet=True)
             if inverter.in_calibration:
                 self.log("Inverter {} is in calibration mode, not balancing".format(id))
                 return
@@ -909,12 +912,12 @@ class Execute:
                 reserves,
                 battery_powers,
                 total_battery_power,
-                dp0(battery_max_rates),
-                dp0(charge_rates),
-                dp0(pv_powers),
-                dp0(load_powers),
+                [dp0(x) for x in battery_max_rates],
+                [dp0(x) for x in charge_rates],
+                [dp0(x) for x in pv_powers],
+                [dp0(x) for x in load_powers],
                 dp0(total_charge_rates),
-                dp0(discharge_rates),
+                [dp0(x) for x in discharge_rates],
                 dp0(total_discharge_rates),
             )
         )
@@ -931,8 +934,8 @@ class Execute:
         soc_low = []
         soc_high = []
         for inverter in inverters:
-            soc_low.append(inverter.soc_percent < soc_max and (abs(inverter.soc_percent - soc_max) >= self.balance_inverters_discharge))
-            soc_high.append(inverter.soc_percent > soc_min and (abs(inverter.soc_percent - soc_min) >= self.balance_inverters_charge))
+            soc_low.append(inverter.soc_percent < soc_max and (abs(inverter.soc_percent - soc_max) >= self.balance_inverters_threshold_discharge))
+            soc_high.append(inverter.soc_percent > soc_min and (abs(inverter.soc_percent - soc_min) >= self.balance_inverters_threshold_charge))
 
         above_reserve = []  # Is the battery above reserve?
         below_full = []  # Is the battery below full?
@@ -985,10 +988,10 @@ class Execute:
                 self.log("BALANCE: Inverter {} is cross charging during discharge, attempting to balance it".format(this_inverter))
                 if soc_low[this_inverter] and can_power_house[other_inverter]:
                     balance_reset_discharge[this_inverter] = True
-                    inverters[this_inverter].adjust_discharge_rate(0, notify=False)
+                    inverters[this_inverter].adjust_charge_rate(0, notify=False)
                 else:
                     balance_reset_charge[this_inverter] = True
-                    inverters[this_inverter].adjust_charge_rate(0, notify=False)
+                    inverters[this_inverter].adjust_discharge_rate(0, notify=False)
             elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
                 balance_reset_discharge[this_inverter] = True
