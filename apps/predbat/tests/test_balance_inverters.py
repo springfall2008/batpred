@@ -18,6 +18,7 @@ def dummy_sleep(seconds):
     """
     pass
 
+
 def apply_dummy_sleep(my_predbat):
     """
     Apply dummy_sleep to all inverters after they have been created
@@ -25,13 +26,13 @@ def apply_dummy_sleep(my_predbat):
     for inv in my_predbat.inverters:
         inv.sleep = dummy_sleep
 
+
 def run_balance_inverters_tests(my_predbat):
     """
     Test the balance_inverters function with various scenarios
     """
     print("**** Running balance_inverters tests ****\n")
     failed = False
-
 
     # Test 1: Two inverters, one low SoC during discharge
     print("Test 1: Two inverters, one low SoC during discharge")
@@ -149,7 +150,6 @@ def setup_two_inverters(my_predbat, soc1=50, soc2=50, reserve1=4, reserve2=4, ba
 
     ha.dummy_items["sensor.grid_power"] = 0
     ha.dummy_items["sensor.grid_power_2"] = 0
-    
 
     # Configure args for my_predbat BEFORE creating inverters
     my_predbat.args["num_inverters"] = 2
@@ -175,20 +175,19 @@ def setup_two_inverters(my_predbat, soc1=50, soc2=50, reserve1=4, reserve2=4, ba
     my_predbat.args["battery_scaling"] = [1.0, 1.0]
     my_predbat.args["battery_temperature"] = [20.0, 20.0]
     my_predbat.args["inverter_limit"] = [5000, 5000]
-    my_predbat.args['inverter_battery_rate_min'] = [100, 100]
-    if 'pause_mode' in my_predbat.args:
+    my_predbat.args["inverter_battery_rate_min"] = [100, 100]
+    if "pause_mode" in my_predbat.args:
         # Remove arg
         del my_predbat.args["pause_mode"]
-    if 'inverter_time' in my_predbat.args:
+    if "inverter_time" in my_predbat.args:
         # Remove arg
         del my_predbat.args["inverter_time"]
-    if 'soc_kw' in my_predbat.args:
+    if "soc_kw" in my_predbat.args:
         # Remove arg
         del my_predbat.args["soc_kw"]
-    if 'battery_power_invert' in my_predbat.args:
+    if "battery_power_invert" in my_predbat.args:
         # Remove arg
         del my_predbat.args["battery_power_invert"]
-    
 
     # Create inverters
     my_predbat.inverters = []
@@ -198,13 +197,15 @@ def setup_two_inverters(my_predbat, soc1=50, soc2=50, reserve1=4, reserve2=4, ba
         inverter.update_status(my_predbat.minutes_now, quiet=True)
         my_predbat.inverters.append(inverter)
 
+
 def test_balance_discharge_low_soc(my_predbat):
     """
     Test balancing when one inverter has low SoC during discharge
     Expected: Low SoC inverter discharge rate should be set to 0
     """
     # Setup: Inverter 0 at 30%, Inverter 1 at 50%, both discharging
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=30,
         soc2=50,
         battery_power1=1000,  # Discharging (positive = discharging)
@@ -224,7 +225,7 @@ def test_balance_discharge_low_soc(my_predbat):
     # Clear service store
     ha.service_store_enable = True
     ha.get_service_store()
-    
+
     # Run balance
     my_predbat.balance_inverters(test_mode=True)
 
@@ -254,7 +255,8 @@ def test_balance_charge_high_soc(my_predbat):
     Expected: High SoC inverter charge rate should be set to 0
     """
     # Setup: Inverter 0 at 80%, Inverter 1 at 60%, both charging
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=80,
         soc2=60,
         battery_power1=-1000,  # Charging (negative = charging)
@@ -303,7 +305,8 @@ def test_balance_cross_charging(my_predbat):
     Expected: Charging inverter should have charge rate set to 0
     """
     # Setup: Inverter 0 discharging, Inverter 1 charging during discharge
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=50,
         soc2=40,
         battery_power1=1000,  # Discharging
@@ -352,7 +355,8 @@ def test_balance_cross_discharging(my_predbat):
     Expected: Discharging inverter should have discharge rate set to 0
     """
     # Setup: Inverter 0 charging, Inverter 1 discharging during charge
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=50,
         soc2=60,
         battery_power1=-1000,  # Charging
@@ -401,7 +405,8 @@ def test_balance_already_balanced(my_predbat):
     Expected: No rate adjustments should be made
     """
     # Setup: Both inverters at 50%
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=50,
         soc2=50,
         battery_power1=1000,
@@ -447,7 +452,8 @@ def test_balance_below_threshold(my_predbat):
     Expected: No rate adjustments should be made
     """
     # Setup: Inverter 0 at 48%, Inverter 1 at 52% (4% difference, below 5% threshold)
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=48,
         soc2=52,
         battery_power1=1000,
@@ -492,7 +498,8 @@ def test_balance_at_reserve(my_predbat):
     Expected: Inverter at reserve should not be forced to discharge
     """
     # Setup: Inverter 0 at reserve (4%), Inverter 1 at 50%, both discharging
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=4,
         soc2=50,
         reserve1=4,
@@ -539,7 +546,8 @@ def test_balance_disabled(my_predbat):
     Expected: No rate adjustments should be made
     """
     # Setup: Inverter 0 at 30%, Inverter 1 at 50%, both discharging
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=30,
         soc2=50,
         battery_power1=1000,
@@ -584,7 +592,8 @@ def test_balance_calibration_mode(my_predbat):
     Expected: Balance function should return early without adjustments
     """
     # Setup: Inverter 0 at 30%, Inverter 1 at 50%
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=30,
         soc2=50,
         battery_power1=1000,
@@ -636,7 +645,8 @@ def test_balance_insufficient_power(my_predbat):
     Expected: No rate adjustments when power too low
     """
     # Setup: Inverter 0 at 30%, Inverter 1 at 50%, but low power (< 50W)
-    setup_two_inverters(my_predbat,
+    setup_two_inverters(
+        my_predbat,
         soc1=30,
         soc2=50,
         battery_power1=20,  # Below 50W threshold
