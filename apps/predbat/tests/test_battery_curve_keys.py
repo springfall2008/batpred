@@ -2,23 +2,30 @@
 Test battery power curve with both integer and string keys
 """
 
+from utils import get_curve_value
 
-def get_curve_value(curve, key, default=1.0):
+
+def run_battery_curve_keys_tests(my_predbat):
     """
-    Get a value from a battery power curve dictionary.
-    Supports both integer and string keys for compatibility with YAML configurations.
+    Run all battery curve key tests
+    Returns False on success, True on failure
     """
-    # Try integer key first (most common case)
-    if key in curve:
-        return curve[key]
+    failed = False
 
-    # Try string key for YAML configs with string-based keys
-    str_key = str(key)
-    if str_key in curve:
-        return curve[str_key]
+    try:
+        test_get_curve_value_with_int_keys()
+        test_get_curve_value_with_string_keys()
+        test_get_curve_value_with_mixed_keys()
+        test_get_curve_value_custom_default()
+        print("**** Battery curve keys tests: All tests passed ****")
+    except AssertionError as e:
+        print(f"**** Battery curve keys tests FAILED: {e} ****")
+        failed = True
+    except Exception as e:
+        print(f"**** Battery curve keys tests FAILED with exception: {e} ****")
+        failed = True
 
-    # Return default if neither found
-    return default
+    return failed
 
 
 def test_get_curve_value_with_int_keys():
