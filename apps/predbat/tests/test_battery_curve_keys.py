@@ -4,13 +4,14 @@ Test battery power curve with both integer and string keys
 
 from utils import get_curve_value
 
+
 def run_battery_curve_keys_tests(my_predbat):
     """
     Run all battery curve key tests
     Returns 0 on success, 1 on failure
     """
     failed = 0
-    
+
     try:
         test_get_curve_value_with_int_keys()
         test_get_curve_value_with_string_keys()
@@ -23,9 +24,8 @@ def run_battery_curve_keys_tests(my_predbat):
     except Exception as e:
         print(f"**** Battery curve keys tests FAILED with exception: {e} ****")
         failed = 1
-    
-    return failed
 
+    return failed
 
 
 def test_get_curve_value_with_int_keys():
