@@ -8,9 +8,9 @@ from utils import get_curve_value
 def run_battery_curve_keys_tests(my_predbat):
     """
     Run all battery curve key tests
-    Returns 0 on success, 1 on failure
+    Returns False on success, True on failure
     """
-    failed = 0
+    failed = False
 
     try:
         test_get_curve_value_with_int_keys()
@@ -20,10 +20,10 @@ def run_battery_curve_keys_tests(my_predbat):
         print("**** Battery curve keys tests: All tests passed ****")
     except AssertionError as e:
         print(f"**** Battery curve keys tests FAILED: {e} ****")
-        failed = 1
+        failed = True
     except Exception as e:
         print(f"**** Battery curve keys tests FAILED with exception: {e} ****")
-        failed = 1
+        failed = True
 
     return failed
 
