@@ -231,7 +231,6 @@ def reset_inverter(my_predbat):
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True
     my_predbat.car_charging_soc_next = [None for car_n in range(4)]
-    my_predbat.charge_scaling10 = 1.0
 
 
 def plot(name, prediction):

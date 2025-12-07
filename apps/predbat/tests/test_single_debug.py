@@ -87,6 +87,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         # my_predbat.iboost_min_power = 500 / MINUTE_WATT
         pass
 
+    print("Charge scaling 10 {} load scaling 10 {}".format(my_predbat.charge_scaling10, my_predbat.load_scaling10))
+
     if re_do_rates:
         # Set rate thresholds
         if my_predbat.rate_import or my_predbat.rate_export:
