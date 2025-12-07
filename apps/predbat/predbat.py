@@ -621,6 +621,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.battery_temperature_prediction = {}
         self.alerts = []
         self.alert_active_keep = {}
+        self.manual_soc_keep = {}
         self.calculate_tweak_plan = False
         self.set_charge_low_power = False
         self.set_export_low_power = False

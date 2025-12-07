@@ -1909,6 +1909,15 @@ class Fetch:
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
         self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))
+        self.manual_soc = self.manual_rates("manual_soc", default_rate=self.get_arg("manual_soc_value"))
+        
+        # Build manual_soc_keep dictionary from manual_soc
+        # The manual_soc is a dictionary of minutes to SOC percentage values
+        # We need to convert it to the same format as alert_active_keep
+        self.manual_soc_keep = {}
+        if self.manual_soc:
+            for minute, soc_value in self.manual_soc.items():
+                self.manual_soc_keep[minute] = soc_value
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()
