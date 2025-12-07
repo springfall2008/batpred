@@ -1913,11 +1913,8 @@ class Fetch:
         
         # Build manual_soc_keep dictionary from manual_soc
         # The manual_soc is a dictionary of minutes to SOC percentage values
-        # We need to convert it to the same format as alert_active_keep
-        self.manual_soc_keep = {}
-        if self.manual_soc:
-            for minute, soc_value in self.manual_soc.items():
-                self.manual_soc_keep[minute] = soc_value
+        # We need to use the same format as alert_active_keep
+        self.manual_soc_keep = self.manual_soc.copy() if self.manual_soc else {}
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()
