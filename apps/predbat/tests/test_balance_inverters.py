@@ -19,13 +19,6 @@ def dummy_sleep(seconds):
     pass
 
 
-def apply_dummy_sleep(my_predbat):
-    """
-    Apply dummy_sleep to all inverters after they have been created
-    """
-    for inv in my_predbat.inverters:
-        inv.sleep = dummy_sleep
-
 
 def run_balance_inverters_tests(my_predbat):
     """
