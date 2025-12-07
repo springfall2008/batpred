@@ -19,7 +19,6 @@ def dummy_sleep(seconds):
     pass
 
 
-
 def run_balance_inverters_tests(my_predbat):
     """
     Test the balance_inverters function with various scenarios
