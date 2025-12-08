@@ -2,15 +2,17 @@
 
 Predbat is a home battery automation program.
 
-It automatically runs every 5 minutes and will update its prediction for the home battery levels for the next period, up to a maximum of 48 hours ahead.
+It runs every 5 minutes and, by default, forecasts 48 hours ahead (configurable via forecast_hours),
+with the plan typically covering at least 24 hours after the first charge slot (forecast_plan_hours).
+
 Predbat will automatically decide when to charge and discharge your battery to achieve the best (lowest) cost spend within the parameters you have set.
 It uses the solar production forecast from Solcast combined with your historical energy usage to make this prediction.
 
-- The output is a prediction of the battery levels, solar generation, house load, charging activity, discharging activity, costs and import and export amounts based on 30-minute slots.
+- The output is a prediction of the battery levels, solar generation, house load, charging activity, discharging activity, costs and import and export amounts based on (by default) 30-minute slots.
 - Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Energy integration
     - Both import and export rates are supported.
     - Intelligent Octopus is also supported and takes into account allocated charging slots.  
-- The solar forecast used is the central scenario from Solcast (50%) with a configurable weighting towards the more pessimistic (10%) scenario.
+- The solar forecast used is the central scenario from Solcast/Forecast.solar (50%) with a configurable weighting towards the more pessimistic (10%) scenario.
 - Predbat automatically programs your inverter with the appropriate charging and discharging controls. Both Hybrid inverters and AC-coupled inverters are supported by Predbat.
 - Automatic planning of export slots is also supported, when enabled Predbat can start a forced discharge of the battery if the export rates are high and you have spare capacity.
 - Historical load data is used to predict your consumption, optionally car charging load can be filtered out of this data.
@@ -40,8 +42,8 @@ The inverter also converts AC power from the grid into DC to charge a battery.
 - **AC Coupled** - A battery that comes with its own inverter and is always charged or discharged with AC (using an internal inverter)
 - **Micro Inverters** - Small inverters that are fitted in line with the DC solar panels and produce AC power on a per-panel basis. Typically used with an AC-coupled battery.
 - **Slot** - A period of time where Predbat acts e.g. charging. In Predbat everything is a multiple of 5 minutes
-    - Charge slots are always in multiples of 30 minutes and align to a 30-minute boundary to match the way energy rates are allocated
-    - Discharge slots can be any multiple of 5 minutes and always finish on a 30-minute boundary.
+    - Charge slots are always in multiples of the [plan interval duration](energy-rates.md#plan-interval), default is 30 minutes, and align to the interval time boundaries to match the way energy rates are allocated
+    - Discharge slots can be any multiple of 5 minutes and always finish on a plan interval (default 30-minute) boundary.
 - **Loss** - Refers to energy lost in your system due to heat or other factors.
 
 - **PV10** - A prediction of the 10% scenario for solar, this is like a worst case, occurs 1 in 10 days
@@ -54,7 +56,7 @@ The inverter also converts AC power from the grid into DC to charge a battery.
 - **Best10** - The best plan but with the 10% outcome for Solar and Load (worst case)
 - **Charge Limit Best** - This is the target charge % in the Best plan (what is currently set on your inverter)
 - **Export Limit Best** - This is the target to force export to in % in the Best plan.
-- **Best SOC Keep** - The amount of battery you want to keep in the plan that Predbat has made
+- **Best SoC Keep** - The amount of battery you want to keep in the plan that Predbat has made
 
 ### Predbat modes
 
@@ -72,6 +74,8 @@ The current Predbat status is reported in the Home Assistant entity **predbat.st
 - **Demand** - This is the default, the load will be covered by solar and/or battery. Excess solar will charge the battery or be
 exported if the battery is full. This is described as 'Eco' Mode for GivEnergy inverters but other inverters use different terminology.
 
+- **Demand (Holiday)** - Predbat is in Demand mode, and additionally [Holiday Mode](customisation.md#holiday-mode) is active.
+
 - **Charging** - The battery charges from the grid and the grid also covers any load. Solar power will also be used to charge the battery.
 
 - **Freeze charging** - The battery is charging but the current battery level (SoC) is frozen (held). Think of it as a charge to the current battery level.
@@ -88,8 +92,19 @@ but if there is excess Solar power above the house load, the excess solar will b
 The battery or solar covers the house load. As charging is disabled, if there is excess solar generated, the current SoC level will be held and the excess solar will be exported.
 If there is a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
 
+- **Demand [Freeze exporting]** - Predbat's Demand mode has been overridden and Predbat is set to Freeze exporting mode.  See [Freeze Export during Demand](customisation.md#freeze-export-during-demand).
+
 - **Hold exporting** - The plan was to force export but the minimum battery level was reached and thus the battery is kept in Demand mode.
 If the battery level again gets above the threshold it will be changed back to Export mode.
+
+- **Hold for car** and **Demand, Hold for car** - A car is charging (either Predbat-led or Octopus-led), the battery is in Demand mode,
+but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be set to On).
+
+- **Hold for iBoost** and **Demand, Hold for iBoost** - iBoost is active, the battery is in Demand mode, but is set to prevent discharging into the iBoost (requires **switch.predbat_iboost_prevent_discharge** to be set to On).
+
+- **Read-Only** - Predbat is in [read-only mode](customisation.md#manual-control), the plan will be produced and updated but no instructions will be sent to the inverter to charge or discharge.
+
+- **[Alert]** will be appended to the Predbat status if an [Alert is active](apps-yaml.md#alert-system).
 
 - **Calibration** - The inverter is calibrating the batteries.
 On GivEnergy systems the battery state of charge (SoC) level has to be calibrated by performing a full battery discharge and then a full charge

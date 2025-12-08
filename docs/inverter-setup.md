@@ -1,6 +1,6 @@
 # Inverter setup
 
-PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other inverter models:
+PredBat was originally written for GivEnergy inverters using the GivTCP integration but has been extended to many other inverter models:
 
    | Name                          | Integration     | Template |
    | :---------------------------- | :------------- | :------------ |
@@ -20,22 +20,20 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | [LuxPower](#lux-power) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml)|
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
+   | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
 
 Additionally you can create a [custom inverter definition for Predbat](#i-want-to-add-an-unsupported-inverter-to-predbat) if your inverter type is not directly supported.
-Once you get everything working please share the configuration as a github issue so it can be incorporated into the predbat documentation.
+Once you get everything working please share the configuration as a github issue so it can be incorporated into the Predbat documentation.
 
 NB: By default the apps.yaml template for GivTCP is installed with Predbat.
-If you are using a different inverter then you will need to copy the appropriate apps.yaml template from the above list and use it to **replace the GivTCP apps.yaml** - if
+If you are using a different inverter then you will need to copy the appropriate `apps.yaml` template from the above list and use it to **replace the GivTCP apps.yaml** - if
 you copy but don't replace the standard template then Predbat will not function correctly.
 
 ## GivEnergy with GivTCP
 
-It's recommended that you first watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=ygD9KyciX54).
-Although the video covers GivTCP v2 and v3 has been recently released, the installation and setup process are very similar.
-
-The below instructions assume you are installing GivTCP v3, with changes highlighted against GivTCP v2 as covered in the video.
+It's recommended that you first watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=d06Mqeplvns).
 
 1. Install Mosquitto Broker add-on:
 
@@ -44,7 +42,6 @@ The below instructions assume you are installing GivTCP v3, with changes highlig
 - Once the Mosquitto broker has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on, and click 'START' to start the add-on
 - Next, configure Mosquitto broker by going to Settings / Devices and Services / Integrations.
 Mosquitto broker should appear as a Discovered integration so click the blue 'CONFIGURE' button, then SUBMIT to complete configuring Mosquitto broker
-- With GivTCP v3 you no longer need to create a dedicated Home Assistant user for MQTT so this part of the video can be skipped over
 
 2. Install the GivTCP add-on:
 
@@ -60,8 +57,7 @@ Click on the 'GivTCP' add-on, then click 'INSTALL'
 
 3. Configure GivTCP:
 
-- The configuration process for GivTCP in v3 has changed from that shown in the video,
-the Configuration tab is no longer used and all configuration is now done via the add-on's Web interface
+- All configuration for GivTCP is done via the add-on's Web interface
 - On the GivTCP add-on, click 'START' to start the add-on
 - Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
@@ -73,10 +69,10 @@ The prefixes should be set before you start using GivTCP in anger
 as changing the prefixes later on will result in both the old and new sensor names appearing in Home Assistant with the 'old' sensors being "unavailable".<BR>
 Note that if you do change the givtcp prefixes then you will also have to edit the apps.yaml configuration file to match,
 and change the sensor names that Predbat is looking for (by default prefixed 'givtcp_xxx') to your new sensor naming structure
-- Click Next and Next to get to the Selfrun page, and turn on Self Run. The Self Run Loop Timer is how often GivTCP will retrieve data from your inverters - it's
+- Click Next and Next to get to the Selfrun page, and turn on Self Run so that GivTCP automatically retrieves data from your inverter. The Self Run Loop Timer is how often GivTCP will retrieve data - it's
 recommended that set this to a value between 20 and 60, but not less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
 and won't communicate with the GivEnergy portal and app
-- GivTCP now auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant;
+- GivTCP auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant;
 you won't need to create a dedicated MQTT user or enter the details on the MQTT page
 - You don't need to configure the Influx page. Tariff and Palm pages can also be skipped as these functions are done by Predbat
 - (Optional) On the Web page, you can turn the Dashboard on to see a simple power flow diagram for your inverters (similar to the GivEnergy mobile app)
@@ -116,34 +112,32 @@ If you have a Gen 1 or a firmware version that allows the reserve being set to 1
 [input_number.predbat_set_reserve_min](customisation.md#inverter-control-options) to reserve some battery power for use in emergencies.
 
 **NB: GivTCP and Predbat do not currently yet work together for 3-phase inverters**.
-This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable to charge or discharge 3 phase inverters with predbat](https://github.com/britkat1980/giv_tcp/issues/218)
+This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable to charge or discharge 3 phase inverters with Predbat](https://github.com/britkat1980/giv_tcp/issues/218)
 
 ## Solis Inverters before FB00
 
 To run PredBat with Solis hybrid inverters with firmware level prior to FB00 (you can recognise these by having fewer than 6 slots for charging times), follow the following steps:
 
 1. Install PredBat as per the [Installation Summary](installation-summary.md)
-2. Ensure that you have the Solax Modbus integration running and select the inverter type solis. There are a number of entities which this integration disables by default that you
-   will need to enable via the Home Assistant GUI:
+2. Ensure that you have the Solax Modbus integration running and select the inverter type solis.
+There are a number of entities which this integration disables by default that you will need to enable via the Home Assistant GUI:
 
    | Name                          | Description     |
    | :---------------------------- | :-------------- |
    | `sensor.solis_rtc`           | Real Time Clock |
    | `sensor.solis_battery_power` | Battery Power   |
 
-4. Instead of `apps.yaml` use `ginlong_solis.yaml` from this Repo as your starting template.
-   The majority of settings should be correct but please check.
-   You will need to un-comment the `template` line to enable it. Save it to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
-   Set **solax_modbus_new** in apps.yaml to True if you have integration version 2024.03.2 or greater
+3. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/gilong_solis.yaml> over the top of your `apps.yaml`, and modify it for your system
+4. Set **solax_modbus_new** in `apps.yaml` to True if you have integration version 2024.03.2 or greater
 5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
-   If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
-   this is not fully tested. In due course, these mode settings will be incorporated into the code.
-6. Your inverter will require a "button press" triggered by Predbat to update the schedules.
+If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that this is not fully tested.
+In due course, these mode settings will be incorporated into the code.
+6. Your inverter will require a "button press" triggered by Predbat to update the schedules. Some Solis inverter integrations feature a combined charge/discharge update button, in which case a single `apps.yaml` entry of:
 
-   ```yaml
-   charge_discharge_update_button:
-     - button.solis_update_charge_discharge_times
-   ```
+```yaml
+  charge_discharge_update_button:
+    - button.solis_update_charge_discharge_times
+```
 
 7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
@@ -152,36 +146,253 @@ To run PredBat with Solis hybrid inverters with firmware level prior to FB00 (yo
 To run PredBat with Solis hybrid inverters with firmware level FB00 or later (you can recognise these by having 6 slots for charging times), follow the following steps:
 
 1. Install PredBat as per the [Installation Summary](installation-summary.md)
-2. Ensure that you have the Solax Modbus integration running and select the inverter type solis_fb00. There are a number of entities which this integration disables by default that you
-   will need to enable via the Home Assistant GUI:
+2. Ensure that you have the Solax Modbus integration running and select the inverter type solis_fb00.
+There are a number of entities which this integration disables by default that you will need to enable via the Home Assistant GUI:
 
    | Name                          | Description     |
    | :---------------------------- | :-------------- |
-   | `sensor.solis_rtc`           | Real Time Clock |
-   | `sensor.solis_battery_power` | Battery Power   |
+   | `sensor.solisx_rtc`           | Real Time Clock |
+   | `sensor.solisx_battery_power` | Battery Power   |
 
-3. Instead of `apps.yaml` use `ginlong_solis.yaml` from this Repo as your starting template.
-   The majority of settings should be correct but please check.
-   You will need to update these lines:
-   - Replace **inverter_type: "GS"** with **inverter_type: "GS_fb00"** to enable the inverter template for the newer firmware version of Solis inverters.
-   - Un-comment **charge_update_button** and **discharge_update_button** and comment out **charge_discharge_update_button** to enable
-     the two "button presses" needed for writing charge/discharge times to the inverter  
-   - Un-comment **scheduled_charge_enable** and **scheduled_discharge_enable** to enable Predbat to enable/disable the charge/discharge slots
-   - Un-comment **charge_limit** to enable the charge limit through setting an upper SOC value
-   - Set **solax_modbus_new** to True if you have integration version 2024.03.2 or greater
-   - Last you will need to comment out or delete the **template** line to enable the configuration
+3. Copy the template <https://github.com/springfall2008/batpred/blob/main/templates/gilong_solis.yaml> over the top of your `apps.yaml`, and modify it for your system.
+You will need to update these lines:
 
-4. Save the file as **apps.yaml** to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
+- Replace **inverter_type: "GS"** with **inverter_type: "GS_fb00"** to enable the inverter template for the newer firmware version of Solis inverters
+- Un-comment **charge_update_button** and **discharge_update_button** and comment out **charge_discharge_update_button** to enable the two "button presses" needed for writing charge/discharge times to the inverter
+- Un-comment **scheduled_charge_enable** and **scheduled_discharge_enable** to enable Predbat to enable/disable the charge/discharge slots
+- Un-comment **charge_limit** to enable the charge limit through setting an upper SoC value
+- Set **solax_modbus_new** to True if you have integration version 2024.03.2 or greater
+- Lastly you will need to comment out or delete the **template** line to enable the configuration
+
+4. Save the file as `apps.yaml` to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
+
 5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
-   If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
-   this is not fully tested. In due course, these mode settings will be incorporated into the code.
-6. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.  
+If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that this is not fully tested.
+In due course, these mode settings will be incorporated into the code.
 
-## Solax Gen4 Inverters
+6. Note: Predbat will read the minimum SoC level set on the inverter via **sensor.solis_battery_minimum_soc** configured in `apps.yaml`.
+You must set the minimum SoC level that Predbat will set in **input_number.predbat_set_reserve_min** to at least 1% more than the inverter minimum SoC.<BR>
+So for example, if the inverter minimum SoC is set to 20%, predbat_set_reserve_min must be set to at least 21%. If this is not done then when Predbat sets the reserve SoC, the instruction will be rejected by the inverter and Predbat will error.
 
-Use the template configuration from: [solax.sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml)
+7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
-- Set **solax_modbus_new** in apps.yaml to True if you have integration version 2024.03.2 or greater
+## Solax Gen4+ Inverters
+
+The Predbat Solax configuration can either either use the Mode1 remote control or the newer Mode8 option. Both should work with the SolaX Gen 4, 5 or 6 inverters.  Thanks @TCWORLD for this configuration.
+
+- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/solax_sx4.yaml> over the top of your `apps.yaml`, and modify it for your system and the work mode that your inverter is set to
+- Install and configure the Solax Modbus integration in Home Assistant and confirm that it is connected to your inverter
+- The regular expressions in the custom SX4+ `apps.yaml` should auto-match to the entity names provided by your Solax Modbus integration, but do double-check that they do
+- To use Mode 1 remote control, create and save the following automation script (Settings/Automations/Scripts) which will act as the interface between Predbat and the Solax Modbus integration.<BR>
+You can change the limits for the power field if you have a larger inverter, it doesn't matter if this limit is larger than the inverter can handle as the value gets clipped to the inverter limits by the Solax Modbus integration.<BR>
+You may need to amend the 'solax_' prefixes on the entity names that this script sets if your Modbus integration has slightly different entity names (e.g. 'solaxmodbus_' or 'solax_inverter_'):
+
+```yaml
+alias: SolaX Remote Control
+description: ""
+fields:
+  power:
+    selector:
+      number:
+        min: 0
+        max: 6600
+    default: 0
+  operation:
+    selector:
+      select:
+        multiple: false
+        options:
+          - Disabled
+          - Force Charge
+          - Force Discharge
+          - Freeze Charge
+          - Freeze Discharge
+    default: Disabled
+    required: false
+  duration:
+    selector:
+      number:
+        min: 300
+        max: 86400
+    default: 28800
+    required: false
+sequence:
+  - variables:
+      defaultPower: "{{ 200 }}"
+      mode: |-
+        {% set map = {
+           'Disabled': 'Disabled',
+           'Force Charge': 'Enabled Battery Control',
+           'Force Discharge': 'Enabled Battery Control',
+           'Freeze Charge': 'Enabled No Discharge',
+           'Freeze Discharge': 'Enabled Feedin Priority'} %}
+        {{ map.get( operation, 'Disabled' ) }}
+      activeP: >-
+        {% set chargePower = (power | int(defaultPower)) if power is defined else
+        defaultPower %}
+
+        {% set dischargePower = (0 - chargePower) %}
+
+        {% set map = {
+           'Disabled': 0,
+           'Force Charge': chargePower,
+           'Force Discharge': dischargePower,
+           'Freeze Charge': 0,
+           'Freeze Discharge': 0} %}
+        {{ map.get( operation, 0 ) }}
+  - action: number.set_value
+    data:
+      value: "{{ activeP }}"
+    target:
+      entity_id: number.solax_remotecontrol_active_power
+  - action: number.set_value
+    data:
+      value: "60"
+    target:
+      entity_id: number.solax_remotecontrol_duration
+  - action: number.set_value
+    data:
+      value: "{{ duration if duration is defined else 28800 }}"
+    target:
+      entity_id: number.solax_remotecontrol_autorepeat_duration
+  - action: select.select_option
+    data:
+      option: "{{ mode if mode is defined else Disabled }}"
+    target:
+      entity_id: select.solax_remotecontrol_power_control
+  - action: button.press
+    data: {}
+    target:
+      entity_id: button.solax_remotecontrol_trigger
+mode: queued
+max: 10
+```
+
+- To use Mode 1 remote control, ensure the following entities are enabled:
+
+    - number.solax_remotecontrol_active_power
+    - number.solax_remotecontrol_duration
+    - number.solax_remotecontrol_autorepeat_duration
+    - select.solax_remotecontrol_power_control
+    - button.solax_remotecontrol_trigger
+
+- To use Mode 8 power control API (Gen 4 or newer inverter) which has direct control over the battery charge/discharge rate, and can directly set the battery (dis)charge rate without limiting any PV generation,
+create and save the following automation script (Settings/Automations/Scripts) which will act as the interface between Predbat and the Solax Modbus integration.<BR>
+In the script, change 'maxPvPower: "{{ 12000 }}"' to a value larger than your PV array size so the script doesn't limit PV generation.<BR>
+Change 'max: 6600' - to a value larger than the maximum charge/discharge power for your battery (doesn't matter if higher).<BR>
+Note: Mode8 requires version 2025.10.7 or newer of the SolaX Modbus integration as there are some necessary Mode 8 improvements added:
+
+```yaml
+alias: SolaX Remote Control (Mode 8)
+description: ""
+fields:
+  power:
+    selector:
+      number:
+        min: 0
+        max: 6600
+    default: 0
+  operation:
+    selector:
+      select:
+        multiple: false
+        options:
+          - Disabled
+          - Force Charge
+          - Force Discharge
+          - Freeze Charge
+          - Freeze Discharge
+    default: Disabled
+    required: false
+  duration:
+    selector:
+      number:
+        min: 60
+        max: 86400
+    default: 28800
+sequence:
+  - variables:
+      maxPvPower: "{{ 12000 }}"
+      defaultPower: "{{ 200 }}"
+      mode: |-
+        {% set map = {
+           'Disabled': 'Disabled',
+           'Force Charge': 'Mode 8 - PV and BAT control - Duration',
+           'Force Discharge': 'Mode 8 - PV and BAT control - Duration',
+           'Freeze Charge': 'Enabled No Discharge',
+           'Freeze Discharge': 'Export-First Battery Limit'} %}
+        {{ map.get( operation, 'Disabled' ) }}
+      activeP: >-
+        {% set dischargePower = (power | int(defaultPower)) if power is defined
+        else defaultPower %} {% set chargePower = (0 - dischargePower) %} {% set map
+        = {
+           'Disabled': 0,
+           'Force Charge': chargePower,
+           'Force Discharge': dischargePower,
+           'Freeze Charge': 0,
+           'Freeze Discharge': 0} %}
+        {{ map.get( operation, 0 ) }}
+  - action: number.set_value
+    data:
+      value: "{{ activeP }}"
+    target:
+      entity_id: number.solax_remotecontrol_push_mode_power_8_9
+  - action: number.set_value
+    data:
+      value: "{{ maxPvPower }}"
+    target:
+      entity_id: number.solax_remotecontrol_pv_power_limit
+  - action: number.set_value
+    data:
+      value: "30"
+    target:
+      entity_id: number.solax_remotecontrol_duration
+  - action: number.set_value
+    data:
+      value: "300"
+    target:
+      entity_id: number.solax_remotecontrol_timeout
+  - action: number.set_value
+    data:
+      value: "{{ duration if duration is defined else 28800 }}"
+    target:
+      entity_id: number.solax_remotecontrol_autorepeat_duration
+  - action: select.select_option
+    data:
+      option: VPP Off
+    target:
+      entity_id: select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
+  - action: select.select_option
+    data:
+      option: "{{ mode if mode is defined else Disabled }}"
+    target:
+      entity_id: select.solax_remotecontrol_power_control_mode
+  - action: button.press
+    data: {}
+    enabled: true
+    target:
+      entity_id: button.solax_powercontrolmode8_trigger
+mode: queued
+max: 10
+```
+
+- To use Mode 8 power control, ensure the following entities are enabled:
+
+    - number.solax_remotecontrol_push_mode_power_8_9
+    - number.solax_remotecontrol_pv_power_limit
+    - number.solax_remotecontrol_duration
+    - number.solax_remotecontrol_timeout
+    - number.solax_remotecontrol_autorepeat_duration
+    - select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
+    - select.solax_remotecontrol_power_control_mode
+    - button.solax_powercontrolmode8_trigger
+
+- Predbat needs a 'Todays House Load' sensor, this can be created from inverter-supplied information by creating two custom helper entities:
+    - Create a helper entity of type 'Integral', set the Name to 'Todays House Load Integral', Metric Prefix to 'k (kilo)', Time unit to 'Hours', Input sensor to 'House Load', Integration method to 'Trapezoidal', Precision to '2'
+    and Max sub-interval to '0:05:00'
+    - Create a helper entity of type 'Utility Meter', set the Name to 'Todays House Load', Input sensor to 'Todays House Load Integral' (that you just created) and Meter Reset Cycle to 'Daily'
+
+- When you first start Predbat, check the [Predbat log](output-data.md#predbat-logfile) to confirm that the correct sensor names are identified by the regular expressions in `apps.yaml`. Any non-matching expressions should be investigated and resolved
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 
@@ -193,10 +404,10 @@ For this integration, the key elements are:
 - Software - [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) - MQTT integration
 - Home Assistant configuration - [sofar_inverter.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yaml) (in templates directory),
 defines the custom HA entities and should be added to HA's `configuration.yaml`. This is the default Sofar HA configuration with a couple of additional inputs to support battery capacity.
-- Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory). This file should be copied to apps.yaml
+- Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory). This file should be copied over the top of your `apps.yaml` and edited for your installation
 
 - Please note that the inverter needs to be put into "Passive Mode" for the sofar2mqtt to control the inverter.
-- This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%
+- This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SoC%
 - Note: You will need to change the min reserve in Home Assistant to match your minimum battery level (**input_number.predbat_set_reserve_min**).
 
 Please see this ticket in Github for ongoing discussions: <https://github.com/springfall2008/batpred/issues/395>
@@ -205,21 +416,71 @@ Please see this ticket in Github for ongoing discussions: <https://github.com/sp
 
 The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684>
 
-- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> and modify them for your system
+- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> over the top of your `apps.yaml`, and modify it for your system
 - Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which may be 12%
+
+- Huawei inverters can charge the battery from DC solar and discharge at one power level (e.g. 5kWh), but have a lower limit (e.g. 3kWh) for AC charging.
+At present Predbat doesn't have the ability to model separate DC and AC charging limits,
+so battery_rate_max is set to the lower limit in watts (e.g. 3000) in the template `apps.yaml` to ensure that Predbat correctly plans AC charging of the battery at the right rate.
+
+- However this means Predbat will also limit DC solar charging to this lower limit and to avoid that an automation is used to overwrite the **inverter_limit_charge** during the hours of sunrise and sunset:
+
+```yaml
+alias: Predbat change inverter charge rate at sunrise and sunset
+description: Using predbat_manual_api
+triggers:
+  - trigger: time
+    at:
+      entity_id: sensor.sun_next_rising
+    id: sunrise
+  - trigger: time
+    at:
+      entity_id: sensor.sun_next_setting
+    id: sunset
+conditions: []
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            alias: Sunrise
+            id:
+              - sunrise
+        sequence:
+          - action: select.select_option
+            alias: set inverter charge rate to 5000W at sunrise for maximum DC solar charging
+            target:
+              entity_id:
+                - select.predbat_manual_api
+            data:
+              option: inverter_limit_charge(0)=5000
+      - conditions:
+          - condition: trigger
+            alias: Sunset
+            id:
+              - sunset
+        sequence:
+          - action: select.select_option
+            alias: set inverter charge rate to 1500W at sunset for reduced AC charging rate
+            target:
+              entity_id:
+                - select.predbat_manual_api
+            data:
+              option: inverter_limit_charge(0)=3000
+mode: single
+```
+
+- Set the Huawei inverter work mode to 'TOU' (Time Of Use).
 
 ## SolarEdge Inverters
 
-The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181>
-
-- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> and modify them for your system
-- The default entity name prefix for the integration is 'solaredge' but if you have changed this on installation then you will need to amend the apps.yaml template and the template sensors to match your new prefix
+- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> over the top of your `apps.yaml` and modify it for your system
+- The default entity name prefix for the integration is 'solaredge' but if you have changed this on installation then you will need to amend the `apps.yaml` template and the template sensors to match your new prefix
 - Ensure that **number.solaredge_i1_storage_command_timeout** is set to a reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled
 - Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
 and **switch.solaredge_i1_advanced_power_control** must be on.
 
-- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template within your Home Assistant `configuration.yaml`.
-Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in apps.yaml if you can't get it to work
+- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create these as a template entities within your Home Assistant `configuration.yaml`.
+These sensors are not critical so you can just comment them out in `apps.yaml` if you can't get them to work:
 
 ```yaml
 template:
@@ -281,67 +542,68 @@ You will need to make a number of changes to the solaredge apps.yaml, replacing 
 
 - set charge_rate and discharge_rate to the SolarEdge inverter values, e.g. 5000
 
-And add the following additional template sensors to configuration.yaml:
+- And add the following additional template sensors to `configuration.yaml` after the existing 'template:' line (from the earlier template sensor definitions):
 
 ```yaml
-    - sensor:
-      # Template sensor for Max Battery Charge rate
-      # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
-      # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
-      - name: "Calc Power - Batteries Max Charge Power"
-        unique_id: calc_power_batteries_max_charge_power
-        unit_of_measurement: "W"
-        device_class: "power"
-        state_class: "measurement"
-        state: >
-          {% set myB1 = float(states('sensor.solaredge_b1_max_charge_power'),0) %}
-          {% set myB2 = float(states('sensor.solaredge_b2_max_charge_power'),0) %}
-          {% set myB3 = float(states('sensor.solaredge_b3_max_charge_power'),0) %}
-          {% set myValue = ((myB1 + myB2 + myB3)) | int %}
-          {{ (myValue if (myValue) > 5000 else 5000) }}
+  - sensor:
+    # Template sensor for Max Battery Charge rate
+    # This is the sum of all three batteries charge rate as the max charge rate can be higher than inverter capacity (e.g. 8k) when charging from AC+Solar
+    # Returns 5000W as the minimum max value, the single battery charge/discharge limit to ensure at least one battery can always be charged if one or more batteries have 'gone offline' to modbus
+    # Remove all 'B3' entries if you only have two batteries, or follow the same pattern for adding 'B4', etc if you have more than 3 batteries
+    - name: "Calc Power - Batteries Max Charge Power"
+      unique_id: calc_power_batteries_max_charge_power
+      unit_of_measurement: "W"
+      device_class: "power"
+      state_class: "measurement"
+      state: >
+        {% set myB1 = float(states('sensor.solaredge_b1_max_charge_power'),0) %}
+        {% set myB2 = float(states('sensor.solaredge_b2_max_charge_power'),0) %}
+        {% set myB3 = float(states('sensor.solaredge_b3_max_charge_power'),0) %}
+        {% set myValue = ((myB1 + myB2 + myB3)) | int %}
+        {{ (myValue if (myValue) > 5000 else 5000) }}
 
-      # Calculate Total Battery Power Value
-      - name: "Calc Power - Batteries DC Power"
-        unique_id: calc_power_batteries_dc_power
-        unit_of_measurement: "W"
-        device_class: "power"
-        state_class: "measurement"
-        state: >
-          {% set myB1 = float(states('sensor.solaredge_b1_dc_power'),0) %}
-          {% set myB2 = float(states('sensor.solaredge_b2_dc_power'),0) %}
-          {% set myB3 = float(states('sensor.solaredge_b3_dc_power'),0) %}
-          {% set myValue = ((myB1 + myB2 + myB3)) %}
-          {{ myValue }}
+    # Calculate Total Battery Power Value
+    - name: "Calc Power - Batteries DC Power"
+      unique_id: calc_power_batteries_dc_power
+      unit_of_measurement: "W"
+      device_class: "power"
+      state_class: "measurement"
+      state: >
+        {% set myB1 = float(states('sensor.solaredge_b1_dc_power'),0) %}
+        {% set myB2 = float(states('sensor.solaredge_b2_dc_power'),0) %}
+        {% set myB3 = float(states('sensor.solaredge_b3_dc_power'),0) %}
+        {% set myValue = ((myB1 + myB2 + myB3)) %}
+        {{ myValue }}
 
-      # Average state of charge across the batteries
-      - name: "Calc Battery All State"
-        unique_id: calc_battery_all_state
-        unit_of_measurement: "%"
-        state: >
-          {% set myB1 = float(states('sensor.solaredge_b1_state_of_energy'),0) %}
-          {% set myB2 = float(states('sensor.solaredge_b2_state_of_energy'),0) %}
-          {% set myB3 = float(states('sensor.solaredge_b3_state_of_energy'),0) %}
-          {% set myValue = ((myB1 + myB2 + myB3) / 3) | round(0) %}
-          {{ myValue }}
+    # Average state of charge across the batteries
+    - name: "Calc Battery All State"
+      unique_id: calc_battery_all_state
+      unit_of_measurement: "%"
+      state: >
+        {% set myB1 = float(states('sensor.solaredge_b1_state_of_energy'),0) %}
+        {% set myB2 = float(states('sensor.solaredge_b2_state_of_energy'),0) %}
+        {% set myB3 = float(states('sensor.solaredge_b3_state_of_energy'),0) %}
+        {% set myValue = ((myB1 + myB2 + myB3) / 3) | round(0) %}
+        {{ myValue }}
 
-      # Total Energy Stored in the Batteries
-      - name: "Calc Battery Total Capacity"
-        unique_id: calc_battery_total_capacity
-        unit_of_measurement: kWh
-        state: >
-          {% set myB1 = float(states('sensor.solaredge_b1_maximum_energy'),0) %}
-          {% set myB2 = float(states('sensor.solaredge_b2_maximum_energy'),0) %}
-          {% set myB3 = float(states('sensor.solaredge_b3_maximum_energy'),0) %}
-          {% set myValue = ((myB1 + myB2 + myB3)) %}
-          {{ myValue }}
+    # Total Energy Stored in the Batteries
+    - name: "Calc Battery Total Capacity"
+      unique_id: calc_battery_total_capacity
+      unit_of_measurement: kWh
+      state: >
+        {% set myB1 = float(states('sensor.solaredge_b1_maximum_energy'),0) %}
+        {% set myB2 = float(states('sensor.solaredge_b2_maximum_energy'),0) %}
+        {% set myB3 = float(states('sensor.solaredge_b3_maximum_energy'),0) %}
+        {% set myValue = ((myB1 + myB2 + myB3)) %}
+        {{ myValue }}
 
-      # Current Energy Stored in the Batteries
-      - name: "Calc Battery Current Capacity"
-        unique_id: calc_battery_current_capacity
-        unit_of_measurement: kWh
-        state: >
-          {% set myValue = (float(states('sensor.calc_battery_all_state'),0) / 100) * float(states('sensor.calc_battery_total_capacity'),0) %}
-          {{ myValue }}
+    # Current Energy Stored in the Batteries
+    - name: "Calc Battery Current Capacity"
+      unique_id: calc_battery_current_capacity
+      unit_of_measurement: kWh
+      state: >
+        {% set myValue = (float(states('sensor.calc_battery_all_state'),0) / 100) * float(states('sensor.calc_battery_total_capacity'),0) %}
+        {{ myValue }}
 ```
 
 ## GivEnergy with ge_cloud
@@ -349,23 +611,23 @@ And add the following additional template sensors to configuration.yaml:
 This is an experimental system, please discuss it on the ticket: <https://github.com/springfall2008/batpred/issues/905>
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
-- Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit
+- Now copy the template `givenergy_cloud.yaml` from templates over the top of your `apps.yaml` and edit
     - Set geserial to your inverter serial number
 - Make sure that the 'discharge down to' registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled in the portal (if you have them)
 
 ## GivEnergy with EMS
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
-- Now copy the template givenergy_ems.yaml from templates into your apps.yaml and edit
+- Now copy the template `givenergy_ems.yaml` from templates over the top of your `apps.yaml` and edit
     - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
     - Set geseriale to the EMS inverter serial number (look in HA for the entity names)
 - Turn off charge, export and discharge slots 2, 3 and 4 as Predbat will only use slot 1 - set the start and end times for these to 00:00
 
 ## GivEnergy/Octopus Cloud Direct - No Home Assistant
 
-- Take the template and enter your GivEnergy API key directly into apps.yaml
-- Set your Octopus API key in apps.yaml
-- Set your Solcast API key in apps.yaml
+- Take the template and enter your GivEnergy API key directly into `apps.yaml`
+- Set your Octopus API key in `apps.yaml`
+- Set your Solcast API key in `apps.yaml`
 - Review any other configuration settings
 
 Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.
@@ -391,7 +653,7 @@ Try the template for auto-integration.
 
 This requires the LuxPython component which integrates with your Lux Power inverter
 
-- Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required
+- Copy the template `luxpower.yaml` from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required
 - LuxPower does not have a SoC max entity in kWh and the SoC percentage entity never reports the battery reaching 100%, so create the following template helper sensors:
 
 ```text
@@ -419,15 +681,28 @@ device class: Battery
 state class: Measurement
 ```
 
+If you have a LuxPower inverter with the 'Charge Last' feature you should enable the Predbat discharge freeze service. Enabling this will ensure you get the most out of Predbat.
+
+In your `apps.yaml` file:
+
+- change the 'support_discharge_freeze' line in the Inverter section from 'False' to 'True'
+- uncomment the following two lines in the 'discharge_stop_service' section so that Predbat turns switch.lux_charge_last off when it stops discharge from your inverter
+- uncomment the next three lines, so adding a new 'discharge_freeze_service'
+- make sure the indentation and alignment of these new lines is consistent with the other service entries
+
+Check that the Predbat configuration switch **switch.predbat_set_export_freeze** is turned On.
+
+After the Predbat Plan has recalculated you may notice some 'FrzExp' in the state column next to some slots.
+
 ## Growatt with Solar Assistant
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
 
-Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates into your apps.yaml and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
+Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
 
 ## Sunsynk
 
-- Copy the Sunsynk apps.yaml template and edit for your system.
+- Copy the Sunsynk template over the top of your `apps.yaml`, and edit for your system.
 - Create the following Home Assistant automations:
 
 ```yaml
@@ -500,7 +775,7 @@ mode: single
 
 ```yaml
 alias: PredBat - Copy Charge Limit
-description: Copy Battery SOC to all timezone (time) slots
+description: Copy Battery SoC to all timezone (time) slots
 trigger:
   - platform: state
     entity_id:
@@ -520,7 +795,7 @@ action:
 mode: single
 ```
 
-- Create the following templates sensors in your configuration.yaml:
+- Create the following templates sensors in your `configuration.yaml`:
 
 ```yaml
 template:
@@ -559,148 +834,613 @@ template:
 To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to follow the steps below:
 
 - make sure the inverter is already integrated into Home Assistant. Here is a ([repo](https://github.com/TypQxQ/Sigenergy-Local-Modbus)) with full integration (this is the Python version of the Sigenergy Home Assistant integration).
-- Copy the template [sigenergy_sigenstor.yaml](/templates/sigenergy_sigenstor.yaml) template over your apps.yaml and edit for your system.
+- Copy the template [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) template over your `apps.yaml`, and edit for your system.
 
-The following additions are needed to facilitate integration with Predbat and need to put put in Home Assistant `configuration.yaml` or a package yaml:
+- All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
+
+    - sensor.sigen_plant_available_max_discharging_capacity
+    - sensor.sigen_plant_daily_consumed_energy
+    - number.sigen_plant_ess_backup_state_of_charge
+    - number.sigen_plant_ess_charge_cut_off_state_of_charge
+    - number.sigen_plant_ess_discharge_cut_off_state_of_charge
+    - sensor.sigen_plant_max_active_power
+
+- The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
 
 ```yaml
-    input_select:
-      predbat_requested_mode:
-        name: "Predbat Requested Mode"
-        options:
-          - "Demand"
-          - "Charging"
-          - "Freeze Charging"
-          - "Discharging"
-          - "Freeze Discharging"
-        initial: "Demand"
-        icon: mdi:battery-unknown
+input_select:
+  predbat_requested_mode:
+    name: "Predbat Requested Mode"
+    options:
+      - "Demand"
+      - "Charging"
+      - "Freeze Charging"
+      - "Discharging"
+      - "Freeze Discharging"
+    initial: "Demand"
+    icon: mdi:battery-unknown
 
-    automation:
-      - id: predbat_requested_mode_action
-        alias: "Predbat Requested Mode Action"
-        description: "Acts as a mapper for the input_select.predbat_requested_mode to the select.sigen_plant_remote_ems_control_mode"
-        mode: restart
-        triggers:
-          - trigger: state
-            entity_id:
-              - input_select.predbat_requested_mode
-        conditions: []
-        actions:
-          - action: select.select_option
-            metadata: {}
-            target:
-              entity_id: select.sigen_plant_remote_ems_control_mode
-            data:
-              option: >
-                {% if is_state('input_select.predbat_requested_mode', "Demand") %}Maximum Self Consumption
-                {% elif is_state('input_select.predbat_requested_mode', "Charging") %}Command Charging (PV First)
-                {% elif is_state('input_select.predbat_requested_mode', "Freeze Charging") %}Maximum Self Consumption
-                {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
-                {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
-                {% endif %}
-          - choose:
-              # Set charging limit to 0 when requested mode is Freeze Charging
-              # Docs:
-              #  Freeze charging - The battery is charging but the current battery level (SoC) is frozen (held). Think of it
-              #  as a charge to the current battery level. The grid or solar covers any house load. If there is a shortfall of
-              #  Solar power to meet house load, the excess house load is met from grid import, but if there is excess Solar
-              #  power above the house load, the excess solar will be used to charge the battery
-              # In Sigenergy, this is effectively "self consumption" mode with discharging prohibited
-              - conditions:
-                  - condition: state
-                    entity_id: input_select.predbat_requested_mode
-                    state: "Freeze Charging"
-                sequence:
-                  - service: number.set_value
-                    data_template:
-                      entity_id: number.sigen_plant_ess_max_discharging_limit
-                      value: 0
+input_number:
+  charge_rate:
+    name: Battery charge rate
+    initial: 6950
+    min: 0
+    max: 20000
+    step: 1
+    mode: box
+    unit_of_measurement: W
 
-              # Set charging limit to 0 when requested mode is Freeze Discharging
-              # Docs:
-              #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
-              #  but with charging disabled. The battery or solar covers the house load. As charging is disabled, if there is
-              #  excess solar generated, the current SoC level will be held and the excess solar will be exported. If there is
-              #  a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
-              # In Sigenergy, this is effectively "self consumption" mode with charging prohibited
-              - conditions:
-                  - condition: state
-                    entity_id: input_select.predbat_requested_mode
-                    state: "Freeze Discharging"
-                sequence:
-                  - service: number.set_value
-                    data_template:
-                      entity_id: number.sigen_plant_ess_max_charging_limit
-                      value: 0
-
-              # If neither of the above conditions are met, set the limits to the input numbers
-              - conditions:
-                  - condition: not
-                    conditions:
-                      - condition: state
-                        entity_id: input_select.predbat_requested_mode
-                        state: "Freeze Charging"
-                      - condition: state
-                        entity_id: input_select.predbat_requested_mode
-                        state: "Freeze Discharging"
-                sequence:
-                  - service: number.set_value
-                    data_template:
-                      entity_id: number.sigen_plant_ess_max_charging_limit
-                      value: "{{ [(states('input_number.charge_rate') | float / 1000) | round(2), states('sensor.sigen_inverter_ess_rated_charge_power') | float] | min}}"
-                  - service: number.set_value
-                    data_template:
-                      entity_id: number.sigen_plant_ess_max_discharging_limit
-                      value: "{{ [(states('input_number.discharge_rate') | float / 1000) | round(2), states('sensor.sigen_inverter_ess_rated_discharge_power') | float] | min}}"
-
-      - id: "automation_sigen_ess_max_charging_limit_input_number_action"
-        alias: "Predbat max charging limit action"
-        description: "Mapper from input_number.charge_rate to number.sigen_plant_ess_max_charging_limit"
-        triggers:
-          - trigger: state
-            entity_id: input_number.charge_rate
-        action:
-          - action: number.set_value
-            target:
-              entity_id: number.sigen_plant_ess_max_charging_limit
-            data:
-              value: "{{ (states('input_number.charge_rate')| float / 1000) | round(2) }}"
-        mode: single
-
-      - id: "automation_sigen_ess_max_discharging_limit_input_number_action"
-        alias: "Predbat max discharging limit action"
-        description: "Mapper from input_number.discharge_rate to number.sigen_plant_ess_max_discharging_limit"
-        triggers:
-          - trigger: state
-            entity_id: input_number.discharge_rate
-        action:
-          - action: number.set_value
-            target:
-              entity_id: number.sigen_plant_ess_max_discharging_limit
-            data:
-              value: "{{ (states('input_number.discharge_rate')| float / 1000) | round(2) | int }}"
-        mode: single
-
-    input_number:
-      charge_rate:
-        name: Battery charge rate
-        initial: 6950
-        min: 0
-        max: 20000
-        step: 1
-        mode: box
-        unit_of_measurement: W
-
-      discharge_rate:
-        name: Battery discharge rate
-        initial: 8000
-        min: 0
-        max: 20000
-        step: 1
-        mode: box
-        unit_of_measurement: W
+  discharge_rate:
+    name: Battery discharge rate
+    initial: 8000
+    min: 0
+    max: 20000
+    step: 1
+    mode: box
+    unit_of_measurement: W
 ```
+
+Add the following automations to `automations.yaml` (or configure via the UI):
+
+```yaml
+- id: predbat_requested_mode_action
+  alias: "Predbat Requested Mode Action"
+  description: "Acts as a mapper for the input_select.predbat_requested_mode to the select.sigen_plant_remote_ems_control_mode"
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id:
+        - input_select.predbat_requested_mode
+  conditions: []
+  actions:
+    - action: select.select_option
+      metadata: {}
+      target:
+        entity_id: select.sigen_plant_remote_ems_control_mode
+      data:
+        option: >
+          {% if is_state('input_select.predbat_requested_mode', "Demand") %}Maximum Self Consumption
+          {% elif is_state('input_select.predbat_requested_mode', "Charging") %}Command Charging (PV First)
+          {% elif is_state('input_select.predbat_requested_mode', "Freeze Charging") %}Maximum Self Consumption
+          {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
+          {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
+          {% endif %}
+
+    - choose:
+        # Freeze Charging
+        # Docs:
+        #  Freeze charging - The battery is charging but the current battery level (SoC) is frozen (held). Think of it
+        #  as a charge to the current battery level. The grid or solar covers any house load. If there is a shortfall of
+        #  Solar power to meet house load, the excess house load is met from grid import, but if there is excess Solar
+        #  power above the house load, the excess solar will be used to charge the battery
+        # In Sigenergy, this is effectively "self consumption" mode with discharging prohibited
+        - conditions:
+            - condition: state
+              entity_id: input_select.predbat_requested_mode
+              state: "Freeze Charging"
+          sequence:
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+                value: 100
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+                value: 100
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_grid_import_limitation
+                value: 0
+
+        # Freeze Discharging
+        # Docs:
+        #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
+        #  but with charging disabled. The battery or solar covers the house load. As charging is disabled, if there is
+        #  excess solar generated, the current SoC level will be held and the excess solar will be exported. If there is
+        #  a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
+        # In Sigenergy, this is effectively "self consumption" mode with charging prohibited
+        - conditions:
+            - condition: state
+              entity_id: input_select.predbat_requested_mode
+              state: "Freeze Discharging"
+          sequence:
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+                value: 0
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+                value: 0
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_grid_import_limitation
+                value: 0
+
+        # If neither of the above conditions are met, set the limits to the input numbers
+        - conditions:
+          - condition: not
+            conditions:
+              - condition: state
+                entity_id: input_select.predbat_requested_mode
+                state: "Freeze Charging"
+              - condition: state
+                entity_id: input_select.predbat_requested_mode
+                state: "Freeze Discharging"
+          sequence:
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+                value: 100
+            - action: number.set_value
+              data_template:  
+                entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge  
+                value: "{{ states('input_number.predbat_set_reserve_min') | float(10) }}"  
+            - action: number.set_value
+              data_template:
+                entity_id: number.sigen_plant_grid_import_limitation
+                value: 100
+
+- id: "automation_sigen_ess_max_charging_limit_input_number_action"
+  alias: "Predbat max charging limit action"
+  description: "Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit"
+  triggers:
+    - trigger: state
+      entity_id: input_number.charge_rate
+  action:
+    - action: number.set_value
+      target:
+        entity_id: number.sigen_plant_ess_max_charging_limit
+      data:
+        value: >-
+          "{{ [(states('input_number.charge_rate') | float / 1000) | round(2),
+          states('sensor.sigen_inverter_ess_rated_charging_power') | float] | min}}"
+        value: "{{ (states('input_number.charge_rate')| float / 1000) | round(2) }}"
+  mode: single
+
+- id: "automation_sigen_ess_max_discharging_limit_input_number_action"
+  alias: "Predbat max discharging limit action"
+  description: "Mapper from input_number.discharge_rate to number.sigen_plant_ess_max_discharging_limit"
+  triggers:
+    - trigger: state
+      entity_id: input_number.discharge_rate
+  action:
+    - action: number.set_value
+      target:
+        entity_id: number.sigen_plant_ess_max_discharging_limit
+      data:
+        value: >-
+          "{{ [(states('input_number.discharge_rate') | float / 1000) | round(2),
+          states('sensor.sigen_inverter_ess_rated_discharging_power') | float] | min}}"
+  mode: single
+```
+
+## Tesla Powerwall
+
+Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla).
+Ed's setup only covered Predbat controlling charging the Powerwall, the below configuration (thanks @Slee2112) covers both charging and discharging (exporting).
+
+*Note:* This Predbat Tesla configuration has been developed with a Powerwall 3. It may require changes for older Powerwall models. Please raise a Github issue with details of any changes you find are required so the documentation can be updated.
+
+- The Predbat Tesla `apps.yaml` configuration was developed using the Tesla Fleet integration, and you can use this, or you can use the Teslemetry integration which provides easier access to Tesla API's, but requires a [Teslemetry subscription](https://teslemetry.com/)
+- Install and configure either the Tesla Fleet integration or Teslemetry integration in Home Assistant
+- Copy the template [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) template over the top of your `apps.yaml`, and edit for your system
+
+Exporting with Powerwall is tricky, as there is no built in button as such to do it, you have to trick the Powerwall to export by changing the tariff options using the Tesla API.
+
+In order to do this you firstly need to create an API refresh token.
+
+- Create 8 input_text helpers to hold the Tesla access and refresh security tokens and your Tesla site id. These can be created via the HA UI, or added to `configuration.yaml`:
+
+```yaml
+input_text:
+  tesla_refresh_token_part1:
+    name: "Tesla Refresh Token - Part 1"
+    max: 255
+    mode: password
+
+  tesla_refresh_token_part2:
+    name: "Tesla Refresh Token - Part 2"
+    max: 255
+    mode: password
+
+  tesla_refresh_token_part3:
+    name: "Tesla Refresh Token - Part 3"
+    max: 255
+    mode: password
+
+  tesla_refresh_token_part4:
+    name: "Tesla Refresh Token - Part 4"
+    max: 255
+    mode: password
+
+  tesla_access_token_part1:
+    name: "Tesla Access Token - Part 1"
+    max: 255
+    mode: password
+
+  tesla_access_token_part2:
+    name: "Tesla Access Token - Part 2"
+    max: 255
+    mode: password
+
+  tesla_access_token_part3:
+    name: "Tesla Access Token - Part 3"
+    max: 255
+    mode: password
+
+  tesla_access_token_part4:
+    name: "Tesla Access Token - Part 4"
+    max: 255
+    mode: password
+
+  tesla_energy_site_id:
+    name: "Tesla Energy Site ID"
+    unit_of_measurement: ""
+    icon: mdi:lightning-bolt-outline
+```
+
+- Use the [Access Token Generator for Tesla](https://chromewebstore.google.com/detail/access-token-generator-fo/djpjpanpjaimfjalnpkppkjiedmgpjpe?hl=en) to create a token
+
+- This token needs to be copied, and then split into 4 parts (up to 255 characters long), so each part can be copied into the "refresh" input helpers
+
+- An automation then uses the refresh token to generate an access token valid for 8 hours, and a new refresh token than is valid for ~30 days.<BR>
+Create the following automation using the HA UI or by adding to `configuration.yaml`, the automation triggers an automatic refresh of the access token every 8 hours:
+
+```yaml
+automation:
+  alias: "Refresh Tesla Access Token"
+  description: "Refresh Tesla access token every 8 hours"
+  trigger:
+    platform: time_pattern
+    hours: "/8"
+  action:
+    - service: rest_command.tesla_refresh_token
+      response_variable: tesla_response
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part1
+      data:
+        value: "{{ tesla_response.content.access_token[0:250] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part2
+      data:
+       value: "{{ tesla_response.content.access_token[250:500] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part3
+      data:
+        value: "{{ tesla_response.content.access_token[500:750] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part4
+      data:
+        value: "{{ tesla_response.content.access_token[750:] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_refresh_token_part1
+      data:
+        value: "{{ tesla_response.content.refresh_token[0:250] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_refresh_token_part2
+      data:
+        value: "{{ tesla_response.content.refresh_token[250:500] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_refresh_token_part3
+      data:
+        value: "{{ tesla_response.content.refresh_token[500:750] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_refresh_token_part4
+      data:
+        value: "{{ tesla_response.content.refresh_token[750:] }}"
+    - service: persistent_notification.create
+      data:
+        title: "Tesla Tokens Updated"
+        message: "Access and refresh tokens have been successfully updated"
+      notification_id: "tesla_token_update"
+```
+
+- An automation executes every time HA starts and every midnight to populate the Tesla site id input_helper.
+Create the following automation using the HA UI or by adding to `configuration.yaml`:
+
+```yaml
+automation:
+  - alias: "Update Tesla Energy Site ID"
+    trigger:
+      - platform: homeassistant
+        event: start
+      - platform: time
+        at: "00:00:00"
+    action:
+      - service: rest_command.tesla_api_get_products
+        response_variable: products_response
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.tesla_energy_site_id
+        data:
+          value: "{{ products_response.content.response[0].energy_site_id }}"
+```
+
+- A number of REST commands are required to communicate to the Tesla API's:
+
+    - tesla_refresh_token - automatically regenerates access and refresh tokens,
+    - tesla_api_get_products - used to retrieve your Tesla site id,
+    - tesla_api_get_current_tariff - retrieves your current Tariff information from the Powerwall,
+    - tesla_api_set_export_now_tariff - sets a custom export rate tariff to force the Powerwall to export,
+    - tesla_api_set_iog_custom_tariff - returns the Powerwall to the Octopus IOG tariff.  If you are on a different tariff you will need to customise the REST payload to your tariff details
+
+  In `configuration.yaml` add the following lines:
+
+```yaml
+rest_command:
+  tesla_refresh_token:
+    url: "https://auth.tesla.com/oauth2/v3/token"
+    method: POST
+    content_type: "application/x-www-form-urlencoded"
+    payload: >-
+      grant_type=refresh_token&client_id=ownerapi&refresh_token={{
+        (states('input_text.tesla_refresh_token_part1') or '') +
+        (states('input_text.tesla_refresh_token_part2') or '') +
+        (states('input_text.tesla_refresh_token_part3') or '') +
+        (states('input_text.tesla_refresh_token_part4') or '') }}&scope=openid%20email%20offline_access"
+
+  tesla_api_get_products:
+    url: "https://owner-api.teslamotors.com/api/1/products"
+    method: GET
+    headers:
+      Authorization: >-
+        Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
+          (states('input_text.tesla_access_token_part2') or '') +
+          (states('input_text.tesla_access_token_part3') or '') +
+          (states('input_text.tesla_access_token_part4') or '') }}
+
+  tesla_api_get_current_tariff:
+    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
+    method: GET
+    headers:
+      Authorization: >-
+        Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
+          (states('input_text.tesla_access_token_part2') or '') +
+          (states('input_text.tesla_access_token_part3') or '') +
+          (states('input_text.tesla_access_token_part4') or '') }}
+
+  tesla_api_set_export_now_tariff:
+    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+    method: POST
+    headers:
+      Authorization: >-
+        Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
+          (states('input_text.tesla_access_token_part2') or '') +
+          (states('input_text.tesla_access_token_part3') or '') +
+          (states('input_text.tesla_access_token_part4') or '') }}
+      Content-Type: application/json
+    payload: >
+      {% set now = now() %}
+      {% set minute = now.minute %}
+      {% set start = now.replace(minute=0) if minute < 30 else now.replace(minute=30) %}
+      {% set end = start + timedelta(minutes=60) %}
+      {% set ns = namespace(super_off_peak_periods=[]) %}
+      {% if start.hour > 0 %}
+        {% set ns.super_off_peak_periods = ns.super_off_peak_periods + [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": start.hour, "toMinute": start.minute}] %}
+      {% endif %}
+      {% if end.hour > 0 %}
+        {% set ns.super_off_peak_periods = ns.super_off_peak_periods + [{"fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": end.hour, "fromMinute": end.minute, "toHour": 0, "toMinute": 0}] %}
+      {% endif %}
+      {
+        "tou_settings": {
+          "tariff_content_v2": {
+            "version": 1,
+            "utility": "Octopus Energy",
+            "code": "OCTO-IOG-CUSTOM",
+            "name": "Octopus IOG (Force Export Now)",
+            "currency": "GBP",
+            "monthly_minimum_bill": 0,
+            "min_applicable_demand": 0,
+            "max_applicable_demand": 0,
+            "monthly_charges": 0,
+            "daily_charges": [
+              { "name": "Charge", "amount": 0 }
+            ],
+            "daily_demand_charges": {},
+            "demand_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": { "rates": {} }
+            },
+            "energy_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": {
+                "rates": {
+                  "SUPER_OFF_PEAK": 0.07,
+                  "ON_PEAK": 0.31
+                }
+              }
+            },
+            "seasons": {
+              "AllYear": {
+                "fromMonth": 1,
+                "fromDay": 1,
+                "toMonth": 12,
+                "toDay": 31,
+                "tou_periods": {
+                  "SUPER_OFF_PEAK": {
+                    "periods": {{ ns.super_off_peak_periods | tojson }}
+                  },
+                  "ON_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ start.hour }}, "fromMinute": {{ start.minute }}, "toHour": {{ end.hour }}, "toMinute": {{ end.minute }} }
+                    ]
+                  }
+                }
+              }
+            },
+            "sell_tariff": {
+              "min_applicable_demand": 0,
+              "max_applicable_demand": 0,
+              "monthly_minimum_bill": 0,
+              "monthly_charges": 0,
+              "utility": "Octopus Energy",
+              "daily_charges": [
+                { "name": "Charge", "amount": 0 }
+              ],
+              "demand_charges": {
+                "ALL": { "rates": { "ALL": 0 } },
+                "AllYear": { "rates": {} }
+              },
+              "energy_charges": {
+                "ALL": { "rates": { "ALL": 0 } },
+                "AllYear": {
+                  "rates": {
+                    "SUPER_OFF_PEAK": 0.07,
+                    "ON_PEAK": 0.30
+                  }
+                }
+              },
+              "seasons": {
+                "AllYear": {
+                  "fromMonth": 1,
+                  "fromDay": 1,
+                  "toMonth": 12,
+                  "toDay": 31,
+                  "tou_periods": {
+                    "SUPER_OFF_PEAK": {
+                      "periods": {{ ns.super_off_peak_periods | tojson }}
+                    },
+                    "ON_PEAK": {
+                      "periods": [
+                        { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": {{ start.hour }}, "fromMinute": {{ start.minute }}, "toHour": {{ end.hour }}, "toMinute": {{ end.minute }} }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+  tesla_api_set_iog_custom_tariff:
+    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+    method: POST
+    headers:
+      Authorization: >-
+        Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
+          (states('input_text.tesla_access_token_part2') or '') +
+          (states('input_text.tesla_access_token_part3') or '') +
+          (states('input_text.tesla_access_token_part4') or '') }}
+      Content-Type: application/json
+    payload: >
+      {
+        "tou_settings": {
+          "tariff_content_v2": {
+            "version": 1,
+            "monthly_minimum_bill": 0,
+            "min_applicable_demand": 0,
+            "max_applicable_demand": 0,
+            "monthly_charges": 0,
+            "utility": "Octopus Energy",
+            "code": "OCTO-IOG-CUSTOM",
+            "name": "Octopus IOG (Custom-restored)",
+            "currency": "GBP",
+            "daily_charges": [
+              { "name": "Charge", "amount": 0 }
+            ],
+            "daily_demand_charges": {},
+            "demand_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": { "rates": {} }
+            },
+            "energy_charges": {
+              "ALL": { "rates": { "ALL": 0 } },
+              "AllYear": {
+                "rates": {
+                  "SUPER_OFF_PEAK": 0.07,
+                  "PARTIAL_PEAK": 0.31,
+                  "ON_PEAK": 0.31
+                }
+              }
+            },
+            "seasons": {
+              "AllYear": {
+                "fromMonth": 1,
+                "fromDay": 1,
+                "toMonth": 12,
+                "toDay": 31,
+                "tou_periods": {
+                  "SUPER_OFF_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 5, "toMinute": 30 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 0 }
+                    ]
+                  },
+                  "ON_PEAK": {
+                    "periods": [
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 2, "fromMinute": 0, "toHour": 3, "toMinute": 0 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 5, "fromMinute": 30, "toHour": 16, "toMinute": 0 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 16, "fromMinute": 0, "toHour": 19, "toMinute": 0 },
+                      { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 19, "fromMinute": 0, "toHour": 23, "toMinute": 30 }
+                    ]
+                  }
+                }
+              }
+            },
+            "sell_tariff": {
+              "min_applicable_demand": 0,
+              "max_applicable_demand": 0,
+              "monthly_minimum_bill": 0,
+              "monthly_charges": 0,
+              "utility": "Octopus Energy",
+              "daily_charges": [
+                { "name": "Charge", "amount": 0 }
+              ],
+              "demand_charges": {
+                "ALL": { "rates": { "ALL": 0 } },
+                "AllYear": { "rates": {} }
+              },
+              "energy_charges": {
+                "ALL": { "rates": { "ALL": 0 } },
+                "AllYear": {
+                  "rates": {
+                    "SUPER_OFF_PEAK": 0.07,
+                    "PARTIAL_PEAK": 0.30,
+                    "ON_PEAK": 0.22
+                  }
+                }
+              },
+              "seasons": {
+                "AllYear": {
+                  "fromMonth": 1,
+                  "fromDay": 1,
+                  "toMonth": 12,
+                  "toDay": 31,
+                  "tou_periods": {
+                    "SUPER_OFF_PEAK": {
+                      "periods": [
+                        { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 0, "fromMinute": 0, "toHour": 5, "toMinute": 30 },
+                        { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 23, "fromMinute": 30, "toHour": 0, "toMinute": 0 }
+                      ]
+                    },
+                    "ON_PEAK": {
+                      "periods": [
+                        { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 2, "fromMinute": 0, "toHour": 3, "toMinute": 0 },
+                        { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 5, "fromMinute": 30, "toHour": 16, "toMinute": 0 },
+                        { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 16, "fromMinute": 0, "toHour": 19, "toMinute": 0 },
+                        { "fromDayOfWeek": 0, "toDayOfWeek": 6, "fromHour": 19, "fromMinute": 0, "toHour": 23, "toMinute": 30 }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+```
+
+- Manually run the two automations to ensure the helper input_texts are all pre-populated before use.
 
 ## I want to add an unsupported inverter to Predbat
 

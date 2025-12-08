@@ -22,8 +22,10 @@ predbat:
     internal_temperature:
       - sensor.living_room_temperature
 
-    # Weather data
+    # Weather data, configure to your HA weather service
     weather: weather.openweathermap
+    # or for Met Office:
+    # weather: weather.met_office_YOUR_LOCAL_FORECAST_TOWN
 
     # Sensor with history that monitors the thermostat setting in the house
     target_temperature: sensor.living_room_target

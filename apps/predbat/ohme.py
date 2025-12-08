@@ -241,7 +241,7 @@ class OhmeAPI(ComponentBase):
         battery = self.client.battery
         vehicle = self.client.current_vehicle
 
-        # self.log("Info: Ohme API: Mode: %s, Status: %s, Power: %sW, %sA, %sV, CT: %sA, Max Charge: %s, Available: %s, Target SOC: %s%%, Target Time: %s, Preconditioning: %s mins, Vehicle: %s, Slots: %s" % (
+        # self.log("Info: Ohme API: Mode: %s, Status: %s, Power: %sW, %sA, %sV, CT: %sA, Max Charge: %s, Available: %s, Target SoC: %s%%, Target Time: %s, Preconditioning: %s mins, Vehicle: %s, Slots: %s" % (
         #         mode, status, power.watts, power.amps, power.volts, power.ct_amps, max_charge, available, target_soc,
         #         target_time, preconditioning, vehicle, slots)
         #        )
@@ -357,7 +357,7 @@ class OhmeAPI(ComponentBase):
             if (isinstance(value, float) or isinstance(value, int)) and 0 <= value <= 100:
                 await self.client.async_apply_session_rule(target_percent=int(value))
             else:
-                self.log(f"Warn: Ohme API: Invalid target SOC value: {value}")
+                self.log(f"Warn: Ohme API: Invalid target SoC value: {value}")
         elif entity_id.endswith("_preconditioning"):
             try:
                 value = int(value)

@@ -33,6 +33,140 @@ OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
 fox_attribute_table = {"mode": {}}
 
 
+def schedules_are_equal(time_now, schedule1, schedule2):
+    """
+    Docstring for schedules_are_equal
+
+    :param time_now: Datetime object
+    :param schedule1: Schedule to compare
+    :param schedule2: Schedule to compare
+    """
+    schedule1 = sort_schedule_by_start_time(time_now, schedule1)
+    schedule2 = sort_schedule_by_start_time(time_now, schedule2)
+
+    same = True
+    if len(schedule1) != len(schedule2):
+        same = False
+    else:
+        for i in range(0, len(schedule2)):
+            for key in schedule2[i]:
+                if schedule2[i][key] != schedule1[i].get(key, None):
+                    same = False
+                    break
+            if not same:
+                break
+    return same
+
+
+def end_minute_inclusive_to_exclusive(end_hour, end_minute):
+    """
+    Adjust end minute that is inclusive to exclusive (add 1 minute).
+    Handles overflow to next hour and special case at end of day.
+
+    Args:
+        end_hour: Hour value (0-23)
+        end_minute: Minute value (0-59)
+
+    Returns:
+        Tuple of (adjusted_end_hour, adjusted_end_minute)
+    """
+    if end_minute != 0:
+        end_minute += 1
+        if end_minute == 60:
+            if end_hour == 23:
+                end_minute = 59
+            else:
+                end_minute = 0
+                end_hour += 1
+    return end_hour, end_minute
+
+
+def end_minute_exclusive_to_inclusive(end_hour, end_minute):
+    """
+    Convert exclusive end time to inclusive format (subtract 1 minute).
+    Handles underflow to previous hour and special case at start of day.
+
+    Args:
+        end_hour: Hour value (0-23)
+        end_minute: Minute value (0-59)
+
+    Returns:
+        Tuple of (adjusted_end_hour, adjusted_end_minute)
+    """
+    if end_minute == 0:
+        end_hour -= 1
+        end_minute = 59
+        if end_hour < 0:
+            end_hour = 0
+            end_minute = 0
+    elif end_minute != 59:
+        end_minute -= 1
+    return end_hour, end_minute
+
+
+def minutes_to_schedule_time(hour, minute, minutes_now):
+    total_minutes = hour * 60 + minute
+    if total_minutes < minutes_now:
+        total_minutes += 24 * 60
+    return total_minutes - minutes_now
+
+
+def schedule_strip_disabled(schedule):
+    new_schedule = []
+    for entry in schedule:
+        if entry.get("enable", 0) == 1:
+            new_schedule.append(entry)
+    return new_schedule
+
+
+def sort_schedule_by_start_time(time_now, schedule):
+    minutes_now = time_now.hour * 60 + time_now.minute
+    schedule = schedule_strip_disabled(schedule)
+    schedule = sorted(schedule, key=lambda x: (minutes_to_schedule_time(x["startHour"], x["startMinute"], minutes_now)))
+    return schedule
+
+
+def validate_schedule(time_now, new_schedule, reserve, fdPwr_max):
+    # Avoid more than one schedule as fox seems to error out, so take the first only
+    # First should be the next upcoming schedule, starting now not the one closest to midnight
+    new_schedule = sort_schedule_by_start_time(time_now, new_schedule)
+    if not new_schedule:
+        # No schedule entries so disable
+        new_schedule = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}]
+        return new_schedule
+
+    if len(new_schedule):
+        new_schedule = [new_schedule[0]]
+
+    # Need to in-fill before/after with demand mode to avoid gaps
+    first_entry = new_schedule[0]
+    start_hour = first_entry["startHour"]
+    start_minute = first_entry["startMinute"]
+    end_hour = first_entry["endHour"]
+    end_minute = first_entry["endMinute"]
+
+    # Adjust end time to be inclusive
+    end_hour, end_minute = end_minute_exclusive_to_inclusive(end_hour, end_minute)
+    first_entry["endHour"] = end_hour
+    first_entry["endMinute"] = end_minute
+
+    if start_hour != 0 or start_minute != 0:
+        # Add demand mode before first entry
+        demand_end_hour, demand_end_minute = end_minute_exclusive_to_inclusive(start_hour, start_minute)
+        new_schedule.insert(0, {"enable": 1, "startHour": 0, "startMinute": 0, "endHour": demand_end_hour, "endMinute": demand_end_minute, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
+    if end_hour != 23 or end_minute != 59:
+        # Add demand mode after last entry
+        demand_start_hour = end_hour
+        demand_start_minute = end_minute
+        if demand_start_minute == 59:
+            demand_start_hour += 1
+            demand_start_minute = 0
+        else:
+            demand_start_minute += 1
+        new_schedule.append({"enable": 1, "startHour": demand_start_hour, "startMinute": demand_start_minute, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
+    return new_schedule
+
+
 class FoxAPI(ComponentBase):
     """Fox API client."""
 
@@ -430,8 +564,8 @@ class FoxAPI(ComponentBase):
         # First convert battery times into the same format as scheduler times
         # Create an array of 0 - 2 slots containing the battery charge times
 
-        minSocOnGrid = self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
-        MinSoc = self.device_settings.get(deviceSN, {}).get("MinSoc", {}).get("value", 10)
+        minSocOnGrid = self.getMinSocOnGrid(deviceSN)
+        reserve = self.local_schedule.get(deviceSN, {}).get("reserve", minSocOnGrid)
 
         battery_slots = []
         for i in range(0, 8):
@@ -467,7 +601,7 @@ class FoxAPI(ComponentBase):
                         "fdPwr": 0,
                         "workMode": "ForceCharge",
                         "fdSoc": 100,
-                        "minSocOnGrid": minSocOnGrid,
+                        "minSocOnGrid": reserve,
                     }
         self.device_current_schedule[deviceSN] = battery_slots
 
@@ -486,21 +620,32 @@ class FoxAPI(ComponentBase):
             if group.get("enable", 0) and (group.get("workMode", "") in ["ForceDischarge"]):
                 discharge_group = group
                 break
+
+        if deviceSN not in self.local_schedule:
+            self.local_schedule[deviceSN] = {}
+
         if charge_group:
+            end_hour = charge_group.get("endHour", 0)
+            end_minute = charge_group.get("endMinute", 0)
+            end_hour, end_minute = end_minute_inclusive_to_exclusive(end_hour, end_minute)
+
             self.local_schedule[deviceSN]["charge"] = {}
             self.local_schedule[deviceSN]["charge"]["start_time"] = "{:02d}:{:02d}:00".format(charge_group.get("startHour", 0), charge_group.get("startMinute", 0))
-            self.local_schedule[deviceSN]["charge"]["end_time"] = "{:02d}:{:02d}:00".format(charge_group.get("endHour", 0), charge_group.get("endMinute", 0))
+            self.local_schedule[deviceSN]["charge"]["end_time"] = "{:02d}:{:02d}:00".format(end_hour, end_minute)
             self.local_schedule[deviceSN]["charge"]["soc"] = charge_group.get("maxSoc", 100)
             self.local_schedule[deviceSN]["charge"]["power"] = self.fdpwr_max[deviceSN]
             self.local_schedule[deviceSN]["charge"]["enable"] = 1 if charge_group.get("enable", 0) else 0
         if discharge_group:
+            end_hour = discharge_group.get("endHour", 0)
+            end_minute = discharge_group.get("endMinute", 0)
+            end_hour, end_minute = end_minute_inclusive_to_exclusive(end_hour, end_minute)
             self.local_schedule[deviceSN]["discharge"] = {}
             self.local_schedule[deviceSN]["discharge"]["start_time"] = "{:02d}:{:02d}:00".format(discharge_group.get("startHour", 0), discharge_group.get("startMinute", 0))
-            self.local_schedule[deviceSN]["discharge"]["end_time"] = "{:02d}:{:02d}:00".format(discharge_group.get("endHour", 0), discharge_group.get("endMinute", 0))
+            self.local_schedule[deviceSN]["discharge"]["end_time"] = "{:02d}:{:02d}:00".format(end_hour, end_minute)
             self.local_schedule[deviceSN]["discharge"]["soc"] = discharge_group.get("fdSoc", 100)
             self.local_schedule[deviceSN]["discharge"]["power"] = int(discharge_group.get("fdPwr", 0))
             self.local_schedule[deviceSN]["discharge"]["enable"] = 1 if discharge_group.get("enable", 0) else 0
-        return battery_slots
+        return self.local_schedule
 
     async def get_device_production(self, deviceSN):
         """
@@ -561,18 +706,7 @@ class FoxAPI(ComponentBase):
                 await self.set_scheduler_enabled(deviceSN, False)
         else:
             # Compare old and new schedule to see if it needs setting
-            same = True
-            if len(current_groups) != len(groups):
-                same = False
-            else:
-                for i in range(0, len(groups)):
-                    for key in groups[i]:
-                        if groups[i][key] != current_groups[i].get(key, None):
-                            same = False
-                            break
-                    if not same:
-                        break
-
+            same = schedules_are_equal(datetime.now(), current_groups, groups)
             self.log("Fox: Debug: Setting scheduler for {} same={} current_enable={} current_groups={} new_groups={}".format(deviceSN, same, current_enable, current_groups, groups))
             if not same:
                 result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
@@ -588,7 +722,22 @@ class FoxAPI(ComponentBase):
         if not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
             return
 
+        minSocOnGrid = self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
         local_schedule = self.local_schedule.get(deviceSN, {})
+
+        # Global schedule control
+        for attribute in ["reserve"]:
+            entity_id_number = "number.predbat_fox_{}_battery_schedule_{}".format(deviceSN.lower(), attribute)
+            value = local_schedule.get(attribute, 0)
+            if attribute == "reserve":
+                self.dashboard_item(
+                    entity_id_number,
+                    state=value,
+                    attributes={"min": minSocOnGrid, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "Fox {} Battery Schedule {}".format(deviceSN, attribute.replace("_", " ").capitalize()), "icon": "mdi:gauge"},
+                    app="fox",
+                )
+
+        # Per direction schedule control
         for direction in ["charge", "discharge"]:
             for attribute in ["start_time", "end_time", "soc", "enable", "power", "write"]:
                 entity_id_select = "select.predbat_fox_{}_battery_schedule_{}_{}".format(deviceSN.lower(), direction, attribute)
@@ -615,7 +764,14 @@ class FoxAPI(ComponentBase):
                         self.dashboard_item(
                             entity_id_number,
                             state=value,
-                            attributes={"min": 10, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "Fox {} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()), "icon": "mdi:gauge"},
+                            attributes={
+                                "min": minSocOnGrid,
+                                "max": 100,
+                                "step": 1,
+                                "unit_of_measurement": "%",
+                                "friendly_name": "Fox {} Battery Schedule {} {}".format(deviceSN, direction.capitalize(), attribute.replace("_", " ").capitalize()),
+                                "icon": "mdi:gauge",
+                            },
                             app="fox",
                         )
                     elif attribute == "power":
@@ -651,12 +807,34 @@ class FoxAPI(ComponentBase):
                         app="fox",
                     )
 
+    def getMinSocOnGrid(self, deviceSN):
+        """
+        Get the MinSocOnGrid setting for the device
+        """
+        value = self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
+        try:
+            value = int(float(value))
+        except ValueError:
+            value = 10
+        return value
+
     async def get_schedule_settings_ha(self, deviceSN):
         """
         Get the current schedule from HA database
         """
+        minSocOnGrid = self.getMinSocOnGrid(deviceSN)
         if deviceSN not in self.local_schedule:
             self.local_schedule[deviceSN] = {}
+        for attribute in ["reserve"]:
+            entity_id_number = "number.predbat_fox_{}_battery_schedule_{}".format(deviceSN.lower(), attribute)
+            value = self.get_state_wrapper(entity_id_number, default=0)
+            try:
+                value = int(float(value))
+            except ValueError:
+                value = 0
+            value = max(value, minSocOnGrid)
+            self.local_schedule[deviceSN][attribute] = value
+
         for direction in ["charge", "discharge"]:
             if direction not in self.local_schedule[deviceSN]:
                 self.local_schedule[deviceSN][direction] = {}
@@ -667,7 +845,7 @@ class FoxAPI(ComponentBase):
 
                 if attribute in ["start_time", "end_time"]:
                     value = self.get_state_wrapper(entity_id_select, default="00:00:00")
-                    self.local_schedule[deviceSN][attribute] = value
+                    self.local_schedule[deviceSN][direction][attribute] = value
                 elif attribute in ["soc", "power"]:
                     default_value = 0
                     if attribute == "soc" and direction == "charge":
@@ -681,10 +859,10 @@ class FoxAPI(ComponentBase):
                         value = int(float(value))
                     except ValueError:
                         value = 0
-                    self.local_schedule[deviceSN][attribute] = value
+                    self.local_schedule[deviceSN][direction][attribute] = value
                 elif attribute == "enable":
                     value = self.get_state_wrapper(entity_id_switch, default="off")
-                    self.local_schedule[deviceSN][attribute] = 1 if value == "on" else 0
+                    self.local_schedule[deviceSN][direction][attribute] = 1 if value == "on" else 0
 
     async def get_scheduler(self, deviceSN, checkBattery=True):
         """
@@ -781,7 +959,7 @@ class FoxAPI(ComponentBase):
         Retry wrapper
         """
         retries = 0
-        self.log("Fox: API Requesting {} {}".format("POST" if post else "GET", path))
+        self.log("Fox: API Requesting {} {} - data {}".format("POST" if post else "GET", path, datain))
         while retries < FOX_RETRIES:
             result, allow_retry = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
@@ -912,8 +1090,8 @@ class FoxAPI(ComponentBase):
             battery_rate_max = int(self.fdpwr_max.get(sn, 8000))
             self.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_rate_max", state=battery_rate_max, attributes={"friendly_name": f"Fox {sn} Battery Max Rate", "unit_of_measurement": "W"}, app="fox")
 
-            reserve = int(self.fdsoc_min.get(sn, 10))
-            self.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_reserve_min", state=reserve, attributes={"friendly_name": f"Fox {sn} Battery Reserve Min", "unit_of_measurement": "%"}, app="fox")
+            reserve_min = int(self.fdsoc_min.get(sn, 10))
+            self.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_reserve_min", state=reserve_min, attributes={"friendly_name": f"Fox {sn} Battery Reserve Min", "unit_of_measurement": "%"}, app="fox")
 
         for sn in self.device_values:
             for item_name in self.device_values[sn]:
@@ -1065,24 +1243,6 @@ class FoxAPI(ComponentBase):
             minute = orig_minute
         return hour, minute
 
-    def minutes_to_schedule_time(self, hour, minute, minutes_now):
-        total_minutes = hour * 60 + minute
-        if total_minutes < minutes_now:
-            total_minutes += 24 * 60
-        return total_minutes - minutes_now
-
-    def validate_schedule(self, new_schedule):
-        # Avoid more than one schedule as fox seems to error out, so take the first only
-        # First should be the next upcoming schedule, starting now not the one closest to midnight
-        time_now = datetime.now(self.local_tz)
-        minutes_now = time_now.hour * 60 + time_now.minute
-
-        new_schedule = sorted(new_schedule, key=lambda x: (self.minutes_to_schedule_time(x["startHour"], x["startMinute"], minutes_now)))
-        if len(new_schedule):
-            return [new_schedule[0]]
-        else:
-            return new_schedule
-
     async def write_battery_schedule_event(self, entity_id, value):
         """
         Handle battery schedule events
@@ -1102,15 +1262,29 @@ class FoxAPI(ComponentBase):
             self.log("Warn: Fox: Event, unknown serial number for {}: {}".format(entity_id, sn))
             return
 
+        if serial not in self.local_schedule:
+            self.local_schedule[serial] = {}
+
         direction = ""
         direction = "charge" if "_charge_" in entity_id else direction
         direction = "discharge" if "_discharge_" in entity_id else direction
+
+        # non-directional settings
+        if "_reserve" in entity_id:
+            try:
+                value = int(value)
+            except ValueError:
+                value = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
+            self.local_schedule[serial]["reserve"] = value
+            await self.publish_schedule_settings_ha(serial)
+            # Changing reserve impacts idle slots so re-apply full schedule
+            await self.apply_battery_schedule(serial)
+            return
+
         if not direction:
             self.log("Warn: Fox: Event, unknown direction for {}: {}".format(entity_id, sn))
             return
 
-        if serial not in self.local_schedule:
-            self.local_schedule[serial] = {}
         if direction not in self.local_schedule[serial]:
             self.local_schedule[serial][direction] = {}
 
@@ -1148,17 +1322,20 @@ class FoxAPI(ComponentBase):
 
     async def apply_battery_schedule(self, serial):
         new_schedule = []
+        minSocOnGrid = self.getMinSocOnGrid(serial)
+        fdPwr_max = self.fdpwr_max.get(serial, 8000)
+        reserve = self.local_schedule.get(serial, {}).get("reserve", minSocOnGrid)
+
         for direction in ["charge", "discharge"]:
             enable = self.local_schedule[serial].get(direction, {}).get("enable", 0)
             if enable:
                 start_time = self.local_schedule[serial].get(direction, {}).get("start_time", "00:00:00")
                 end_time = self.local_schedule[serial].get(direction, {}).get("end_time", "00:00:00")
                 soc = self.local_schedule[serial].get(direction, {}).get("soc", 100 if direction == "charge" else self.fdsoc_min.get(serial, 10))
-                power = self.local_schedule[serial].get(direction, {}).get("power", self.fdpwr_max.get(serial, 8000))
+                power = self.local_schedule[serial].get(direction, {}).get("power", fdPwr_max)
 
                 start_hour, start_minute = self.time_string_to_hour_minute(start_time, 0, 0)
                 end_hour, end_minute = self.time_string_to_hour_minute(end_time, 0, 0)
-                minSocOnGrid = self.device_settings.get(serial, {}).get("MinSocOnGrid", {}).get("value", 10)
 
                 if direction == "charge":
                     new_schedule.append(
@@ -1171,16 +1348,13 @@ class FoxAPI(ComponentBase):
                             "workMode": "ForceCharge",
                             "fdSoc": 100,
                             "maxSoc": soc,
-                            "fdPwr": self.fdpwr_max.get(serial, 8000),
+                            "fdPwr": fdPwr_max,
                             "minSocOnGrid": soc,
                         }
                     )
                 elif direction == "discharge":
-                    new_schedule.append(
-                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": 100, "fdPwr": power, "minSocOnGrid": minSocOnGrid}
-                    )
-
-        new_schedule = self.validate_schedule(new_schedule)
+                    new_schedule.append({"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": 100, "fdPwr": power, "minSocOnGrid": reserve})
+        new_schedule = validate_schedule(datetime.now(self.local_tz), new_schedule, reserve, fdPwr_max)
         self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
         result = await self.set_scheduler(serial, new_schedule)
         if result is not None:
@@ -1238,7 +1412,7 @@ class FoxAPI(ComponentBase):
         self.set_arg("load_power", [f"sensor.predbat_fox_{device}_loadspower" for device in batteries])
         self.set_arg("soc_percent", [f"sensor.predbat_fox_{device}_soc" for device in batteries])
         self.set_arg("soc_max", [f"sensor.predbat_fox_{device}_battery_capacity" for device in batteries])
-        self.set_arg("reserve", [f"number.predbat_fox_{device}_setting_minsocongrid" for device in batteries])
+        self.set_arg("reserve", [f"number.predbat_fox_{device}_battery_schedule_reserve" for device in batteries])
         self.set_arg("battery_min_soc", [f"sensor.predbat_fox_{device}_battery_reserve_min" for device in batteries])
         self.set_arg("charge_start_time", [f"select.predbat_fox_{device}_battery_schedule_charge_start_time" for device in batteries])
         self.set_arg("charge_end_time", [f"select.predbat_fox_{device}_battery_schedule_charge_end_time" for device in batteries])
@@ -1280,17 +1454,14 @@ async def test_fox_api(api_key):
     # Create a mock base object
     mock_base = MockBase()
 
-    sn = "603J303046YP036"
+    sn = "60BH50202A5B097"
 
     # Create FoxAPI instance with a lambda that returns the API key
-    args = {
-        "key": api_key,
-        "automatic": False,
-    }
-    fox_api = FoxAPI(mock_base, **args)
-    device_List = await fox_api.get_device_list()
-    print(f"Device List: {device_List}")
-    # return(1)
+    arg_dict = {}
+    arg_dict = {"key": api_key, "automatic": False}
+    fox_api = FoxAPI(mock_base, **arg_dict)
+    # device_List = await fox_api.get_device_list()
+    # print(f"Device List: {device_List}")
     # await fox_api.start()
     # res = await fox_api.get_device_settings(sn)
     # print(res)
@@ -1302,7 +1473,13 @@ async def test_fox_api(api_key):
     # print(res)
     # res = await fox_api.get_scheduler(sn, checkBattery=False)
     # print(res)
-    # res = await fox_api.compute_schedule(sn)
+    # res = await fox_api.get_device_detail(sn)
+    # print(res)
+    res = await fox_api.get_scheduler(sn, checkBattery=False)
+    print(res)
+    # return 1
+    res = await fox_api.compute_schedule(sn)
+    print(res)
     # res = await fox_api.publish_data()
     # res = await fox_api.set_device_setting(sn, "dummy", 42)
     # print(res)
@@ -1333,9 +1510,15 @@ async def test_fox_api(api_key):
     new_slot2["fdPwr"] = 8000
     new_slot2["minSocOnGrid"] = 100
 
-    new_schedule = fox_api.validate_schedule([new_slot])
+    minSocOnGrid = 10
+    fdPwr_max = 5000
+    new_schedule = [new_slot, new_slot2]
+
+    # new_schedule = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 1, "endMinute": 0, "workMode": "SelfUse", "fdSoc": minSocOnGrid, "maxSoc": minSocOnGrid, "fdPwr": fdPwr_max, "minSocOnGrid": minSocOnGrid}]
+    new_schedule = validate_schedule(datetime.now(fox_api.local_tz), new_schedule, minSocOnGrid, fdPwr_max)
     print("Validated schedule")
     print(new_schedule)
+    return 1
 
     print("Sending: {}".format(new_schedule))
     res = await fox_api.set_scheduler(sn, new_schedule)

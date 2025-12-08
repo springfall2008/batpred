@@ -65,10 +65,12 @@ def test_get_override_time_from_string(my_predbat):
         print("ERROR: Test 5 failed - expected {} got {}".format(expected, result))
         failed = True
 
-    # Test 6: Time-only format - exact current time (should go to tomorrow)
-    print("Test 6: Time-only format - exact current time")
+    # Test 6: Time-only format - requested time equals current time
+    # When user selects a time that equals current time (after rounding), it should select
+    # today's slot since we're within the current active slot
+    print("Test 6: Time-only format - requested time equals current time, within current slot")
     result = get_override_time_from_string(now, "14:23", 30)
-    expected = datetime(2024, 11, 27, 14, 0, 0, tzinfo=utc)  # Tomorrow, rounded down to 14:00
+    expected = datetime(2024, 11, 26, 14, 0, 0, tzinfo=utc)  # Today, rounded down to 14:00 (current slot)
     if result != expected:
         print("ERROR: Test 6 failed - expected {} got {}".format(expected, result))
         failed = True
@@ -119,6 +121,36 @@ def test_get_override_time_from_string(my_predbat):
     expected = datetime(2024, 11, 27, 0, 0, 0, tzinfo=utc)  # Tomorrow at midnight
     if result != expected:
         print("ERROR: Test 12 failed - expected {} got {}".format(expected, result))
+        failed = True
+
+    # Test 13: Bug case - current time slot is active (within plan_interval_minutes of slot start)
+    # Scenario: slot started at 23:30, current time is 23:35, should select TODAY's 23:30 slot
+    print("Test 13: Time-only format - within current active time slot (23:30 slot, now 23:35)")
+    now_in_slot = datetime(2024, 11, 26, 23, 35, 0, tzinfo=utc)
+    result = get_override_time_from_string(now_in_slot, "23:30", 30)
+    expected = datetime(2024, 11, 26, 23, 30, 0, tzinfo=utc)  # Today's 23:30 slot (NOT tomorrow)
+    if result != expected:
+        print("ERROR: Test 13 failed - expected {} got {}".format(expected, result))
+        failed = True
+
+    # Test 14: Similar case with 5-minute intervals
+    # Scenario: slot started at 14:20, current time is 14:23, should select TODAY's 14:20 slot
+    print("Test 14: Time-only format - within current active time slot (14:20 slot, now 14:23, 5-min intervals)")
+    now_in_slot_5min = datetime(2024, 11, 26, 14, 23, 0, tzinfo=utc)
+    result = get_override_time_from_string(now_in_slot_5min, "14:20", 5)
+    expected = datetime(2024, 11, 26, 14, 20, 0, tzinfo=utc)  # Today's 14:20 slot (NOT tomorrow)
+    if result != expected:
+        print("ERROR: Test 14 failed - expected {} got {}".format(expected, result))
+        failed = True
+
+    # Test 15: Edge case - exactly at plan_interval_minutes boundary
+    # Scenario: slot started at 14:00, current time is 14:30 (exactly at next slot start), should be tomorrow
+    print("Test 15: Time-only format - exactly at next slot boundary (14:00 slot, now 14:30)")
+    now_at_boundary = datetime(2024, 11, 26, 14, 30, 0, tzinfo=utc)
+    result = get_override_time_from_string(now_at_boundary, "14:00", 30)
+    expected = datetime(2024, 11, 27, 14, 0, 0, tzinfo=utc)  # Tomorrow's 14:00 slot
+    if result != expected:
+        print("ERROR: Test 15 failed - expected {} got {}".format(expected, result))
         failed = True
 
     print("**** get_override_time_from_string tests completed ****")

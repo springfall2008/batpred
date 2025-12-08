@@ -548,7 +548,7 @@ class SolarAPI(ComponentBase):
         for day in range(days):
             if day == 0:
                 self.log(
-                    "PV Forecast for today is {} ({} 10% {} 90% {} calib) kWh and left today is {} ({} 10% {} 90% {} calib) kWh".format(
+                    "PV Forecast for today is {} ({} 10%, {} 90%, {} calibrated) kWh, and PV left today is {} ({} 10%, {} 90%, {} calibrated) kWh".format(
                         dp2(total_day[day]),
                         dp2(total_day10[day]),
                         dp2(total_day90[day]),
@@ -596,7 +596,7 @@ class SolarAPI(ComponentBase):
             else:
                 day_name = "tomorrow" if day == 1 else "d{}".format(day)
                 day_name_long = day_name if day == 1 else "day {}".format(day)
-                self.log("PV Forecast for day {} is {} ({} 10% {} 90% {} CL) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day])))
+                self.log("PV Forecast for day {} is {} ({} 10%, {} 90%, {} calibrated) kWh".format(day_name, dp2(total_day[day]), dp2(total_day10[day]), dp2(total_day90[day]), dp2(total_dayCL[day])))
 
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_" + day_name,
@@ -676,7 +676,7 @@ class SolarAPI(ComponentBase):
             scaling_factor = dp4(past_day_actual[day] / past_day_forecast[day] if past_day_forecast[day] > 0 else 1.0)
             worst_day_scaling = min(worst_day_scaling, scaling_factor)
             best_day_scaling = max(best_day_scaling, scaling_factor)
-            self.log("PV Calibration: Past day {} had {} kWh of PV forecast data and actual {} kWh".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day])))
+            self.log("PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day])))
 
         # Clamp best and worst day scaling factors to sensible values
         worst_day_scaling = max(worst_day_scaling, 0.5)
@@ -684,7 +684,7 @@ class SolarAPI(ComponentBase):
         if not enabled_calibration:
             worst_day_scaling = 0.7
             best_day_scaling = 1.3
-        self.log("PV Calibration: Worst day scaling factor {} best day scaling factor {}".format(dp2(worst_day_scaling), dp2(best_day_scaling)))
+        self.log("PV Calibration: Worst day scaling factor {}, best day scaling factor {}".format(dp2(worst_day_scaling), dp2(best_day_scaling)))
 
         for slot in pv_forecast_by_slot:
             if pv_forecast_by_slot_count[slot] > 0:
@@ -705,7 +705,7 @@ class SolarAPI(ComponentBase):
             pv_distribution[slot] = dp4((pv_power_hist_by_slot.get(slot, 0)) / total_production if total_production > 0 else 0)
             forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
 
-            slot_adjustment[slot] = pv_power_hist_by_slot.get(slot, 0) / pv_forecast_by_slot.get(slot, 0) if pv_forecast_by_slot.get(slot, 0) > 0.01 else 1.0
+            slot_adjustment[slot] = dp4(pv_power_hist_by_slot.get(slot, 0) / pv_forecast_by_slot.get(slot, 0) if pv_forecast_by_slot.get(slot, 0) > 0.01 else 1.0)
             slot_adjustment[slot] = max(min(slot_adjustment[slot], 2.0), 0.5)  # Clamp adjustment factor to sensible values
 
             # Override if we don't have enough data
@@ -716,7 +716,7 @@ class SolarAPI(ComponentBase):
         total_adjustment = max(min(total_adjustment, 2.0), 0.5)
         if not enabled_calibration:
             total_adjustment = 1.0
-        self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh adjustment {}x slot adjustments {} max_kwh {} divide_by {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, slot_adjustment, max_kwh, divide_by))
+        self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh, adjustment {}x slot adjustments {}, max_kwh {}, divide_by {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, slot_adjustment, max_kwh, divide_by))
 
         # Look at PV forecast today and an adjusted version
         pv_forecast_minute_adjusted = {}
@@ -841,9 +841,9 @@ class SolarAPI(ComponentBase):
             divide_by = dp2(30 * factor)
 
             if factor != 1.0 and factor != 2.0:
-                self.log("Warn: PV Forecast today adds up to {} kWh but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
+                self.log("Warn: PV Forecast today adds up to {} kWh, but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
             else:
-                self.log("PV Forecast today adds up to {} kWh and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
+                self.log("PV Forecast today adds up to {} kWh, and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
             pv_forecast_minute, _ = minute_data(

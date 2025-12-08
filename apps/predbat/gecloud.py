@@ -524,18 +524,29 @@ class GECloudDirect(ComponentBase):
             reg_name = registers[key].get("name", "")
             value = registers[key].get("value", None)
             ha_name = regname_to_ha(reg_name)
-            if "inverter_max_output_active_power_percent" in ha_name:
-                if value and value != 100:
-                    self.log("GECloud: Setting inverter max output active power percent to 100 for {} was {}".format(device, value))
+
+            if ("export_soc_percent_limit" in ha_name) or ("discharge_soc_percent_limit" in ha_name):
+                if not value or value > 4:
+                    self.log("GECloud: Setting {} to 4 for {} was {}".format(ha_name, device, value))
+                    result = await self.async_write_inverter_setting(device, key, 4)
+                    if result and ("value" in result):
+                        registers[key]["value"] = result["value"]
+                        await self.publish_registers(device, self.settings[device], select_key=key)
+                        return True
+                    else:
+                        self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
+                        return False
+            if ("inverter_max_output_active_power_percent" in ha_name) or ("ac_charge_upper_percent_limit" in ha_name):
+                if not value or value < 100:
+                    self.log("GECloud: Setting {} to 100 for {} was {}".format(ha_name, device, value))
                     result = await self.async_write_inverter_setting(device, key, 100)
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
                         return True
                     else:
-                        self.log("GECloud: Failed to set inverter max output active power percent for {}".format(device))
+                        self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
                         return False
-
             if "real_time_control" in ha_name:
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
@@ -745,6 +756,7 @@ class GECloudDirect(ComponentBase):
             ems = devices["ems"]
             self.set_arg("inverter_type", ["GEE" for _ in range(num_inverters)])
             self.set_arg("ge_cloud_serial", ems)
+            self.set_arg("ge_cloud_data", False)
             self.set_arg("load_today", ["sensor.predbat_gecloud_" + ems + "_consumption_today"])
             self.set_arg("import_today", ["sensor.predbat_gecloud_" + ems + "_grid_import_today"])
             self.set_arg("export_today", ["sensor.predbat_gecloud_" + ems + "_grid_export_today"])
@@ -1346,6 +1358,7 @@ class GECloudData(ComponentBase):
         self.ge_cloud_serial = None
         self.api_fatal = False
         self.ge_url_cache = {}
+        self.ge_cloud_data = ge_cloud_data
         self.mdata = []
 
         # API request metrics for monitoring
@@ -1377,6 +1390,13 @@ class GECloudData(ComponentBase):
         """
         Run the client
         """
+
+        # Component can be disabled if GECloud detects an EMS system (see async_automatic_config)
+        ge_cloud_data = self.get_arg("ge_cloud_data", default=self.ge_cloud_data)
+        if not ge_cloud_data:
+            self.update_success_timestamp()
+            return True
+
         if first:
             self.max_days_previous = max(self.days_previous) + 1
             # Resolve any templated values

@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -177,7 +177,14 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     if add_days < 0:
         add_days += 7
     elif not has_day and override_time <= now_utc:
-        add_days += 1
+        # Check if override_time is within the current active time slot
+        # A slot is active if it started within plan_interval_minutes ago
+        minutes_since_override = (now_utc - override_time).total_seconds() / 60
+        is_outside_current_slot = minutes_since_override >= plan_interval_minutes
+        if is_outside_current_slot:
+            # Not in current slot, use tomorrow
+            add_days += 1
+        # else: override_time is within current active slot, use today (add_days stays 0)
 
     override_time += timedelta(days=add_days)
 
@@ -287,6 +294,7 @@ def minute_data(
     attributes=False,
     max_increment=MAX_INCREMENT,
     interpolate=False,
+    debug=False,
 ):
     """
     Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -432,6 +440,7 @@ def minute_data(
         minutes = int(timed.total_seconds() / 60)
         if to_time:
             minutes_to = int(timed_to.total_seconds() / 60)
+            minutes_delta = (timed_to.total_seconds() - timed.total_seconds()) / 60.0
 
         if minutes < newest_age:
             newest_age = minutes
@@ -440,7 +449,7 @@ def minute_data(
 
         # Power to Energy
         if integrate and to_time:
-            total_minutes = abs(minutes_to - minutes)
+            total_minutes = abs(minutes_delta)
             state = last_state + state * total_minutes / 60.0
 
         if to_time:
@@ -449,22 +458,29 @@ def minute_data(
                 mdata[minute] = state
             else:
                 if smoothing:
-                    # Reset to zero, sometimes not exactly zero
-                    if clean_increment and (state < last_state) and ((last_state - state) >= 1.0):
+                    near_midnight = (last_updated_time.time() < time(0, 6)) or (last_updated_time.time() > time(23, 58))
+                    if clean_increment and state < last_state and (near_midnight or (last_state - state >= 1)):
+                        # If there is a large drop in the data or we are near midnight where the sensor resets to zero,
+                        # then smooth out the drop.
+                        if debug:
+                            print(f"Found drop at minute {minute}, where {state} < {last_state} (near midnight = {near_midnight}). Padding to {minutes_to}")
                         while minute < minutes_to:
                             if minute >= minute_min and minute <= minute_max:
                                 mdata[minute] = state
                             minute += 1
                     else:
-                        # Incrementing data can't go backwards
+                        # Otherwise linearly interpolate between the two points, ignoring small dips in the data
                         if clean_increment and state < last_state:
                             state = last_state
+                        diff = (state - last_state) / minutes_delta
 
-                        # Create linear function
-                        diff = (state - last_state) / (minutes_to - minute)
+                        if debug:
+                            print(f"Smoothing from minute {minute} to {minutes_to}, where diff = {diff} = ({state} - {last_state}) / {minutes_delta}")
 
                         # If the spike is too big don't smooth it, it will removed in the clean function later
                         if clean_increment and max_increment > 0 and diff > max_increment:
+                            if debug:
+                                print(f"    Increment larger than max {max_increment}, setting diff to 0.")
                             diff = 0
 
                         index = 0
@@ -814,6 +830,36 @@ def str2time(str):
     return tdata
 
 
+def get_curve_value(curve, key, default=1.0):
+    """
+    Get a value from a battery power curve dictionary.
+    Supports both integer and string keys for compatibility with YAML configurations.
+
+    Args:
+        curve: Dictionary containing the power curve (e.g., battery_charge_power_curve)
+        key: Integer SOC percentage to look up
+        default: Default value if key not found (default: 1.0)
+
+    Returns:
+        The curve value at the given SOC percentage, or default if not found
+
+    Note:
+        This function handles both integer keys (100, 99, 98) and string keys ("100", "99", "98")
+        to support YAML configurations that require string keys for encryption (e.g., SOPS).
+    """
+    # Try integer key first (most common case)
+    if key in curve:
+        return curve[key]
+
+    # Try string key for YAML configs with string-based keys
+    str_key = str(key)
+    if str_key in curve:
+        return curve[str_key]
+
+    # Return default if neither found
+    return default
+
+
 def calc_percent_limit(charge_limit, soc_max):
     """
     Calculate a charge limit in percent
@@ -897,10 +943,10 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
 
 def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve, debug=False):
     """
-    Compute true charging rate from SOC and charge rate setting
+    Compute true charging rate from SoC and charge rate setting
     """
     soc_percent = calc_percent_limit(soc, soc_max)
-    max_charge_rate = battery_rate_max_charge * battery_charge_power_curve.get(soc_percent, 1.0)
+    max_charge_rate = battery_rate_max_charge * get_curve_value(battery_charge_power_curve, soc_percent, 1.0)
 
     # Temperature cap
     max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_charge)
@@ -908,7 +954,7 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
 
     if debug:
         print(
-            "Max charge rate: {} SOC: {} Percent {} Rate in: {} rate out: {} cap: {}".format(
+            "Max charge rate: {} SoC: {} Percent {} Rate in: {} rate out: {} cap: {}".format(
                 max_charge_rate * MINUTE_WATT, soc, soc_percent, charge_rate_setting * MINUTE_WATT, min(charge_rate_setting, max_charge_rate) * MINUTE_WATT, max_rate_cap * MINUTE_WATT
             )
         )
@@ -917,10 +963,10 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
 
 def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
     """
-    Compute true discharging rate from SOC and charge rate setting
+    Compute true discharging rate from SoC and charge rate setting
     """
     soc_percent = calc_percent_limit(soc, soc_max)
-    max_discharge_rate = battery_rate_max_discharge * battery_discharge_power_curve.get(soc_percent, 1.0)
+    max_discharge_rate = battery_rate_max_discharge * get_curve_value(battery_discharge_power_curve, soc_percent, 1.0)
     max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_discharge)
     max_discharge_rate = min(max_discharge_rate, max_rate_cap)
 
@@ -982,13 +1028,13 @@ def find_charge_rate(
         # If we don't have enough minutes left go to max
         if abs_minutes_left < 0:
             if log_to:
-                log_to("Low power mode: abs_minutes_left {} < 0, default to max rate".format(abs_minutes_left))
+                log_to("Low power mode: abs_minutes_left {} < 0, default to max rate".format(dp2(abs_minutes_left)))
             return max_rate, max_rate_real
 
         # If we already have reached target go back to max
         if round(soc, 2) >= target_soc:
             if log_to:
-                log_to("Low power mode: soc {} >= target_soc {}, default to max rate".format(soc, target_soc))
+                log_to("Low power mode: SoC {}kW >= target_SoC {}kW, default to max rate".format(soc, target_soc))
             return max_rate, max_rate_real
 
         # Work out the charge left in kw
@@ -998,8 +1044,8 @@ def find_charge_rate(
         if round(max_rate_real * abs_minutes_left, 2) <= charge_left:
             if log_to:
                 log_to(
-                    "Low power mode: Can't hit target: max_rate * abs_minutes_left = {} <= charge_left {}, minutes_left {} window_end {} minutes_now {} default to max rate".format(
-                        max_rate_real * abs_minutes_left, charge_left, abs_minutes_left, window["end"], minutes_now
+                    "Low power mode: Can't hit target: max_rate * abs_minutes_left = {}kW <= charge_left {}kW, minutes_left {}, window_end {}, minutes_now {}, default to max rate".format(
+                        dp2(max_rate_real * abs_minutes_left), charge_left, abs_minutes_left, window["end"], minutes_now
                     )
                 )
             return max_rate, max_rate_real
@@ -1016,8 +1062,8 @@ def find_charge_rate(
 
         if log_to:
             log_to(
-                "Find charge rate for low power mode: soc: {} target_soc: {} charge_left: {} minutes_left: {} abs_minutes_left: {} max_rate: {} min_rate: {} min_rate_w: {}".format(
-                    soc, target_soc, charge_left, minutes_left, abs_minutes_left, max_rate * MINUTE_WATT, min_rate * MINUTE_WATT, min_rate_w
+                "Find charge rate for low power mode: SoC: {}kW, target_SoC: {}kW, charge_left: {}kW, minutes_left: {}, abs_minutes_left: {}, max_rate: {}W, min_rate: {}W, min_rate_w: {}W".format(
+                    soc, target_soc, charge_left, minutes_left, abs_minutes_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(min_rate_w)
                 )
             )
 
@@ -1040,7 +1086,7 @@ def find_charge_rate(
                         best_rate_real = rate_scale_max
                         break
                 # if log_to:
-                #   log_to("Low Power mode: rate: {} minutes: {} SOC: {} Target SOC: {} Charge left: {} Charge now: {} Rate scale: {} Charge amount: {} Charge now: {} best rate: {} highest achievable_rate {}".format(
+                #   log_to("Low Power mode: rate: {} minutes: {} SOC: {} Target SoC: {} Charge left: {} Charge now: {} Rate scale: {} Charge amount: {} Charge now: {} best rate: {} highest achievable_rate {}".format(
                 #        rate * MINUTE_WATT, minute, soc, target_soc, charge_left, charge_now, rate_scale * MINUTE_WATT, charge_amount, round(charge_now, 2), best_rate*MINUTE_WATT, highest_achievable_rate*MINUTE_WATT))
             else:
                 break
@@ -1050,13 +1096,17 @@ def find_charge_rate(
         if best_rate >= highest_achievable_rate and current_charge_rate >= highest_achievable_rate:
             best_rate = current_charge_rate
             if log_to:
-                log_to("Low Power mode: best rate {} is greater than highest achievable rate {} and current rate {} so sticking with current rate".format(best_rate * MINUTE_WATT, highest_achievable_rate * MINUTE_WATT, current_charge_rate * MINUTE_WATT))
+                log_to(
+                    "Low Power mode: best rate {}W is greater than highest achievable rate {}W and current rate {}W, so sticking with current rate".format(
+                        dp0(best_rate * MINUTE_WATT), dp0(highest_achievable_rate * MINUTE_WATT), dp0(current_charge_rate * MINUTE_WATT)
+                    )
+                )
 
         best_rate_real = get_charge_rate_curve(soc, best_rate, soc_max, max_rate, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve) * battery_rate_max_scaling
         if log_to:
             log_to(
-                "Low Power mode: minutes left: {} absolute: {} SOC: {} Target SOC: {} Charge left: {} Max rate: {} Min rate: {} Best rate: {} Best rate real: {} Battery temp {}".format(
-                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, max_rate * MINUTE_WATT, min_rate * MINUTE_WATT, best_rate * MINUTE_WATT, best_rate_real * MINUTE_WATT, battery_temperature
+                "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W, Battery temp {}°C".format(
+                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(best_rate * MINUTE_WATT), dp0(best_rate_real * MINUTE_WATT), battery_temperature
                 )
             )
         return best_rate, best_rate_real

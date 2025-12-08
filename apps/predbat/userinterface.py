@@ -82,8 +82,8 @@ class UserInterface:
                 value = None
             index = None
 
-        if index:
-            self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
+        if index and value is not None:
+            self.log("Warn: item {} is incorrectly setup, element {} has value {}".format(arg, index, value))
 
         # If we have a list of items get each and add them up or return them as a list
         if isinstance(value, list):
@@ -1255,6 +1255,8 @@ class UserInterface:
                     value_no_eq = value.split("=")[0]
                 elif "?" in value:
                     value_no_eq = value.split("?")[0]
+                else:
+                    value_no_eq = value
                 if prev_no_eq == value_no_eq:
                     time_overrides.remove(prev)
             time_overrides.append(value)
@@ -1447,7 +1449,7 @@ class UserInterface:
             if service_data.get("entity_id", "") == "update.predbat_version":
                 latest = self.releases.get("latest", None)
                 if latest:
-                    self.log("Requested install of latest version {}".format(latest))
+                    self.log("Requested install of latest Predbat version {}".format(latest))
                     await self.async_download_predbat_version(latest)
         elif data and data.get("service", "") == "skip":
             self.log("Requested to skip the update, this is not yet supported...")

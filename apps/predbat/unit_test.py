@@ -53,6 +53,11 @@ from tests.test_prune_today import test_prune_today
 from tests.test_cumulative import test_get_now_from_cumulative
 from tests.test_octopus_url import test_download_octopus_url_wrapper
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
+from tests.test_fox_api import run_fox_api_tests
+from tests.test_solcast import run_solcast_tests
+from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
+from tests.test_battery_curve_keys import run_battery_curve_keys_tests
+from tests.test_balance_inverters import run_balance_inverters_tests
 
 
 # Mock the components and plugin system
@@ -139,15 +144,20 @@ def main():
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
+        ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("energydataservice", test_energydataservice, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
+        ("fox_api", run_fox_api_tests, "Fox API tests", False),
+        ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
         ("inverter_multi", run_inverter_multi_tests, "Inverter multi tests", False),
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
+        ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),
+        ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),

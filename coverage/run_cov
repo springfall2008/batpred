@@ -1,2 +1,2 @@
-python3 -m coverage run ../apps/predbat/unit_test.py
-python3 -m coverage html
+python3 -m coverage run ../apps/predbat/unit_test.py $*
+python3 -m coverage html --omit='../apps/predbat/tests/*,../apps/predbat/unit_test.py'

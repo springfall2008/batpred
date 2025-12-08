@@ -19,7 +19,7 @@ pred_bat:
   #ha_url: 'http://homeassistant.local:8123'
   #ha_key: 'xxx'
 
-  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
+  # Currency, symbol for main currency and second symbol for 1/100s e.g. $ and c, £ and p or € and c
   currency_symbols:
     - '£'
     - 'p'
@@ -28,7 +28,7 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  # Sensors, more than one can be specified and they will be summed up automatically
+  # Energy today (not power) sensors, more than one can be specified and they will be summed up automatically
   #
   # For two inverters the load today would normally be the master load sensor only (to cover the entire house)
   # If you have three phase and one inverter per phase then you would need three load sensors
@@ -64,10 +64,20 @@ pred_bat:
     - number.battery_maximum_discharging_power
   battery_power:
     - sensor.battery_charge_discharge_power
+  battery_power_invert:
+    - True
   pv_power:
     - sensor.inverter_input_power
   load_power:
     - sensor.power_meter_active_power
+  # grid_power measures active power in Watts on the grid side, but requires a separate Huawei power module for this
+  # if you do not have the module or any way to measure grid power, then comment grid_power out of apps.yaml
+  # the only impact will be that there is no grid power flow shown on the Predbat web console powerflow.
+  # It has no impact on battery planning
+  grid_power:
+    - sensor.power_meter_active_power
+  grid_power_invert:
+    - False
   soc_percent:
     - sensor.battery_state_of_capacity
   #soc_kw:
@@ -78,30 +88,31 @@ pred_bat:
     - number.battery_end_of_charge_soc
   reserve:
     - 12
-  scheduled_charge_enable:
-    - off
-  scheduled_discharge_enable:
-    - off
-  charge_start_time:
-    - "00:00:00"
-  charge_end_time:
-    - "06:00:00"
-  discharge_start_time:
-    - "07:00:00"
-  discharge_end_time:
-    - "23:00:00"
   battery_min_soc:
     - 14
 
   # Services to charge/discharge
-  charge_start_service: huawei_solar/forcible_charge_soc
-  charge_stop_service: huawei_solar/stop_forcible_charge
-  discharge_start_service: huawei_solar/forcible_discharge_soc
-  discharge_stop_service: huawei_solar/stop_forcible_charge
+  charge_start_service:
+    - service: huawei_solar.forcible_charge_soc
+      target_soc: 100
+      power: "{inverter_limit_charge}"
+      device_id: "{device_id}"
+  charge_stop_service:
+    - service: huawei_solar.stop_forcible_charge
+      device_id: "{device_id}"
+  discharge_start_service:
+    - service: huawei_solar.forcible_discharge_soc
+      target_soc: 10
+      power: "{inverter_limit_discharge}"
+      device_id: "{device_id}"
+  discharge_stop_service:
+    - service: huawei_solar.stop_forcible_charge
+      device_id: "{device_id}"
 
-  # Device_ID for the Huawei Batteries device in home-assistant
-  # Click on Developer Tools /Action and choose "Huawei Solar: Forcible Charge" or other battery related action.
-  # Click on "Go to YAML Mode" and you will find the device_id copy and paste the long numbers/letters.
+  # You must set Home Assistant's device_id for the Huawei Batteries
+  #
+  # Click on Developer Tools / Actions and choose "Huawei Solar: Forcible Charge" or any other battery related action.
+  # Click on "Go to YAML mode" and you will find the device_id; copy and paste the long numbers/letters in below:
   device_id: XXXXXX
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
@@ -111,7 +122,13 @@ pred_bat:
 
   # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
-    - 5500
+    - 5000
+
+  # Set Inverter max charge rate - see inverter setup guide
+  inverter_limit_charge: 3000
+
+  # Set Inverter max discharge rate to grid
+  inverter_limit_discharge: 5000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
@@ -217,7 +234,7 @@ pred_bat:
   # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
   # If you have Intelligent Octopus the battery size and limit will be extracted from the Octopus Energy plugin directly.
-  # Set the car SOC% if you have it to give an accurate forecast of the cars battery levels.
+  # Set the car SoC% if you have it to give an accurate forecast of the cars battery levels.
   # One entry per car if you have multiple cars.
   #car_charging_battery_size:
   #  - 75

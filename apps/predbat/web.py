@@ -445,7 +445,7 @@ class WebInterface(ComponentBase):
             text += f'<option value="{option}" {selected}>{option}</option>'
         text += "</select></form></td></tr>\n"
 
-        text += "<tr><td>SOC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
+        text += "<tr><td>SoC</td><td>{}</td></tr>\n".format(self.get_battery_status_icon())
 
         # Editable Debug Enable field
         text += "<tr><td>Debug Enable</td><td>"
@@ -886,7 +886,7 @@ class WebInterface(ComponentBase):
         text += "  }\n"
         return text
 
-    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True):
+    def render_chart(self, series_data, yaxis_name, chart_name, now_str, tagname="chart", daily_chart=True, extra_yaxis=None):
         """
         Render a chart
         """
@@ -956,6 +956,7 @@ var options = {
         opacity = []
         stroke_width = []
         stroke_curve = []
+        series_units = []
         for series in series_data:
             name = series.get("name")
             results = series.get("data")
@@ -964,6 +965,7 @@ var options = {
             stroke_curve_value = series.get("stroke_curve", "smooth")
             chart_type = series.get("chart_type", "line")
             color = series.get("color", "")
+            unit_name = series.get("unit", yaxis_name) or ""
 
             if results:
                 if not first:
@@ -973,6 +975,9 @@ var options = {
                 opacity.append(opacity_value)
                 stroke_width.append(stroke_width_value)
                 stroke_curve.append("'{}'".format(stroke_curve_value))
+                series_units.append(unit_name)
+
+        units_array = ",".join("'{}'".format(unit) for unit in series_units)
 
         text += "  ],\n"
         text += "  fill: {\n"
@@ -991,19 +996,72 @@ var options = {
         text += "  tooltip: {\n"
         text += "    x: {\n"
         text += "      format: 'dd/MMM HH:mm'\n"
+        text += "    },\n"
+        text += "    y: {\n"
+        text += "      formatter: function(value, { seriesIndex }) {\n"
+        text += "        if (value === null || typeof value === 'undefined') {\n"
+        text += "          return value;\n"
+        text += "        }\n"
+        text += "        var units = [{}];\n".format(units_array)
+        text += "        var unit = units[seriesIndex] !== undefined ? units[seriesIndex] : '{}';\n".format(yaxis_name)
+        text += "        var rounded = (Math.round((value + Number.EPSILON) * 100) / 100).toFixed(2);\n"
+        text += "        return unit ? rounded + ' ' + unit : rounded;\n"
+        text += "      }\n"
         text += "    }\n"
         text += "  },"
-        text += "  yaxis: {\n"
-        text += "    title: {{ text: '{}' }},\n".format(yaxis_name)
-        text += "    decimalsInFloat: 2\n"
-        text += "  },\n"
+        if extra_yaxis:
+            axis_list = extra_yaxis if isinstance(extra_yaxis, list) else [extra_yaxis]
+            primary_series_names = [series.get("name") for series in series_data if series.get("data") and series.get("unit", yaxis_name) == yaxis_name]
+
+            primary_parts = [
+                "      title: {{ text: '{}' }}".format(yaxis_name),
+                "      decimalsInFloat: 2",
+            ]
+            if primary_series_names:
+                names = ",".join("'{}'".format(name) for name in primary_series_names)
+                primary_parts.append("      seriesName: [{}]".format(names))
+
+            text += "  yaxis: [\n"
+            text += "    {\n" + ",\n".join(primary_parts) + "\n    }"
+
+            for axis in axis_list:
+                title = axis.get("title", "")
+                decimals = axis.get("decimals", 2)
+                series_name = axis.get("series_name")
+                series_names = axis.get("series_names")
+                opposite = axis.get("opposite", False)
+                labels_formatter = axis.get("labels_formatter")
+
+                axis_parts = []
+                if series_names:
+                    names = ",".join("'{}'".format(name) for name in series_names)
+                    axis_parts.append("      seriesName: [{}]".format(names))
+                elif series_name:
+                    axis_parts.append("      seriesName: '{}'".format(series_name))
+                axis_parts.append("      title: {{ text: '{}' }}".format(title))
+                axis_parts.append("      decimalsInFloat: {}".format(decimals))
+                if opposite:
+                    axis_parts.append("      opposite: true")
+                if labels_formatter:
+                    axis_parts.append("      labels: {{ formatter: function(val) {{ {} }} }}".format(labels_formatter))
+
+                text += ",\n    {\n" + ",\n".join(axis_parts) + "\n    }"
+
+            text += "\n  ],\n"
+        else:
+            text += "  yaxis: {\n"
+            text += "    title: {{ text: '{}' }},\n".format(yaxis_name)
+            text += "    decimalsInFloat: 2\n"
+            text += "  },\n"
         text += "  title: {\n"
         text += "    text: '{}'\n".format(chart_name)
         text += "  },\n"
         text += "  legend: {\n"
         text += "    position: 'top',\n"
         text += "    formatter: function(seriesName, opts) {\n"
-        text += "        return [opts.w.globals.series[opts.seriesIndex].at(-1),' {} <br> ', seriesName]\n".format(yaxis_name)
+        text += "        var units = [{}];\n".format(units_array)
+        text += "        var unit = units[opts.seriesIndex] !== undefined ? units[opts.seriesIndex] : '{}';\n".format(yaxis_name)
+        text += "        return [opts.w.globals.series[opts.seriesIndex].at(-1), ' ', unit, ' <br> ', seriesName]\n"
         text += "    }\n"
         text += "  },\n"
         text += "  annotations: {\n"
@@ -1831,7 +1889,7 @@ var options = {
                 {"name": "Best Export Limit", "data": best_export_limit_kw, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
                 {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "4", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
             ]
-            text += self.render_chart(series_data, "kWh", "Battery SOC Prediction", now_str)
+            text += self.render_chart(series_data, "kWh", "Battery SoC Prediction", now_str)
         elif chart == "Power":
             series_data = [
                 {"name": "battery", "data": battery_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
@@ -1870,16 +1928,25 @@ var options = {
             load_energy_actual = self.get_entity_results(self.prefix + ".load_energy_actual")
             load_energy_predicted = self.get_entity_results(self.prefix + ".load_energy_predicted")
             load_energy_adjusted = self.get_entity_results(self.prefix + ".load_energy_adjusted")
-            inday_adjust_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_inday_adjustment", 2, required=False), scale=0.01)
+            inday_adjust_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_inday_adjustment", 2, required=False))
             adjustment_factor = prune_today(inday_adjust_hist, self.now_utc, self.midnight_utc, prune=True)
 
             series_data = [
-                {"name": "Actual", "data": load_energy_actual, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
-                {"name": "Predicted", "data": load_energy_predicted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
-                {"name": "Adjusted", "data": load_energy_adjusted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
-                {"name": "Adjustment Factor", "data": adjustment_factor, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "Actual", "data": load_energy_actual, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
+                {"name": "Predicted", "data": load_energy_predicted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
+                {"name": "Adjusted", "data": load_energy_adjusted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kWh"},
+                {"name": "Adjustment Factor", "data": adjustment_factor, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "%"},
             ]
-            text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
+            secondary_axis = [
+                {
+                    "title": "%",
+                    "series_name": "Adjustment Factor",
+                    "decimals": 0,
+                    "opposite": True,
+                    "labels_formatter": "return val.toFixed(0) + '%';",
+                }
+            ]
+            text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str, extra_yaxis=secondary_axis)
         elif chart == "PV" or chart == "PV7":
             pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 7, required=False))
             pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=chart == "PV")
@@ -2405,7 +2472,7 @@ var options = {
         text += "</form>"
 
         text += "<table class='comparison-table'>\n"
-        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th>"
+        text += "<tr><th>ID</th><th>Name</th><th>Date</th><th>True cost</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SoC</th>"
         if self.base.iboost_enable:
             text += "<th>Iboost</th>"
         if self.base.carbon_enable:

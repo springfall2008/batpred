@@ -12,6 +12,7 @@ apexcharts
 appdaemon
 appkey
 argname
+ASHP
 asyncio
 autodocstring
 autoflake
@@ -172,6 +173,7 @@ metricb
 metricmid
 minb
 minmax
+minsoc
 minsocongrid
 minuteb
 Mixergy
@@ -206,6 +208,7 @@ oninput
 onmouseout
 onmouseover
 openweathermap
+ownerapi
 pdata
 pdetails
 perc
@@ -213,7 +216,9 @@ percnt
 pitem
 pkwh
 postdata
+powercontrolmode
 powerline
+Powerwall
 ppdetails
 ppkwh
 Pred
@@ -258,6 +263,7 @@ SFMB
 sigen
 sigenergy
 sigenstor
+Slee
 socb
 socs
 sofar
@@ -280,9 +286,11 @@ sunsynk
 syscmd
 tabindex
 tasmota
+TCWORLD
 tdata
 tdiff
 temperation
+Teslemetry
 testname
 thirdparty
 timea
@@ -292,6 +300,7 @@ timeday
 timedelta
 timekey
 timelapse
+timenow
 timeobj
 timestr
 timezone

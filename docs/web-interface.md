@@ -49,18 +49,28 @@ This debug file enables your setup to be recreated to identify any configuration
 Note that before you can attach a downloaded apps.yaml or predbat_debug.yaml file to a Github issue you must rename the file extension, e.g. to '.txt', so for example `apps.txt` and `predbat_debug.txt`.
 This is because Github does not accept .yaml file attachments.
 
-Underneath the Debug panel is the Plan textual description panel which gives a brief summary of current battery level, forthcoming import rates, solar generation, planned charging, discharging and export activity.
+Underneath the Debug panel is the Power Flow diagram.  The Power Flow gives an 'instantaneous Power' snapshot of your PV generation, Battery charge/discharge, Grid import/export and House consumption using the **power_xx** entities defined in `apps.yaml`.
 
-Below this is the Predbat Entities panel which details all the other Predbat output entities, their current state and attributes. Any entity name can be clicked to swap to the [Entities view](#entities-view) for that entity.
+Note these are a view of what is happening right now on your inverter and are not the same as the
+'Energy Today' sensors in `apps.yaml` (load_today, import_today, export_today and pv_today) which give accumulated energy so far today and for the days_previous days history.
+
+Beneath that is the plan textual description panel which gives a brief summary of current battery level, forthcoming import rates, solar generation, planned charging, discharging and export activity.
+
+At the bottom of the view is the Predbat Entities panel which details all the other Predbat output entities, their current state and attributes. Any entity name can be clicked to swap to the [Entities view](#entities-view) for that entity.
 
 ### Plan View
 
-This view provides an easy way to see what Predbat is planning for your battery/inverter. It displays the current Predbat plan in 30 minute segments showing import and export rates,
+This view provides an easy way to see what Predbat is planning for your battery/inverter. It displays the current Predbat plan in (by default) 30 minute segments showing import and export rates,
 Predbat's planned state for the battery (charging, discharging, etc), predicted solar generation, predicted house load, car charging, cost, etc.
 
 ![image](images/web-interface-plan-view.png)
 
-You can also [create the Predbat Plan card](predbat-plan-card.md) to show this plan on your own custom dashboard.
+You can easily change Predbat's planned activity for a slot by clicking on the slot time, then selecting Manual Demand, Manual Charge, Manual Export, Manual Freeze Charge or Manual Freeze Export to set the activity.
+If you have previously changed Predbat's planned activity for a slot, choose Clear to return Predbat to its planned activity.
+
+Further details of the columns, what they show, the colour coding, etc can be found in the [Predbat plan card documentation](predbat-plan-card.md#understanding-the-predbat-plan).
+
+You can also [create a Predbat Plan card](predbat-plan-card.md) to show Predbat's plan on your own custom dashboard.
 
 ### Entities View
 
@@ -89,7 +99,13 @@ Example PV chart:
 
 ![image](images/web-interface-pv-chart.png)
 
-### Config View
+### Compare View
+
+The Compare View provides access to Predbat's [Compare Energy Tariff feature](compare.md) which enables you compare what Predbat predicts it would cost you (or you'd gain from export) on different energy tariffs with your predicted load and solar generation.
+
+![image](images/web-interface-compare-view.png)
+
+#### Config View
 
 The Config view provides a way to see and change all of Predbat's configuration entities in Home Assistant.  For each entity is displayed the name, entity type, the current entity value and Predbat's default value for that entity.
 
@@ -102,20 +118,32 @@ Any entity name can be clicked to swap to the [Entities view](#entities-view) fo
 You can also create a [custom dashboard to see and update Predbat's control entities](output-data.md#creating-a-compact-predbat-control-dashboard);
 and full explanation of Predbat's control entities and what they do can be found in the [customisation documentation](customisation.md).
 
-### apps.yaml View
+### Apps View
 
-The apps view allows you to look at your configuration and to modify the values within the web browser without having to edit the yaml directly.
-Click the edit button to change a value, when all the edits are complete hit save to save the apps.yaml and restart predbat.
+The Apps view allows you to look at your `apps.yaml` configuration and to modify the values within the web browser without having to edit the YAML file directly.
+Click the edit button to change a value, when all the edits are complete hit save to save the `apps.yaml` and Predbat will automatically be restarted with the new configuration.
 
 <img width="1746" height="764" alt="image" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
 
-Predbat validates your apps.yaml and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
+Predbat validates your `apps.yaml` every time it runs and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
 
 ![image](images/web-interface-apps-yaml-validation-error.png)
 
-Further details of the apps.yaml error can be found in the [Predbat Log](output-data.md#log-view)
+Further details of the `apps.yaml` error can be found in the [Predbat Log](#log-view).
 
-### Editor
+### Browse View
+
+The Browse view gives a simple file system browser to enable you to view any of the configuration, output and code files in the directory that Predbat is installed in.
+
+You can navigate around subfolders and view files, but not make any changes using the Browse view.
+
+### Components View
+
+The Components View enables you see the current status of the different [Predbat Components](components.md) and the key configuration settings being used by those components.
+
+You can restart individual Predbat components if required.
+
+### Editor View
 
 The editor view allows you to edit apps.yaml as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
 will be disabled pending a fix.
@@ -138,13 +166,7 @@ The Download tab gives the ability to download the logfile.
 
 Further details about the Predbat logfile and its location is [described in the output data document](output-data.md#predbat-logfile).
 
-### Compare View
-
-The Compare View provides access to Predbat's [Compare Energy Tariff feature](compare.md) which enables you compare what it would cost you (or you'd gain from export) on different energy tariffs with your predicted load and solar generation.
-
-![image](images/web-interface-compare-view.png)
-
-### Docs View
+## Docs View
 
 Provides a quick link to the [Predbat documentation](https://springfall2008.github.io/batpred/).
 

@@ -10,6 +10,8 @@
 
 from datetime import datetime, timedelta
 from prediction import wrapped_run_prediction_single, Prediction
+from matplotlib import pyplot as plt
+import numpy as np
 
 
 class DummyInverter:
@@ -73,7 +75,7 @@ class TestHAInterface:
             # print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
             return result
         else:
-            # print("Getting state: {} attribute {} => default".format(entity_id, default))
+            # print("Getting state: {} attribute {} => default {} ".format(entity_id, attribute, default))
             if attribute:
                 return ""
             else:
@@ -301,6 +303,7 @@ def simple_scenario(
     iboost_enable=False,
     iboost_on_export=False,
     iboost_prevent_discharge=False,
+    charge_scaling10=1.0,
     assert_iboost_running=False,
     assert_iboost_running_solar=False,
     assert_iboost_running_full=False,
@@ -405,6 +408,7 @@ def simple_scenario(
     my_predbat.car_charging_soc[0] = car_soc
     my_predbat.car_charging_limit[0] = car_limit
     my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
+    my_predbat.charge_scaling10 = charge_scaling10
 
     if my_predbat.iboost_enable and (((not iboost_solar) and (not iboost_charging)) or iboost_smart):
         my_predbat.iboost_plan = my_predbat.plan_iboost_smart()

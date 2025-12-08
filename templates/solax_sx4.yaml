@@ -24,119 +24,149 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  #
-  # Sensors, currently more than one can be specified and they will be summed up automatically
-  # however if you have two inverters only set one of them as they will both read the same.
-  #
+  # Solax Inverter Configuration
+  solax_modbus_new: true
 
-  inverter_type: "SX4"
   num_inverters: 1
-  #
-  # Controls/status - must by 1 per inverter
-  #
+
+  inverter_type: SOLAX
+  inverter:
+    name: "Solax Gen4+ (Modbus Power Control)"
+    has_rest_api: False
+    has_mqtt_api: False
+    has_service_api: True
+    output_charge_control: "power"
+    charge_control_immediate: True
+    has_charge_enable_time: False
+    has_discharge_enable_time: False
+    has_target_soc: False
+    has_reserve_soc: True
+    has_timed_pause: False
+    charge_time_format: "S"
+    charge_time_entity_is_option: False
+    soc_units: "%"
+    num_load_entities: 1
+    has_ge_inverter_mode: False
+    time_button_press: True
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    write_and_poll_sleep: 4
+    has_time_window: False
+    support_charge_freeze: True
+    support_discharge_freeze: True
+    has_idle_time: False
+    can_span_midnight: True
+    charge_discharge_with_rate: True
+    target_soc_used_for_discharge: False
 
   # Set to the maximum rate your inverter can charge your battery at (in Watts)
   battery_rate_max:
-    - 5000
+    - 6000
 
-  # Battery capacity in kWh
+  # Set your battery capacity in kWh
   soc_max:
-    - 11.6
-
-  # Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
-
-  load_today:
-    - sensor.energy_house_load_today
-  import_today:
-    - sensor.solaxmodbus_today_s_import_energy
-  export_today:
-    - sensor.solaxmodbus_today_s_export_energy
-  pv_today:
-    - sensor.solaxmodbus_today_s_solar_energy
-
-  battery_voltage:
-    - sensor.solaxmodbus_battery_voltage_charge
-
-  # This is disabled by default in the Solax integration so it must be manually enabled.
-  inverter_time:
-    - sensor.date_time
-
-  # This is disabled by default in the Solax integration so it must be manually enabled.
-  battery_power:
-    - sensor.solaxmodbus_battery_power_charge
-  pv_power:
-    - sensor.solaxmodbus_pv_power_total
-
-  # For Solis inverters we need to add the bypass (backup) load to the main house load. If not used the load_power_1 can be commented out
-  load_power:
-    - sensor.solaxmodbus_house_load
-  #load_power_1:
-  #  - sensor.solis_bypass_load
-
-  soc_percent:
-    - sensor.solaxmodbus_battery_capacity
-
-  reserve:
-    - number.solaxmodbus_backup_discharge_min_soc
-
-  battery_min_soc:
-    - sensor.solaxmodbus_feedin_discharge_min_soc
-
-  # With the Solax integration we need to press a button to send the time to
-  charge_discharge_update_button:
-    - button.solis_update_charge_discharge_times
-
-  #timed_charge_current:
-  #  - number.solis_timed_charge_current
-  #charge_start_hour:
-  #  - number.solis_timed_charge_start_hours
-  #charge_start_minute:
-  #  - number.solis_timed_charge_start_minutes
-  #charge_end_hour:
-  #  - number.solis_timed_charge_end_hours
-  #charge_end_minute:
-  #  - number.solis_timed_charge_end_minutes
-
-
-  #timed_discharge_current:
-  #  - number.solis_timed_discharge_current
-
-  #discharge_start_hour:
-  #  - number.solis_timed_discharge_start_hours
-  #discharge_start_minute:
-  #  - number.solis_timed_discharge_start_minutes
-  #discharge_end_hour:
-  #  - number.solis_timed_discharge_end_hours
-  #discharge_end_minute:
-  #  - number.solis_timed_discharge_end_minutes
-
-
-  energy_control_switch:
-    - select.solaxmodbus_remotecontrol_power_control
-
-  # Service for start/stop
-  charge_start_service:
-    service: select.select_option
-    entity_id: select.solax_manual_mode_select
-    option: "Force Charge"
-  charge_stop_service:
-    service: select.select_option
-    entity_id: select.solax_manual_mode_select
-    option: "Stop Charge and Discharge"
-  discharge_start_service:
-    service: select.select_option
-    entity_id: select.solax_manual_mode_select
-    option: "Force Discharge"
+    - 10.2
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
-  inverter_limit: 5000
+  inverter_limit:
+    - 6000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
-  #export_limit:
-  #  - 3600
-  #  - 3600
+  # export_limit:
+  #  - 3680
+
+  load_today:
+    - sensor.todays_house_load
+
+  import_today:
+    - re:(sensor.solax([a-z_]+|)_today_s_import_energy)
+
+  export_today:
+    - re:(sensor.solax([a-z_]+|)_today_s_export_energy)
+
+  pv_today:
+    - re:(sensor.solax([a-z_]+|)_today_s_solar_energy)
+
+  inverter_time:
+    - re:(sensor.solax([a-z_]+|)_rtc)
+
+  pv_power:
+    - re:(sensor.solax([a-z_]+|)_pv_power_total)
+
+  grid_power:
+    - re:(sensor.solax([a-z_]+|)_measured_power)
+
+  grid_power_invert:
+    - false
+
+  load_power:
+    - re:(sensor.solax([a-z_]+|)_house_load)
+
+  # Set the reserve entity based upon which work mode the inverter is set to:
+  reserve:
+  # for inverter work mode "Self Use Mode", set reserve to selfuse_discharge_min_soc
+    - re:(number.solax([a-z_]+|)_selfuse_discharge_min_soc)
+  # for inverter work mode "Backup Mode", set reserve to backup_discharge_min_soc
+  #  - re:(number.solax([a-z_]+|)_backup_discharge_min_soc)
+
+  # battery_min_soc is not needed
+  #battery_min_soc:
+  #  - re:(number.solax([a-z_]+|)_selfuse_discharge_min_soc)
+
+  # The Gen 5 inverters can have two batteries, with entity names 'battery_1_xxx' and 'battery_2_xxx'
+  # If you have a Gen 4 inverter with a single battery, the regular expressions should match the single battery entity names (without '_1')
+  soc_percent:
+    - re:(sensor.solax([a-z_]+|)(?<!chargeable)(?<!remaining)_battery_capacity)
+
+  battery_temperature:
+    - re:(sensor.solax([a-z_]+|)_battery(_1|)_temperature)
+
+  battery_power:
+    - re:(sensor.solax([a-z_]+|)_battery_power_charge)
+
+  battery_power_invert:
+    - true
+
+  # for inverter control in Watts (power), battery_voltage is not needed
+  # battery_voltage:
+  #   - re:(sensor.solax([a-z_]+|)_battery(_1|)_voltage_charge)
+
+  charge_discharge_update_button:
+    - re:(button.solax([a-z_]+|)_battery_awaken)
+
+  # don't believe this is required for custom Solax
+  #
+  # energy_control_switch:
+  #   - select.solax_remotecontrol_power_control
+
+  # Services for start/stop/freeze charge and discharge
+  #
+  # Predbat calls the supplied Solax automation script to set the appropriate inverter controls directly.
+  #
+  # If you are using Mode 8 control, change the ALL the service calls to 'script.solax_remote_control_mode_8'
+  charge_start_service:
+    - service: script.solax_remote_control
+      power: "{power}"
+      operation: "Force Charge"
+
+  discharge_start_service:
+    - service: script.solax_remote_control
+      power: "{power}"
+      operation: "Force Discharge"
+
+  charge_stop_service: # used also as discharge_stop_service
+    - service: script.solax_remote_control
+      operation: "Disabled"
+
+  charge_freeze_service:
+    - service: script.solax_remote_control
+      operation: "Freeze Charge"
+
+  discharge_freeze_service:
+    - service: script.solax_remote_control
+      operation: "Freeze Discharge"
+
   #
   # The maximum rate the inverter can charge and discharge the battery can be overwritten, this will change
   # the register programming and thus cap the max rates. The default is to use the maximum supported rates (recommended)
@@ -145,7 +175,6 @@ pred_bat:
   #  - 2000
   #inverter_limit_discharge:
   #  - 2600
-
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
   # The value can be set here in watts to model this (doesn't change operation)
@@ -229,7 +258,7 @@ pred_bat:
   # To make planned car charging more accurate, either using car_charging_planned or Octopus Intelligent
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
   # If you have intelligent the battery size and limit will be extracted from Intelligent directly
-  # Set the car SOC% if you have it to give an accurate forecast of the cars battery levels
+  # Set the car SoC% if you have it to give an accurate forecast of the cars battery levels
   # One entry per car if you have multiple cars
   # car_charging_battery_size:
   #   - 75

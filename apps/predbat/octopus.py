@@ -74,10 +74,6 @@ api_token_query = """mutation {{
 }}"""
 
 account_query = """query {{
-  octoplusAccountInfo(accountNumber: "{account_id}") {{
-    isOctoplusEnrolled
-  }}
-  octoHeatPumpControllerEuids(accountNumber: "{account_id}")
   account(accountNumber: "{account_id}") {{
     electricityAgreements(active: true) {{
 			meterPoint {{
@@ -568,6 +564,14 @@ class OctopusAPI(ComponentBase):
         # Load URL cache from individual shared files
         # URL cache will be checked on-demand via load_url_from_cache()
         self.url_cache = {}
+            if self.tariffs is None:
+                self.tariffs = {}
+            if self.account_data is None:
+                self.account_data = {}
+            if self.saving_sessions is None:
+                self.saving_sessions = {}
+            if self.intelligent_device is None:
+                self.intelligent_device = {}
 
     async def save_octopus_cache(self):
         """
@@ -846,9 +850,14 @@ class OctopusAPI(ComponentBase):
 
         available_events = self.saving_sessions.get("events", [])
         joined_events = self.saving_sessions.get("account", {}).get("joinedEvents", [])
+        has_joined = self.saving_sessions.get("account", {}).get("hasJoinedCampaign", False)
         joined_ids = {}
         event_reward = {}
         event_code = {}
+
+        if not has_joined:
+            self.log("Octopus API: User has not joined Octopus saving sessions campaign")
+            available_events = []
 
         for event in joined_events:
             event_id = event.get("eventId", None)
@@ -916,11 +925,17 @@ class OctopusAPI(ComponentBase):
         """
         Get the saving sessions
         """
-        response_data = await self.async_graphql_query(octoplus_saving_session_query.format(account_id=self.account_id), "get-saving-sessions")
+        response_data = await self.async_graphql_query(octoplus_saving_session_query.format(account_id=self.account_id), "get-saving-sessions", ignore_errors=True)
         if response_data is None:
             return self.saving_sessions
         else:
-            return response_data.get("savingSessions", {})
+            savingSessions = response_data.get("savingSessions", {})
+            if savingSessions is None:
+                savingSessions = {}
+            if "account" in savingSessions:
+                if savingSessions["account"] is None:
+                    savingSessions["account"] = {}
+            return savingSessions
 
     async def async_get_day_night_rates(self, url):
         """
@@ -1200,7 +1215,7 @@ class OctopusAPI(ComponentBase):
             self.log(f"Warn: Octopus API: Failed to extract response json: {e} - {url} - {text}")
             return None
 
-        if "graphql" in url and "errors" in data_as_json and ignore_errors == False:
+        if ("graphql" in url) and ("errors" in data_as_json) and (ignore_errors == False):
             msg = f'Warn: Octopus API: Errors in request ({url}): {data_as_json["errors"]}'
             errors = list(map(lambda error: error["message"], data_as_json["errors"]))
             self.log(msg)
@@ -1277,9 +1292,10 @@ class OctopusAPI(ComponentBase):
                     self.update_success_timestamp()
                     return response_body["data"]
                 else:
-                    self.failures_total += 1
-                    if returns_data:
-                        self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
+                    if not ignore_errors:
+                        self.failures_total += 1
+                        if returns_data:
+                            self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
                     return None
         except TimeoutError:
             self.failures_total += 1
@@ -2167,8 +2183,18 @@ class Octopus:
     def rate_add_io_slots(self, rates, octopus_slots):
         """
         # Add in any planned octopus slots
+        # Octopus limits cheap slots to 6 hours (12 x 30-min slots) per 24-hour period
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
+        octopus_slot_max = self.get_arg("octopus_slot_max", 48)  # Default to 48 so no limit
+
+        # Track slots per 24-hour period (keyed by day offset from midnight)
+        # Day 0 = today (minutes 0 to 1440), Day -1 = yesterday (minutes -1440 to 0), etc.
+        slots_per_day = {}
+
+        # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
+        slots_added_set = set()
+
         if octopus_slots:
             # Add in IO slots
             for slot in octopus_slots:
@@ -2184,7 +2210,29 @@ class Octopus:
                         assumed_price = self.rate_min
                         for minute in range(start_minutes, end_minutes):
                             if minute >= (-96 * 60) and minute < self.forecast_minutes:
-                                rates[minute] = assumed_price
+                                # Calculate which day this minute belongs to (day boundary at midnight)
+                                # Day 0 = minutes 0-1439, Day 1 = 1440-2879, Day -1 = -1440 to -1, etc.
+                                # Python's floor division handles negative numbers correctly
+                                day_offset = minute // (24 * 60)
+
+                                # Initialize counter for this day if needed
+                                if day_offset not in slots_per_day:
+                                    slots_per_day[day_offset] = 0
+
+                                # Calculate the 30-min slot start for this minute
+                                slot_start = (minute // 30) * 30
+
+                                # At the start of each 30-min slot, decide if we can add it
+                                if minute % 30 == 0:
+                                    if slots_per_day[day_offset] < octopus_slot_max:
+                                        slots_per_day[day_offset] += 1
+                                        slots_added_set.add(slot_start)
+                                        rates[minute] = assumed_price
+
+                                else:
+                                    # For minutes within a 30-min slot, only apply if the slot was added
+                                    if slot_start in slots_added_set:
+                                        rates[minute] = assumed_price
                     else:
                         assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
@@ -2193,6 +2241,11 @@ class Octopus:
                             self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), assumed_price, kwh, location, source, octopus_slot_low_rate
                         )
                     )
+
+        # Log daily slot counts for debugging
+        for day_offset in sorted(slots_per_day.keys()):
+            if slots_per_day[day_offset] > 0:
+                self.log("Octopus Intelligent slots for day {}: {} of {} max".format(day_offset, slots_per_day[day_offset], octopus_slot_max))
 
         return rates
 
