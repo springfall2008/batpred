@@ -75,7 +75,7 @@ class TestHAInterface:
             # print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
             return result
         else:
-            # print("Getting state: {} attribute {} => default".format(entity_id, default))
+            # print("Getting state: {} attribute {} => default {} ".format(entity_id, attribute, default))
             if attribute:
                 return ""
             else:

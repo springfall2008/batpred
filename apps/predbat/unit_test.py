@@ -57,6 +57,7 @@ from tests.test_fox_api import run_fox_api_tests
 from tests.test_solcast import run_solcast_tests
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
+from tests.test_balance_inverters import run_balance_inverters_tests
 
 
 # Mock the components and plugin system
@@ -156,6 +157,7 @@ def main():
         ("inverter_multi", run_inverter_multi_tests, "Inverter multi tests", False),
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
         ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),
+        ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
