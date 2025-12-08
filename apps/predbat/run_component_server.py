@@ -20,7 +20,6 @@ import argparse
 import asyncio
 import logging
 import signal
-import importlib
 
 # Add apps/predbat to path so we can import modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "apps", "predbat"))
