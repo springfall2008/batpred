@@ -474,6 +474,15 @@ class Fetch:
             if alert_feed:
                 self.alerts, self.alert_active_keep = alert_feed.process_alerts(self.minutes_now, self.midnight_utc)
 
+        # Combine keep from alerts and manual SOC into all_active_keep
+        self.all_active_keep = self.alert_active_keep.copy()
+        if self.manual_soc_keep:
+            for minute, soc_value in self.manual_soc_keep.items():
+                if minute in self.all_active_keep:
+                    self.all_active_keep[minute] = max(self.all_active_keep[minute], soc_value)
+                else:
+                    self.all_active_keep[minute] = soc_value
+
         # iBoost load data
         if "iboost_energy_today" in self.args:
             self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", self.max_days_previous, required_unit="kWh", load_scaling=1.0)
@@ -1420,6 +1429,8 @@ class Fetch:
         curr = self.currency_symbols[1]
 
         have_alerts = len(self.alert_active_keep) > 0
+        have_manual_soc = len(self.manual_soc_keep) > 0
+
         car_planning_on_rates = self.num_cars > 0 and not self.octopus_intelligent_charging
         car_charging_max_price = max(self.car_charging_plan_max_price[: self.num_cars]) if car_planning_on_rates else 0.0
 
@@ -1427,7 +1438,7 @@ class Fetch:
             self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts:
+            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts or have_manual_soc:
                 self.rate_import_cost_threshold = self.rate_max + 0.1
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
@@ -1909,6 +1920,7 @@ class Fetch:
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
         self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))
+        self.manual_soc_keep = self.manual_rates("manual_soc", default_rate=self.get_arg("manual_soc_value"))
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()

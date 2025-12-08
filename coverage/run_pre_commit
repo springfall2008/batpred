@@ -1,0 +1,3 @@
+source setup.csh
+python3 -m pre_commit run --all-files
+./run_all --quick

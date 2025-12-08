@@ -34,7 +34,17 @@ wheels/
 MANIFEST
 
 # Test and coverage files
-coverage/
+coverage/*.yaml
+coverage/*.log
+coverage/*.json
+coverage/*.txt
+coverage/*.db
+coverage/*.html
+coverage/cache/
+coverage/debug/
+coverage/predbat_standalone/
+coverage/predbat_standalone_ha/
+coverage/supabase/
 .coverage
 .pytest_cache/
 .tox/
@@ -82,5 +92,3 @@ apps.mod.yaml
 apps.yaml.mark
 comparisons.yaml
 it
-deploy
-;

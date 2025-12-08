@@ -4042,6 +4042,63 @@ def get_plan_css():
         closeDropdowns();
     }
 
+    // Handle SOC override
+    function handleSocOverride(time, value, action, isClear) {
+        console.log("SOC override:", time, "Value:", value, "Action:", action, "Clear:", isClear);
+
+        // Create a form data object to send the override parameters
+        const formData = new FormData();
+        formData.append('time', time);
+        formData.append('action', action);
+        formData.append('rate', value);
+
+        // Send the override request to the server
+        fetch('./rate_override', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Show success message
+                const messageElement = document.createElement('div');
+                if (isClear) {
+                    messageElement.textContent = `SOC override cleared for ${time}`;
+                } else {
+                    messageElement.textContent = `SOC target set to ${value}% for ${time}`;
+                }
+                messageElement.style.position = 'fixed';
+                messageElement.style.top = '65px';
+                messageElement.style.right = '10px';
+                messageElement.style.padding = '10px';
+                messageElement.style.backgroundColor = '#4CAF50';
+                messageElement.style.color = 'white';
+                messageElement.style.borderRadius = '4px';
+                messageElement.style.zIndex = '1000';
+                document.body.appendChild(messageElement);
+
+                // Auto-remove message after 3 seconds
+                setTimeout(() => {
+                    messageElement.style.opacity = '0';
+                    messageElement.style.transition = 'opacity 0.5s';
+                    setTimeout(() => messageElement.remove(), 500);
+                }, 3000);
+
+                // Reload the page to show the updated plan
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showErrorMessage(data.message || 'Unknown error');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showErrorMessage(error.message);
+        });
+
+        // Close dropdown after selection
+        closeDropdowns();
+    }
+
     // Close dropdowns when clicking outside
     document.addEventListener("click", function(event) {
         if (!event.target.matches('.clickable-time-cell') && !event.target.closest('.dropdown-content')) {
