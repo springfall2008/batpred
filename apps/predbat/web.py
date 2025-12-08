@@ -430,7 +430,7 @@ class WebInterface(ComponentBase):
         if status and (("Warn:" in status) or ("Error:" in status)):
             text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
         elif not is_running:
-            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (unhealthy)</td></tr>\n".format(status)
+            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (unhealthy, Predbat not running)</td></tr>\n".format(status)
         else:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
