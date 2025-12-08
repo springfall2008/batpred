@@ -1352,6 +1352,7 @@ var options = {
         import_pattern = r"<td id=import data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"
         export_pattern = r"<td id=export data-minute=(\S+) data-rate=(\S+)(.*?)>(.*?)</td>"
         load_pattern = r"<td id=load data-minute=(\S+) (.*?)>(.*?)</td>"
+        soc_pattern = r"<td id=soc data-minute=(\S+)(.*?)>(.*?)</td>"
 
         # Counter for creating unique IDs for dropdowns
         dropdown_counter = 0
@@ -1365,6 +1366,7 @@ var options = {
         manual_import_rates = self.base.manual_rates("manual_import_rates")
         manual_export_rates = self.base.manual_rates("manual_export_rates")
         manual_load_adjust = self.base.manual_rates("manual_load_adjust")
+        manual_soc_keep = self.base.manual_rates("manual_soc")
 
         # Function to replace time cells with cells containing dropdowns
         def add_button_to_time(match):
@@ -1537,11 +1539,59 @@ var options = {
 
             return button_html
 
+        def add_button_to_soc(match):
+            """
+            Add SOC button to limit cells
+            """
+            nonlocal dropdown_counter
+            dropdown_id = f"dropdown_{dropdown_counter}"
+            input_id = f"soc_input_{dropdown_counter}"
+            dropdown_counter += 1
+
+            soc_minute = match.group(1)
+            soc_tag = match.group(2).strip()
+            soc_text = match.group(3).strip()
+            soc_minute_to_time = self.midnight_utc + timedelta(minutes=int(soc_minute))
+            soc_minute_str = soc_minute_to_time.strftime("%a %H:%M")
+            soc_target = manual_soc_keep.get(int(soc_minute), 0)
+
+            button_html = f"""<td {soc_tag} class="clickable-time-cell {'override-active' if soc_target > 0 else ''}" onclick="toggleForceDropdown('{dropdown_id}')">
+                {soc_text}
+                <div class="dropdown">
+                    <div id="{dropdown_id}" class="dropdown-content">
+            """
+            if soc_target > 0:
+                action = "Clear SOC"
+                button_html += f"""<a onclick="handleSocOverride('{soc_minute_str}', '{soc_target}', '{action}', true)">{action}</a>"""
+            else:
+                # Add input field for custom SOC entry
+                default_soc = self.get_arg("manual_soc_value", 100)
+                action = "Set SOC"
+                button_html += f"""
+                    <div style="padding: 12px 16px;">
+                        <label style="display: block; margin-bottom: 5px; color: inherit;">{action} {soc_minute_str} Target (%):</label>
+                        <input type="number" id="{input_id}" step="1" min="0" max="100" value="{default_soc}"
+                               style="width: 80px; padding: 4px; margin-bottom: 8px; border-radius: 3px;">
+                        <br>
+                        <button onclick="handleSocOverride('{soc_minute_str}', document.getElementById('{input_id}').value, '{action}', false)"
+                                style="padding: 6px 12px; border-radius: 3px; font-size: 12px;">
+                            Set SOC Target
+                        </button>
+                    </div>
+                """
+            button_html += f"""
+                    </div>
+                </div>
+            </td>"""
+
+            return button_html
+
         # Process the HTML plan to add buttons to time cells
         processed_html = re.sub(time_pattern, add_button_to_time, html_plan)
         processed_html = re.sub(import_pattern, add_button_to_import, processed_html)
         processed_html = re.sub(export_pattern, add_button_to_export, processed_html)
         processed_html = re.sub(load_pattern, add_button_to_load, processed_html)
+        processed_html = re.sub(soc_pattern, add_button_to_soc, processed_html)
 
         text += processed_html + "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -2881,6 +2931,12 @@ var options = {
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
+            elif action == "Set SOC":
+                item = self.base.config_index.get("manual_soc_value", {})
+                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_soc", selection_option)
+            elif action == "Clear SOC":
+                await self.base.async_manual_select("manual_soc", clear_option)
             else:
                 self.log("ERROR: Unknown action for rate override")
                 return web.json_response({"success": False, "message": "Unknown action"}, status=400)

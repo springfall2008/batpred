@@ -1056,8 +1056,8 @@ class Output:
                 else:
                     rowspan = 0
 
-            in_alert = (self.alert_active_keep.get(minute, 0) > 0) or (self.alert_active_keep.get(minute_relative_end + self.minutes_now - self.plan_interval_minutes, 0) > 0)
-            in_manual_soc = (self.manual_soc_keep.get(minute, 0) > 0) or (self.manual_soc_keep.get(minute_relative_end + self.minutes_now - self.plan_interval_minutes, 0) > 0)
+            in_alert = self.alert_active_keep.get(minute, 0) > 0
+            in_manual_soc = self.manual_soc_keep.get(minute, 0) > 0
 
             pv_forecast = 0
             load_forecast = 0
@@ -1305,9 +1305,9 @@ class Output:
 
             # Alert
             if in_alert:
-                state = "&#9888; " + state
+                soc_sym = "&#9888; " + soc_sym
             if in_manual_soc:
-                state = "&#9998; " + state
+                soc_sym = "&#9998; " + soc_sym
 
             # Import and export rates -> to string
             adjust_type = self.rate_import_replicated.get(minute, None)
@@ -1469,7 +1469,7 @@ class Output:
                 html += "<td id=car bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
                 html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
-            html += "<td id=soc bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
+            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td id=cost bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
             html += "<td id=total_cost bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             if self.carbon_enable:
