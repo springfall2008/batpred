@@ -1,6 +1,31 @@
 # Inverter setup
 
-PredBat was originally written for GivEnergy inverters using the GivTCP integration but has been extended to many other inverter models:
+PredBat was originally written for GivEnergy inverters using the GivTCP integration but has been extended to many other inverter models.
+
+The table below lists the inverters and required Home Assistant integrations that have had Predbat configurations developed.
+
+Follow the [Predbat installation guide](install.md) for full instructions to setup and configure Predbat. This document covers only the steps that are specific to different inverter types.
+
+Additionally, if your inverter type is not listed, you can create a [custom inverter definition for Predbat](#i-want-to-add-an-unsupported-inverter-to-predbat).
+Once you get everything working please share the configuration as a github issue so it can be incorporated into the Predbat documentation.
+
+To setup the inverter with Predbat you will need to:
+
+1. Install the appropriate Home Assistant integration for your inverter
+2. Configure the integration according to its documentation
+3. Confirm that the integration is working.  Are you receiving data from the various sensors (grid energy, charge limit, solar PV generated, etc)?<BR>
+Can you control the inverter using its Home Assistant controls?
+4. For each inverter there is a custom `apps.yaml` template configuration file that must be used in place of the GivTCP template file installed by default with Predbat:
+
+    - Open the inverter-specific template file with a browser
+    - Using a [file editor in Home Assistant](install.md#editing-configuration-files-in-home-assistant), edit the default `apps.yaml` configuration file
+    - Select-all in `apps.yaml` and delete the entire template contents
+    - Select-all in the inverter-specific template file opened earlier, and copy and paste the contents into the Home Assistant file editor - if
+    you copy but don't replace the standard `apps.yaml` template then Predbat will not function correctly.
+
+5. Follow the inverter-specific setup steps detailed below for each inverter (click on the inverter name in the table). Steps vary for each inverter, for some there are no additional steps,
+but for other inverters there are additional controls, scripts and automations that have to be created for Predbat to work.
+6. Follow the rest of the [Predbat install instructions](install.md), in particular review that `apps.yaml` is configured correctly for your inverter.
 
    | Name                          | Integration     | Template |
    | :---------------------------- | :------------- | :------------ |
@@ -23,13 +48,6 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
-
-Additionally you can create a [custom inverter definition for Predbat](#i-want-to-add-an-unsupported-inverter-to-predbat) if your inverter type is not directly supported.
-Once you get everything working please share the configuration as a github issue so it can be incorporated into the Predbat documentation.
-
-NB: By default the apps.yaml template for GivTCP is installed with Predbat.
-If you are using a different inverter then you will need to copy the appropriate `apps.yaml` template from the above list and use it to **replace the GivTCP apps.yaml** - if
-you copy but don't replace the standard template then Predbat will not function correctly.
 
 ## GivEnergy with GivTCP
 
