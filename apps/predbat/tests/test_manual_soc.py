@@ -24,7 +24,7 @@ def run_test_manual_soc(my_predbat):
     my_predbat.args["manual_soc_value"] = 100
     my_predbat.api_select("manual_soc", "05:30")
     my_predbat.manual_soc_keep = my_predbat.manual_rates("manual_soc", default_rate=my_predbat.get_arg("manual_soc_value"))
-    
+
     # The minutes are calculated from midnight_utc, not from "now"
     # So we need to check what minutes_now is and adjust
     # For this test, we check if any entry exists and has value 100
@@ -44,7 +44,7 @@ def run_test_manual_soc(my_predbat):
     print("Test 2: Manual SOC with explicit value")
     my_predbat.api_select("manual_soc", "06:00=80")
     my_predbat.manual_soc_keep = my_predbat.manual_rates("manual_soc", default_rate=my_predbat.get_arg("manual_soc_value"))
-    
+
     if not my_predbat.manual_soc_keep:
         print("ERROR: T2 Expected manual_soc_keep to have entries but got empty dict")
         failed = True
@@ -61,7 +61,7 @@ def run_test_manual_soc(my_predbat):
     print("Test 3: Multiple manual SOC targets")
     my_predbat.api_select("manual_soc", "05:30=100,07:00=90,08:30=50")
     my_predbat.manual_soc_keep = my_predbat.manual_rates("manual_soc", default_rate=my_predbat.get_arg("manual_soc_value"))
-    
+
     expected_values = {100.0, 90.0, 50.0}
     actual_values = set(my_predbat.manual_soc_keep.values())
 
@@ -75,17 +75,17 @@ def run_test_manual_soc(my_predbat):
     print("Test 4: Manual SOC off clears targets")
     my_predbat.api_select("manual_soc", "off")
     my_predbat.manual_soc_keep = my_predbat.manual_rates("manual_soc", default_rate=my_predbat.get_arg("manual_soc_value"))
-    
+
     if my_predbat.manual_soc_keep:
         print("ERROR: T4 Expected manual_soc_keep to be empty when off but got {}".format(my_predbat.manual_soc_keep))
         failed = True
     else:
         print("PASS: T4 Manual SOC targets cleared when set to off")
-    
+
     # Clean up
     my_predbat.alert_active_keep = {}
     my_predbat.manual_soc_keep = {}
     my_predbat.all_active_keep = {}
     my_predbat.api_select("manual_soc", "off")
-    
+
     return failed
