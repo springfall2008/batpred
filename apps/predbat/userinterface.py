@@ -1254,10 +1254,14 @@ class UserInterface:
                     prev_no_eq = prev.split("=")[0]
                 elif "?" in prev:
                     prev_no_eq = prev.split("?")[0]
+                else:
+                    prev_no_eq = prev
                 if "=" in value:
                     value_no_eq = value.split("=")[0]
                 elif "?" in value:
                     value_no_eq = value.split("?")[0]
+                else:
+                    value_no_eq = value
                 if prev_no_eq == value_no_eq:
                     time_overrides.remove(prev)
             time_overrides.append(value)

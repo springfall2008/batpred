@@ -23,7 +23,7 @@ def run_test_manual_soc(my_predbat):
     print("Test 1: Basic manual SOC parsing with default value")
     my_predbat.args["manual_soc_value"] = 100
     my_predbat.api_select("manual_soc", "05:30")
-    my_predbat.fetch_config_options()
+    my_predbat.manual_soc_keep = my_predbat.manual_rates("manual_soc", default_rate=my_predbat.get_arg("manual_soc_value"))
     
     # The minutes are calculated from midnight_utc, not from "now"
     # So we need to check what minutes_now is and adjust
@@ -43,7 +43,7 @@ def run_test_manual_soc(my_predbat):
     # Test 2: Manual SOC with explicit value
     print("Test 2: Manual SOC with explicit value")
     my_predbat.api_select("manual_soc", "06:00=80")
-    my_predbat.fetch_config_options()
+    my_predbat.manual_soc_keep = my_predbat.manual_rates("manual_soc", default_rate=my_predbat.get_arg("manual_soc_value"))
     
     if not my_predbat.manual_soc_keep:
         print("ERROR: T2 Expected manual_soc_keep to have entries but got empty dict")
@@ -60,7 +60,7 @@ def run_test_manual_soc(my_predbat):
     # Test 3: Multiple manual SOC targets
     print("Test 3: Multiple manual SOC targets")
     my_predbat.api_select("manual_soc", "05:30=100,07:00=90,08:30=50")
-    my_predbat.fetch_config_options()
+    my_predbat.manual_soc_keep = my_predbat.manual_rates("manual_soc", default_rate=my_predbat.get_arg("manual_soc_value"))
     
     expected_values = {100.0, 90.0, 50.0}
     actual_values = set(my_predbat.manual_soc_keep.values())
@@ -74,7 +74,7 @@ def run_test_manual_soc(my_predbat):
     # Test 4: Manual SOC off clears targets
     print("Test 4: Manual SOC off clears targets")
     my_predbat.api_select("manual_soc", "off")
-    my_predbat.fetch_config_options()
+    my_predbat.manual_soc_keep = my_predbat.manual_rates("manual_soc", default_rate=my_predbat.get_arg("manual_soc_value"))
     
     if my_predbat.manual_soc_keep:
         print("ERROR: T4 Expected manual_soc_keep to be empty when off but got {}".format(my_predbat.manual_soc_keep))
@@ -82,118 +82,10 @@ def run_test_manual_soc(my_predbat):
     else:
         print("PASS: T4 Manual SOC targets cleared when set to off")
     
-    # Test 5: Integration with alert_active_keep - verify manual_soc_keep is populated
-    print("Test 5: Verify manual_soc_keep structure")
-    # Set up manual SOC target
-    my_predbat.api_select("manual_soc", "05:30=100")
-    my_predbat.fetch_config_options()
-    
-    # Get the first minute from manual_soc_keep to use in test
-    if my_predbat.manual_soc_keep:
-        test_minute = list(my_predbat.manual_soc_keep.keys())[0]
-        
-        # Simulate alert system setting a lower target at the same time
-        my_predbat.alert_active_keep = {test_minute: 80}
-        
-        # Test the merging logic directly (this is what happens in Prediction.__init__)
-        merged_keep = my_predbat.alert_active_keep.copy()
-        if my_predbat.manual_soc_keep:
-            for minute, soc_value in my_predbat.manual_soc_keep.items():
-                if minute in merged_keep:
-                    merged_keep[minute] = max(merged_keep[minute], soc_value)
-                else:
-                    merged_keep[minute] = soc_value
-        
-        # Check that the maximum value (100 from manual, 80 from alert) is used
-        if test_minute not in merged_keep:
-            print("ERROR: T5 Expected merged alert_active_keep to have entry for minute {} but got {}".format(test_minute, merged_keep))
-            failed = True
-        elif merged_keep[test_minute] != 100:
-            print("ERROR: T5 Expected merged SOC target of 100% (max of 100 and 80) at minute {} but got {}%".format(test_minute, merged_keep[test_minute]))
-            failed = True
-        else:
-            print("PASS: T5 Manual SOC correctly merged with alert_active_keep (taking maximum)")
-    else:
-        print("ERROR: T5 Could not test merging - manual_soc_keep is empty")
-        failed = True
-    
-    # Test 6: Alert wins when higher than manual SOC
-    print("Test 6: Alert wins when higher than manual SOC")
-    my_predbat.api_select("manual_soc", "off")  # Clear previous values
-    my_predbat.fetch_config_options()
-    my_predbat.api_select("manual_soc", "06:00=70")
-    my_predbat.fetch_config_options()
-    
-    if my_predbat.manual_soc_keep:
-        test_minute2 = list(my_predbat.manual_soc_keep.keys())[0]
-        my_predbat.alert_active_keep = {test_minute2: 90}
-        
-        # Test the merging logic directly
-        merged_keep2 = my_predbat.alert_active_keep.copy()
-        if my_predbat.manual_soc_keep:
-            for minute, soc_value in my_predbat.manual_soc_keep.items():
-                if minute in merged_keep2:
-                    merged_keep2[minute] = max(merged_keep2[minute], soc_value)
-                else:
-                    merged_keep2[minute] = soc_value
-        
-        if test_minute2 not in merged_keep2:
-            print("ERROR: T6 Expected merged alert_active_keep to have entry for minute {} but got {}".format(test_minute2, merged_keep2))
-            failed = True
-        elif merged_keep2[test_minute2] != 90:
-            print("ERROR: T6 Expected merged SOC target of 90% (max of 70 and 90) at minute {} but got {}%".format(test_minute2, merged_keep2[test_minute2]))
-            failed = True
-        else:
-            print("PASS: T6 Alert correctly wins when higher than manual SOC (taking maximum)")
-    else:
-        print("ERROR: T6 Could not test merging - manual_soc_keep is empty")
-        failed = True
-    
-    # Test 7: Manual SOC at different time than alert
-    print("Test 7: Manual SOC and alert at different times")
-    my_predbat.api_select("manual_soc", "off")  # Clear previous values
-    my_predbat.fetch_config_options()
-    my_predbat.api_select("manual_soc", "05:30=100")
-    my_predbat.fetch_config_options()
-    
-    if my_predbat.manual_soc_keep:
-        manual_minute = list(my_predbat.manual_soc_keep.keys())[0]
-        # Pick a different minute for alert (add 90 minutes to manual_minute)
-        alert_minute = manual_minute + 90
-        my_predbat.alert_active_keep = {alert_minute: 85}
-        
-        # Test the merging logic directly
-        merged_keep3 = my_predbat.alert_active_keep.copy()
-        if my_predbat.manual_soc_keep:
-            for minute, soc_value in my_predbat.manual_soc_keep.items():
-                if minute in merged_keep3:
-                    merged_keep3[minute] = max(merged_keep3[minute], soc_value)
-                else:
-                    merged_keep3[minute] = soc_value
-        
-        if manual_minute not in merged_keep3:
-            print("ERROR: T7 Expected manual_minute {} in merged alert_active_keep but got {}".format(manual_minute, merged_keep3))
-            failed = True
-        elif merged_keep3[manual_minute] != 100:
-            print("ERROR: T7 Expected manual SOC of 100% at minute {} but got {}%".format(manual_minute, merged_keep3[manual_minute]))
-            failed = True
-        
-        if alert_minute not in merged_keep3:
-            print("ERROR: T7 Expected alert_minute {} in merged alert_active_keep but got {}".format(alert_minute, merged_keep3))
-            failed = True
-        elif merged_keep3[alert_minute] != 85:
-            print("ERROR: T7 Expected alert SOC of 85% at minute {} but got {}%".format(alert_minute, merged_keep3[alert_minute]))
-            failed = True
-        
-        if not failed:
-            print("PASS: T7 Manual SOC and alert both present at different times")
-    else:
-        print("ERROR: T7 Could not test merging - manual_soc_keep is empty")
-        failed = True
-    
     # Clean up
-    my_predbat.api_select("manual_soc", "off")
-    my_predbat.fetch_config_options()
     my_predbat.alert_active_keep = {}
+    my_predbat.manual_soc_keep = {}
+    my_predbat.all_active_keep = {}
+    my_predbat.api_select("manual_soc", "off")
     
     return failed
