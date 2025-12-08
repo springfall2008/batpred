@@ -145,4 +145,7 @@ def run_test_manual_api(my_predbat):
 
     del my_predbat.args["inverter_limit_charge"]
 
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+
     return failed

@@ -135,10 +135,7 @@ def setup_two_inverters(my_predbat, soc1=50, soc2=50, reserve1=4, reserve2=4, ba
     # Common settings
     ha.dummy_items["sensor.soc_max"] = 10.0
     ha.dummy_items["sensor.soc_max_2"] = 10.0
-    ha.dummy_items["sensor.battery_rate_max_charge"] = 2.6
-    ha.dummy_items["sensor.battery_rate_max_charge_2"] = 2.6
-    ha.dummy_items["sensor.battery_rate_max_discharge"] = 2.6
-    ha.dummy_items["sensor.battery_rate_max_discharge_2"] = 2.6
+    ha.dummy_items["sensor.battery_rate_max"] = 2600
 
     # Charge/discharge window settings for inverter 0
     ha.dummy_items["select.charge_start_time"] = "01:00:00"
@@ -172,8 +169,7 @@ def setup_two_inverters(my_predbat, soc1=50, soc2=50, reserve1=4, reserve2=4, ba
     my_predbat.args["grid_power"] = ["sensor.grid_power", "sensor.grid_power_2"]
     my_predbat.args["reserve"] = ["number.reserve", "number.reserve_2"]
     my_predbat.args["soc_max"] = ["sensor.soc_max", "sensor.soc_max_2"]
-    my_predbat.args["battery_rate_max_charge"] = ["sensor.battery_rate_max_charge", "sensor.battery_rate_max_charge_2"]
-    my_predbat.args["battery_rate_max_discharge"] = ["sensor.battery_rate_max_discharge", "sensor.battery_rate_max_discharge_2"]
+    my_predbat.args["battery_rate_max"] = ["sensor.battery_rate_max", "sensor.battery_rate_max"]
     my_predbat.args["charge_start_time"] = ["select.charge_start_time", "select.charge_start_time_2"]
     my_predbat.args["charge_end_time"] = ["select.charge_end_time", "select.charge_end_time_2"]
     my_predbat.args["discharge_start_time"] = ["select.discharge_start_time", "select.discharge_start_time_2"]
@@ -184,6 +180,8 @@ def setup_two_inverters(my_predbat, soc1=50, soc2=50, reserve1=4, reserve2=4, ba
     my_predbat.args["battery_temperature"] = [20.0, 20.0]
     my_predbat.args["inverter_limit"] = [5000, 5000]
     my_predbat.args["inverter_battery_rate_min"] = [100, 100]
+    my_predbat.args["inverter_limit_charge"] = [2600, 2600]
+    my_predbat.args["inverter_limit_discharge"] = [2600, 2600]
     if "pause_mode" in my_predbat.args:
         # Remove arg
         del my_predbat.args["pause_mode"]
