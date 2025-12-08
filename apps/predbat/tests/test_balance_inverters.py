@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from config import MINUTE_WATT
 from inverter import Inverter
 
 
@@ -102,7 +101,6 @@ def run_balance_inverters_tests(my_predbat):
     failed |= test_balance_reset_balanced_discharge(my_predbat)
     if failed:
         return failed
-
 
     return failed
 
@@ -358,6 +356,7 @@ def test_balance_cross_charging1(my_predbat):
     print("✓ Test passed: Cross-charging inverter charge rate set to 0")
     return False
 
+
 def test_balance_cross_charging2(my_predbat):
     """
     Test balancing when one inverter is cross-charging during discharge
@@ -406,6 +405,7 @@ def test_balance_cross_charging2(my_predbat):
 
     print("✓ Test passed: Cross-charging inverter discharge rate set to 0")
     return False
+
 
 def test_balance_cross_discharging(my_predbat):
     """
@@ -503,6 +503,7 @@ def test_balance_already_balanced(my_predbat):
     print("✓ Test passed: No adjustments made when already balanced")
     return False
 
+
 def test_balance_reset_balanced_charge(my_predbat):
     """
     Test when inverters are already balanced, resetting charge/discharge rates
@@ -551,6 +552,7 @@ def test_balance_reset_balanced_charge(my_predbat):
 
     print("✓ Test passed: Rate adjustments made when already balanced")
     return False
+
 
 def test_balance_reset_balanced_discharge(my_predbat):
     """
