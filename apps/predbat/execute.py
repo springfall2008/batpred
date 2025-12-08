@@ -989,7 +989,7 @@ class Execute:
                 if soc_low[this_inverter] and can_power_house[other_inverter]:
                     balance_reset_charge[this_inverter] = True
                     inverters[this_inverter].adjust_charge_rate(0, notify=False)
-                else:
+                elif can_power_house[this_inverter]:
                     balance_reset_discharge[other_inverter] = True
                     inverters[other_inverter].adjust_discharge_rate(0, notify=False)
             elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
@@ -998,7 +998,7 @@ class Execute:
                 inverters[this_inverter].adjust_discharge_rate(0, notify=False)
 
         for id in range(num_inverters):
-            if not balance_reset_charge.get(id, False) and total_charge_rates != 0 and charge_rates[id] == 0:
+            if not balance_reset_charge.get(id, False) and total_charge_rates > 0 and charge_rates[id] == 0:
                 self.log("BALANCE: Inverter {} reset charge rate to {} now balanced".format(id, inverter.battery_rate_max_charge * MINUTE_WATT))
                 inverters[id].adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT, notify=False)
             if not balance_reset_discharge.get(id, False) and total_discharge_rates != 0 and discharge_rates[id] == 0:

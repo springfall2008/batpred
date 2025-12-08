@@ -39,8 +39,13 @@ def run_balance_inverters_tests(my_predbat):
         return failed
 
     # Test 3: Cross charging during discharge
-    print("Test 3: Cross charging during discharge")
-    failed |= test_balance_cross_charging(my_predbat)
+    print("Test 3.1: Cross charging during discharge")
+    failed |= test_balance_cross_charging1(my_predbat)
+    if failed:
+        return failed
+    # Test 3.2: Cross charging during discharge
+    print("Test 3.2: Cross charging during discharge")
+    failed |= test_balance_cross_charging2(my_predbat)
     if failed:
         return failed
 
@@ -85,6 +90,19 @@ def run_balance_inverters_tests(my_predbat):
     failed |= test_balance_insufficient_power(my_predbat)
     if failed:
         return failed
+
+    # Test 11: Reset balance
+    print("Test 11: Reset balance when already balanced, charge")
+    failed |= test_balance_reset_balanced_charge(my_predbat)
+    if failed:
+        return failed
+
+    # Test 11: Reset balance
+    print("Test 12: Reset balance when already balanced, discharge")
+    failed |= test_balance_reset_balanced_discharge(my_predbat)
+    if failed:
+        return failed
+
 
     return failed
 
@@ -291,7 +309,7 @@ def test_balance_charge_high_soc(my_predbat):
     return False
 
 
-def test_balance_cross_charging(my_predbat):
+def test_balance_cross_charging1(my_predbat):
     """
     Test balancing when one inverter is cross-charging during discharge
     Expected: Charging inverter should have charge rate set to 0
@@ -326,7 +344,7 @@ def test_balance_cross_charging(my_predbat):
     services = ha.get_service_store()
     ha.service_store_enable = False
 
-    # Should turn off discharge for inverter 0
+    # Should turn off charge for inverter 2
     charge_set = False
     for service, kwargs in services:
         if service == "number/set_value" and kwargs.get("entity_id") == "number.charge_rate_2" and kwargs.get("value") == 0:
@@ -334,12 +352,60 @@ def test_balance_cross_charging(my_predbat):
             break
 
     if not charge_set:
-        print("ERROR: Expected inverter 1 charge rate to be set to 0 to stop cross-charging")
+        print("ERROR: Expected inverter 2 charge rate to be set to 0 to stop cross-charging")
         return True
 
     print("✓ Test passed: Cross-charging inverter charge rate set to 0")
     return False
 
+def test_balance_cross_charging2(my_predbat):
+    """
+    Test balancing when one inverter is cross-charging during discharge
+    Expected: Charging inverter should have charge rate set to 0
+    """
+    # Setup: Inverter 0 discharging, Inverter 1 charging during discharge
+    setup_two_inverters(
+        my_predbat,
+        soc1=40,
+        soc2=50,
+        battery_power1=1000,  # Discharging
+        battery_power2=-100,  # Charging (cross-charge)
+        discharge_rate1=2600,
+        discharge_rate2=2600,
+    )
+    ha = my_predbat.ha_interface
+
+    # Enable balance
+    my_predbat.balance_inverters_discharge = False
+    my_predbat.balance_inverters_charge = False
+    my_predbat.balance_inverters_crosscharge = True
+    my_predbat.balance_inverters_threshold_charge = 5
+    my_predbat.balance_inverters_threshold_discharge = 5
+
+    # Clear service store
+    ha.service_store_enable = True
+    ha.get_service_store()
+
+    # Run balance
+    my_predbat.balance_inverters(test_mode=True)
+
+    # Check services called
+    services = ha.get_service_store()
+    ha.service_store_enable = False
+
+    # Should turn off discharge for inverter 0
+    charge_set = False
+    for service, kwargs in services:
+        if service == "number/set_value" and kwargs.get("entity_id") == "number.discharge_rate" and kwargs.get("value") == 0:
+            charge_set = True
+            break
+
+    if not charge_set:
+        print("ERROR: Expected inverter 1 discharge rate to be set to 0 to stop cross-charging")
+        return True
+
+    print("✓ Test passed: Cross-charging inverter discharge rate set to 0")
+    return False
 
 def test_balance_cross_discharging(my_predbat):
     """
@@ -435,6 +501,104 @@ def test_balance_already_balanced(my_predbat):
         return True
 
     print("✓ Test passed: No adjustments made when already balanced")
+    return False
+
+def test_balance_reset_balanced_charge(my_predbat):
+    """
+    Test when inverters are already balanced, resetting charge/discharge rates
+    Expected: Rate goes back to full
+    """
+    # Setup: Both inverters at 50%
+    setup_two_inverters(
+        my_predbat,
+        soc1=50,
+        soc2=50,
+        battery_power1=0,
+        battery_power2=1000,
+    )
+    ha = my_predbat.ha_interface
+
+    # Enable balance
+    my_predbat.balance_inverters_discharge = True
+    my_predbat.balance_inverters_charge = True
+    my_predbat.balance_inverters_crosscharge = True
+    my_predbat.balance_inverters_threshold_charge = 5
+    my_predbat.balance_inverters_threshold_discharge = 5
+    my_predbat.inverters[0].charge_rate_now = 0  # Simulate previously balanced state
+    ha.dummy_items["number.charge_rate"] = 0
+
+    # Clear service store
+    ha.service_store_enable = True
+    ha.get_service_store()
+
+    # Run balance
+    my_predbat.balance_inverters(test_mode=True)
+
+    # Check services called
+    services = ha.get_service_store()
+    ha.service_store_enable = False
+
+    # Should not have adjusted any rates to 0
+    charge_reset = False
+    for service, kwargs in services:
+        if service == "number/set_value" and kwargs.get("entity_id") == "number.charge_rate" and kwargs.get("value") == 2600:
+            charge_reset = True
+            break
+
+    if not charge_reset:
+        print("ERROR: Expected rate adjustments when inverters are balanced")
+        return True
+
+    print("✓ Test passed: Rate adjustments made when already balanced")
+    return False
+
+def test_balance_reset_balanced_discharge(my_predbat):
+    """
+    Test when inverters are already balanced, resetting charge/discharge rates
+    Expected: Rate goes back to full
+    """
+    # Setup: Both inverters at 50%
+    setup_two_inverters(
+        my_predbat,
+        soc1=50,
+        soc2=50,
+        battery_power1=1000,
+        battery_power2=0,
+    )
+    ha = my_predbat.ha_interface
+
+    # Enable balance
+    my_predbat.balance_inverters_discharge = True
+    my_predbat.balance_inverters_charge = True
+    my_predbat.balance_inverters_crosscharge = True
+    my_predbat.balance_inverters_threshold_charge = 5
+    my_predbat.balance_inverters_threshold_discharge = 5
+    my_predbat.inverters[1].discharge_rate_now = 0  # Simulate previously balanced state
+    ha.dummy_items["number.discharge_rate_2"] = 0
+
+    # Clear service store
+    ha.service_store_enable = True
+    ha.get_service_store()
+
+    # Run balance
+    my_predbat.balance_inverters(test_mode=True)
+
+    # Check services called
+    services = ha.get_service_store()
+    ha.service_store_enable = False
+
+    # Should not have adjusted any rates to 0
+    discharge_reset = False
+    for service, kwargs in services:
+        if service == "number/set_value" and kwargs.get("entity_id") == "number.discharge_rate_2" and kwargs.get("value") == 2600:
+            discharge_reset = True
+            break
+
+    if not discharge_reset:
+        print("ERROR: Expected rate adjustments when inverters are balanced")
+        return True
+
+    print("✓ Test passed: Rate adjustments made when already balanced")
     return False
 
 
