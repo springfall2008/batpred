@@ -174,14 +174,8 @@ class Prediction:
             self.load_minutes_step = load_minutes_step
             self.load_minutes_step10 = load_minutes_step10
             self.carbon_intensity = base.carbon_intensity
-            # Merge alert_active_keep with manual_soc_keep, taking the maximum value for overlapping times
-            self.alert_active_keep = base.alert_active_keep.copy()
-            if base.manual_soc_keep:
-                for minute, soc_value in base.manual_soc_keep.items():
-                    if minute in self.alert_active_keep:
-                        self.alert_active_keep[minute] = max(self.alert_active_keep[minute], soc_value)
-                    else:
-                        self.alert_active_keep[minute] = soc_value
+            # Use pre-computed manual_active_keep which merges alert_active_keep with manual_soc_keep
+            self.alert_active_keep = base.manual_active_keep
             self.iboost_running = False
             self.iboost_running_solar = False
             self.iboost_running_full = False
