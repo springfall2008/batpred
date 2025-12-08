@@ -514,6 +514,33 @@ class OctopusAPI(ComponentBase):
         except Exception as e:
             self.log(f"Warn: Failed to save URL cache {url_hash}: {e}")
 
+    def decode_kraken_token_expiry(self, token):
+        """
+        Extract expiration timestamp from Kraken JWT token without verification.
+        Returns datetime object if successful, None otherwise.
+        """
+        import base64
+        import json
+
+        if not token:
+            return None
+
+        try:
+            parts = token.split(".")
+            if len(parts) != 3:
+                return None
+
+            # Decode payload (add padding if needed)
+            payload = parts[1] + "=" * (4 - len(parts[1]) % 4)
+            payload_decoded = json.loads(base64.urlsafe_b64decode(payload))
+
+            if "exp" in payload_decoded:
+                return datetime.fromtimestamp(payload_decoded["exp"])
+            return None
+        except Exception as e:
+            self.log(f"Warn: Failed to decode Kraken token expiry: {e}")
+            return None
+
     async def load_octopus_cache(self):
         """
         Load the octopus cache
@@ -532,6 +559,7 @@ class OctopusAPI(ComponentBase):
                 self.account_data = data.get("account_data", {})
                 self.saving_sessions = data.get("saving_sessions", {})
                 self.intelligent_device = data.get("intelligent_device", {})
+                self.graphql_token = data.get("kraken_token")
 
         # Load tariffs from individual shared cache files
         # Tariffs will be loaded on-demand when needed via load_tariff_from_cache()
@@ -551,6 +579,7 @@ class OctopusAPI(ComponentBase):
         octopus_cache["account_data"] = self.account_data
         octopus_cache["saving_sessions"] = self.saving_sessions
         octopus_cache["intelligent_device"] = self.intelligent_device
+        octopus_cache["kraken_token"] = self.graphql_token
         with open(self.cache_file, "w") as f:
             yaml.dump(octopus_cache, f)
 
@@ -1185,11 +1214,13 @@ class OctopusAPI(ComponentBase):
 
     async def async_refresh_token(self):
         """
-        Refresh the token
+        Refresh the token using JWT expiry from the token itself
         """
-
-        if self.graphql_expiration is not None and (self.graphql_expiration - timedelta(minutes=5)) > datetime.now():
-            return self.graphql_token
+        # Check if we have a valid token by decoding its expiry
+        if self.graphql_token:
+            expiry = self.decode_kraken_token_expiry(self.graphql_token)
+            if expiry and expiry > datetime.now() + timedelta(minutes=5):
+                return self.graphql_token
 
         client = await self.api.async_create_client_session()
         url = f"{self.api.base_url}/v1/graphql/"
@@ -1207,7 +1238,8 @@ class OctopusAPI(ComponentBase):
                     and "token" in token_response_body["data"]["obtainKrakenToken"]
                 ):
                     self.graphql_token = token_response_body["data"]["obtainKrakenToken"]["token"]
-                    self.graphql_expiration = datetime.now() + timedelta(hours=1)
+                    # Save token to cache immediately
+                    await self.save_octopus_cache()
                     return self.graphql_token
                 else:
                     self.log("Warn: Octopus API: Failed to retrieve auth token")
@@ -1216,9 +1248,9 @@ class OctopusAPI(ComponentBase):
             self.log(f"Failed to connect. Timeout of {self.api.timeout} exceeded.")
             return None
 
-    async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False):
+    async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0):
         """
-        Execute a graphql query
+        Execute a graphql query with automatic token refresh on auth errors
         """
         await self.async_refresh_token()
         try:
@@ -1228,7 +1260,19 @@ class OctopusAPI(ComponentBase):
             payload = {"query": query}
             headers = {"Authorization": f"JWT {self.graphql_token}", integration_context_header: request_context}
             async with client.post(url, json=payload, headers=headers) as response:
+                # Process response (which reads the text)
                 response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
+
+                # Check for auth errors and retry once
+                if response_body and "errors" in response_body and _retry_count == 0:
+                    for error in response_body.get("errors", []):
+                        error_code = error.get("extensions", {}).get("errorCode")
+                        if error_code in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
+                            self.log(f"Kraken token invalid (error {error_code}), forcing refresh and retry")
+                            self.graphql_token = None
+                            await self.async_refresh_token()
+                            return await self.async_graphql_query(query, request_context, returns_data, ignore_errors, _retry_count=1)
+
                 if response_body and ("data" in response_body):
                     self.update_success_timestamp()
                     return response_body["data"]
