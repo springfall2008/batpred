@@ -734,7 +734,7 @@ class Fetch:
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
-        self.log("Standing charge is set to {}{}".format(self.metric_standing_charge, curr))
+        self.log("Standing charge is set to {}{}".format(dp2(self.metric_standing_charge), curr))
 
         # futurerate data
         futurerate = FutureRate(self)

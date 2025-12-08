@@ -1047,7 +1047,7 @@ class Inverter:
                         self.base.time_abs_str(self.charge_start_time_minutes),
                         self.base.time_abs_str(self.charge_end_time_minutes),
                         self.current_charge_limit,
-                        self.charge_rate_now * 60.0,
+                        dp2(self.charge_rate_now * 60.0),
                     )
                 )
             else:
