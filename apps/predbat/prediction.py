@@ -174,8 +174,7 @@ class Prediction:
             self.load_minutes_step = load_minutes_step
             self.load_minutes_step10 = load_minutes_step10
             self.carbon_intensity = base.carbon_intensity
-            # Use pre-computed manual_active_keep which merges alert_active_keep with manual_soc_keep
-            self.alert_active_keep = base.manual_active_keep
+            self.all_active_keep = base.all_active_keep
             self.iboost_running = False
             self.iboost_running_solar = False
             self.iboost_running_full = False
@@ -507,7 +506,7 @@ class Prediction:
         battery_loss = self.battery_loss
         battery_loss_discharge = self.battery_loss_discharge
         battery_temperature_prediction = self.battery_temperature_prediction
-        alert_active_keep = self.alert_active_keep
+        all_active_keep = self.all_active_keep
         best_soc_keep_weight = self.best_soc_keep_weight
         best_soc_keep_orig = self.best_soc_keep
         debug_enable = self.debug_enable
@@ -559,7 +558,7 @@ class Prediction:
             export_rate = rate_export.get(minute_absolute, 0)
 
             # Alert?
-            alert_keep = alert_active_keep.get(minute_absolute, 0)
+            alert_keep = all_active_keep.get(minute_absolute, 0)
 
             # Project battery temperature
             battery_temperature = battery_temperature_prediction.get(minute, self.battery_temperature)
@@ -575,7 +574,7 @@ class Prediction:
 
             # Alert keep - force scaling to 1 and set new keep value
             if alert_keep > 0:
-                keep_minute_scaling = max(keep_minute_scaling, 2.0)
+                keep_minute_scaling = max(keep_minute_scaling, 10.0)
                 best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * soc_max, soc_max))
 
             # Find charge & discharge windows

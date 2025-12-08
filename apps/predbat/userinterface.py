@@ -1175,6 +1175,9 @@ class UserInterface:
             elif "_load" in item["name"]:
                 # Manual load rate
                 self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_load_value"))
+            elif "_soc" in item["name"]:
+                # Manual soc rate
+                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_soc_value"))
             else:
                 self.log("Warn: Manual rate sensor {} not recognised".format(config_item))
         else:

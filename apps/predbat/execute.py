@@ -26,7 +26,8 @@ class Execute:
         status_hold_iboost = ""  # iBoost hold status text
         status_freeze_export = ""  # freeze export during demand status text
 
-        in_alert = self.alert_active_keep.get(self.minutes_now, 0)
+        in_alert = self.alert_active_keep.get(self.minutes_now, 0) > 0
+        in_manual_soc = self.manual_soc_keep.get(self.minutes_now, 0) > 0
 
         if self.holiday_days_left > 0:
             status = "Demand (Holiday)"
@@ -595,6 +596,8 @@ class Execute:
 
         if in_alert > 0:
             status += " [Alert]"
+        if in_manual_soc:
+            status += " [Manual SoC]"
 
         return status, status_extra
 

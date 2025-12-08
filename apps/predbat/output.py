@@ -1001,7 +1001,6 @@ class Output:
             rate_value_export = dp2(self.rate_export.get(minute, 0))
             charge_window_n = -1
             export_window_n = -1
-            in_alert = True if self.alert_active_keep.get(minute, 0) > 0 else False
             periods_left = int((end_plan - minute + self.plan_interval_minutes - 1) / self.plan_interval_minutes)
 
             show_limit = ""
@@ -1056,6 +1055,9 @@ class Output:
                     minute_relative_end = self.export_window_best[export_window_n]["end"] - minute_now_align
                 else:
                     rowspan = 0
+
+            in_alert = (self.alert_active_keep.get(minute, 0) > 0) or (self.alert_active_keep.get(minute_relative_end + self.minutes_now - self.plan_interval_minutes, 0) > 0)
+            in_manual_soc = (self.manual_soc_keep.get(minute, 0) > 0) or (self.manual_soc_keep.get(minute_relative_end + self.minutes_now - self.plan_interval_minutes, 0) > 0)
 
             pv_forecast = 0
             load_forecast = 0
@@ -1303,7 +1305,9 @@ class Output:
 
             # Alert
             if in_alert:
-                state = "&#9888;" + state
+                state = "&#9888; " + state
+            if in_manual_soc:
+                state = "&#9998; " + state
 
             # Import and export rates -> to string
             adjust_type = self.rate_import_replicated.get(minute, None)

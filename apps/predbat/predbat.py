@@ -622,7 +622,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.alerts = []
         self.alert_active_keep = {}
         self.manual_soc_keep = {}
-        self.manual_active_keep = {}
+        self.all_active_keep = {}
         self.calculate_tweak_plan = False
         self.set_charge_low_power = False
         self.set_export_low_power = False
@@ -685,16 +685,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.expose_config("active", True)
         self.fetch_config_options()
         sensor_force_replan = self.fetch_sensor_data()
-        
-        # Merge manual_soc_keep with alert_active_keep to create manual_active_keep
-        # This is done once here rather than in every Prediction instance for efficiency
-        self.manual_active_keep = self.alert_active_keep.copy()
-        if self.manual_soc_keep:
-            for minute, soc_value in self.manual_soc_keep.items():
-                if minute in self.manual_active_keep:
-                    self.manual_active_keep[minute] = max(self.manual_active_keep[minute], soc_value)
-                else:
-                    self.manual_active_keep[minute] = soc_value
         
         if sensor_force_replan:
             self.log("Sensor changes require a replan, will recompute the plan")

@@ -537,6 +537,9 @@ class GECloudDirect(ComponentBase):
                         self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
                         return False
             if ("inverter_max_output_active_power_percent" in ha_name) or ("ac_charge_upper_percent_limit" in ha_name):
+                if 'enable_' in ha_name:
+                    continue
+
                 if not value or value < 100:
                     self.log("GECloud: Setting {} to 100 for {} was {}".format(ha_name, device, value))
                     result = await self.async_write_inverter_setting(device, key, 100)
