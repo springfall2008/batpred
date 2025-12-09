@@ -1958,7 +1958,9 @@ class Plan:
                 and (start == new_window_best[-1]["end"])
                 and (limit == new_limit_best[-1])
                 and (start not in self.manual_all_times)
+                and (start not in self.all_active_keep)
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
+                and (new_window_best[-1]["start"] not in self.all_active_keep)
                 and (new_window_best[-1]["average"] >= window["average"] or not self.set_charge_low_power or limit == self.reserve)
             ):
                 # Combine two windows of the same charge target provided the rates are the same or low power mode is off (low power mode can skew the charge into the more expensive slot)
@@ -1973,7 +1975,9 @@ class Plan:
                 and (limit >= new_limit_best[-1])
                 and not (limit != self.reserve and new_limit_best[-1] == self.reserve)
                 and (start not in self.manual_all_times)
+                and (start not in self.all_active_keep)
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
+                and (new_window_best[-1]["start"] not in self.all_active_keep)
                 and new_window_best[-1]["average"] == window["average"]
                 and (new_window_best[-1]["target"] < new_limit_best[-1])
             ):
