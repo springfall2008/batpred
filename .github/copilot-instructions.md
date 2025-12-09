@@ -26,8 +26,7 @@ Before committing code, ALWAYS run pre-commit hooks to ensure code quality:
 
 ```bash
 cd coverage
-source venv/bin/activate
-pre-commit run --all-files
+./run_pre_commit
 ```
 
 Common pre-commit checks:
