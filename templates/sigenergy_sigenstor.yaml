@@ -67,6 +67,8 @@ pred_bat:
     - sensor.sigen_plant_rated_energy_capacity
   battery_temperature:
     - sensor.sigen_inverter_battery_average_cell_temperature
+  reserve:
+    - number.sigen_plant_ess_backup_state_of_charge
 
   # Services to control the inverter
   charge_start_service:
