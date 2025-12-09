@@ -23,6 +23,9 @@ from component_base import ComponentBase
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
 """
 
+PV_CALIBRATION_LOWEST = 0.20
+PV_CALIBRATION_HIGHEST = 4.0
+
 
 class SolarAPI(ComponentBase):
     """
@@ -706,14 +709,14 @@ class SolarAPI(ComponentBase):
             forecast_distribution[slot] = dp4((pv_forecast_by_slot.get(slot, 0)) / total_forecast if total_forecast > 0 else 0)
 
             slot_adjustment[slot] = dp4(pv_power_hist_by_slot.get(slot, 0) / pv_forecast_by_slot.get(slot, 0) if pv_forecast_by_slot.get(slot, 0) > 0.01 else 1.0)
-            slot_adjustment[slot] = max(min(slot_adjustment[slot], 2.0), 0.5)  # Clamp adjustment factor to sensible values
+            slot_adjustment[slot] = max(min(slot_adjustment[slot], PV_CALIBRATION_HIGHEST), PV_CALIBRATION_LOWEST)  # Clamp adjustment factor to sensible values
 
             # Override if we don't have enough data
             if not enabled_calibration:
                 slot_adjustment[slot] = 1.0
 
         total_adjustment = dp4(total_production / total_forecast if total_forecast > 0 else 1.0)
-        total_adjustment = max(min(total_adjustment, 2.0), 0.5)
+        total_adjustment = max(min(total_adjustment, PV_CALIBRATION_HIGHEST), PV_CALIBRATION_LOWEST)
         if not enabled_calibration:
             total_adjustment = 1.0
         self.log("PV Calibration: PV production: {} kWh, Total forecast: {} kWh, adjustment {}x slot adjustments {}, max_kwh {}, divide_by {}".format(dp2(total_production), dp2(total_forecast), total_adjustment, slot_adjustment, max_kwh, divide_by))
