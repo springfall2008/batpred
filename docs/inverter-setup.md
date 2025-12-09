@@ -19,32 +19,33 @@ Can you control the inverter using its Home Assistant controls?
 
     - Open the inverter-specific template file with a browser
     - Using a [file editor in Home Assistant](install.md#editing-configuration-files-in-home-assistant), edit the default `apps.yaml` configuration file
-    - Select-all in `apps.yaml` and delete the entire template contents
+    - Select-all in the default `apps.yaml`, and delete the entire template contents
     - Select-all in the inverter-specific template file opened earlier, and copy and paste the contents into the Home Assistant file editor - if
     you copy but don't replace the standard `apps.yaml` template then Predbat will not function correctly.
 
-5. Follow the inverter-specific setup steps detailed below for each inverter (click on the inverter name in the table). Steps vary for each inverter, for some there are no additional steps,
-but for other inverters there are additional controls, scripts and automations that have to be created for Predbat to work.
+5. Follow the inverter-specific setup steps detailed below for each inverter (click on the inverter name in the table).<BR>
+Steps vary for each inverter, for some there are no additional steps, but for other inverters there are additional controls, scripts and automations that have to be created for Predbat to work with that inverter type.
 6. Follow the rest of the [Predbat install instructions](install.md), in particular review that `apps.yaml` is configured correctly for your inverter.
 
    | Name                          | Integration     | Template |
    | :---------------------------- | :------------- | :------------ |
    | [GivEnergy with GivTCP](#givenergy-with-givtcp) | [GivTCP](https://github.com/britkat1980/ha-addons) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
-   | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
-   | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
-   | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)<BR>in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
-   | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) |  [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
-   | [Huawei inverters](#huawei-inverters) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
-   | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
    | [Givenergy with GE Cloud](#givenergy-with-ge_cloud) | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
    | [Givenergy with GE Cloud EMS](#givenergy-with-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergyoctopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
-   | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
-   | [LuxPower](#lux-power) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml)|
+   | [Huawei inverters](#huawei-inverters) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
+   | [LuxPower](#lux-power) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
+   | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml)|
+   | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) |  [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
+   | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
+   | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)<BR>in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
+   | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
+   | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
+   | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
    | [Victron](#victron) | [Victron MQTT](https://github.com/tomer-w/victron_mqtt) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
@@ -878,6 +879,296 @@ state class: Measurement
 
   After the Predbat Plan has recalculated you may notice some 'FrzExp' in the state column next to some slots.
 
+## Kostal Plenticore
+
+Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plenticore inverters.  It should work with both the G1/G2 and G3 inverters.
+
+- Copy the Kostal template over the top of your `apps.yaml`, and edit for your system.
+
+- Create four new input_boolean and four input_number helpers using the HA UI:
+
+  ```yaml
+  input_boolean.charge_start_service
+
+  input_boolean.discharge_start_service
+
+  input_boolean.charge_freeze_service
+
+  input_boolean.discharge_freeze_service
+
+  input_number.plenticore_g3_max_charge # this is how fast the inverter has to charge in %, its set to -100 when charging from grid
+
+  input_number.plenticore_g3_max_discharge # this is how fast the inverter has to discharge in %, is set to 100 when discharging to grid
+
+  input_number.predbat_charge_limit # this can be used if charge limit is set to true
+
+  input_number.predbat_reserve # this is used to set Min_soc in inverter
+  ```
+
+- To control the Kostal inverter you need to use a modbus/tcp connection, this is not a part of the Kostal integration. Add the following modbus configuration to your `configuration.yaml`:
+
+  ```yaml
+  modbus:
+      - name: kostalplenticore              # name on modbus connection
+        type: tcp                           # Use TCP
+        host: 192.168.xxx.xxx               # Modbus device IP-address
+        port: 1502                          # Port to Modbus-server
+  ```
+
+- Next, create the automation that sends the modbus commands to the Kostal inverter integration, when each input_boolean is activated from Predbat:
+
+  ```yaml
+  alias: Predbat Charge / Discharge Control
+  description: ""
+  triggers:
+    - trigger: state
+      entity_id:
+        - input_boolean.charge_start_service
+      to: "on"
+      id: charge
+      for:
+        hours: 0
+        minutes: 0
+        seconds: 20
+    - trigger: state
+      entity_id:
+        - input_boolean.discharge_start_service
+      to: "on"
+      id: Discharge
+    - trigger: state
+      entity_id:
+        - input_boolean.charge_freeze_service
+      to: "on"
+      id: Charge freeze
+    - trigger: state
+      entity_id:
+        - input_boolean.discharge_freeze_service
+      to: "on"
+      id: Discharge freeze
+  conditions: []
+  actions:
+    - choose:
+        - conditions:
+            - condition: trigger
+              id:
+                - charge
+          sequence:
+            - repeat:
+                sequence:
+                  - if:
+                      - condition: state
+                        entity_id: predbat.status
+                        state: Hold charging
+                    then:
+                      - delay:
+                          hours: 0
+                          minutes: 1
+                          seconds: 15
+                          milliseconds: 0
+                      - repeat:
+                          sequence:
+                            - alias: Write min SOC
+                              action: modbus.write_register
+                              metadata: {}
+                              data:
+                                hub: kostalplenticoreg3
+                                address: 1042
+                                slave: 71
+                                value: >
+                                  [ {{ '0x%x' %
+                                  unpack(pack((states('input_number.predbat_reserve')
+                                  |float(0) - 1),
+                                      ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %    unpack(pack((states('input_number.predbat_reserve') |float(0) - 1), ">f"), ">H")|abs }}
+                                      ]
+                            - delay:
+                                hours: 0
+                                minutes: 0
+                                seconds: 30
+                          while:
+                            - condition: state
+                              entity_id: predbat.status
+                              state: Hold charging
+                            - condition: state
+                              entity_id: input_boolean.charge_start_service
+                              state: "on"
+                        enabled: true
+                    else:
+                      - delay:
+                          hours: 0
+                          minutes: 1
+                          seconds: 15
+                          milliseconds: 0
+                      - repeat:
+                          sequence:
+                            - alias: Write -100 charging
+                              action: modbus.write_register
+                              metadata: {}
+                              data:
+                                slave: 71
+                                address: 1028
+                                hub: kostalplenticoreg3
+                                value: >
+                                  [ {{ '0x%x' %
+                                  unpack(pack(states('input_number.plenticore_g3_max_charge')
+                                  |float(0),
+                                      ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %
+                                      unpack(pack(states('input_number.plenticore_g3_max_charge')|float(0), ">f"), ">H")|abs }}
+                                      ]
+                              enabled: true
+                            - alias: Write power rate charging
+                              action: modbus.write_register
+                              metadata: {}
+                              data:
+                                slave: 71
+                                address: 1034
+                                hub: kostalplenticoreg3
+                                value: |-
+                                  [ 
+                                    {{ '0x%x' % unpack(pack((states('input_number.predbat_charge_rate')|float(0)) * -1, ">f"), ">H", offset=2) | abs }},
+                                    {{ '0x%04x' % unpack(pack((states('input_number.predbat_charge_rate')|float(0)) * -1, ">f"), ">H") | abs }}
+                                  ]
+                              enabled: false
+                            - delay:
+                                hours: 0
+                                minutes: 0
+                                seconds: 30
+                          while:
+                            - condition: state
+                              entity_id: predbat.status
+                              state: Charging
+                        enabled: true
+                while:
+                  - condition: state
+                    entity_id: input_boolean.charge_start_service
+                    state: "on"
+        - conditions:
+            - condition: trigger
+              id:
+                - Discharge
+          sequence:
+            - delay:
+                hours: 0
+                minutes: 1
+                seconds: 10
+                milliseconds: 0
+              enabled: true
+            - repeat:
+                sequence:
+                  - action: modbus.write_register
+                    metadata: {}
+                    data:
+                      slave: 71
+                      address: 1028
+                      hub: kostalplenticoreg3
+                      value: >
+                        [ {{ '0x%x' %
+                        unpack(pack(states('input_number.plenticore_g3_max_discharge')
+                        |float(0),
+                            ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %
+                            unpack(pack(states('input_number.plenticore_g3_max_discharge')|float(0), ">f"), ">H")|abs }}
+                            ]
+                    alias: Write 100 Discharge
+                  - delay:
+                      hours: 0
+                      minutes: 0
+                      seconds: 30
+                while:
+                  - condition: state
+                    entity_id: input_boolean.discharge_start_service
+                    state: "on"
+        - conditions:
+            - condition: trigger
+              id:
+                - Charge freeze
+            - condition: template
+              value_template: |2-
+                      {% set rate = states('sensor.predbat_rates') | float(0) %}
+                      {% set high_rate = states('sensor.predbat_high_rate_export_cost_2') | float(0) %}
+                      {{ rate < high_rate }}
+              enabled: false
+          sequence:
+            - delay:
+                hours: 0
+                minutes: 1
+                seconds: 15
+                milliseconds: 0
+            - repeat:
+                sequence:
+                  - action: modbus.write_register
+                    data:
+                      address: 1040
+                      hub: kostalplenticoreg3
+                      slave: 71
+                      value: >
+                        [{{ '0x%04x' %
+                        unpack(pack(states('input_number.predbat_discharge_rate')
+                        |float(0),
+                            ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %
+                            unpack(pack(states('input_number.predbat_discharge_rate')|float(0), ">f"), ">H")|abs }}]
+                    metadata: {}
+                    alias: Write discharge rate
+                    enabled: false
+                  - alias: Write min. SOC
+                    action: modbus.write_register
+                    data:
+                      address: 1042
+                      hub: kostalplenticoreg3
+                      slave: 71
+                      value: >
+                        [ {{ '0x%x' %
+                        unpack(pack((states('input_number.predbat_reserve')
+                        |float(0) - 1),
+                            ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %
+                            unpack(pack((states('input_number.predbat_reserve')|float(0) - 1), ">f"), ">H")|abs }}
+                            ]
+                    metadata: {}
+                  - delay:
+                      hours: 0
+                      milliseconds: 0
+                      minutes: 0
+                      seconds: 30
+                while:
+                  - condition: state
+                    entity_id: input_boolean.charge_freeze_service
+                    state: "on"
+        - conditions:
+            - condition: trigger
+              id:
+                - Discharge freeze
+          sequence:
+            - delay:
+                hours: 0
+                minutes: 1
+                seconds: 15
+                milliseconds: 0
+            - repeat:
+                sequence:
+                  - action: modbus.write_register
+                    data:
+                      address: 1038
+                      hub: kostalplenticoreg3
+                      slave: 71
+                      value: >
+                        [{{ '0x%04x' %
+                        unpack(pack(states('input_number.predbat_charge_rate')
+                        |float(0),
+                            ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %
+                            unpack(pack(states('input_number.predbat_charge_rate')|float(0), ">f"), ">H")|abs }}]
+                    metadata: {}
+                    alias: Write charge rate
+                  - delay:
+                      hours: 0
+                      milliseconds: 0
+                      minutes: 0
+                      seconds: 30
+                while:
+                  - condition: state
+                    entity_id: input_boolean.discharge_freeze_service
+                    state: "on"
+  mode: queued
+  max: 10
+  ```
+
 ## Growatt with Solar Assistant
 
 You need to have a Solar Assistant installation <https://solar-assistant.io>
@@ -1629,7 +1920,6 @@ rest_command:
 ## Victron
 
 This is at an early stage of development, see Github discussion [#789](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846)
-
 
 ## I want to add an unsupported inverter to Predbat
 
