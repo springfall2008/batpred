@@ -507,9 +507,11 @@ You'll need to change the hard-coded timestamp "2024-12-12..." to the date/time 
 as described in [Predbat led car charging](car-charging.md#car-charging-planning)
 - predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format
 - predbat.car_soc_best - Predicted charge level of your car in the best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
-- predbat.cost_today_car - Current cost in pence so far today of charging the car, with attribute of the projected future car charging costs and slots
+- predbat.cost_today_car - Current cost in pence so far today of charging all cars, with attribute of the projected future car charging costs and slots
 - predbat.cost_total_car - A running total in pence of the below cost_yesterday_car sensor, with attribute of the total in pounds
-- predbat.cost_yesterday_car - A sensor that gives the total energy costs in pence of charging the car for yesterday (00:00-23:59 on the previous day)
+- predbat.cost_yesterday_car - A sensor that gives the total energy costs in pence of charging all cars for yesterday (00:00-23:59 on the previous day)
+
+See [Example Automation to separate car charging costs](car-charging.md#example-separating-car-charging-costs-for-multiple-cars) if you have multiple EV's and want to separate predbat.cost_today_car into costs per car.
 
 ## iBoost Solar Diverter data
 
