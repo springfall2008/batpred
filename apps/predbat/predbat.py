@@ -546,8 +546,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.future_energy_rates_export = {}
         self.load_scaling_dynamic = {}
         self.battery_charge_power_curve = {}
+        self.battery_charge_power_curve_default = {}
         self.battery_charge_power_curve_auto = False
         self.battery_discharge_power_curve = {}
+        self.battery_discharge_power_curve_default = {}
         self.battery_discharge_power_curve_auto = False
         self.computed_charge_curve = False
         self.computed_discharge_curve = False
