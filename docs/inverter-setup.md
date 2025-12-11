@@ -885,7 +885,7 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
 
 - Copy the Kostal template over the top of your `apps.yaml`, and edit for your system.
 
-- Create four new input_boolean and four input_number helpers using the HA UI:
+- Create four new input_boolean and six input_number helpers using the HA UI:
 
   ```yaml
   input_boolean.charge_start_service
@@ -896,13 +896,29 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
 
   input_boolean.discharge_freeze_service
 
-  input_number.plenticore_g3_max_charge # this is how fast the inverter has to charge in %, its set to -100 when charging from grid
+  input_number.plenticore_max_charge    # this is how fast inverter has to charge in %, is set to -100 when charge from grid
+  Min value: -100
+  Max value: 0
 
-  input_number.plenticore_g3_max_discharge # this is how fast the inverter has to discharge in %, is set to 100 when discharging to grid
+  input_number.plenticore_max_discharge  # this is how fast inverter has to charge in %, is set to 100 when discharge to grid
+  Min value: 0
+  Max value: 100
 
-  input_number.predbat_charge_limit # this can be used if charge limit is set to true
+  input_number.predbat_charge_limit      # this can be used if charge limit is set to true
+  Min value: 0
+  Max value: 100
 
-  input_number.predbat_reserve # this is used to set Min_soc in inverter
+  input_number.predbat_reserve           # this is used to set Min_soc in inverter
+  Min value: 0
+  Max value: 100
+
+  input_number.predbat_charge_rate       # This can be used to if low power charge mode is Enabled, remember to switch from "write -100 charging" to "write power rate charging" in automation
+  Min value: 0
+  Max value: (Inverter Battery max charge in watt)
+
+  input_number.predbat_discharge_rate     # this is used to set battery discharge to zero
+  Min value: 0
+  Max value: (Inverter Battery max discharge in watt)
   ```
 
 - To control the Kostal inverter you need to use a modbus/tcp connection, this is not a part of the Kostal integration. Add the following modbus configuration to your `configuration.yaml`:
@@ -924,12 +940,13 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
     - trigger: state
       entity_id:
         - input_boolean.charge_start_service
-      to: "on"
+      to:
+        - "on"
       id: charge
       for:
         hours: 0
         minutes: 0
-        seconds: 20
+        seconds: 5
     - trigger: state
       entity_id:
         - input_boolean.discharge_start_service
@@ -945,6 +962,15 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
         - input_boolean.discharge_freeze_service
       to: "on"
       id: Discharge freeze
+    - trigger: numeric_state
+      entity_id:
+        - input_number.predbat_discharge_rate
+      below: 1
+      id: Car hold
+      for:
+        hours: 0
+        minutes: 0
+        seconds: 30
   conditions: []
   actions:
     - choose:
@@ -955,88 +981,127 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
           sequence:
             - repeat:
                 sequence:
-                  - if:
-                      - condition: state
-                        entity_id: predbat.status
-                        state: Hold charging
-                    then:
+                  - choose:
+                      - conditions:
+                          - condition: state
+                            entity_id: binary_sensor.predbat_charging
+                            state: "on"
+                            enabled: true
+                        sequence:
+                          - delay:
+                              hours: 0
+                              minutes: 0
+                              seconds: 45
+                              milliseconds: 0
+                          - repeat:
+                              sequence:
+                                - alias: Write -100 charging
+                                  action: modbus.write_register
+                                  metadata: {}
+                                  data:
+                                    slave: 71
+                                    address: 1028
+                                    hub: kostalplenticore
+                                    value: >
+                                      [ {{ '0x%x' %
+                                      unpack(pack(states('input_number.plenticore_max_charge')
+                                      |float(0),
+                                          ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %
+                                          unpack(pack(states('input_number.plenticore_max_charge')|float(0), ">f"), ">H")|abs }}
+                                          ]
+                                  enabled: true
+                                - alias: Write power rate charging
+                                  action: modbus.write_register
+                                  metadata: {}
+                                  data:
+                                    slave: 71
+                                    address: 1034
+                                    hub: kostalplenticore
+                                    value: |-
+                                      [ 
+                                        {{ '0x%x' % unpack(pack((states('input_number.predbat_charge_rate')|float(0)) * -1, ">f"), ">H", offset=2) | abs }},
+                                        {{ '0x%04x' % unpack(pack((states('input_number.predbat_charge_rate')|float(0)) * -1, ">f"), ">H") | abs }}
+                                      ]
+                                  enabled: false
+                                - delay:
+                                    hours: 0
+                                    minutes: 0
+                                    seconds: 15
+                                    milliseconds: 0
+                              while:
+                                - condition: state
+                                  entity_id: input_boolean.charge_start_service
+                                  state: "on"
+                                - condition: state
+                                  entity_id: binary_sensor.predbat_charging
+                                  state: "on"
+                                  enabled: true
+                            enabled: true
+                      - conditions:
+                          - condition: template
+                            value_template: >-
+                              {{ states('sensor.scb_battery_soc')
+                              | float <= (states('predbat.best_charge_limit') |
+                              float + 1.0) }}
+                        sequence:
+                          - delay:
+                              hours: 0
+                              minutes: 0
+                              seconds: 45
+                              milliseconds: 0
+                          - repeat:
+                              sequence:
+                                - alias: Write discharge rate zero
+                                  action: modbus.write_register
+                                  metadata: {}
+                                  data:
+                                    hub: kostalplenticore
+                                    address: 1040
+                                    slave: 71
+                                    value: >
+                                      [ {{ '0x%x' %
+                                      unpack(pack(states('input_number.predbat_discharge_rate')
+                                      |float(0),
+                                          ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %    unpack(pack(states('input_number.predbat_discharge_rate') |float(0), ">f"), ">H")|abs }}
+                                          ]
+                                  enabled: true
+                                - alias: Write min SOC
+                                  action: modbus.write_register
+                                  metadata: {}
+                                  data:
+                                    hub: kostalplenticore
+                                    address: 1042
+                                    slave: 71
+                                    value: >
+                                      [ {{ '0x%x' %
+                                      unpack(pack((states('input_number.predbat_reserve')
+                                      |float(0) - 1),
+                                          ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %    unpack(pack((states('input_number.predbat_reserve') |float(0) - 1), ">f"), ">H")|abs }}
+                                          ]
+                                  enabled: false
+                                - delay:
+                                    hours: 0
+                                    minutes: 0
+                                    seconds: 15
+                                    milliseconds: 0
+                              while:
+                                - condition: template
+                                  value_template: >-
+                                    {{
+                                    states('sensor.scb_battery_soc')
+                                    | float <=
+                                    (states('predbat.best_charge_limit') | float +
+                                    1.0) }}
+                                - condition: state
+                                  entity_id: input_boolean.charge_start_service
+                                  state: "on"
+                            enabled: true
+                    default:
                       - delay:
                           hours: 0
-                          minutes: 1
-                          seconds: 15
+                          minutes: 0
+                          seconds: 5
                           milliseconds: 0
-                      - repeat:
-                          sequence:
-                            - alias: Write min SOC
-                              action: modbus.write_register
-                              metadata: {}
-                              data:
-                                hub: kostalplenticoreg3
-                                address: 1042
-                                slave: 71
-                                value: >
-                                  [ {{ '0x%x' %
-                                  unpack(pack((states('input_number.predbat_reserve')
-                                  |float(0) - 1),
-                                      ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %    unpack(pack((states('input_number.predbat_reserve') |float(0) - 1), ">f"), ">H")|abs }}
-                                      ]
-                            - delay:
-                                hours: 0
-                                minutes: 0
-                                seconds: 30
-                          while:
-                            - condition: state
-                              entity_id: predbat.status
-                              state: Hold charging
-                            - condition: state
-                              entity_id: input_boolean.charge_start_service
-                              state: "on"
-                        enabled: true
-                    else:
-                      - delay:
-                          hours: 0
-                          minutes: 1
-                          seconds: 15
-                          milliseconds: 0
-                      - repeat:
-                          sequence:
-                            - alias: Write -100 charging
-                              action: modbus.write_register
-                              metadata: {}
-                              data:
-                                slave: 71
-                                address: 1028
-                                hub: kostalplenticoreg3
-                                value: >
-                                  [ {{ '0x%x' %
-                                  unpack(pack(states('input_number.plenticore_g3_max_charge')
-                                  |float(0),
-                                      ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %
-                                      unpack(pack(states('input_number.plenticore_g3_max_charge')|float(0), ">f"), ">H")|abs }}
-                                      ]
-                              enabled: true
-                            - alias: Write power rate charging
-                              action: modbus.write_register
-                              metadata: {}
-                              data:
-                                slave: 71
-                                address: 1034
-                                hub: kostalplenticoreg3
-                                value: |-
-                                  [ 
-                                    {{ '0x%x' % unpack(pack((states('input_number.predbat_charge_rate')|float(0)) * -1, ">f"), ">H", offset=2) | abs }},
-                                    {{ '0x%04x' % unpack(pack((states('input_number.predbat_charge_rate')|float(0)) * -1, ">f"), ">H") | abs }}
-                                  ]
-                              enabled: false
-                            - delay:
-                                hours: 0
-                                minutes: 0
-                                seconds: 30
-                          while:
-                            - condition: state
-                              entity_id: predbat.status
-                              state: Charging
-                        enabled: true
                 while:
                   - condition: state
                     entity_id: input_boolean.charge_start_service
@@ -1048,8 +1113,8 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
           sequence:
             - delay:
                 hours: 0
-                minutes: 1
-                seconds: 10
+                minutes: 0
+                seconds: 40
                 milliseconds: 0
               enabled: true
             - repeat:
@@ -1059,19 +1124,20 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
                     data:
                       slave: 71
                       address: 1028
-                      hub: kostalplenticoreg3
+                      hub: kostalplenticore
                       value: >
                         [ {{ '0x%x' %
-                        unpack(pack(states('input_number.plenticore_g3_max_discharge')
+                        unpack(pack(states('input_number.plenticore_max_discharge')
                         |float(0),
                             ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %
-                            unpack(pack(states('input_number.plenticore_g3_max_discharge')|float(0), ">f"), ">H")|abs }}
+                            unpack(pack(states('input_number.plenticore_max_discharge')|float(0), ">f"), ">H")|abs }}
                             ]
                     alias: Write 100 Discharge
                   - delay:
                       hours: 0
                       minutes: 0
-                      seconds: 30
+                      seconds: 15
+                      milliseconds: 0
                 while:
                   - condition: state
                     entity_id: input_boolean.discharge_start_service
@@ -1089,15 +1155,15 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
           sequence:
             - delay:
                 hours: 0
-                minutes: 1
-                seconds: 15
+                minutes: 0
+                seconds: 45
                 milliseconds: 0
             - repeat:
                 sequence:
                   - action: modbus.write_register
                     data:
                       address: 1040
-                      hub: kostalplenticoreg3
+                      hub: kostalplenticore
                       slave: 71
                       value: >
                         [{{ '0x%04x' %
@@ -1112,7 +1178,7 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
                     action: modbus.write_register
                     data:
                       address: 1042
-                      hub: kostalplenticoreg3
+                      hub: kostalplenticore
                       slave: 71
                       value: >
                         [ {{ '0x%x' %
@@ -1122,11 +1188,12 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
                             unpack(pack((states('input_number.predbat_reserve')|float(0) - 1), ">f"), ">H")|abs }}
                             ]
                     metadata: {}
+                    enabled: true
                   - delay:
                       hours: 0
-                      milliseconds: 0
                       minutes: 0
-                      seconds: 30
+                      seconds: 15
+                      milliseconds: 0
                 while:
                   - condition: state
                     entity_id: input_boolean.charge_freeze_service
@@ -1138,15 +1205,15 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
           sequence:
             - delay:
                 hours: 0
-                minutes: 1
-                seconds: 15
+                minutes: 0
+                seconds: 45
                 milliseconds: 0
             - repeat:
                 sequence:
                   - action: modbus.write_register
                     data:
                       address: 1038
-                      hub: kostalplenticoreg3
+                      hub: kostalplenticore
                       slave: 71
                       value: >
                         [{{ '0x%04x' %
@@ -1158,13 +1225,61 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
                     alias: Write charge rate
                   - delay:
                       hours: 0
-                      milliseconds: 0
                       minutes: 0
-                      seconds: 30
+                      seconds: 15
+                      milliseconds: 0
                 while:
                   - condition: state
                     entity_id: input_boolean.discharge_freeze_service
                     state: "on"
+        - conditions:
+            - condition: trigger
+              id:
+                - Car hold
+            - condition: state
+              entity_id: input_boolean.charge_start_service
+              state:
+                - "off"
+            - condition: state
+              entity_id: input_boolean.discharge_start_service
+              state:
+                - "off"
+            - condition: state
+              entity_id: input_boolean.charge_freeze_service
+              state:
+                - "off"
+            - condition: state
+              entity_id: input_boolean.discharge_freeze_service
+              state:
+                - "off"
+          sequence:
+            - repeat:
+                sequence:
+                  - alias: Write discharge rate zero
+                    action: modbus.write_register
+                    metadata: {}
+                    data:
+                      hub: kostalplenticore
+                      address: 1040
+                      slave: 71
+                      value: >
+                        [ {{ '0x%x' %
+                        unpack(pack(states('input_number.predbat_discharge_rate')
+                        |float(0),
+                            ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %    unpack(pack(states('input_number.predbat_discharge_rate') |float(0), ">f"), ">H")|abs }}
+                            ]
+                    enabled: true
+                  - delay:
+                      hours: 0
+                      minutes: 0
+                      seconds: 15
+                      milliseconds: 0
+                while:
+                  - condition: numeric_state
+                    entity_id: input_number.predbat_discharge_rate
+                    below: 1
+                    enabled: true
+              enabled: true
   mode: queued
   max: 10
   ```

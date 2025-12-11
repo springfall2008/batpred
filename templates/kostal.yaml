@@ -36,13 +36,13 @@ pred_bat:
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
   load_today:
-    - sensor.hostname_scb_5313dd_home_consumption_total
+    - sensor.scb_home_consumption_total
   import_today:
-    - sensor.ksem_consumption_from_grid_kwh
+    - sensor.scb_Home_Consumption_from_Grid_Total
   export_today:
-    - sensor.hostname_scb_5313dd_energy_to_grid_total
+    - sensor.scb_energy_to_grid_total
   pv_today:
-    - sensor.hostname_scb_5313dd_energy_yield_total
+    - sensor.scb_energy_yield_total
 
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
@@ -86,20 +86,18 @@ pred_bat:
       entity_id: "input_boolean.charge_freeze_service"
     - service: input_boolean.turn_off
       entity_id: input_boolean.discharge_freeze_service
-  #charge_freeze_service:
-  #  - service: input_boolean.turn_on
-  #    entity_id: "input_boolean.charge_freeze_service"
-  #  - service: input_boolean.turn_off
-  #    entity_id: "input_boolean.charge_start_service"
-  #  - service: input_boolean.turn_off
-  #    entity_id: input_boolean.discharge_freeze_service
+  charge_freeze_service: 	
+    - service: input_boolean.turn_on
+      entity_id: "input_boolean.charge_freeze_service"
+    - service: input_boolean.turn_off
+      entity_id: "input_boolean.charge_start_service"
+    - service: input_boolean.turn_off
+      entity_id: input_boolean.discharge_freeze_service
   charge_stop_service:
     - service: input_boolean.turn_off
       entity_id: "input_boolean.charge_start_service"
     - service: input_boolean.turn_off
       entity_id: "input_boolean.charge_freeze_service"
-    #- service: input_boolean.turn_off
-    #  entity_id: input_boolean.discharge_freeze_service
   discharge_freeze_service:
     - service: input_boolean.turn_on
       entity_id: input_boolean.discharge_freeze_service
@@ -124,33 +122,29 @@ pred_bat:
     - input_number.predbat_charge_rate
   discharge_rate:
     - input_number.predbat_discharge_rate
-  battery_voltage:
-    - sensor.battery_external_battery_voltage    #from sunspec integration
+  #battery_voltage:
+  #  - sensor.battery_external_battery_voltage 	#from sunspec integration
   battery_power:
-    - sensor.hostname_scb_5313dd_battery_power
-  pv_power:
-    - sensor.hostname_scb_5313dd_sum_power_of_all_pv_dc_inputs 
+    - sensor.scb_battery_power
+  pv_power: 
+    - sensor.scb_Sum_power_of_all_PV_DC_inputs
   load_power:
-    - sensor.hostname_scb_5313dd_home_power
+    - sensor.scb_home_power
   grid_power:
-    - sensor.hostname_scb_5313dd_grid_power
+    - sensor.scb_grid_power
   grid_power_invert:
     - true
-  battery_temperature:
-    - sensor.be_temperature_max
   battery_min_soc:
-    - '10'
+    - 10
 
-  soc_kw:
-    - sensor.battery_soc_kwh
   soc_percent:
-    - sensor.hostname_scb_5313dd_battery_soc
+    - sensor.scb_battery_soc
   reserve:
     - input_number.predbat_reserve
   charge_limit:
     - input_number.predbat_charge_limit
   soc_max:
-    - 31
+    - 31	# Kwh
   battery_rate_max:
     - 11940
 
@@ -183,38 +177,17 @@ pred_bat:
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
   # the default is 1.0 (full power)
-  battery_charge_power_curve:
-    100: 0.19
-    99: 0.19
-    98: 0.22
-    97: 0.26
-    96: 0.29
-    95: 0.95
-    94: 0.40
-    93: 0.44
-    92: 0.44
-    91: 0.49
-    90: 0.54
-    89: 0.57
-    88: 0.59
-    87: 0.62
-    86: 0.65
-    85: 0.74
-    84: 0.79
-    83: 0.84
-    82: 0.92
-
-  battery_discharge_power_curve:
-    100: 0.97
-    90: 0.96
-    80: 0.94
-    70: 0.93
-    60: 0.92
-    50: 0.91
-    40: 0.90
-    30: 0.89
-    20: 0.86
-
+  #battery_charge_power_curve:
+  #  91 : 0.91
+  #  92 : 0.81
+  #  93 : 0.71
+  #  94 : 0.62
+  #  95 : 0.52
+  #  96 : 0.43
+  #  97 : 0.33
+  #  98 : 0.24
+  #  99 : 0.24
+  #  100 : 0.24
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
@@ -368,7 +341,7 @@ pred_bat:
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
   # One per inverter
   battery_scaling:
-    - 1
+    - 0.9
 
   # Can be used to scale import and export data, used for workarounds
   import_export_scaling: 1.0
@@ -415,5 +388,3 @@ pred_bat:
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
   #  - '{car_charging_now}'
-
-  
