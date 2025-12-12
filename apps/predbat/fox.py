@@ -483,7 +483,7 @@ class FoxAPI(ComponentBase):
         # Check if device has battery
         if checkBattery and not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
             # These controls don't exist for non-battery devices
-            return
+            return {}
         for key in FOX_SETTINGS:
             await self.get_device_setting(deviceSN, key)
         return self.device_settings.get(deviceSN, {})
@@ -1450,7 +1450,7 @@ class MockBase:
         print(f"DASHBOARD: {args}, {kwargs}")
 
 
-async def test_fox_api(api_key):
+async def test_fox_api(sn, api_key):
     """
     Run a test
     """
@@ -1459,14 +1459,17 @@ async def test_fox_api(api_key):
     # Create a mock base object
     mock_base = MockBase()
 
-    sn = "609H372054BC151"
-
     # Create FoxAPI instance with a lambda that returns the API key
     arg_dict = {}
     arg_dict = {"key": api_key, "automatic": False}
     fox_api = FoxAPI(mock_base, **arg_dict)
-    # device_List = await fox_api.get_device_list()
-    # print(f"Device List: {device_List}")
+
+    if sn is None:
+        device_List = await fox_api.get_device_list()
+        print(f"Device List: {device_List}")
+        if device_List:
+            sn = device_List[0].get("deviceSN", None)
+            print(f"Using first device SN: {sn}")
     # await fox_api.start()
     # res = await fox_api.get_device_settings(sn, checkBattery=False)
     # print(res)
@@ -1519,7 +1522,7 @@ async def test_fox_api(api_key):
     # return 1
     new_schedule = [
         {
-            "deviceSN": "609H372054BC151",
+            "deviceSN": sn,
             "groups": [
                 {"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 22, "endMinute": 49, "workMode": "SelfUse", "fdSoc": 10, "maxSoc": 100, "fdPwr": 3000.0, "minSocOnGrid": 10},
                 {"enable": 1, "startHour": 22, "startMinute": 50, "endHour": 22, "endMinute": 59, "workMode": "ForceDischarge", "fdSoc": 10, "maxSoc": 10, "fdPwr": 3000, "minSocOnGrid": 10},
@@ -1538,13 +1541,15 @@ def main():
     Main function for command line execution
     """
     parser = argparse.ArgumentParser(description="Test Fox API")
+    parser.add_argument("--serial", action="store_true", default=None, help="Fox API serial number")
     parser.add_argument("--api-key", required=True, help="Fox API key")
 
     args = parser.parse_args()
     key = args.api_key
+    serial = args.serial
 
     # Run the test
-    asyncio.run(test_fox_api(key))
+    asyncio.run(test_fox_api(serial, key))
 
 
 if __name__ == "__main__":

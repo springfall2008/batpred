@@ -1985,6 +1985,8 @@ APPS_SCHEMA = {
     "inverter_reserve_max": {"type": "integer", "zero": False, "entries": "num_inverters"},
     "battery_charge_power_curve: ": {"type": "int_float_dict"},
     "battery_discharge_power_curve: ": {"type": "int_float_dict"},
+    "battery_charge_power_curve_default: ": {"type": "int_float_dict"},
+    "battery_discharge_power_curve_default: ": {"type": "int_float_dict"},
     "clock_skew": {"type": "integer"},
     "solcast_api_key": {"type": "string", "empty": False},
     "solcast_host": {"type": "string", "empty": False},

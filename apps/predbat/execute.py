@@ -716,6 +716,7 @@ class Execute:
                 else:
                     if self.battery_charge_power_curve_default and not self.battery_charge_power_curve:
                         self.battery_charge_power_curve = self.battery_charge_power_curve_default
+                        self.computed_charge_curve = True
                         self.log("Using default battery charge power curve")
 
             if id == 0 and (not self.computed_discharge_curve or self.battery_discharge_power_curve_auto) and not self.battery_discharge_power_curve:
@@ -727,6 +728,7 @@ class Execute:
                 else:
                     if self.battery_discharge_power_curve_default and not self.battery_discharge_power_curve:
                         self.battery_discharge_power_curve = self.battery_discharge_power_curve_default
+                        self.computed_discharge_curve = True
                         self.log("Using default battery discharge power curve")
 
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
