@@ -27,7 +27,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.29.8"
+THIS_VERSION = "v8.29.9"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py"]
@@ -546,8 +546,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.future_energy_rates_export = {}
         self.load_scaling_dynamic = {}
         self.battery_charge_power_curve = {}
+        self.battery_charge_power_curve_default = {}
         self.battery_charge_power_curve_auto = False
         self.battery_discharge_power_curve = {}
+        self.battery_discharge_power_curve_default = {}
         self.battery_discharge_power_curve_auto = False
         self.computed_charge_curve = False
         self.computed_discharge_curve = False

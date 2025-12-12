@@ -3835,7 +3835,7 @@ def test_apply_battery_schedule_charge_only(my_predbat):
     fox.fdsoc_min[deviceSN] = 10
     fox.local_schedule[deviceSN] = {
         "reserve": 15,
-        "charge": {"enable": 1, "start_time": "02:30:00", "end_time": "05:30:00", "soc": 100, "power": 8000},
+        "charge": {"enable": 1, "start_time": "02:30:00", "end_time": "05:30:00", "soc": 90, "power": 8000},
         "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
     }
 
@@ -3849,9 +3849,15 @@ def test_apply_battery_schedule_charge_only(my_predbat):
     for group in groups:
         if group.get("workMode") == "ForceCharge":
             charge_found = True
-            assert group["startHour"] == 2
-            assert group["startMinute"] == 30
-    assert charge_found
+            assert group["startHour"] == 2, f"Expected startHour=2, got {group['startHour']}"
+            assert group["startMinute"] == 30, f"Expected startMinute=30, got {group['startMinute']}"
+            assert group["fdSoc"] == 100, f"Expected fdSoc=100, got {group['fdSoc']}"
+            assert group["fdPwr"] == 8000, f"Expected fdPwr=8000, got {group['fdPwr']}"
+            assert group["maxSoc"] == 90, f"Expected maxSoc=90, got {group['maxSoc']}"
+            assert group["endHour"] == 5, f"Expected endHour=5, got {group['endHour']}"
+            assert group["endMinute"] == 29, f"Expected endMinute=29, got {group['endMinute']}"
+            assert group["minSocOnGrid"] == 90, f"Expected minSocOnGrid=90, got {group['minSocOnGrid']}"
+    assert charge_found, "ForceCharge group not found in schedule"
 
     return False
 
@@ -3867,7 +3873,7 @@ def test_apply_battery_schedule_discharge_only(my_predbat):
 
     # Setup device
     fox.device_detail[deviceSN] = {"hasBattery": True}
-    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 12}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.fdsoc_min[deviceSN] = 10
     fox.local_schedule[deviceSN] = {
@@ -3887,8 +3893,13 @@ def test_apply_battery_schedule_discharge_only(my_predbat):
         if group.get("workMode") == "ForceDischarge":
             discharge_found = True
             assert group["startHour"] == 16
+            assert group["startMinute"] == 0
+            assert group["endHour"] == 18
+            assert group["endMinute"] == 59
             assert group["fdSoc"] == 10
             assert group["fdPwr"] == 5000
+            assert group["maxSoc"] == 15, f"Expected maxSoc=15, got {group['maxSoc']}"
+            assert group["minSocOnGrid"] == 15, f"Expected minSocOnGrid=15, got {group['minSocOnGrid']}"
     assert discharge_found
 
     return False

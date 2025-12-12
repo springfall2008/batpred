@@ -709,16 +709,27 @@ class Execute:
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
                 curve = inverter.find_charge_curve(discharge=False)
-                if curve and self.battery_charge_power_curve_auto:
+                if curve and (self.battery_charge_power_curve_auto or not self.computed_charge_curve):
                     self.log("Saved computed battery charge power curve")
                     self.battery_charge_power_curve = curve
-                self.computed_charge_curve = True
+                    self.computed_charge_curve = True
+                else:
+                    if self.battery_charge_power_curve_default and not self.battery_charge_power_curve:
+                        self.battery_charge_power_curve = self.battery_charge_power_curve_default
+                        self.computed_charge_curve = True
+                        self.log("Using default battery charge power curve")
+
             if id == 0 and (not self.computed_discharge_curve or self.battery_discharge_power_curve_auto) and not self.battery_discharge_power_curve:
                 curve = inverter.find_charge_curve(discharge=True)
-                if curve and self.battery_discharge_power_curve_auto:
+                if curve and (self.battery_discharge_power_curve_auto or not self.computed_discharge_curve):
                     self.log("Saved computed battery discharge power curve")
                     self.battery_discharge_power_curve = curve
-                self.computed_discharge_curve = True
+                    self.computed_discharge_curve = True
+                else:
+                    if self.battery_discharge_power_curve_default and not self.battery_discharge_power_curve:
+                        self.battery_discharge_power_curve = self.battery_discharge_power_curve_default
+                        self.computed_discharge_curve = True
+                        self.log("Using default battery discharge power curve")
 
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
             if not found_first:
