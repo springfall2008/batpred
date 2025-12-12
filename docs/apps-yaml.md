@@ -1400,9 +1400,9 @@ Example:
 
 - **battery_discharge_power_curve_default** - This optional configuration item provides a fallback discharging curve when Predbat cannot auto-detect the curve from your inverter.
 
-Similar to the charge curve default above, this is used as a fallback when auto-detection fails.
+Similar to the charge curve default above, this is used as a fallback, but only if you have not manually configured `battery_discharge_power_curve` (or have set it to `"auto"`).
 
-The precedence order is: **Auto-detected curve** → **Manual battery_discharge_power_curve** → **Default battery_discharge_power_curve_default**
+**Precedence:** If you manually configure `battery_discharge_power_curve`, it takes absolute precedence and is always used. Only if `battery_discharge_power_curve` is set to `"auto"` or not configured at all will Predbat attempt to auto-detect the curve from inverter history; if that fails, the default `battery_discharge_power_curve_default` is used as a fallback.
 
 Example:
 
