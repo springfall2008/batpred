@@ -1367,6 +1367,57 @@ If you are using REST mode to control your GivEnergy inverter then the following
     - sensor.givtcp_{geserial}_soc_kwh
 ```
 
+- **battery_charge_power_curve_default** - This optional configuration item provides a fallback charging curve when Predbat cannot auto-detect the curve from your inverter.
+
+This is useful when:
+  - Your inverter doesn't provide historical charging data needed for auto-detection
+  - You've recently installed Predbat and don't have sufficient historical data yet
+  - Auto-detection fails but you know your battery's charging characteristics
+
+The default curve only applies when both of the following are true:
+  - Auto-detection from inverter history fails or returns no curve
+  - You haven't manually configured `battery_charge_power_curve`
+
+The precedence order is: **Auto-detected curve** → **Manual battery_charge_power_curve** → **Default battery_charge_power_curve_default**
+
+Example:
+
+```yaml
+  battery_charge_power_curve_default:
+    91 : 0.91
+    92 : 0.81
+    93 : 0.71
+    94 : 0.62
+    95 : 0.52
+    96 : 0.43
+    97 : 0.33
+    98 : 0.24
+    99 : 0.24
+    100 : 0.24
+```
+
+- **battery_discharge_power_curve_default** - This optional configuration item provides a fallback discharging curve when Predbat cannot auto-detect the curve from your inverter.
+
+Similar to the charge curve default above, this is used as a fallback when auto-detection fails.
+
+The precedence order is: **Auto-detected curve** → **Manual battery_discharge_power_curve** → **Default battery_discharge_power_curve_default**
+
+Example:
+
+```yaml
+  battery_discharge_power_curve_default:
+    10 : 0.85
+    9 : 0.75
+    8 : 0.65
+    7 : 0.55
+    6 : 0.45
+    5 : 0.35
+    4 : 0.25
+    3 : 0.15
+    2 : 0.10
+    1 : 0.05
+```
+
 ## Battery temperature curves
 
 Your battery's maximum charge and discharge rate can be impacted by cold weather, Predbat can predict this if you provide a temperature sensor and define a curve.
