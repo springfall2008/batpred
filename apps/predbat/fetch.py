@@ -1743,7 +1743,7 @@ class Fetch:
                 self.battery_charge_power_curve = {}
                 self.log("Warn: battery_charge_power_curve is incorrectly configured - ignoring")
                 self.record_status("battery_charge_power_curve is incorrectly configured - ignoring", had_errors=True)
-        
+
         self.battery_charge_power_curve_default = self.args.get("battery_charge_power_curve_default", {})
         if not isinstance(self.battery_charge_power_curve_default, dict):
             self.battery_charge_power_curve_default = {}

@@ -1356,7 +1356,9 @@ class FoxAPI(ComponentBase):
                         }
                     )
                 elif direction == "discharge":
-                    new_schedule.append({"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve})
+                    new_schedule.append(
+                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
+                    )
         new_schedule = validate_schedule(datetime.now(self.local_tz), new_schedule, reserve, fdPwr_max)
         self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
         result = await self.set_scheduler(serial, new_schedule)
@@ -1466,17 +1468,17 @@ async def test_fox_api(api_key):
     # device_List = await fox_api.get_device_list()
     # print(f"Device List: {device_List}")
     # await fox_api.start()
-    #res = await fox_api.get_device_settings(sn, checkBattery=False)
-    #print(res)
+    # res = await fox_api.get_device_settings(sn, checkBattery=False)
+    # print(res)
     # res = await fox_api.get_battery_charging_time(sn)
     # print(res)
     # res = await fox_api.get_device_detail(sn)
     # print(res)
-    #res = await fox_api.get_scheduler(sn, checkBattery=False)
-    #print(res)
+    # res = await fox_api.get_scheduler(sn, checkBattery=False)
+    # print(res)
     # return 1
-    #res = await fox_api.compute_schedule(sn)
-    #print(res)
+    # res = await fox_api.compute_schedule(sn)
+    # print(res)
     # res = await fox_api.publish_data()
     # res = await fox_api.set_device_setting(sn, "dummy", 42)
     # print(res)
@@ -1506,25 +1508,25 @@ async def test_fox_api(api_key):
     new_slot2["fdPwr"] = 8000
     new_slot2["minSocOnGrid"] = 100
 
-    #minSocOnGrid = 10
-    #fdPwr_max = 5000
-    #new_schedule = [new_slot, new_slot2]
+    # minSocOnGrid = 10
+    # fdPwr_max = 5000
+    # new_schedule = [new_slot, new_slot2]
 
     # new_schedule = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 1, "endMinute": 0, "workMode": "SelfUse", "fdSoc": minSocOnGrid, "maxSoc": minSocOnGrid, "fdPwr": fdPwr_max, "minSocOnGrid": minSocOnGrid}]
-    #new_schedule = validate_schedule(datetime.now(fox_api.local_tz), new_schedule, minSocOnGrid, fdPwr_max)
-    #print("Validated schedule")
-    #print(new_schedule)
-    #return 1
+    # new_schedule = validate_schedule(datetime.now(fox_api.local_tz), new_schedule, minSocOnGrid, fdPwr_max)
+    # print("Validated schedule")
+    # print(new_schedule)
+    # return 1
     new_schedule = [
-                    {'deviceSN': '609H372054BC151', 'groups': 
-                        [
-                            {'enable': 1, 'startHour': 0, 'startMinute': 0, 'endHour': 22, 'endMinute': 49, 'workMode': 'SelfUse', 'fdSoc': 10, 'maxSoc': 100, 'fdPwr': 3000.0, 'minSocOnGrid': 10}, 
-                            {'enable': 1, 'startHour': 22, 'startMinute': 50, 'endHour': 22, 'endMinute': 59, 'workMode': 'ForceDischarge', 'fdSoc': 10, 'maxSoc': 10, 'fdPwr': 3000, 'minSocOnGrid': 10}, 
-                            {'enable': 1, 'startHour': 23, 'startMinute': 0, 'endHour': 23, 'endMinute': 59, 'workMode': 'SelfUse', 'fdSoc': 10, 'maxSoc': 100, 'fdPwr': 3000.0, 'minSocOnGrid': 10}
-                            
-                        ]
-                    }
-                ]
+        {
+            "deviceSN": "609H372054BC151",
+            "groups": [
+                {"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 22, "endMinute": 49, "workMode": "SelfUse", "fdSoc": 10, "maxSoc": 100, "fdPwr": 3000.0, "minSocOnGrid": 10},
+                {"enable": 1, "startHour": 22, "startMinute": 50, "endHour": 22, "endMinute": 59, "workMode": "ForceDischarge", "fdSoc": 10, "maxSoc": 10, "fdPwr": 3000, "minSocOnGrid": 10},
+                {"enable": 1, "startHour": 23, "startMinute": 0, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": 10, "maxSoc": 100, "fdPwr": 3000.0, "minSocOnGrid": 10},
+            ],
+        }
+    ]
 
     print("Sending: {}".format(new_schedule))
     res = await fox_api.set_scheduler(sn, new_schedule)

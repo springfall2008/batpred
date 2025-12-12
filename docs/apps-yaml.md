@@ -1370,13 +1370,15 @@ If you are using REST mode to control your GivEnergy inverter then the following
 - **battery_charge_power_curve_default** - This optional configuration item provides a fallback charging curve when Predbat cannot auto-detect the curve from your inverter.
 
 This is useful when:
-  - Your inverter doesn't provide historical charging data needed for auto-detection
-  - You've recently installed Predbat and don't have sufficient historical data yet
-  - Auto-detection fails but you know your battery's charging characteristics
+
+- Your inverter doesn't provide historical charging data needed for auto-detection
+- You've recently installed Predbat and don't have sufficient historical data yet
+- Auto-detection fails but you know your battery's charging characteristics
 
 The default curve only applies when both of the following are true:
-  - Auto-detection from inverter history fails or returns no curve
-  - You haven't manually configured `battery_charge_power_curve`
+
+- Auto-detection from inverter history fails or returns no curve
+- You haven't manually configured `battery_charge_power_curve`
 
 The precedence order is: **Auto-detected curve** → **Manual battery_charge_power_curve** → **Default battery_charge_power_curve_default**
 
