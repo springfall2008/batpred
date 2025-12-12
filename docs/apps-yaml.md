@@ -1375,12 +1375,12 @@ This is useful when:
 - You've recently installed Predbat and don't have sufficient historical data yet
 - Auto-detection fails but you know your battery's charging characteristics
 
-The default curve only applies when both of the following are true:
+The default curve is only used if:
 
+- You have not manually configured `battery_charge_power_curve` (i.e., it is not set, or is set to `"auto"`)
 - Auto-detection from inverter history fails or returns no curve
-- You haven't manually configured `battery_charge_power_curve`
 
-The precedence order is: **Auto-detected curve** → **Manual battery_charge_power_curve** → **Default battery_charge_power_curve_default**
+**Precedence:** If you manually configure `battery_charge_power_curve` (with any value other than `"auto"`), it will be used exclusively and neither auto-detection nor the default will be considered. Only if `battery_charge_power_curve` is set to `"auto"` or not configured at all will the system attempt auto-detection, with the default as a fallback if auto-detection fails.
 
 Example:
 
