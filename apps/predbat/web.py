@@ -2562,7 +2562,7 @@ var options = {
             id = compare.get("id", "")
             series_data.append({"name": name, "data": compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
         series_data.append({"name": "Actual", "data": cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
-        if self.base.car_charging_hold:
+        if self.base.num_cars > 0:
             series_data.append({"name": "Actual (no car)", "data": cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
 
         now_str = self.now_utc.strftime(TIME_FORMAT)
