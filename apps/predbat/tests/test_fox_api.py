@@ -34,6 +34,7 @@ class MockFoxAPI:
         self.local_schedule = {}
         self.device_current_schedule = {}
         self.fdpwr_max = {}
+        self.fdsoc_min = {}
 
     def getMinSocOnGrid(self, deviceSN):
         """Mock implementation of getMinSocOnGrid"""
