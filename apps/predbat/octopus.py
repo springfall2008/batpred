@@ -330,9 +330,23 @@ class OctopusAPI(ComponentBase):
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
+
+        # Create cache directory structure
         if not os.path.exists(self.cache_path):
             os.makedirs(self.cache_path)
-        self.cache_file = self.cache_path + "/octopus.yaml"
+
+        # Shared cache directories for tariffs and URLs (shared across all users)
+        self.shared_cache_path = self.config_root + "/cache/shared"
+        self.tariffs_cache_path = self.shared_cache_path + "/tariffs"
+        self.urls_cache_path = self.shared_cache_path + "/urls"
+
+        for path in [self.shared_cache_path, self.tariffs_cache_path, self.urls_cache_path]:
+            if not os.path.exists(path):
+                os.makedirs(path)
+
+        # User-specific cache file (account_data, intelligent_device, saving_sessions only)
+        self.cache_file = self.cache_path + "/octopus_user.yaml"
+        self.log("Octopus API: Initialized with account ID {} cache {} shared {}".format(self.account_id, self.cache_file, self.shared_cache_path))
 
     async def select_event(self, entity_id, value):
         if entity_id == self.get_entity_name("select", "intelligent_target_time"):
@@ -360,6 +374,7 @@ class OctopusAPI(ComponentBase):
         """
         Main run loop
         """
+        self.log("Octopus API: enter seconds {} first {}".format(seconds, first))
         if first:
             # Load cached data
             await self.load_octopus_cache()
@@ -426,10 +441,108 @@ class OctopusAPI(ComponentBase):
                 done_command = True
         return done_command
 
+    def get_tariff_cache_key(self, tariff_data):
+        """
+        Generate cache key for a tariff based on product_code and tariff_code
+        Returns: filename safe string like "AGILE-FLEX-22-11-25_E-1R-AGILE-FLEX-22-11-25-C"
+        """
+        product_code = tariff_data.get("product_code", "unknown")
+        tariff_code = tariff_data.get("tariff_code", "unknown")
+        # Sanitize for filesystem safety
+        key = f"{product_code}_{tariff_code}".replace("/", "_").replace("\\", "_")
+        return key
+
+    def load_tariff_from_cache(self, tariff_key):
+        """
+        Load a single tariff from its individual cache file
+        Returns: tariff data dict or None
+        """
+        cache_file = f"{self.tariffs_cache_path}/{tariff_key}.yaml"
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r") as f:
+                    return yaml.safe_load(f)
+            except Exception as e:
+                self.log(f"Warn: Failed to load tariff cache {tariff_key}: {e}")
+        return None
+
+    def save_tariff_to_cache(self, tariff_key, tariff_data):
+        """
+        Save a single tariff to its individual cache file
+        No locking needed - each tariff is in a separate file
+        """
+        cache_file = f"{self.tariffs_cache_path}/{tariff_key}.yaml"
+        try:
+            with open(cache_file, "w") as f:
+                yaml.dump(tariff_data, f)
+        except Exception as e:
+            self.log(f"Warn: Failed to save tariff cache {tariff_key}: {e}")
+
+    def load_url_from_cache(self, url):
+        """
+        Load cached HTTP response for a URL
+        Returns: cached data or None
+        """
+        import hashlib
+
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+        cache_file = f"{self.urls_cache_path}/{url_hash}.yaml"
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r") as f:
+                    return yaml.safe_load(f)
+            except Exception as e:
+                self.log(f"Warn: Failed to load URL cache {url_hash}: {e}")
+        return None
+
+    def save_url_to_cache(self, url, data):
+        """
+        Save HTTP response to cache for a URL
+        No locking needed - each URL is in a separate file
+        """
+        import hashlib
+
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+        cache_file = f"{self.urls_cache_path}/{url_hash}.yaml"
+        try:
+            with open(cache_file, "w") as f:
+                yaml.dump(data, f)
+        except Exception as e:
+            self.log(f"Warn: Failed to save URL cache {url_hash}: {e}")
+
+    def decode_kraken_token_expiry(self, token):
+        """
+        Extract expiration timestamp from Kraken JWT token without verification.
+        Returns datetime object if successful, None otherwise.
+        """
+        import base64
+        import json
+
+        if not token:
+            return None
+
+        try:
+            parts = token.split(".")
+            if len(parts) != 3:
+                return None
+
+            # Decode payload (add padding if needed)
+            payload = parts[1] + "=" * (4 - len(parts[1]) % 4)
+            payload_decoded = json.loads(base64.urlsafe_b64decode(payload))
+
+            if "exp" in payload_decoded:
+                return datetime.fromtimestamp(payload_decoded["exp"])
+            return None
+        except Exception as e:
+            self.log(f"Warn: Failed to decode Kraken token expiry: {e}")
+            return None
+
     async def load_octopus_cache(self):
         """
         Load the octopus cache
+        User-specific data from user file, tariffs/URLs from shared individual files
         """
+        # Load user-specific data
         data = {}
         if os.path.exists(self.cache_file):
             try:
@@ -440,10 +553,17 @@ class OctopusAPI(ComponentBase):
 
             if data:
                 self.account_data = data.get("account_data", {})
-                self.tariffs = data.get("tariffs", {})
                 self.saving_sessions = data.get("saving_sessions", {})
-                self.url_cache = data.get("url_cache", {})
                 self.intelligent_device = data.get("intelligent_device", {})
+                self.graphql_token = data.get("kraken_token")
+
+        # Load tariffs from individual shared cache files
+        # Tariffs will be loaded on-demand when needed via load_tariff_from_cache()
+        self.tariffs = {}
+
+        # Load URL cache from individual shared files
+        # URL cache will be checked on-demand via load_url_from_cache()
+        self.url_cache = {}
             if self.tariffs is None:
                 self.tariffs = {}
             if self.account_data is None:
@@ -456,15 +576,25 @@ class OctopusAPI(ComponentBase):
     async def save_octopus_cache(self):
         """
         Save the octopus cache
+        User-specific data to user file, tariffs/URLs to individual shared files
         """
+        # Save user-specific data only
         octopus_cache = {}
         octopus_cache["account_data"] = self.account_data
-        octopus_cache["tariffs"] = self.tariffs
         octopus_cache["saving_sessions"] = self.saving_sessions
-        octopus_cache["url_cache"] = self.url_cache
         octopus_cache["intelligent_device"] = self.intelligent_device
+        octopus_cache["kraken_token"] = self.graphql_token
         with open(self.cache_file, "w") as f:
             yaml.dump(octopus_cache, f)
+
+        # Save each tariff to its own file in shared cache
+        for tariff_type, tariff_data in self.tariffs.items():
+            if tariff_data:
+                tariff_key = self.get_tariff_cache_key(tariff_data)
+                self.save_tariff_to_cache(tariff_key, tariff_data)
+
+        # URL cache entries are saved on-demand via save_url_to_cache()
+        # when HTTP responses are fetched
 
     def get_tariff(self, tariff_type):
         if tariff_type in self.tariffs:
@@ -904,31 +1034,78 @@ class OctopusAPI(ComponentBase):
 
     async def clean_url_cache(self):
         """
-        Clean the URL cache
+        Clean the URL cache - now uses individual files in shared cache
         """
         now = datetime.now()
-        for url in list(self.url_cache.keys()):
-            stamp = self.url_cache[url]["stamp"]
-            age = now - stamp
-            if age.seconds > (24 * 60 * 60):
-                del self.url_cache[url]
+
+        # Clean old cache files from shared URLs directory
+        if os.path.exists(self.urls_cache_path):
+            for filename in os.listdir(self.urls_cache_path):
+                filepath = os.path.join(self.urls_cache_path, filename)
+                if filename.endswith(".yaml"):
+                    try:
+                        with open(filepath, "r") as f:
+                            cache_entry = yaml.safe_load(f)
+                        if cache_entry and "stamp" in cache_entry:
+                            stamp = cache_entry["stamp"]
+                            age = now - stamp
+                            if age.seconds > (24 * 60 * 60):
+                                os.remove(filepath)
+                                self.log(f"Cleaned old URL cache file: {filename}")
+                    except Exception as e:
+                        self.log(f"Warn: Failed to clean cache file {filename}: {e}")
 
     async def fetch_url_cached(self, url):
         """
         Fetch a URL from the cache or reload it
+        Uses individual file per URL in shared cache directory
+        Implements stale-while-revalidate to prevent thundering herd
         """
-        if url in self.url_cache:
-            stamp = self.url_cache[url]["stamp"]
-            pdata = self.url_cache[url]["data"]
-            age = datetime.now() - stamp
-            if age.seconds < (30 * 60):
-                return pdata
+        import hashlib
 
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+
+        # Check shared file cache first
+        cached_data = self.load_url_from_cache(url)
+        if cached_data and "stamp" in cached_data and "data" in cached_data:
+            stamp = cached_data["stamp"]
+            age = datetime.now() - stamp
+
+            # Fresh cache (< 30 minutes) - return immediately
+            if age.seconds < (30 * 60):
+                return cached_data["data"]
+
+            # Stale cache (30-35 minutes) - serve stale while ONE pod refreshes
+            if age.seconds < (35 * 60):
+                lock_file = f"{self.urls_cache_path}/{url_hash}.lock"
+                try:
+                    # Try to acquire lock atomically (non-blocking)
+                    # cspell:ignore CREAT WRONLY
+                    fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    try:
+                        # We got the lock! Refresh in background
+                        data = await self.async_download_octopus_url(url)
+                        if data:
+                            cache_entry = {"stamp": datetime.now(), "data": data}
+                            self.save_url_to_cache(url, cache_entry)
+                            self.log(f"Refreshed stale cache for {url_hash}")
+                    finally:
+                        os.close(fd)
+                        os.remove(lock_file)
+                except FileExistsError:
+                    # Another pod is refreshing, serve stale data
+                    self.log(f"Serving stale cache while another pod refreshes {url_hash}")
+                    pass
+
+                # Serve stale data (either we just refreshed, or another pod is refreshing)
+                return cached_data["data"]
+
+        # Cache completely missing or too stale (>35 min) - must fetch
         data = await self.async_download_octopus_url(url)
         if data:
-            self.url_cache[url] = {}
-            self.url_cache[url]["stamp"] = datetime.now()
-            self.url_cache[url]["data"] = data
+            # Save to shared file cache
+            cache_entry = {"stamp": datetime.now(), "data": data}
+            self.save_url_to_cache(url, cache_entry)
             return data
         else:
             self.log("Warn: Unable to download Octopus data from URL {}".format(url))
@@ -1052,11 +1229,13 @@ class OctopusAPI(ComponentBase):
 
     async def async_refresh_token(self):
         """
-        Refresh the token
+        Refresh the token using JWT expiry from the token itself
         """
-
-        if self.graphql_expiration is not None and (self.graphql_expiration - timedelta(minutes=5)) > datetime.now():
-            return self.graphql_token
+        # Check if we have a valid token by decoding its expiry
+        if self.graphql_token:
+            expiry = self.decode_kraken_token_expiry(self.graphql_token)
+            if expiry and expiry > datetime.now() + timedelta(minutes=5):
+                return self.graphql_token
 
         client = await self.api.async_create_client_session()
         url = f"{self.api.base_url}/v1/graphql/"
@@ -1074,7 +1253,8 @@ class OctopusAPI(ComponentBase):
                     and "token" in token_response_body["data"]["obtainKrakenToken"]
                 ):
                     self.graphql_token = token_response_body["data"]["obtainKrakenToken"]["token"]
-                    self.graphql_expiration = datetime.now() + timedelta(hours=1)
+                    # Save token to cache immediately
+                    await self.save_octopus_cache()
                     return self.graphql_token
                 else:
                     self.log("Warn: Octopus API: Failed to retrieve auth token")
@@ -1083,9 +1263,9 @@ class OctopusAPI(ComponentBase):
             self.log(f"Failed to connect. Timeout of {self.api.timeout} exceeded.")
             return None
 
-    async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False):
+    async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0):
         """
-        Execute a graphql query
+        Execute a graphql query with automatic token refresh on auth errors
         """
         await self.async_refresh_token()
         try:
@@ -1095,7 +1275,19 @@ class OctopusAPI(ComponentBase):
             payload = {"query": query}
             headers = {"Authorization": f"JWT {self.graphql_token}", integration_context_header: request_context}
             async with client.post(url, json=payload, headers=headers) as response:
+                # Process response (which reads the text)
                 response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
+
+                # Check for auth errors and retry once
+                if response_body and "errors" in response_body and _retry_count == 0:
+                    for error in response_body.get("errors", []):
+                        error_code = error.get("extensions", {}).get("errorCode")
+                        if error_code in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
+                            self.log(f"Kraken token invalid (error {error_code}), forcing refresh and retry")
+                            self.graphql_token = None
+                            await self.async_refresh_token()
+                            return await self.async_graphql_query(query, request_context, returns_data, ignore_errors, _retry_count=1)
+
                 if response_body and ("data" in response_body):
                     self.update_success_timestamp()
                     return response_body["data"]
@@ -2066,7 +2258,6 @@ class Octopus:
         """
         data_all = []
         rate_data = {}
-
         if entity_id:
             # From 9.0.0 of the Octopus plugin the data is split between previous rate, current rate and next rate
             # and the sensor is replaced with an event - try to support the old settings and find the new events
@@ -2101,6 +2292,7 @@ class Octopus:
                 or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
                 or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
             )
+
             if data_import:
                 data_all += data_import
             else:

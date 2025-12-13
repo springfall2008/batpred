@@ -150,6 +150,7 @@ class ComponentBase(ABC):
         """
         seconds = 0
         first = True
+        self.log(f"{self.__class__.__name__}: Starting...")
         while not self.api_stop and not self.fatal_error:
             try:
                 if first or seconds % 60 == 0:

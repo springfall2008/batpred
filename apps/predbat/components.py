@@ -20,6 +20,8 @@ from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from web_mcp import PredbatMCPServer
+from component_client import ComponentClient
+from component_callback_server import ComponentCallbackServer
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
@@ -88,13 +90,34 @@ COMPONENT_LIST = {
         "required_or": ["solcast_host", "forecast_solar", "pv_forecast_today"],
         "phase": 1,
     },
+    "octopus": {
+        "class": OctopusAPI,
+        "name": "Octopus Energy Direct",
+        "event_filter": "predbat_octopus_",
+        "args": {
+            "key": {
+                "required": True,
+                "config": "octopus_api_key",
+            },
+            "account_id": {
+                "required": True,
+                "config": "octopus_api_account",
+            },
+            "automatic": {
+                "required": False,
+                "default": True,
+                "config": "octopus_automatic",
+            },
+        },
+        "phase": 1,
+    },
     "gecloud": {
         "class": GECloudDirect,
         "name": "GivEnergy Cloud Direct",
         "event_filter": "predbat_gecloud_",
         "args": {
             "ge_cloud_direct": {
-                "required_true": True,
+                "required": True,
                 "config": "ge_cloud_direct",
             },
             "api_key": {
@@ -114,7 +137,7 @@ COMPONENT_LIST = {
         "name": "GivEnergy Cloud Data",
         "args": {
             "ge_cloud_data": {
-                "required_true": True,
+                "required": True,
                 "config": "ge_cloud_data",
             },
             "ge_cloud_key": {
@@ -129,27 +152,6 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": [7],
                 "config": "days_previous",
-            },
-        },
-        "phase": 1,
-    },
-    "octopus": {
-        "class": OctopusAPI,
-        "name": "Octopus Energy Direct",
-        "event_filter": "predbat_octopus_",
-        "args": {
-            "key": {
-                "required": True,
-                "config": "octopus_api_key",
-            },
-            "account_id": {
-                "required": True,
-                "config": "octopus_api_account",
-            },
-            "automatic": {
-                "required": False,
-                "default": True,
-                "config": "octopus_automatic",
             },
         },
         "phase": 1,
@@ -222,9 +224,51 @@ class Components:
         self.component_tasks = {}
         self.base = base
         self.log = base.log
+        self.callback_server = None
+
+    def register_component(self, name, component_info):
+        """
+        Register a new component dynamically.
+        Useful for overlays that want to add custom components without modifying COMPONENT_LIST.
+
+        Args:
+            name: Component name (string)
+            component_info: Component configuration dict (same format as COMPONENT_LIST entries)
+        """
+        global COMPONENT_LIST
+        COMPONENT_LIST[name] = component_info
+        self.log(f"Components: Registered custom component '{name}'")
 
     def initialize(self, only=None, phase=0):
         """Initialize components without starting them"""
+
+        # Initialize callback server for remote components (phase 0 only)
+        if phase == 0 and only is None:
+            # Get component_server config from args (apps.yaml)
+            component_server_config = self.base.args.get("component_server", {})
+            component_server_components = component_server_config.get("components", [])
+
+            if component_server_components:
+                server_url = component_server_config.get("url", "")
+                if not server_url:
+                    self.log("Warn: component_server.components configured but component_server.url is empty, disabling remote components")
+                    component_server_components = []
+                else:
+                    # Start callback server
+                    try:
+                        self.log("Components: Starting component callback server for remote components")
+                        port = component_server_config.get("callback_port", 5054)
+                        self.callback_server = ComponentCallbackServer(self.base, port)
+                        self.log("Components: Starting component callback server for remote components")
+                        self.base.create_task(self.callback_server.start())
+                        self.log("Components: Waiting for component callback server to start...")
+                        self.callback_server.wait_started(timeout=30)
+                        self.log(f"Components: Callback server started on port {port}")
+                    except Exception as e:
+                        self.log(f"Components: Error: Failed to start callback server: {e}")
+                        self.callback_server = None
+                        component_server_components = []
+
         for component_name, component_info in COMPONENT_LIST.items():
             if only and component_name != only:
                 continue
@@ -247,8 +291,12 @@ class Components:
                     # Defer resolution of config value until later
                     arg_dict[arg] = arg_info["config"]
                     continue
-                elif required_true and not self.base.get_arg(arg_info["config"], False, indirect=False):
-                    have_all_args = False
+                elif required_true:
+                    # required_true is only for checking if component should be enabled
+                    # Don't pass it to __init__()
+                    if not self.base.get_arg(arg_info["config"], False, indirect=False):
+                        have_all_args = False
+                    continue
                 elif required and self.base.get_arg(arg_info["config"], None, indirect=False) is None:
                     have_all_args = False
                 else:
@@ -260,7 +308,39 @@ class Components:
                     have_all_args = False
             if have_all_args:
                 self.log(f"Initializing {component_info['name']} interface")
-                self.components[component_name] = component_info["class"](self.base, **arg_dict)
+
+                # Check if this component should run remotely
+                component_server_config = self.base.args.get("component_server", {})
+                component_server_components = component_server_config.get("components", [])
+
+                if component_name in component_server_components and self.callback_server:
+                    # Create remote component client
+                    server_url = component_server_config.get("url", "")
+                    callback_url = component_server_config.get("callback_url", "")
+                    callback_port = component_server_config.get("callback_port", 5054)
+                    poll_interval = component_server_config.get("poll_interval", 300)
+                    timeout = component_server_config.get("timeout", 1800)
+
+                    args_data = {"callback_url": callback_url, "callback_port": callback_port, "poll_interval": poll_interval, "timeout": timeout, "component_args": arg_dict}
+
+                    self.log(f"Creating remote component client for {component_name} at {server_url}")
+                    self.components[component_name] = ComponentClient(
+                        self.base,
+                        server_url,
+                        component_name,
+                        **args_data,
+                    )
+                else:
+                    # Create local component
+                    # Check if component inherits from ComponentBase
+                    from component_base import ComponentBase
+
+                    if issubclass(component_info["class"], ComponentBase):
+                        # New pattern: base first, then kwargs (which are processed by initialize())
+                        self.components[component_name] = component_info["class"](self.base, **arg_dict)
+                    else:
+                        # Legacy pattern: pass args, then base last
+                        self.components[component_name] = component_info["class"](**arg_dict, base=self.base)
 
     def start(self, only=None, phase=0):
         """Start all initialized components"""
@@ -288,6 +368,12 @@ class Components:
         return not failed
 
     async def stop(self, only=None):
+        # Stop callback server first if stopping all components
+        if not only and self.callback_server:
+            self.log("Stopping component callback server")
+            await self.callback_server.stop()
+            self.callback_server = None
+
         for component_name, component_info in reversed(list(self.components.items())):
             if only and component_name != only:
                 continue
