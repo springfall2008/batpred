@@ -564,9 +564,9 @@ class FoxAPI(ComponentBase):
         # First convert battery times into the same format as scheduler times
         # Create an array of 0 - 2 slots containing the battery charge times
 
-        minSocOnGrid = self.getMinSocOnGrid(deviceSN)
-        reserve = self.local_schedule.get(deviceSN, {}).get("reserve", minSocOnGrid)
-        reserve = max(reserve, minSocOnGrid)
+        fdsoc_min = self.fdsoc_min.get(deviceSN, 10)
+        reserve = self.local_schedule.get(deviceSN, {}).get("reserve", fdsoc_min)
+        reserve = max(reserve, fdsoc_min)
 
         battery_slots = []
         for i in range(0, 8):
@@ -725,7 +725,7 @@ class FoxAPI(ComponentBase):
         if not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
             return
 
-        minSocOnGrid = self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
+        fdsoc_min = self.fdsoc_min.get(deviceSN, 10)
         local_schedule = self.local_schedule.get(deviceSN, {})
 
         # Global schedule control
@@ -736,7 +736,7 @@ class FoxAPI(ComponentBase):
                 self.dashboard_item(
                     entity_id_number,
                     state=value,
-                    attributes={"min": minSocOnGrid, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "Fox {} Battery Schedule {}".format(deviceSN, attribute.replace("_", " ").capitalize()), "icon": "mdi:gauge"},
+                    attributes={"min": fdsoc_min, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "Fox {} Battery Schedule {}".format(deviceSN, attribute.replace("_", " ").capitalize()), "icon": "mdi:gauge"},
                     app="fox",
                 )
 
@@ -768,7 +768,7 @@ class FoxAPI(ComponentBase):
                             entity_id_number,
                             state=value,
                             attributes={
-                                "min": minSocOnGrid,
+                                "min": fdsoc_min,
                                 "max": 100,
                                 "step": 1,
                                 "unit_of_measurement": "%",
@@ -825,7 +825,7 @@ class FoxAPI(ComponentBase):
         """
         Get the current schedule from HA database
         """
-        minSocOnGrid = self.getMinSocOnGrid(deviceSN)
+        fdsoc_min = self.fdsoc_min.get(deviceSN, 10)
         if deviceSN not in self.local_schedule:
             self.local_schedule[deviceSN] = {}
         for attribute in ["reserve"]:
@@ -834,8 +834,8 @@ class FoxAPI(ComponentBase):
             try:
                 value = int(float(value))
             except ValueError:
-                value = 0
-            value = max(value, minSocOnGrid)
+                value = fdsoc_min
+            value = max(value, fdsoc_min)
             self.local_schedule[deviceSN][attribute] = value
 
         for direction in ["charge", "discharge"]:
@@ -1278,8 +1278,8 @@ class FoxAPI(ComponentBase):
             try:
                 value = int(value)
             except ValueError:
-                value = self.getMinSocOnGrid(serial)
-            value = max(value, self.getMinSocOnGrid(serial))
+                value = self.fdsoc_min.get(serial, 10)
+            value = max(value, self.fdsoc_min.get(serial, 10))
             self.local_schedule[serial]["reserve"] = value
             await self.publish_schedule_settings_ha(serial)
             # Changing reserve impacts idle slots so re-apply full schedule
@@ -1327,10 +1327,10 @@ class FoxAPI(ComponentBase):
 
     async def apply_battery_schedule(self, serial):
         new_schedule = []
-        minSocOnGrid = self.getMinSocOnGrid(serial)
         fdPwr_max = self.fdpwr_max.get(serial, 8000)
-        reserve = self.local_schedule.get(serial, {}).get("reserve", minSocOnGrid)
-        reserve = max(reserve, minSocOnGrid)
+        fdsoc_min = self.fdsoc_min.get(serial, 10)
+        reserve = self.local_schedule.get(serial, {}).get("reserve", fdsoc_min)
+        reserve = max(reserve, fdsoc_min)
 
         for direction in ["charge", "discharge"]:
             enable = self.local_schedule[serial].get(direction, {}).get("enable", 0)
