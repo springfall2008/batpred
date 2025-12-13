@@ -3967,6 +3967,8 @@ def test_apply_battery_schedule_neither_enabled(my_predbat):
     assert groups[0]["startHour"] == 0
     assert groups[0]["endHour"] == 23
     assert groups[0]["endMinute"] == 59
+    assert groups[0]["minSocOnGrid"] == 15, f"Expected minSocOnGrid=15, got {groups[0]['minSocOnGrid']}"
+    assert groups[0]["maxSoc"] == 100
 
     return False
 
