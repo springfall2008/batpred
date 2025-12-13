@@ -1665,8 +1665,8 @@ def test_api_get_scheduler(my_predbat):
         {
             "enable": 1,
             "groups": [
-                {"endHour": 5, "fdPwr": 8000, "minSocOnGrid": 10, "workMode": "ForceCharge", "fdSoc": 100, "enable": 1, "startHour": 2, "maxSoc": 100, "startMinute": 30, "endMinute": 29},
-                {"endHour": 0, "fdPwr": 0, "minSocOnGrid": 10, "workMode": "Invalid", "fdSoc": 10, "enable": 0, "startHour": 0, "maxSoc": 100, "startMinute": 0, "endMinute": 0},
+                {"endHour": 5, "fdPwr": 8000, "minSocOnGrid": 15, "workMode": "ForceCharge", "fdSoc": 100, "enable": 1, "startHour": 2, "maxSoc": 100, "startMinute": 30, "endMinute": 29},
+                {"endHour": 0, "fdPwr": 0, "minSocOnGrid": 15, "workMode": "Invalid", "fdSoc": 10, "enable": 0, "startHour": 0, "maxSoc": 100, "startMinute": 0, "endMinute": 0},
             ],
             "properties": {
                 "fdpwr": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 8000.0}},
@@ -1680,6 +1680,15 @@ def test_api_get_scheduler(my_predbat):
     assert result["enable"] == 1
     assert len(result["groups"]) == 2
     assert result["groups"][0]["workMode"] == "ForceCharge"
+    assert result["groups"][0]["minSocOnGrid"] == 15
+    assert result["groups"][0]["enable"] == 1
+    assert result["groups"][0]["startHour"] == 2
+    assert result["groups"][0]["startMinute"] == 30
+    assert result["groups"][0]["endHour"] == 5
+    assert result["groups"][0]["endMinute"] == 29
+    assert result["groups"][1]["enable"] == 0
+    assert result["groups"][1]["workMode"] == "Invalid"
+
     assert fox.fdpwr_max[deviceSN] == 8000
     assert fox.fdsoc_min[deviceSN] == 10
 
@@ -3967,6 +3976,8 @@ def test_apply_battery_schedule_neither_enabled(my_predbat):
     assert groups[0]["startHour"] == 0
     assert groups[0]["endHour"] == 23
     assert groups[0]["endMinute"] == 59
+    assert groups[0]["minSocOnGrid"] == 15, f"Expected minSocOnGrid=15, got {groups[0]['minSocOnGrid']}"
+    assert groups[0]["maxSoc"] == 100
 
     return False
 

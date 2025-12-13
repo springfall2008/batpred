@@ -583,7 +583,8 @@ class FoxAPI(ComponentBase):
                         "fdPwr": self.fdpwr_max.get(deviceSN, 8000),
                         "workMode": "SelfUse",
                         "fdSoc": 100,
-                        "minSocOnGrid": minSocOnGrid,
+                        "minSocOnGrid": reserve,
+                        "maxSoc": 100,
                     }
                 )
 
@@ -603,6 +604,7 @@ class FoxAPI(ComponentBase):
                         "workMode": "ForceCharge",
                         "fdSoc": 100,
                         "minSocOnGrid": reserve,
+                        "maxSoc": 100,
                     }
         self.device_current_schedule[deviceSN] = battery_slots
 
@@ -911,7 +913,8 @@ class FoxAPI(ComponentBase):
             if inverter_capacity:
                 self.fdpwr_max[deviceSN] = min(inverter_capacity, self.fdpwr_max[deviceSN])
 
-            self.fdsoc_min[deviceSN] = max(self.getMinSocOnGrid(deviceSN), result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10))
+            # Min SOC On grid can change as Predbat writes reserve so this must be the real min
+            self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
             self.log("Fox: Fetched schedule got {} fdPwr max {} fdSoc min {}".format(result, self.fdpwr_max[deviceSN], self.fdsoc_min[deviceSN]))
             self.device_scheduler[deviceSN] = result
             return result
