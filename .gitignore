@@ -45,6 +45,7 @@ coverage/debug/
 coverage/predbat_standalone/
 coverage/predbat_standalone_ha/
 coverage/supabase/
+coverage/octopus/
 .coverage
 .pytest_cache/
 .tox/

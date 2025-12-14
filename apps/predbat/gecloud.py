@@ -448,6 +448,10 @@ class GECloudDirect(ComponentBase):
             entity_name = "sensor.predbat_gecloud_" + device
             entity_name = entity_name.lower()
             attributes = {}
+            if status[key] is None:
+                # Skip bad values
+                continue
+
             if key == "time":
                 self.dashboard_item(entity_name + "_time", state=status[key], attributes=attribute_table.get("time", {}), app="gecloud")
             elif key == "status":

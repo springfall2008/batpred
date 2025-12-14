@@ -52,13 +52,24 @@ from tests.test_previous_days_modal import test_previous_days_modal_filter
 from tests.test_octopus_free import test_octopus_free
 from tests.test_prune_today import test_prune_today
 from tests.test_cumulative import test_get_now_from_cumulative
-from tests.test_octopus_url import test_download_octopus_url_wrapper
+from tests.test_octopus_url import test_download_octopus_url_wrapper, test_async_get_day_night_rates_wrapper, test_get_saving_session_data, test_async_intelligent_update_sensor_wrapper, test_async_find_tariffs_wrapper
+from tests.test_octopus_cache import test_octopus_cache_wrapper
+from tests.test_octopus_events import test_octopus_events_wrapper
+from tests.test_octopus_refresh_token import test_octopus_refresh_token_wrapper
+from tests.test_octopus_read_response import test_octopus_read_response_wrapper
+from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
+from tests.test_fetch_octopus_rates import test_fetch_octopus_rates
+from tests.test_fetch_tariffs import test_fetch_tariffs
+from tests.test_fetch_url_cached import test_fetch_url_cached
+from tests.test_load_free_slot import test_load_free_slot
+from tests.test_add_now_to_octopus_slot import test_add_now_to_octopus_slot
 from tests.test_dynamic_load import test_dynamic_load_car_slot_cancellation
 from tests.test_fox_api import run_fox_api_tests
 from tests.test_solcast import run_solcast_tests
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
+from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 
 
 # Mock the components and plugin system
@@ -138,6 +149,20 @@ def main():
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
         ("octopus_url", test_download_octopus_url_wrapper, "Octopus URL download tests", False),
+        ("day_night_rates", test_async_get_day_night_rates_wrapper, "Octopus day/night rates tests", False),
+        ("saving_sessions", test_get_saving_session_data, "Octopus saving sessions tests", False),
+        ("intelligent_dispatch", test_async_intelligent_update_sensor_wrapper, "Octopus intelligent dispatch tests", False),
+        ("find_tariffs", test_async_find_tariffs_wrapper, "Octopus find tariffs tests", False),
+        ("octopus_cache", test_octopus_cache_wrapper, "Octopus cache save/load tests", False),
+        ("octopus_events", test_octopus_events_wrapper, "Octopus event handler tests", False),
+        ("octopus_refresh_token", test_octopus_refresh_token_wrapper, "Octopus refresh token tests", False),
+        ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
+        ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
+        ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
+        ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
+        ("fetch_url_cached", test_fetch_url_cached, "Fetch URL cached tests", False),
+        ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
+        ("add_now_to_octopus_slot", test_add_now_to_octopus_slot, "Add now to Octopus slot tests", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
         ("units", run_test_units, "Unit tests", False),
@@ -163,6 +188,7 @@ def main():
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
+        ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
     ]
 
     # Parse command line arguments
