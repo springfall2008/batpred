@@ -3850,7 +3850,7 @@ def test_write_battery_schedule_event_write_trigger(my_predbat):
 
     # Verify set_scheduler was called (meaning apply_battery_schedule ran)
     assert len(fox.set_scheduler_calls) > 0
-    
+
     # Verify the schedule values passed to set_scheduler are correct
     groups = fox.set_scheduler_calls[0]["groups"]
     charge_found = False
