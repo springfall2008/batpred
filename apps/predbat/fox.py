@@ -104,11 +104,13 @@ def end_minute_exclusive_to_inclusive(end_hour, end_minute):
     return end_hour, end_minute
 
 
-def minutes_to_schedule_time(hour, minute, minutes_now):
-    total_minutes = hour * 60 + minute
-    if total_minutes < minutes_now:
-        total_minutes += 24 * 60
-    return total_minutes - minutes_now
+def minutes_to_schedule_time(start_hour, start_minute, end_hour, end_minute, minutes_now):
+    start_minutes = start_hour * 60 + start_minute
+    end_minutes = end_hour * 60 + end_minute
+    if end_minutes < minutes_now:
+        end_minutes += 24 * 60
+        start_minutes += 24 * 60
+    return max(start_minutes - minutes_now, 0)
 
 
 def schedule_strip_disabled(schedule):
@@ -122,7 +124,7 @@ def schedule_strip_disabled(schedule):
 def sort_schedule_by_start_time(time_now, schedule):
     minutes_now = time_now.hour * 60 + time_now.minute
     schedule = schedule_strip_disabled(schedule)
-    schedule = sorted(schedule, key=lambda x: (minutes_to_schedule_time(x["startHour"], x["startMinute"], minutes_now)))
+    schedule = sorted(schedule, key=lambda x: (minutes_to_schedule_time(x["startHour"], x["startMinute"], x["endHour"], x["endMinute"], minutes_now)))
     return schedule
 
 
