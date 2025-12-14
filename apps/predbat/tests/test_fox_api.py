@@ -151,13 +151,11 @@ def test_validate_schedule_empty(my_predbat):
     Test validate_schedule with an empty schedule - should return a default SelfUse schedule
     """
     print("  - test_validate_schedule_empty")
-    local_tz = pytz.timezone("Europe/London")
     new_schedule = []
     reserve = 10
     fdPwr_max = 8000
 
-    timenow = datetime.now(local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return a single entry with SelfUse mode for the whole day
     assert len(result) == 1
@@ -179,8 +177,6 @@ def test_validate_schedule_single_charge_midnight(my_predbat):
     Test validate_schedule with a single charge window starting at midnight
     """
     print("  - test_validate_schedule_single_charge_midnight")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -198,12 +194,10 @@ def test_validate_schedule_single_charge_midnight(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return 2 entries: charge window + demand mode after
     assert len(result) == 2
-
-    print(result)
 
     # First entry should be the charge window with adjusted end time (5:29 -> 5:28 inclusive)
     assert result[0]["enable"] == 1
@@ -232,8 +226,6 @@ def test_validate_schedule_single_charge_midday(my_predbat):
     Test validate_schedule with a single charge window in the middle of the day
     """
     print("  - test_validate_schedule_single_charge_midday")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=4, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -251,7 +243,7 @@ def test_validate_schedule_single_charge_midday(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return 3 entries: demand before + charge + demand after
     assert len(result) == 3
@@ -287,8 +279,6 @@ def test_validate_schedule_discharge_window(my_predbat):
     Test validate_schedule with a discharge window
     """
     print("  - test_validate_schedule_discharge_window")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=4, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -306,7 +296,7 @@ def test_validate_schedule_discharge_window(my_predbat):
     reserve = 12
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return 3 entries: demand before + discharge + demand after
     assert len(result) == 3
@@ -351,8 +341,6 @@ def test_validate_schedule_full_day(my_predbat):
     Test validate_schedule with a schedule covering the full day
     """
     print("  - test_validate_schedule_full_day")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=4, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -370,7 +358,7 @@ def test_validate_schedule_full_day(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return just the single entry adjusted to inclusive times
     assert len(result) == 1
@@ -388,8 +376,6 @@ def test_validate_schedule_end_minute_zero(my_predbat):
     Test validate_schedule with end minute of 0 (e.g., 5:00)
     """
     print("  - test_validate_schedule_end_minute_zero")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=4, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -407,7 +393,7 @@ def test_validate_schedule_end_minute_zero(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return 3 entries
     assert len(result) == 3
@@ -428,21 +414,21 @@ def test_minutes_to_schedule_time(my_predbat):
     """
     print("  - test_minutes_to_schedule_time")
 
-    # Test with end time before minutes_now (should add 24 hours to both start and end)
-    result = minutes_to_schedule_time(2, 30, 2, 55, 3 * 60)  # 2:30-2:55 when current is 3:00
-    assert result == (2 * 60 + 30 + 24 * 60) - (3 * 60)  # 23.5 hours
-
-    # Test with end time after minutes_now
-    result = minutes_to_schedule_time(14, 30, 15, 0, 3 * 60)  # 14:30-15:00 when current is 3:00
-    assert result == (14 * 60 + 30) - (3 * 60)  # 11.5 hours
-
-    # Test with start time same as minutes_now
-    result = minutes_to_schedule_time(3, 0, 5, 30, 3 * 60)  # 3:00-5:30 when current is 3:00
+    result = minutes_to_schedule_time(0, 0)
     assert result == 0
 
-    # Test with window spanning past midnight
-    result = minutes_to_schedule_time(23, 30, 1, 0, 3 * 60)  # 23:30-1:00 when current is 3:00
-    assert result == (23 * 60 + 30 + 24 * 60) - (3 * 60)  # 20.5 hours until start
+    result = minutes_to_schedule_time(0, 1)
+    assert result == 1
+
+    result = minutes_to_schedule_time(2, 30)
+    assert result == 2*60 + 30
+
+    result = minutes_to_schedule_time(14, 30)
+    assert result == 14 * 60 + 30
+
+    result = minutes_to_schedule_time(23, 59)
+    assert result == 23 * 60 + 59
+
 
     return False
 
@@ -452,10 +438,8 @@ def test_validate_schedule_multiple_windows(my_predbat):
     Test that validate_schedule only keeps the first (nearest from now) window
     """
     print("  - test_validate_schedule_multiple_windows")
-    now = pytz.timezone("Europe/London")
-    timenow = datetime.now(now).replace(hour=14, minute=0, second=0, microsecond=0)
 
-    # Provide multiple windows - should only keep the first chronologically
+    # Provide multiple windows
     new_schedule = [
         {
             "enable": 1,
@@ -485,35 +469,49 @@ def test_validate_schedule_multiple_windows(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # The function should sort by time from now (midnight assumed) and keep only the first one
     # The first chronologically from midnight should be the 2:30-5:30 charge window
     # So we should have 3 entries total (demand before, charge, demand after)
-    assert len(result) == 3
 
     print(result)
+    assert len(result) == 5
 
     # First entry should be demand mode from
     assert result[0]["workMode"] == "SelfUse"
     assert result[0]["startHour"] == 0
     assert result[0]["startMinute"] == 0
-    assert result[0]["endHour"] == 15
-    assert result[0]["endMinute"] == 59
+    assert result[0]["endHour"] == 2
+    assert result[0]["endMinute"] == 29
 
     # Second entry should be the discharge window
-    assert result[1]["workMode"] == "ForceDischarge"
-    assert result[1]["startHour"] == 16
-    assert result[1]["startMinute"] == 00
-    assert result[1]["endHour"] == 18
-    assert result[1]["endMinute"] == 59
+    assert result[1]["workMode"] == "ForceCharge"
+    assert result[1]["startHour"] == 2
+    assert result[1]["startMinute"] == 30
+    assert result[1]["endHour"] == 5
+    assert result[1]["endMinute"] == 29
+
+    assert result[2]["workMode"] == "SelfUse"
+    assert result[2]["startHour"] == 5
+    assert result[2]["startMinute"] == 30
+    assert result[2]["endHour"] == 15
+    assert result[2]["endMinute"] == 59
+
+
+    # Second entry should be the discharge window
+    assert result[3]["workMode"] == "ForceDischarge"
+    assert result[3]["startHour"] == 16
+    assert result[3]["startMinute"] == 00
+    assert result[3]["endHour"] == 18
+    assert result[3]["endMinute"] == 59
 
     # Third entry should be demand mode
-    assert result[2]["workMode"] == "SelfUse"
-    assert result[2]["startHour"] == 19
-    assert result[2]["startMinute"] == 00
-    assert result[2]["endHour"] == 23
-    assert result[2]["endMinute"] == 59
+    assert result[4]["workMode"] == "SelfUse"
+    assert result[4]["startHour"] == 19
+    assert result[4]["startMinute"] == 00
+    assert result[4]["endHour"] == 23
+    assert result[4]["endMinute"] == 59
 
     return False
 
@@ -523,8 +521,6 @@ def test_validate_schedule_both_charge_and_discharge(my_predbat):
     Test validate_schedule with both charge and discharge windows (same settings as test_compute_schedule_both_charge_and_discharge)
     """
     print("  - test_validate_schedule_both_charge_and_discharge")
-    now = pytz.timezone("Europe/London")
-    timenow = datetime.now(now).replace(hour=2, minute=31, second=0, microsecond=0)
 
     # Provide both charge and discharge windows with same settings as test_compute_schedule_both_charge_and_discharge
     new_schedule = [
@@ -545,10 +541,10 @@ def test_validate_schedule_both_charge_and_discharge(my_predbat):
             "startHour": 2,
             "startMinute": 55,
             "endHour": 3,
-            "endMinute": 60,
+            "endMinute": 0,
             "workMode": "ForceDischarge",
             "fdSoc": 10,
-            "maxSoc": 90,
+            "maxSoc": 10,
             "fdPwr": 5000,
             "minSocOnGrid": 10,
         },
@@ -556,12 +552,10 @@ def test_validate_schedule_both_charge_and_discharge(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
-    # Should have 5 entries: demand, charge, demand, discharge, demand
-    assert len(result) == 3
-
-    print(result)
+    # Should have 4 entries: demand, charge, discharge, demand
+    assert len(result) == 4
 
     # First entry should be demand mode from midnight to charge start
     assert result[0]["workMode"] == "SelfUse"
@@ -578,13 +572,74 @@ def test_validate_schedule_both_charge_and_discharge(my_predbat):
     assert result[1]["endMinute"] == 54, f"Got {result[1]['endMinute']} expected 54"
     assert result[1]["fdSoc"] == 100
     assert result[1]["fdPwr"] == 8000
+    assert result[1]["maxSoc"] == 100
 
-    # Third entry should be demand mode between charge and discharge
-    assert result[2]["workMode"] == "SelfUse"
+    # Second entry should be the charge window
+    assert result[2]["workMode"] == "ForceDischarge"
     assert result[2]["startHour"] == 2
-    assert result[2]["startMinute"] == 55, f"Got {result[2]['startMinute']} expected 55"
-    assert result[2]["endHour"] == 23
-    assert result[2]["endMinute"] == 59
+    assert result[2]["startMinute"] == 55
+    assert result[2]["endHour"] == 2, f"Got {result[2]['endHour']} expected 2"
+    assert result[2]["endMinute"] == 59, f"Got {result[2]['endMinute']} expected 59"
+    assert result[2]["fdSoc"] == 10
+    assert result[2]["fdPwr"] == 5000
+    assert result[2]["maxSoc"] == 10
+
+    # Demand until midnight
+    assert result[3]["workMode"] == "SelfUse"
+    assert result[3]["startHour"] == 3
+    assert result[3]["startMinute"] == 0, f"Got {result[2]['startMinute']} expected 0"
+    assert result[3]["endHour"] == 23
+    assert result[3]["endMinute"] == 59
+
+    return False
+
+
+def test_validate_schedule_discharge_ending_at_midnight(my_predbat):
+    """
+    Test validate_schedule with discharge window that ends at midnight
+    """
+    print("  - test_validate_schedule_discharge_ending_at_midnight")
+
+    # Discharge window from 20:00 to 00:00 (midnight)
+    new_schedule = [
+        {
+            "enable": 1,
+            "startHour": 20,
+            "startMinute": 0,
+            "endHour": 23,
+            "endMinute": 59,
+            "workMode": "ForceDischarge",
+            "fdSoc": 10,
+            "maxSoc": 100,
+            "fdPwr": 5000,
+            "minSocOnGrid": 10,
+        }
+    ]
+    reserve = 10
+    fdPwr_max = 8000
+
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
+
+    print(result)
+    # Should have 2 entries: demand before discharge, then discharge window
+    assert len(result) == 2
+
+
+    # First entry should be demand mode from midnight to discharge start
+    assert result[0]["workMode"] == "SelfUse"
+    assert result[0]["startHour"] == 0
+    assert result[0]["startMinute"] == 0
+    assert result[0]["endHour"] == 19
+    assert result[0]["endMinute"] == 59
+
+    # Second entry should be the discharge window ending at 23:59
+    assert result[1]["workMode"] == "ForceDischarge"
+    assert result[1]["startHour"] == 20
+    assert result[1]["startMinute"] == 0
+    assert result[1]["endHour"] == 23
+    assert result[1]["endMinute"] == 59
+    assert result[1]["fdSoc"] == 10
+    assert result[1]["fdPwr"] == 5000
 
     return False
 
@@ -621,8 +676,6 @@ def test_compute_schedule_scheduler_enabled_charge(my_predbat):
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
     # Call compute_schedule (sync wrapper since it's now a regular method)
-    import asyncio
-
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify charge schedule was extracted
@@ -670,8 +723,6 @@ def test_compute_schedule_scheduler_enabled_discharge(my_predbat):
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
-    import asyncio
-
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify discharge schedule was extracted
@@ -710,8 +761,6 @@ def test_compute_schedule_scheduler_disabled_battery_times(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
-
-    import asyncio
 
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
@@ -770,9 +819,6 @@ def test_compute_schedule_both_charge_and_discharge(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
-
-    import asyncio
-
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify both schedules were extracted
@@ -825,8 +871,6 @@ def test_compute_schedule_no_enabled_windows(my_predbat):
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
-    import asyncio
-
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify no charge or discharge schedules were created
@@ -866,8 +910,6 @@ def test_compute_schedule_end_time_midnight(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
-
-    import asyncio
 
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
@@ -4202,6 +4244,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_minutes_to_schedule_time(my_predbat)
         failed |= test_validate_schedule_multiple_windows(my_predbat)
         failed |= test_validate_schedule_both_charge_and_discharge(my_predbat)
+        failed |= test_validate_schedule_discharge_ending_at_midnight(my_predbat)
         if failed:
             return failed
 
