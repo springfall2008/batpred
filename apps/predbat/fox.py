@@ -41,8 +41,8 @@ def schedules_are_equal(time_now, schedule1, schedule2):
     :param schedule1: Schedule to compare
     :param schedule2: Schedule to compare
     """
-    schedule1 = sort_schedule_by_start_time(time_now, schedule1)
-    schedule2 = sort_schedule_by_start_time(time_now, schedule2)
+    schedule1 = sort_schedule_by_start_time(schedule1)
+    schedule2 = sort_schedule_by_start_time(schedule2)
 
     same = True
     if len(schedule1) != len(schedule2):
@@ -97,18 +97,16 @@ def end_minute_exclusive_to_inclusive(end_hour, end_minute):
         end_hour -= 1
         end_minute = 59
         if end_hour < 0:
-            end_hour = 0
-            end_minute = 0
+            end_hour = 23
+            end_minute = 59
     elif end_minute != 59:
         end_minute -= 1
     return end_hour, end_minute
 
 
-def minutes_to_schedule_time(hour, minute, minutes_now):
-    total_minutes = hour * 60 + minute
-    if total_minutes < minutes_now:
-        total_minutes += 24 * 60
-    return total_minutes - minutes_now
+def minutes_to_schedule_time(start_hour, start_minute):
+    start_minutes = start_hour * 60 + start_minute
+    return start_minutes
 
 
 def schedule_strip_disabled(schedule):
@@ -119,52 +117,82 @@ def schedule_strip_disabled(schedule):
     return new_schedule
 
 
-def sort_schedule_by_start_time(time_now, schedule):
-    minutes_now = time_now.hour * 60 + time_now.minute
+def sort_schedule_by_start_time(schedule):
     schedule = schedule_strip_disabled(schedule)
-    schedule = sorted(schedule, key=lambda x: (minutes_to_schedule_time(x["startHour"], x["startMinute"], minutes_now)))
+    schedule = sorted(schedule, key=lambda x: (minutes_to_schedule_time(x["startHour"], x["startMinute"])))
     return schedule
 
 
-def validate_schedule(time_now, new_schedule, reserve, fdPwr_max):
-    # Avoid more than one schedule as fox seems to error out, so take the first only
-    # First should be the next upcoming schedule, starting now not the one closest to midnight
-    new_schedule = sort_schedule_by_start_time(time_now, new_schedule)
+def validate_schedule(new_schedule, reserve, fdPwr_max):
+    # Sort schedule by start time, closest to midnight first
+    new_schedule = sort_schedule_by_start_time(new_schedule)
     if not new_schedule:
         # No schedule entries so disable
         new_schedule = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}]
         return new_schedule
 
-    if len(new_schedule):
-        new_schedule = [new_schedule[0]]
+    # Process all schedule entries
+    result_schedule = []
 
-    # Need to in-fill before/after with demand mode to avoid gaps
+    # Adjust end times to be inclusive for all entries
+    for entry in new_schedule:
+        end_hour = entry["endHour"]
+        end_minute = entry["endMinute"]
+        end_hour, end_minute = end_minute_exclusive_to_inclusive(end_hour, end_minute)
+        entry["endHour"] = end_hour
+        entry["endMinute"] = end_minute
+
+    # Add demand mode before first entry if needed
     first_entry = new_schedule[0]
-    start_hour = first_entry["startHour"]
-    start_minute = first_entry["startMinute"]
-    end_hour = first_entry["endHour"]
-    end_minute = first_entry["endMinute"]
+    if first_entry["startHour"] != 0 or first_entry["startMinute"] != 0:
+        demand_end_hour, demand_end_minute = end_minute_exclusive_to_inclusive(first_entry["startHour"], first_entry["startMinute"])
+        result_schedule.append({"enable": 1, "startHour": 0, "startMinute": 0, "endHour": demand_end_hour, "endMinute": demand_end_minute, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
 
-    # Adjust end time to be inclusive
-    end_hour, end_minute = end_minute_exclusive_to_inclusive(end_hour, end_minute)
-    first_entry["endHour"] = end_hour
-    first_entry["endMinute"] = end_minute
+    # Add schedule entries and fill gaps between them
+    for i, entry in enumerate(new_schedule):
+        result_schedule.append(entry)
 
-    if start_hour != 0 or start_minute != 0:
-        # Add demand mode before first entry
-        demand_end_hour, demand_end_minute = end_minute_exclusive_to_inclusive(start_hour, start_minute)
-        new_schedule.insert(0, {"enable": 1, "startHour": 0, "startMinute": 0, "endHour": demand_end_hour, "endMinute": demand_end_minute, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
-    if end_hour != 23 or end_minute != 59:
-        # Add demand mode after last entry
-        demand_start_hour = end_hour
-        demand_start_minute = end_minute
+        # Check if there's a gap between this entry and the next
+        if i < len(new_schedule) - 1:
+            next_entry = new_schedule[i + 1]
+            current_end_hour = entry["endHour"]
+            current_end_minute = entry["endMinute"]
+            next_start_hour = next_entry["startHour"]
+            next_start_minute = next_entry["startMinute"]
+
+            # Calculate gap start time (one minute after current entry ends)
+            gap_start_hour = current_end_hour
+            gap_start_minute = current_end_minute
+            if gap_start_minute == 59:
+                gap_start_hour += 1
+                gap_start_minute = 0
+            else:
+                gap_start_minute += 1
+
+            # Check if there's actually a gap
+            gap_start_minutes = gap_start_hour * 60 + gap_start_minute
+            next_start_minutes = next_start_hour * 60 + next_start_minute
+
+            if gap_start_minutes < next_start_minutes:
+                # Fill the gap with SelfUse
+                gap_end_hour, gap_end_minute = end_minute_exclusive_to_inclusive(next_start_hour, next_start_minute)
+                result_schedule.append(
+                    {"enable": 1, "startHour": gap_start_hour, "startMinute": gap_start_minute, "endHour": gap_end_hour, "endMinute": gap_end_minute, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}
+                )
+
+    # Add demand mode after last entry if needed
+    last_entry = new_schedule[-1]
+    if last_entry["endHour"] != 23 or last_entry["endMinute"] != 59:
+        demand_start_hour = last_entry["endHour"]
+        demand_start_minute = last_entry["endMinute"]
         if demand_start_minute == 59:
             demand_start_hour += 1
             demand_start_minute = 0
         else:
             demand_start_minute += 1
-        new_schedule.append({"enable": 1, "startHour": demand_start_hour, "startMinute": demand_start_minute, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
-    return new_schedule
+        result_schedule.append({"enable": 1, "startHour": demand_start_hour, "startMinute": demand_start_minute, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
+
+    return result_schedule
 
 
 class FoxAPI(ComponentBase):
@@ -714,6 +742,8 @@ class FoxAPI(ComponentBase):
             if not same:
                 result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
                 if result is not None:
+                    if deviceSN not in self.device_scheduler:
+                        self.device_scheduler[deviceSN] = {}
                     self.device_scheduler[deviceSN]["enable"] = True
                     self.device_scheduler[deviceSN]["groups"] = groups
 
@@ -1362,7 +1392,7 @@ class FoxAPI(ComponentBase):
                     new_schedule.append(
                         {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
                     )
-        new_schedule = validate_schedule(datetime.now(self.local_tz), new_schedule, reserve, fdPwr_max)
+        new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max)
         self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
         result = await self.set_scheduler(serial, new_schedule)
         if result is not None:
@@ -1519,23 +1549,26 @@ async def test_fox_api(sn, api_key):
     # new_schedule = [new_slot, new_slot2]
 
     # new_schedule = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 1, "endMinute": 0, "workMode": "SelfUse", "fdSoc": minSocOnGrid, "maxSoc": minSocOnGrid, "fdPwr": fdPwr_max, "minSocOnGrid": minSocOnGrid}]
-    # new_schedule = validate_schedule(datetime.now(fox_api.local_tz), new_schedule, minSocOnGrid, fdPwr_max)
+    # new_schedule = validate_schedule(new_schedule, minSocOnGrid, fdPwr_max)
     # print("Validated schedule")
     # print(new_schedule)
     # return 1
     new_schedule = [
-        {
-            "deviceSN": sn,
-            "groups": [
-                {"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 22, "endMinute": 49, "workMode": "SelfUse", "fdSoc": 10, "maxSoc": 100, "fdPwr": 3000.0, "minSocOnGrid": 10},
-                {"enable": 1, "startHour": 22, "startMinute": 50, "endHour": 22, "endMinute": 59, "workMode": "ForceDischarge", "fdSoc": 10, "maxSoc": 10, "fdPwr": 3000, "minSocOnGrid": 10},
-                {"enable": 1, "startHour": 23, "startMinute": 0, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": 10, "maxSoc": 100, "fdPwr": 3000.0, "minSocOnGrid": 10},
-            ],
-        }
+        {"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 30, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 5000, "minSocOnGrid": 10},
+        {"enable": 1, "startHour": 11, "startMinute": 0, "endHour": 12, "endMinute": 00, "workMode": "ForceDischarge", "fdSoc": 10, "maxSoc": 100, "fdPwr": 5000, "minSocOnGrid": 10},
     ]
+    new_schedule = validate_schedule(new_schedule, 10, 5000)
+    print("Validated schedule")
+    print(new_schedule)
 
     print("Sending: {}".format(new_schedule))
     res = await fox_api.set_scheduler(sn, new_schedule)
+
+    res = await fox_api.get_scheduler(sn, checkBattery=False)
+    print(res)
+    res = await fox_api.compute_schedule(sn)
+    print(res)
+
     print(res)
 
 

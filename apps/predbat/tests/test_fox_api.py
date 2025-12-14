@@ -151,13 +151,11 @@ def test_validate_schedule_empty(my_predbat):
     Test validate_schedule with an empty schedule - should return a default SelfUse schedule
     """
     print("  - test_validate_schedule_empty")
-    local_tz = pytz.timezone("Europe/London")
     new_schedule = []
     reserve = 10
     fdPwr_max = 8000
 
-    timenow = datetime.now(local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return a single entry with SelfUse mode for the whole day
     assert len(result) == 1
@@ -179,8 +177,6 @@ def test_validate_schedule_single_charge_midnight(my_predbat):
     Test validate_schedule with a single charge window starting at midnight
     """
     print("  - test_validate_schedule_single_charge_midnight")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -198,12 +194,10 @@ def test_validate_schedule_single_charge_midnight(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return 2 entries: charge window + demand mode after
     assert len(result) == 2
-
-    print(result)
 
     # First entry should be the charge window with adjusted end time (5:29 -> 5:28 inclusive)
     assert result[0]["enable"] == 1
@@ -232,8 +226,6 @@ def test_validate_schedule_single_charge_midday(my_predbat):
     Test validate_schedule with a single charge window in the middle of the day
     """
     print("  - test_validate_schedule_single_charge_midday")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=4, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -251,7 +243,7 @@ def test_validate_schedule_single_charge_midday(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return 3 entries: demand before + charge + demand after
     assert len(result) == 3
@@ -287,8 +279,6 @@ def test_validate_schedule_discharge_window(my_predbat):
     Test validate_schedule with a discharge window
     """
     print("  - test_validate_schedule_discharge_window")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=4, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -306,7 +296,7 @@ def test_validate_schedule_discharge_window(my_predbat):
     reserve = 12
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return 3 entries: demand before + discharge + demand after
     assert len(result) == 3
@@ -351,8 +341,6 @@ def test_validate_schedule_full_day(my_predbat):
     Test validate_schedule with a schedule covering the full day
     """
     print("  - test_validate_schedule_full_day")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=4, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -370,7 +358,7 @@ def test_validate_schedule_full_day(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return just the single entry adjusted to inclusive times
     assert len(result) == 1
@@ -388,8 +376,6 @@ def test_validate_schedule_end_minute_zero(my_predbat):
     Test validate_schedule with end minute of 0 (e.g., 5:00)
     """
     print("  - test_validate_schedule_end_minute_zero")
-    local_tz = pytz.timezone("Europe/London")
-    timenow = datetime.now(local_tz).replace(hour=4, minute=0, second=0, microsecond=0)
     new_schedule = [
         {
             "enable": 1,
@@ -407,7 +393,7 @@ def test_validate_schedule_end_minute_zero(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # Should return 3 entries
     assert len(result) == 3
@@ -424,21 +410,24 @@ def test_validate_schedule_end_minute_zero(my_predbat):
 
 def test_minutes_to_schedule_time(my_predbat):
     """
-    Test the minutes_to_schedule_time helper function
+    Test the minutes_to_schedule_time helper function with start and end times
     """
     print("  - test_minutes_to_schedule_time")
 
-    # Test with time before minutes_now (should add 24 hours)
-    result = minutes_to_schedule_time(2, 30, 3 * 60)  # 2:30 when current is 3:00
-    assert result == (2 * 60 + 30 + 24 * 60) - (3 * 60)  # 23.5 hours
-
-    # Test with time after minutes_now
-    result = minutes_to_schedule_time(14, 30, 3 * 60)  # 14:30 when current is 3:00
-    assert result == (14 * 60 + 30) - (3 * 60)  # 11.5 hours
-
-    # Test with same time
-    result = minutes_to_schedule_time(3, 0, 3 * 60)  # 3:00 when current is 3:00
+    result = minutes_to_schedule_time(0, 0)
     assert result == 0
+
+    result = minutes_to_schedule_time(0, 1)
+    assert result == 1
+
+    result = minutes_to_schedule_time(2, 30)
+    assert result == 2 * 60 + 30
+
+    result = minutes_to_schedule_time(14, 30)
+    assert result == 14 * 60 + 30
+
+    result = minutes_to_schedule_time(23, 59)
+    assert result == 23 * 60 + 59
 
     return False
 
@@ -448,10 +437,8 @@ def test_validate_schedule_multiple_windows(my_predbat):
     Test that validate_schedule only keeps the first (nearest from now) window
     """
     print("  - test_validate_schedule_multiple_windows")
-    now = pytz.timezone("Europe/London")
-    timenow = datetime.now(now).replace(hour=14, minute=0, second=0, microsecond=0)
 
-    # Provide multiple windows - should only keep the first chronologically
+    # Provide multiple windows
     new_schedule = [
         {
             "enable": 1,
@@ -481,35 +468,175 @@ def test_validate_schedule_multiple_windows(my_predbat):
     reserve = 10
     fdPwr_max = 8000
 
-    result = validate_schedule(timenow, new_schedule, reserve, fdPwr_max)
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
 
     # The function should sort by time from now (midnight assumed) and keep only the first one
     # The first chronologically from midnight should be the 2:30-5:30 charge window
     # So we should have 3 entries total (demand before, charge, demand after)
-    assert len(result) == 3
 
     print(result)
+    assert len(result) == 5
 
     # First entry should be demand mode from
     assert result[0]["workMode"] == "SelfUse"
     assert result[0]["startHour"] == 0
     assert result[0]["startMinute"] == 0
-    assert result[0]["endHour"] == 15
-    assert result[0]["endMinute"] == 59
+    assert result[0]["endHour"] == 2
+    assert result[0]["endMinute"] == 29
 
     # Second entry should be the discharge window
-    assert result[1]["workMode"] == "ForceDischarge"
-    assert result[1]["startHour"] == 16
-    assert result[1]["startMinute"] == 00
-    assert result[1]["endHour"] == 18
-    assert result[1]["endMinute"] == 59
+    assert result[1]["workMode"] == "ForceCharge"
+    assert result[1]["startHour"] == 2
+    assert result[1]["startMinute"] == 30
+    assert result[1]["endHour"] == 5
+    assert result[1]["endMinute"] == 29
+
+    assert result[2]["workMode"] == "SelfUse"
+    assert result[2]["startHour"] == 5
+    assert result[2]["startMinute"] == 30
+    assert result[2]["endHour"] == 15
+    assert result[2]["endMinute"] == 59
+
+    # Second entry should be the discharge window
+    assert result[3]["workMode"] == "ForceDischarge"
+    assert result[3]["startHour"] == 16
+    assert result[3]["startMinute"] == 00
+    assert result[3]["endHour"] == 18
+    assert result[3]["endMinute"] == 59
 
     # Third entry should be demand mode
-    assert result[2]["workMode"] == "SelfUse"
-    assert result[2]["startHour"] == 19
-    assert result[2]["startMinute"] == 00
-    assert result[2]["endHour"] == 23
-    assert result[2]["endMinute"] == 59
+    assert result[4]["workMode"] == "SelfUse"
+    assert result[4]["startHour"] == 19
+    assert result[4]["startMinute"] == 00
+    assert result[4]["endHour"] == 23
+    assert result[4]["endMinute"] == 59
+
+    return False
+
+
+def test_validate_schedule_both_charge_and_discharge(my_predbat):
+    """
+    Test validate_schedule with both charge and discharge windows (same settings as test_compute_schedule_both_charge_and_discharge)
+    """
+    print("  - test_validate_schedule_both_charge_and_discharge")
+
+    # Provide both charge and discharge windows with same settings as test_compute_schedule_both_charge_and_discharge
+    new_schedule = [
+        {
+            "enable": 1,
+            "startHour": 2,
+            "startMinute": 30,
+            "endHour": 2,
+            "endMinute": 55,
+            "workMode": "ForceCharge",
+            "fdSoc": 100,
+            "maxSoc": 100,
+            "fdPwr": 8000,
+            "minSocOnGrid": 10,
+        },
+        {
+            "enable": 1,
+            "startHour": 2,
+            "startMinute": 55,
+            "endHour": 3,
+            "endMinute": 0,
+            "workMode": "ForceDischarge",
+            "fdSoc": 10,
+            "maxSoc": 10,
+            "fdPwr": 5000,
+            "minSocOnGrid": 10,
+        },
+    ]
+    reserve = 10
+    fdPwr_max = 8000
+
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
+
+    # Should have 4 entries: demand, charge, discharge, demand
+    assert len(result) == 4
+
+    # First entry should be demand mode from midnight to charge start
+    assert result[0]["workMode"] == "SelfUse"
+    assert result[0]["startHour"] == 0
+    assert result[0]["startMinute"] == 0
+    assert result[0]["endHour"] == 2
+    assert result[0]["endMinute"] == 29
+
+    # Second entry should be the charge window
+    assert result[1]["workMode"] == "ForceCharge"
+    assert result[1]["startHour"] == 2
+    assert result[1]["startMinute"] == 30
+    assert result[1]["endHour"] == 2
+    assert result[1]["endMinute"] == 54, f"Got {result[1]['endMinute']} expected 54"
+    assert result[1]["fdSoc"] == 100
+    assert result[1]["fdPwr"] == 8000
+    assert result[1]["maxSoc"] == 100
+
+    # Third entry should be the discharge window
+    assert result[2]["workMode"] == "ForceDischarge"
+    assert result[2]["startHour"] == 2
+    assert result[2]["startMinute"] == 55
+    assert result[2]["endHour"] == 2, f"Got {result[2]['endHour']} expected 2"
+    assert result[2]["endMinute"] == 59, f"Got {result[2]['endMinute']} expected 59"
+    assert result[2]["fdSoc"] == 10
+    assert result[2]["fdPwr"] == 5000
+    assert result[2]["maxSoc"] == 10
+
+    # Demand until midnight
+    assert result[3]["workMode"] == "SelfUse"
+    assert result[3]["startHour"] == 3
+    assert result[3]["startMinute"] == 0, f"Got {result[3]['startMinute']} expected 0"
+    assert result[3]["endHour"] == 23
+    assert result[3]["endMinute"] == 59
+
+    return False
+
+
+def test_validate_schedule_discharge_ending_at_midnight(my_predbat):
+    """
+    Test validate_schedule with discharge window that ends at midnight
+    """
+    print("  - test_validate_schedule_discharge_ending_at_midnight")
+
+    # Discharge window from 20:00 to 00:00 (midnight)
+    new_schedule = [
+        {
+            "enable": 1,
+            "startHour": 20,
+            "startMinute": 0,
+            "endHour": 23,
+            "endMinute": 59,
+            "workMode": "ForceDischarge",
+            "fdSoc": 10,
+            "maxSoc": 100,
+            "fdPwr": 5000,
+            "minSocOnGrid": 10,
+        }
+    ]
+    reserve = 10
+    fdPwr_max = 8000
+
+    result = validate_schedule(new_schedule, reserve, fdPwr_max)
+
+    print(result)
+    # Should have 2 entries: demand before discharge, then discharge window
+    assert len(result) == 2
+
+    # First entry should be demand mode from midnight to discharge start
+    assert result[0]["workMode"] == "SelfUse"
+    assert result[0]["startHour"] == 0
+    assert result[0]["startMinute"] == 0
+    assert result[0]["endHour"] == 19
+    assert result[0]["endMinute"] == 59
+
+    # Second entry should be the discharge window ending at 23:59
+    assert result[1]["workMode"] == "ForceDischarge"
+    assert result[1]["startHour"] == 20
+    assert result[1]["startMinute"] == 0
+    assert result[1]["endHour"] == 23
+    assert result[1]["endMinute"] == 59
+    assert result[1]["fdSoc"] == 10
+    assert result[1]["fdPwr"] == 5000
 
     return False
 
@@ -546,8 +673,6 @@ def test_compute_schedule_scheduler_enabled_charge(my_predbat):
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
     # Call compute_schedule (sync wrapper since it's now a regular method)
-    import asyncio
-
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify charge schedule was extracted
@@ -595,8 +720,6 @@ def test_compute_schedule_scheduler_enabled_discharge(my_predbat):
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
-    import asyncio
-
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify discharge schedule was extracted
@@ -636,8 +759,6 @@ def test_compute_schedule_scheduler_disabled_battery_times(my_predbat):
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
-    import asyncio
-
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify charge schedule was created from battery times
@@ -669,8 +790,8 @@ def test_compute_schedule_both_charge_and_discharge(my_predbat):
             {
                 "startHour": 2,
                 "startMinute": 30,
-                "endHour": 5,
-                "endMinute": 29,
+                "endHour": 2,
+                "endMinute": 54,
                 "enable": 1,
                 "fdPwr": 8000,
                 "workMode": "ForceCharge",
@@ -679,9 +800,9 @@ def test_compute_schedule_both_charge_and_discharge(my_predbat):
                 "minSocOnGrid": 10,
             },
             {
-                "startHour": 16,
-                "startMinute": 0,
-                "endHour": 18,
+                "startHour": 2,
+                "startMinute": 55,
+                "endHour": 2,
                 "endMinute": 59,
                 "enable": 1,
                 "fdPwr": 5000,
@@ -695,9 +816,6 @@ def test_compute_schedule_both_charge_and_discharge(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
-
-    import asyncio
-
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify both schedules were extracted
@@ -706,13 +824,13 @@ def test_compute_schedule_both_charge_and_discharge(my_predbat):
 
     charge = fox.local_schedule[deviceSN]["charge"]
     assert charge["start_time"] == "02:30:00"
-    assert charge["end_time"] == "05:30:00"  # 5:29 inclusive -> 5:30 exclusive
+    assert charge["end_time"] == "02:55:00"  # 5:29 inclusive -> 5:30 exclusive
     assert charge["soc"] == 100
     assert charge["enable"] == 1
 
     discharge = fox.local_schedule[deviceSN]["discharge"]
-    assert discharge["start_time"] == "16:00:00"
-    assert discharge["end_time"] == "19:00:00"  # 18:59 inclusive -> 19:00 exclusive
+    assert discharge["start_time"] == "02:55:00"
+    assert discharge["end_time"] == "03:00:00", f'Got {discharge["end_time"]} expected 03:00:00'
     assert discharge["soc"] == 10
     assert discharge["enable"] == 1
 
@@ -749,8 +867,6 @@ def test_compute_schedule_no_enabled_windows(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
-
-    import asyncio
 
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
@@ -791,8 +907,6 @@ def test_compute_schedule_end_time_midnight(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
-
-    import asyncio
 
     result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
@@ -3508,6 +3622,308 @@ def test_write_battery_schedule_event_power_change(my_predbat):
     return False
 
 
+def test_write_battery_schedule_event_unknown_serial(my_predbat):
+    """
+    Test write_battery_schedule_event with unknown serial number (not in device_current_schedule)
+    """
+    print("  - test_write_battery_schedule_event_unknown_serial")
+
+    fox = MockFoxAPIWithRequests()
+
+    # Setup empty device_current_schedule
+    fox.device_current_schedule = {}
+
+    # Try to write with unknown serial
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_unknown123_battery_schedule_reserve", "20"))
+
+    # Should log warning and return early, local_schedule should remain empty
+    assert "unknown123" not in fox.local_schedule
+
+    return False
+
+
+def test_write_battery_schedule_event_reserve_invalid_value(my_predbat):
+    """
+    Test write_battery_schedule_event for reserve with invalid (non-numeric) value
+    """
+    print("  - test_write_battery_schedule_event_reserve_invalid_value")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 15
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 20}
+    fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
+
+    # Try to set reserve to invalid value
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_reserve", "invalid"))
+
+    # Should fall back to fdsoc_min (15)
+    assert fox.local_schedule[deviceSN]["reserve"] == 15
+
+    return False
+
+
+def test_write_battery_schedule_event_unknown_direction(my_predbat):
+    """
+    Test write_battery_schedule_event with entity that has no charge/discharge direction
+    """
+    print("  - test_write_battery_schedule_event_unknown_direction")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10}
+
+    # Entity ID without _charge_ or _discharge_ in it (not reserve either)
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_unknown_attribute", "20"))
+
+    # Should log warning and return early without updating
+    # local_schedule should only have reserve
+    assert "charge" not in fox.local_schedule[deviceSN]
+    assert "discharge" not in fox.local_schedule[deviceSN]
+
+    return False
+
+
+def test_write_battery_schedule_event_initialize_direction_dict(my_predbat):
+    """
+    Test write_battery_schedule_event initializes direction dict when missing
+    """
+    print("  - test_write_battery_schedule_event_initialize_direction_dict")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    # local_schedule exists but no charge/discharge dict
+    fox.local_schedule[deviceSN] = {"reserve": 10}
+
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_charge_soc", "90"))
+
+    # Should initialize charge dict and set SOC
+    assert "charge" in fox.local_schedule[deviceSN]
+    assert fox.local_schedule[deviceSN]["charge"]["soc"] == 90
+
+    return False
+
+
+def test_write_battery_schedule_event_soc_invalid_value(my_predbat):
+    """
+    Test write_battery_schedule_event for SOC with invalid (non-numeric) value
+    """
+    print("  - test_write_battery_schedule_event_soc_invalid_value")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"soc": 80}, "discharge": {"soc": 20}}
+
+    # Test charge with invalid value - should default to 100
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_charge_soc", "invalid"))
+    assert fox.local_schedule[deviceSN]["charge"]["soc"] == 100
+
+    # Test discharge with invalid value - should default to fdsoc_min (10)
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_discharge_soc", "invalid"))
+    assert fox.local_schedule[deviceSN]["discharge"]["soc"] == 10
+
+    return False
+
+
+def test_write_battery_schedule_event_power_invalid_value(my_predbat):
+    """
+    Test write_battery_schedule_event for power with invalid (non-numeric) value
+    """
+    print("  - test_write_battery_schedule_event_power_invalid_value")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"power": 5000}}
+
+    # Try to set power to invalid value - should default to fdpwr_max (8000)
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_charge_power", "invalid"))
+    assert fox.local_schedule[deviceSN]["charge"]["power"] == 8000
+
+    return False
+
+
+def test_write_battery_schedule_event_start_time_invalid(my_predbat):
+    """
+    Test write_battery_schedule_event for start_time with invalid value
+    """
+    print("  - test_write_battery_schedule_event_start_time_invalid")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {"start_time": "02:30:00"}}
+
+    # Try to set start_time to invalid value - should default to "00:00:00"
+    run_async(fox.write_battery_schedule_event("select.predbat_fox_test123456_battery_schedule_charge_start_time", "99:99:99"))
+    assert fox.local_schedule[deviceSN]["charge"]["start_time"] == "00:00:00"
+
+    return False
+
+
+def test_write_battery_schedule_event_end_time_invalid(my_predbat):
+    """
+    Test write_battery_schedule_event for end_time with invalid value
+    """
+    print("  - test_write_battery_schedule_event_end_time_invalid")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "discharge": {"end_time": "19:00:00"}}
+
+    # Try to set end_time to invalid value - should default to "00:00:00"
+    run_async(fox.write_battery_schedule_event("select.predbat_fox_test123456_battery_schedule_discharge_end_time", "invalid_time"))
+    assert fox.local_schedule[deviceSN]["discharge"]["end_time"] == "00:00:00"
+
+    return False
+
+
+def test_write_battery_schedule_event_write_trigger(my_predbat):
+    """
+    Test write_battery_schedule_event with _write trigger calls apply_battery_schedule
+    """
+    print("  - test_write_battery_schedule_event_write_trigger")
+
+    fox = MockFoxAPIWithSchedulerTracking()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {
+        "reserve": 10,
+        "charge": {"enable": 1, "start_time": "02:30:00", "end_time": "05:30:00", "soc": 100, "power": 8000},
+        "discharge": {"enable": 0, "start_time": "00:00:00", "end_time": "00:00:00", "soc": 10, "power": 5000},
+    }
+
+    # Trigger write
+    run_async(fox.write_battery_schedule_event("switch.predbat_fox_test123456_battery_schedule_charge_write", "turn_on"))
+
+    # Verify set_scheduler was called (meaning apply_battery_schedule ran)
+    assert len(fox.set_scheduler_calls) > 0
+
+    # Verify the schedule values passed to set_scheduler are correct
+    groups = fox.set_scheduler_calls[0]["groups"]
+    charge_found = False
+    for group in groups:
+        if group.get("workMode") == "ForceCharge":
+            charge_found = True
+            assert group["startHour"] == 2, f"Expected startHour=2, got {group['startHour']}"
+            assert group["startMinute"] == 30, f"Expected startMinute=30, got {group['startMinute']}"
+            assert group["endHour"] == 5, f"Expected endHour=5, got {group['endHour']}"
+            assert group["endMinute"] == 29, f"Expected endMinute=29 (end time adjusted by 1 min), got {group['endMinute']}"
+            assert group["maxSoc"] == 100, f"Expected maxSoc=100, got {group['maxSoc']}"
+            assert group["fdPwr"] == 8000, f"Expected fdPwr=8000, got {group['fdPwr']}"
+            assert group["minSocOnGrid"] == 100, f"Expected minSocOnGrid=100 (same as maxSoc), got {group['minSocOnGrid']}"
+    assert charge_found, "ForceCharge group not found in schedule"
+
+    return False
+
+
+def test_write_battery_schedule_event_unknown_attribute(my_predbat):
+    """
+    Test write_battery_schedule_event with unknown attribute (not soc, power, time, enable, write)
+    """
+    print("  - test_write_battery_schedule_event_unknown_attribute")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_current_schedule[deviceSN] = []
+    fox.local_schedule[deviceSN] = {"reserve": 10, "charge": {}}
+
+    # Try with unknown attribute
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_charge_unknown_attr", "20"))
+
+    # Should log warning and return early - charge dict should still be empty
+    assert len(fox.local_schedule[deviceSN]["charge"]) == 0
+
+    return False
+
+
+def test_write_battery_schedule_event_initialize_local_schedule(my_predbat):
+    """
+    Test write_battery_schedule_event initializes local_schedule[serial] when missing
+    """
+    print("  - test_write_battery_schedule_event_initialize_local_schedule")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # Setup device
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 15
+    fox.device_current_schedule[deviceSN] = []
+    # local_schedule doesn't have deviceSN key
+    fox.local_schedule = {}
+    fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
+
+    # Write reserve - should initialize local_schedule[deviceSN]
+    run_async(fox.write_battery_schedule_event("number.predbat_fox_test123456_battery_schedule_reserve", "20"))
+
+    # Should initialize the dict and set reserve
+    assert deviceSN in fox.local_schedule
+    assert fox.local_schedule[deviceSN]["reserve"] == 20
+
+    return False
+
+
 def test_select_event_setting(my_predbat):
     """
     Test select_event routes to write_setting_from_event for setting entities
@@ -4126,6 +4542,10 @@ def run_fox_api_tests(my_predbat):
         failed |= test_validate_schedule_end_minute_zero(my_predbat)
         failed |= test_minutes_to_schedule_time(my_predbat)
         failed |= test_validate_schedule_multiple_windows(my_predbat)
+        failed |= test_validate_schedule_both_charge_and_discharge(my_predbat)
+        failed |= test_validate_schedule_discharge_ending_at_midnight(my_predbat)
+        if failed:
+            return failed
 
         # compute_schedule tests
         failed |= test_compute_schedule_scheduler_enabled_charge(my_predbat)
@@ -4228,6 +4648,17 @@ def run_fox_api_tests(my_predbat):
         failed |= test_write_battery_schedule_event_time_change(my_predbat)
         failed |= test_write_battery_schedule_event_soc_change(my_predbat)
         failed |= test_write_battery_schedule_event_power_change(my_predbat)
+        failed |= test_write_battery_schedule_event_unknown_serial(my_predbat)
+        failed |= test_write_battery_schedule_event_reserve_invalid_value(my_predbat)
+        failed |= test_write_battery_schedule_event_unknown_direction(my_predbat)
+        failed |= test_write_battery_schedule_event_initialize_direction_dict(my_predbat)
+        failed |= test_write_battery_schedule_event_soc_invalid_value(my_predbat)
+        failed |= test_write_battery_schedule_event_power_invalid_value(my_predbat)
+        failed |= test_write_battery_schedule_event_start_time_invalid(my_predbat)
+        failed |= test_write_battery_schedule_event_end_time_invalid(my_predbat)
+        failed |= test_write_battery_schedule_event_write_trigger(my_predbat)
+        failed |= test_write_battery_schedule_event_unknown_attribute(my_predbat)
+        failed |= test_write_battery_schedule_event_initialize_local_schedule(my_predbat)
         failed |= test_select_event_setting(my_predbat)
         failed |= test_select_event_battery_schedule(my_predbat)
         failed |= test_number_event_setting(my_predbat)
