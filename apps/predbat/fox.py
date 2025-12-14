@@ -108,6 +108,7 @@ def minutes_to_schedule_time(start_hour, start_minute):
     start_minutes = start_hour * 60 + start_minute
     return start_minutes
 
+
 def schedule_strip_disabled(schedule):
     new_schedule = []
     for entry in schedule:
@@ -123,7 +124,7 @@ def sort_schedule_by_start_time(schedule):
 
 
 def validate_schedule(new_schedule, reserve, fdPwr_max):
-    # Sort schedule by start time, closest to midnight furst
+    # Sort schedule by start time, closest to midnight first
     new_schedule = sort_schedule_by_start_time(new_schedule)
     if not new_schedule:
         # No schedule entries so disable
@@ -132,7 +133,7 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
 
     # Process all schedule entries
     result_schedule = []
-    
+
     # Adjust end times to be inclusive for all entries
     for entry in new_schedule:
         end_hour = entry["endHour"]
@@ -150,7 +151,7 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
     # Add schedule entries and fill gaps between them
     for i, entry in enumerate(new_schedule):
         result_schedule.append(entry)
-        
+
         # Check if there's a gap between this entry and the next
         if i < len(new_schedule) - 1:
             next_entry = new_schedule[i + 1]
@@ -158,7 +159,7 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
             current_end_minute = entry["endMinute"]
             next_start_hour = next_entry["startHour"]
             next_start_minute = next_entry["startMinute"]
-            
+
             # Calculate gap start time (one minute after current entry ends)
             gap_start_hour = current_end_hour
             gap_start_minute = current_end_minute
@@ -167,15 +168,17 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
                 gap_start_minute = 0
             else:
                 gap_start_minute += 1
-            
+
             # Check if there's actually a gap
             gap_start_minutes = gap_start_hour * 60 + gap_start_minute
             next_start_minutes = next_start_hour * 60 + next_start_minute
-            
+
             if gap_start_minutes < next_start_minutes:
                 # Fill the gap with SelfUse
                 gap_end_hour, gap_end_minute = end_minute_exclusive_to_inclusive(next_start_hour, next_start_minute)
-                result_schedule.append({"enable": 1, "startHour": gap_start_hour, "startMinute": gap_start_minute, "endHour": gap_end_hour, "endMinute": gap_end_minute, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
+                result_schedule.append(
+                    {"enable": 1, "startHour": gap_start_hour, "startMinute": gap_start_minute, "endHour": gap_end_hour, "endMinute": gap_end_minute, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve}
+                )
 
     # Add demand mode after last entry if needed
     last_entry = new_schedule[-1]
@@ -188,7 +191,7 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
         else:
             demand_start_minute += 1
         result_schedule.append({"enable": 1, "startHour": demand_start_hour, "startMinute": demand_start_minute, "endHour": 23, "endMinute": 59, "workMode": "SelfUse", "fdSoc": reserve, "maxSoc": 100, "fdPwr": fdPwr_max, "minSocOnGrid": reserve})
-    
+
     return result_schedule
 
 
@@ -1551,9 +1554,9 @@ async def test_fox_api(sn, api_key):
     # print(new_schedule)
     # return 1
     new_schedule = [
-                {'enable': 1, 'startHour': 2, 'startMinute': 30, 'endHour': 5, 'endMinute': 30, 'workMode': 'ForceCharge', 'fdSoc': 100, 'maxSoc': 100, 'fdPwr': 5000, 'minSocOnGrid': 10}, 
-                {'enable': 1, 'startHour': 11, 'startMinute': 0, 'endHour': 12, 'endMinute': 00, 'workMode': 'ForceDischarge', 'fdSoc': 10, 'maxSoc': 100, 'fdPwr': 5000, 'minSocOnGrid': 10}, 
-    ]   
+        {"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 30, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 5000, "minSocOnGrid": 10},
+        {"enable": 1, "startHour": 11, "startMinute": 0, "endHour": 12, "endMinute": 00, "workMode": "ForceDischarge", "fdSoc": 10, "maxSoc": 100, "fdPwr": 5000, "minSocOnGrid": 10},
+    ]
     new_schedule = validate_schedule(new_schedule, 10, 5000)
     print("Validated schedule")
     print(new_schedule)

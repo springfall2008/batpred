@@ -421,14 +421,13 @@ def test_minutes_to_schedule_time(my_predbat):
     assert result == 1
 
     result = minutes_to_schedule_time(2, 30)
-    assert result == 2*60 + 30
+    assert result == 2 * 60 + 30
 
     result = minutes_to_schedule_time(14, 30)
     assert result == 14 * 60 + 30
 
     result = minutes_to_schedule_time(23, 59)
     assert result == 23 * 60 + 59
-
 
     return False
 
@@ -497,7 +496,6 @@ def test_validate_schedule_multiple_windows(my_predbat):
     assert result[2]["startMinute"] == 30
     assert result[2]["endHour"] == 15
     assert result[2]["endMinute"] == 59
-
 
     # Second entry should be the discharge window
     assert result[3]["workMode"] == "ForceDischarge"
@@ -623,7 +621,6 @@ def test_validate_schedule_discharge_ending_at_midnight(my_predbat):
     print(result)
     # Should have 2 entries: demand before discharge, then discharge window
     assert len(result) == 2
-
 
     # First entry should be demand mode from midnight to discharge start
     assert result[0]["workMode"] == "SelfUse"
