@@ -572,7 +572,7 @@ def test_validate_schedule_both_charge_and_discharge(my_predbat):
     assert result[1]["fdPwr"] == 8000
     assert result[1]["maxSoc"] == 100
 
-    # Second entry should be the charge window
+    # Third entry should be the discharge window
     assert result[2]["workMode"] == "ForceDischarge"
     assert result[2]["startHour"] == 2
     assert result[2]["startMinute"] == 55
