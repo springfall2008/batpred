@@ -585,7 +585,7 @@ def test_validate_schedule_both_charge_and_discharge(my_predbat):
     # Demand until midnight
     assert result[3]["workMode"] == "SelfUse"
     assert result[3]["startHour"] == 3
-    assert result[3]["startMinute"] == 0, f"Got {result[2]['startMinute']} expected 0"
+    assert result[3]["startMinute"] == 0, f"Got {result[3]['startMinute']} expected 0"
     assert result[3]["endHour"] == 23
     assert result[3]["endMinute"] == 59
 
