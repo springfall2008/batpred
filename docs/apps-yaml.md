@@ -1049,7 +1049,7 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
-An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's Github.
+An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
 
 ## Ohme car charger - direct integration
 
