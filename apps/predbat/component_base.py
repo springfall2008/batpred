@@ -137,6 +137,10 @@ class ComponentBase(ABC):
         """Get the configuration root directory"""
         return self.base.config_root
 
+    def get_error_count(self):
+        """Get the number of errors that have occurred in this component"""
+        return self.count_errors
+
     async def start(self):
         """
         Start the component's main operation loop.
@@ -159,10 +163,13 @@ class ComponentBase(ABC):
                             self.log(f"{self.__class__.__name__}: Started")
                     else:
                         self.count_errors += 1
+                        self.non_fatal_error_occurred()
                 first = False
             except Exception as e:
                 self.log(f"Error: {self.__class__.__name__}: {e}")
                 self.log("Error: " + traceback.format_exc())
+                self.non_fatal_error_occurred()
+                self.count_errors += 1
 
             seconds += 5
             await asyncio.sleep(5)
@@ -195,6 +202,15 @@ class ComponentBase(ABC):
         self.api_stop = True
         self.api_started = False
         await asyncio.sleep(0.1)  # Allow time for the main loop to exit
+
+    def non_fatal_error_occurred(self):
+        """
+        Notify the base system that a non-fatal error has occurred.
+
+        This method increments the non_fatal_error_count in the base object,
+        which can be used for monitoring and logging purposes.
+        """
+        self.base.had_errors = True
 
     def fatal_error_occurred(self):
         """

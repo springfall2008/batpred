@@ -2096,6 +2096,16 @@ def get_components_css():
     font-style: italic;
 }
 
+.error-count-none {
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+.error-count-high {
+    color: #f44336;
+    font-weight: bold;
+}
+
 /* Dark mode styles */
 body.dark-mode .component-card {
     background: #2d2d2d;
@@ -2181,6 +2191,16 @@ body.dark-mode .entity-count-zero {
 body.dark-mode .last-updated-time {
     color: #aaa;
     font-style: italic;
+}
+
+body.dark-mode .error-count-none {
+    color: #4CAF50;
+    font-weight: bold;
+}
+
+body.dark-mode .error-count-high {
+    color: #f44336;
+    font-weight: bold;
 }
 
 body.dark-mode .restart-button {

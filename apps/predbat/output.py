@@ -2317,6 +2317,15 @@ class Output:
             self.call_notify("Predbat status change to: " + message + extra)
             self.previous_status = message
 
+        error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
+        try:
+            error_count = int(error_count)
+        except (ValueError, TypeError):
+            error_count = 0
+
+        if had_errors:
+            error_count += 1
+
         self.dashboard_item(
             self.prefix + ".status",
             state=message,
@@ -2328,6 +2337,7 @@ class Output:
                 "debug": debug,
                 "version": THIS_VERSION,
                 "error": (had_errors or self.had_errors),
+                "error_count": error_count,
             },
         )
 

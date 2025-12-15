@@ -3079,6 +3079,12 @@ var options = {
             # Add last updated time
             text += f'<p><strong>Last Updated:</strong> <span class="last-updated-time">{time_ago_text}</span></p>\n'
 
+            # Add error count
+            error_count = self.base.components.get_error_count(component_name)
+            if error_count is not None:
+                error_class = "error-count-high" if error_count > 0 else "error-count-none"
+                text += f'<p><strong>Error Count:</strong> <span class="{error_class}">{error_count}</span></p>\n'
+
             # Show args and their current values
             args_info = component_info.get("args", {})
             if args_info:

@@ -368,7 +368,6 @@ class OctopusAPI(ComponentBase):
         """
         Main run loop
         """
-        self.log("Octopus API: enter seconds {} first {}".format(seconds, first))
         if first:
             # Load cached data
             await self.load_octopus_cache()
