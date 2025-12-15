@@ -383,6 +383,16 @@ class Components:
         all_components = [name for name in self.components.keys()]
         return all_components
 
+    def get_error_count(self, name):
+        """Get error count for a component"""
+        if name not in self.components:
+            return None
+        if not self.components[name]:
+            return None
+        if "get_error_count" not in dir(self.components[name]):
+            return None
+        return self.components[name].get_error_count()
+
     def can_restart(self, name):
         """Check if a component can be restarted"""
         if name not in COMPONENT_LIST:

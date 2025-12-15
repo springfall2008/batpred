@@ -921,10 +921,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             active_components = self.components.get_active()
             error_count = 0
             component_status = {}
+            component_error_count = {}
             all_healthy = True
             for component_name in all_components:
                 is_active = self.components.is_active(component_name)
                 is_alive = self.components.is_alive(component_name)
+                component_error_count[component_name] = self.components.get_error_count(component_name)
                 if is_active and not is_alive:
                     # Component is active but not alive - error state
                     component_status[component_name] = "error"
@@ -941,6 +943,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "friendly_name": "Predbat components healthy",
                     "icon": "mdi:cog-outline" if all_healthy else "mdi:cog-off-outline",
                     "components": component_status,
+                    "component_error_count": component_error_count,
                     "active_count": len(active_components),
                     "total_count": len(all_components),
                     "error_count": error_count,
