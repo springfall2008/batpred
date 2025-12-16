@@ -665,9 +665,9 @@ class WebInterface(ComponentBase):
         get_entity_attributes returns a list of attribute names for the given entity_id
         """
         state_info = self.get_state_wrapper(entity_id=entity_id, raw=True)
-        if state_info and ('attributes' in state_info) and isinstance(state_info['attributes'], dict):
-            attr_list = sorted(list(state_info['attributes'].keys()))
-            for attr in ['friendly_name', 'icon', 'unit_of_measurement', 'device_class', 'state_class']:
+        if state_info and ("attributes" in state_info) and isinstance(state_info["attributes"], dict):
+            attr_list = sorted(list(state_info["attributes"].keys()))
+            for attr in ["friendly_name", "icon", "unit_of_measurement", "device_class", "state_class"]:
                 try:
                     attr_list.remove(attr)
                 except ValueError:
