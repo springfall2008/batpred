@@ -108,6 +108,7 @@ generationmix
 generationpower
 geserial
 geseriale
+getall
 Ginlong
 GivEnergy
 givtcp
