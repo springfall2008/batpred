@@ -659,7 +659,7 @@ class WebInterface(ComponentBase):
                 history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
 
         return history
-    
+
     def get_entity_attributes(self, entity_id):
         """
         get_entity_attributes returns a list of attribute names for the given entity_id
