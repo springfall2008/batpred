@@ -38,7 +38,7 @@ pred_bat:
   load_today:
     - sensor.scb_home_consumption_total
   import_today:
-    - sensor.scb_Home_Consumption_from_Grid_Total
+    - sensor.scb_home_consumption_from_grid_total
   export_today:
     - sensor.scb_energy_to_grid_total
   pv_today:
@@ -81,40 +81,40 @@ pred_bat:
   # Services to control charging/discharging
   charge_start_service:
     - service: input_boolean.turn_on
-      entity_id: "input_boolean.charge_start_service"
+      entity_id: input_boolean.charge_start_service
     - service: input_boolean.turn_off
-      entity_id: "input_boolean.charge_freeze_service"
+      entity_id: input_boolean.charge_freeze_service
     - service: input_boolean.turn_off
       entity_id: input_boolean.discharge_freeze_service
   charge_freeze_service: 	
     - service: input_boolean.turn_on
-      entity_id: "input_boolean.charge_freeze_service"
+      entity_id: input_boolean.charge_freeze_service
     - service: input_boolean.turn_off
-      entity_id: "input_boolean.charge_start_service"
+      entity_id: input_boolean.charge_start_service
     - service: input_boolean.turn_off
       entity_id: input_boolean.discharge_freeze_service
   charge_stop_service:
     - service: input_boolean.turn_off
-      entity_id: "input_boolean.charge_start_service"
+      entity_id: input_boolean.charge_start_service
     - service: input_boolean.turn_off
-      entity_id: "input_boolean.charge_freeze_service"
+      entity_id: input_boolean.charge_freeze_service
   discharge_freeze_service:
     - service: input_boolean.turn_on
       entity_id: input_boolean.discharge_freeze_service
     - service: input_boolean.turn_off
-      entity_id: "input_boolean.charge_start_service"
+      entity_id: input_boolean.charge_start_service
     - service: input_boolean.turn_off
-      entity_id: "input_boolean.charge_freeze_service"
+      entity_id: input_boolean.charge_freeze_service
     - service: input_boolean.turn_off
-      entity_id: "input_boolean.discharge_start_service"
+      entity_id: input_boolean.discharge_start_service
   discharge_start_service:
     - service: input_boolean.turn_on
-      entity_id: "input_boolean.discharge_start_service"
+      entity_id: input_boolean.discharge_start_service
     - service: input_boolean.turn_off
       entity_id: input_boolean.discharge_freeze_service
   discharge_stop_service:
     - service: input_boolean.turn_off
-      entity_id: "input_boolean.discharge_start_service"
+      entity_id: input_boolean.discharge_start_service
     - service: input_boolean.turn_off
       entity_id: input_boolean.discharge_freeze_service
 
@@ -123,11 +123,11 @@ pred_bat:
   discharge_rate:
     - input_number.predbat_discharge_rate
   #battery_voltage:
-  #  - sensor.battery_external_battery_voltage 	#from sunspec integration
+  #  - sensor.battery_external_battery_voltage 	#from Sunspec integration
   battery_power:
     - sensor.scb_battery_power
   pv_power: 
-    - sensor.scb_Sum_power_of_all_PV_DC_inputs
+    - sensor.scb_sum_power_of_all_pv_dc_inputs
   load_power:
     - sensor.scb_home_power
   grid_power:
@@ -144,9 +144,9 @@ pred_bat:
   charge_limit:
     - input_number.predbat_charge_limit
   soc_max:
-    - 31	# Kwh
+    - 31	   # kWh
   battery_rate_max:
-    - 11940
+    - 11940  # Watts
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
