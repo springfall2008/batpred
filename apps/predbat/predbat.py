@@ -81,7 +81,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
     def download_predbat_releases_url(self, url):
         """
-        Download release data from github, but use the cache for 2 hours
+        Download release data from GitHub, but use the cache for 2 hours
         """
         # Check the cache first
         now = datetime.now()
@@ -90,19 +90,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             pdata = self.github_url_cache[url]["data"]
             age = now - stamp
             if age.seconds < (120 * 60):
-                self.log("Using cached GITHub data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+                self.log("Using cached GitHub data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
                 return pdata
 
         try:
             r = requests.get(url)
         except Exception:
-            self.log("Warn: Unable to load data from Github URL: {}".format(url))
+            self.log("Warn: Unable to load data from GitHub URL: {}".format(url))
             return []
 
         try:
             pdata = r.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Unable to decode data from Github URL: {}".format(url))
+            self.log("Warn: Unable to decode data from GitHub URL: {}".format(url))
             return []
 
         # Save to cache
@@ -197,7 +197,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             self.expose_config("version", new_version, force=True)
 
         else:
-            self.log("Warn: Unable to download Predbat version information from github, return code: {}".format(data))
+            self.log("Warn: Unable to download Predbat version information from GitHub, return code: {}".format(data))
             self.expose_config("version", False, force=True)
 
         return self.releases

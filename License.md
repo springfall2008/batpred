@@ -10,8 +10,8 @@ The Software is provided "as is" and without any warranty, express or implied.
 
 2. Permitted Use:
 You may install and use the Software on your personal computer or devices for your sole personal use.
-You may modify the software for your own personal use or for the purpose of contributing towards its development, including Github public forks, tickets and pull requests.
-You may not distribute or sublicense this Software outside its Github repository without prior written permission.
+You may modify the software for your own personal use or for the purpose of contributing towards its development, including GitHub public forks, tickets and pull requests.
+You may not distribute or sublicense this Software outside its GitHub repository without prior written permission.
 
 3. Ownership:
 Licensor retains all ownership rights, including intellectual property rights, in the Software.
@@ -30,7 +30,7 @@ This Agreement shall be governed by and construed in accordance with the laws of
 This Agreement constitutes the entire agreement between the parties relating to the Software.
 
 8. Contributions
-Any contributions made to the software via Github shall be deemed to be your own work and by contributing you agree that you are no longer the Copyright holder of this contribution and instead it will fall solely within the ownership of this project.
+Any contributions made to the software via GitHub shall be deemed to be your own work and by contributing you agree that you are no longer the Copyright holder of this contribution and instead it will fall solely within the ownership of this project.
 
 9. Uses that fall outside this agreement
 If you wish to use this project for any purpose that falls outside this agreement then you must request a separate Software License agreement from the Copyright Holder.

@@ -36,4 +36,4 @@ This is important for any plan related issues.
 
 Once you have captured the issue go to the Web UI, in the Dash tab click on **predbat_debug.yaml** and wait 30 seconds for it to download. Select 'keep' if your Web Browser thinks the file is dangerous.
 
-Rename the download file to predbat_debug.yaml.txt and upload it to Github. This will allow your plan to be reproduced and also stores all your settings for review.
+Rename the download file to predbat_debug.yaml.txt and upload it to GitHub. This will allow your plan to be reproduced and also stores all your settings for review.

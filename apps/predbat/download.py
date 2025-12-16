@@ -14,7 +14,7 @@ import requests
 
 def download_predbat_file_from_github(tag, filename, new_filename):
     """
-    Downloads a predbat source file from github and returns the contents
+    Downloads a Predbat source file from GitHub and returns the contents
 
     Args:
         tag (str): The tag to download from (e.g. v1.0.0)
@@ -93,7 +93,7 @@ def check_install():
 
 def predbat_update_download(version):
     """
-    Download the defined version of Predbat from Github
+    Download the defined version of Predbat from GitHub
     """
     this_path = os.path.dirname(__file__)
     tag_split = version.split(" ")
