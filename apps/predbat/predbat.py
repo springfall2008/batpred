@@ -250,6 +250,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         """
         Wrapper function to get state from HA
+
+        entity_id = The entity id to get
+        default = Default value if not found
+        attribute = Specific attribute to get, if not set defaults to the current state
+        refresh = Force a refresh of the state from HA
+        required_unit = Convert the state to this unit if different
+        raw = Fetch the raw database information which includes state and all the attributes
         """
         if not self.ha_interface:
             self.log("Error: get_state_wrapper - No HA interface available")
