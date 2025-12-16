@@ -608,7 +608,7 @@ class WebInterface(ComponentBase):
         """
         count_nums = 0
         count_total = 0
-        
+
         if history and len(history) >= 1:
             for item in history[0]:
                 if attribute:
@@ -623,8 +623,8 @@ class WebInterface(ComponentBase):
                     if value is None:
                         continue
                     value = str(value)
-                
-                if value.lower() in ['on', 'off', 'true', 'false']:
+
+                if value.lower() in ["on", "off", "true", "false"]:
                     count_nums += 1
                 else:
                     try:
@@ -633,13 +633,13 @@ class WebInterface(ComponentBase):
                     except (ValueError, TypeError):
                         pass
                 count_total += 1
-        
+
         if count_total > 0 and (count_nums / count_total) >= 0.1:
             return True
         elif count_total == 0:
             return True
         return False
-    
+
     def get_entity_attributes(self, history):
         """
         Scan history data to find all available attributes for an entity
@@ -647,14 +647,14 @@ class WebInterface(ComponentBase):
         """
         attributes_set = set()
         metadata_attrs = {"friendly_name", "icon", "device_class", "state_class", "unit_of_measurement"}
-        
+
         if history and len(history) >= 1:
             for item in history[0]:
                 attrs = item.get("attributes", {})
                 for attr_name in attrs.keys():
                     if attr_name not in metadata_attrs:
                         attributes_set.add(attr_name)
-        
+
         return sorted(list(attributes_set))
 
     async def get_history_with_now(self, entity_id, days, attribute=None):
@@ -674,9 +674,9 @@ class WebInterface(ComponentBase):
                 history[0].append({"attributes": {attribute: current_value}, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
             else:
                 history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
-        
+
         return history
-    
+
     async def html_entity(self, request):
         """
         Return the Predbat entity as an HTML page
@@ -690,7 +690,7 @@ class WebInterface(ComponentBase):
 
         # Get attribute selections (parallel to entity_ids)
         entity_attributes = request.query.getall("entity_attribute", [])
-        
+
         # Build entity_selections list pairing entity IDs with attributes
         # Each entity can have multiple attributes (comma-separated)
         entity_selections = []
@@ -703,7 +703,7 @@ class WebInterface(ComponentBase):
                     attrs = [a.strip() if a.strip() else None for a in attr_string.split(",")]
                 else:
                     attrs = [None]  # Default to state
-                
+
                 # Create one selection per attribute
                 for attr in attrs:
                     entity_selections.append({"entity_id": entity_id, "attribute": attr})
@@ -742,12 +742,9 @@ class WebInterface(ComponentBase):
                 entity_attr_groups[entity_id] = []
             if attr not in entity_attr_groups[entity_id]:
                 entity_attr_groups[entity_id].append(attr)
-        
+
         # Convert to array format for JavaScript
-        selected_entities_data = [
-            {"entity": entity_id, "attributes": attrs}
-            for entity_id, attrs in entity_attr_groups.items()
-        ]
+        selected_entities_data = [{"entity": entity_id, "attributes": attrs} for entity_id, attrs in entity_attr_groups.items()]
         selected_entities_json = json.dumps(selected_entities_data)
         entity_attributes_json = json.dumps(entity_attributes_map)
 
@@ -812,20 +809,14 @@ class WebInterface(ComponentBase):
             for selection in entity_selections:
                 entity_id = selection["entity_id"]
                 attribute = selection["attribute"]
-                
+
                 attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
                 unit = attributes.get("unit_of_measurement", "") or "(no unit)"
 
                 if unit not in entity_groups:
                     entity_groups[unit] = []
 
-                entity_groups[unit].append({
-                    "id": entity_id, 
-                    "friendly_name": attributes.get("friendly_name", entity_id), 
-                    "unit": unit,
-                    "attribute": attribute,
-                    "available_attrs": entity_attributes_map.get(entity_id, [])
-                })
+                entity_groups[unit].append({"id": entity_id, "friendly_name": attributes.get("friendly_name", entity_id), "unit": unit, "attribute": attribute, "available_attrs": entity_attributes_map.get(entity_id, [])})
 
             # Display entity details table for first selected entity
             if len(entity_selections) == 1:
@@ -872,7 +863,7 @@ class WebInterface(ComponentBase):
 
                     # Fetch history with attribute if specified
                     history = entity_data_fetch[entity_id]
-                    
+
                     # Check if data is numerical (supports both state and attribute)
                     is_numerical = self.is_data_numerical(history, attribute=attribute)
 
@@ -885,7 +876,7 @@ class WebInterface(ComponentBase):
                         # Chart state data (default)
                         history_chart = history_attribute(history, is_numerical=is_numerical)
                         display_name = friendly_name
-                    
+
                     if history_chart:
                         entity_data.append({"name": display_name, "entity_id": entity_id, "data": history_chart})
 
@@ -947,13 +938,13 @@ class WebInterface(ComponentBase):
                                     continue
                                 last_updated_time = item["last_updated"]
                                 last_updated_stamp = str2time(last_updated_time)
-                                
+
                                 # Get state or attribute value
                                 if attribute:
                                     state = item.get("attributes", {}).get(attribute, None)
                                 else:
                                     state = item.get("state", None)
-                                
+
                                 if state is None:
                                     state = "None"
 

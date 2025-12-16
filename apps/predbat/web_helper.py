@@ -218,10 +218,10 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
                 html += '<tr style=\"border-bottom: 1px solid #eee;\">';
                 html += '<td style=\"padding: 8px;\">' + entityName + '</td>';
                 html += '<td style=\"padding: 8px; position: relative;\">';
-                
+
                 // Multi-select dropdown with tag display
                 html += '<div class=\"attr-select-container\" id=\"attr-container-' + idx + '\">';
-                
+
                 // Display selected attributes as tags
                 html += '<div class=\"attr-tags\" onclick=\"toggleAttrDropdown(' + idx + ')\" style=\"cursor: pointer; min-height: 30px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; background: var(--input-background, #fff);\">';
                 if (selection.attributes.length === 0 || (selection.attributes.length === 1 && selection.attributes[0] === '')) {
@@ -234,17 +234,17 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
                 }
                 html += '<span style=\"float: right; color: #999;\">\u25bc</span>';
                 html += '</div>';
-                
+
                 // Dropdown menu (hidden by default)
                 html += '<div class=\"attr-dropdown\" id=\"attr-dropdown-' + idx + '\" style=\"display: none;\">';
-                
+
                 // State option
                 const stateChecked = selection.attributes.includes('') ? ' checked' : '';
                 html += '<label class=\"attr-option\">';
                 html += '<input type=\"checkbox\" onchange=\"toggleEntityAttribute(' + idx + ', \\'\\')\"' + stateChecked + ' />';
                 html += '<span style=\"font-weight: bold;\">state (default)</span>';
                 html += '</label>';
-                
+
                 // Other attributes
                 availableAttrs.forEach(attr => {
                     const attrChecked = selection.attributes.includes(attr) ? ' checked' : '';
@@ -253,10 +253,10 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
                     html += attr;
                     html += '</label>';
                 });
-                
+
                 html += '</div>';
                 html += '</div>';
-                
+
                 html += '</td>';
                 html += '<td style=\"padding: 8px; text-align: center;\">';
                 html += '<button type=\"button\" onclick=\"removeEntity(' + idx + ')\" style=\"background: #ff4444; color: white; border: none; border-radius: 4px; cursor: pointer; padding: 4px 12px; font-weight: bold;\" title=\"Remove\">X</button>';
@@ -283,7 +283,7 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
             if (index >= 0 && index < selectedEntities.length) {
                 const attrs = selectedEntities[index].attributes;
                 const attrIndex = attrs.indexOf(attribute);
-                
+
                 if (attrIndex >= 0) {
                     // Remove attribute
                     attrs.splice(attrIndex, 1);
@@ -291,12 +291,12 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
                     // Add attribute
                     attrs.push(attribute);
                 }
-                
+
                 // Ensure at least one attribute is selected (default to state)
                 if (attrs.length === 0) {
                     attrs.push('');
                 }
-                
+
                 updateSelectedEntitiesDisplay();
                 autoSubmitForm(); // Automatically update chart
             }
@@ -629,7 +629,7 @@ def get_entity_css():
         body.dark-mode #selectedEntitiesDisplay button:hover {
             background-color: #dd4444 !important;
         }
-        
+
         /* Attribute multi-select dropdown styles */
         .attr-select-container {
             position: relative;
@@ -674,7 +674,7 @@ def get_entity_css():
         .attr-option input[type="checkbox"] {
             margin-right: 8px;
         }
-        
+
         /* Dark mode for attribute selector */
         body.dark-mode .attr-tags {
             background: #333 !important;
