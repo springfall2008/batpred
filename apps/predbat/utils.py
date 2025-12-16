@@ -62,7 +62,7 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
     return results
 
 
-def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False):
+def history_attribute(history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, daily=False, offset_days=0, first=True, pounds=False, is_numerical=True):
     """
     Get historical data for an attribute
     """
@@ -85,7 +85,7 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
             continue
 
         if attributes:
-            if state_key not in item["attributes"]:
+            if state_key not in item.get("attributes", {}):
                 continue
             state = item["attributes"][state_key]
         else:
@@ -100,23 +100,24 @@ def history_attribute(history, state_key="state", last_updated_key="last_updated
             state = item[state_key]
 
         # Get the numerical key and the timestamp and ignore if in error
-        try:
-            state = float(state) * scale
-            if pounds:
-                state = dp2(state / 100)
-            else:
-                state = dp4(state)
+        if is_numerical:
+            try:
+                state = float(state) * scale
+                if pounds:
+                    state = dp2(state / 100)
+                else:
+                    state = dp4(state)
 
-        except (ValueError, TypeError):
-            if isinstance(state, str):
-                if state.lower() in ["on", "true", "yes"]:
-                    state = 1
-                elif state.lower() in ["off", "false", "no"]:
-                    state = 0
+            except (ValueError, TypeError):
+                if isinstance(state, str):
+                    if state.lower() in ["on", "true", "yes"]:
+                        state = 1
+                    elif state.lower() in ["off", "false", "no"]:
+                        state = 0
+                    else:
+                        continue
                 else:
                     continue
-            else:
-                continue
 
         try:
             last_updated_time = item[last_updated_key]

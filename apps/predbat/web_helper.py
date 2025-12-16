@@ -69,7 +69,37 @@ async function restartComponent(componentName) {
     return text
 
 
-def get_entity_js(entity):
+def get_entity_detailed_row_js():
+    text = """
+    <script>
+    function toggleDetailRow(rowIndex) {
+        var mainRow = document.getElementById('row_' + rowIndex);
+        var detailRows = document.querySelectorAll('#detail_' + rowIndex);
+        var timeCell = mainRow.cells[0];
+        var isExpanded = mainRow.classList.contains('expanded');
+
+        if (isExpanded) {
+            // Collapse
+            detailRows.forEach(function(row) {
+                row.style.display = 'none';
+            });
+            mainRow.classList.remove('expanded');
+            timeCell.innerHTML = timeCell.innerHTML.replace('▼', '▶');
+        } else {
+            // Expand
+            detailRows.forEach(function(row) {
+                row.style.display = 'table-row';
+            });
+            mainRow.classList.add('expanded');
+            timeCell.innerHTML = timeCell.innerHTML.replace('▶', '▼');
+        }
+    }
+    </script>
+    """
+    return text
+
+
+def get_entity_js(selected_entities_json, entity_attributes_json):
     text = (
         """
         <script>
@@ -78,6 +108,12 @@ def get_entity_js(entity):
         let filteredEntities = [];
         let selectedIndex = -1;
         let isDropdownVisible = false;
+        let selectedEntities = """
+        + selected_entities_json
+        + """;
+        let entityAttributes = """
+        + entity_attributes_json
+        + """;
 
         // Initialize entity data
 
@@ -94,20 +130,9 @@ def get_entity_js(entity):
                 }
                 allEntities = await response.json();
 
-                // Set initial value if entity is selected
-                const currentEntity = '"""
-        + (entity.replace("'", "\\'").replace('"', '\\"') if entity else "")
-        + """';
-                if (currentEntity) {
-                    const entityInput = document.getElementById('entitySearchInput');
-                    const selectedEntity = allEntities.find(e => e.id === currentEntity);
-                    if (selectedEntity) {
-                        entityInput.value = selectedEntity.id;
-                    }
-                }
-
                 // Set up event listeners after data is loaded
                 setupEventListeners();
+                updateSelectedEntitiesDisplay();
             } catch (error) {
                 console.error('Error loading entities:', error);
                 allEntities = [];
@@ -118,6 +143,7 @@ def get_entity_js(entity):
         function setupEventListeners() {
             const entityInput = document.getElementById('entitySearchInput');
             const clearButton = document.getElementById('clearEntitySearch');
+            const entityForm = document.getElementById('entitySelectForm');
 
             if (entityInput) {
                 entityInput.addEventListener('input', filterEntityOptions);
@@ -129,9 +155,32 @@ def get_entity_js(entity):
             if (clearButton) {
                 clearButton.addEventListener('click', function() {
                     entityInput.value = '';
-                    document.getElementById('selectedEntityId').value = '';
                     hideEntityDropdown();
                     entityInput.focus();
+                });
+            }
+
+            // Intercept form submission to add selected entities and attributes as hidden inputs
+            if (entityForm) {
+                entityForm.addEventListener('submit', function(event) {
+                    // Remove any existing entity_id and entity_attribute inputs
+                    const existingInputs = entityForm.querySelectorAll('input[name=\"entity_id\"], input[name=\"entity_attribute\"]');
+                    existingInputs.forEach(input => input.remove());
+
+                    // Add hidden inputs for each selected entity and its attribute
+                    selectedEntities.forEach(selection => {
+                        const hiddenEntityInput = document.createElement('input');
+                        hiddenEntityInput.type = 'hidden';
+                        hiddenEntityInput.name = 'entity_id';
+                        hiddenEntityInput.value = selection.entity;
+                        entityForm.appendChild(hiddenEntityInput);
+
+                        const hiddenAttrInput = document.createElement('input');
+                        hiddenAttrInput.type = 'hidden';
+                        hiddenAttrInput.name = 'entity_attribute';
+                        hiddenAttrInput.value = selection.attributes.join(',');
+                        entityForm.appendChild(hiddenAttrInput);
+                    });
                 });
             }
 
@@ -142,6 +191,170 @@ def get_entity_js(entity):
                     hideEntityDropdown();
                 }
             });
+        }
+
+        function updateSelectedEntitiesDisplay() {
+            const display = document.getElementById('selectedEntitiesDisplay');
+            if (!display) return;
+
+            if (selectedEntities.length === 0) {
+                display.innerHTML = '<span style=\"color: #999;\">No entities selected</span>';
+                return;
+            }
+
+            // Create table for selected entities with attribute checkboxes
+            let html = '<table style=\"width: 100%; border-collapse: collapse;\">';
+            html += '<thead><tr>';
+            html += '<th style=\"text-align: left; padding: 8px; border-bottom: 2px solid #ddd;\">Entity</th>';
+            html += '<th style=\"text-align: left; padding: 8px; border-bottom: 2px solid #ddd;\">Attributes</th>';
+            html += '<th style=\"text-align: center; padding: 8px; border-bottom: 2px solid #ddd; width: 50px;\">Remove</th>';
+            html += '</tr></thead><tbody>';
+
+            selectedEntities.forEach((selection, idx) => {
+                const entity = allEntities.find(e => e.id === selection.entity);
+                const entityName = entity ? entity.name : selection.entity;
+                const availableAttrs = entityAttributes[selection.entity] || [];
+
+                html += '<tr style=\"border-bottom: 1px solid #eee;\">';
+                html += '<td style=\"padding: 8px;\">' + entityName + '</td>';
+                html += '<td style=\"padding: 8px; position: relative;\">';
+                
+                // Multi-select dropdown with tag display
+                html += '<div class=\"attr-select-container\" id=\"attr-container-' + idx + '\">';
+                
+                // Display selected attributes as tags
+                html += '<div class=\"attr-tags\" onclick=\"toggleAttrDropdown(' + idx + ')\" style=\"cursor: pointer; min-height: 30px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; background: var(--input-background, #fff);\">';
+                if (selection.attributes.length === 0 || (selection.attributes.length === 1 && selection.attributes[0] === '')) {
+                    html += '<span style=\"color: #999;\">state (default)</span>';
+                } else {
+                    selection.attributes.forEach(attr => {
+                        const displayName = attr === '' ? 'state' : attr;
+                        html += '<span class=\"attr-tag\">' + displayName + '</span>';
+                    });
+                }
+                html += '<span style=\"float: right; color: #999;\">\u25bc</span>';
+                html += '</div>';
+                
+                // Dropdown menu (hidden by default)
+                html += '<div class=\"attr-dropdown\" id=\"attr-dropdown-' + idx + '\" style=\"display: none;\">';
+                
+                // State option
+                const stateChecked = selection.attributes.includes('') ? ' checked' : '';
+                html += '<label class=\"attr-option\">';
+                html += '<input type=\"checkbox\" onchange=\"toggleEntityAttribute(' + idx + ', \\'\\')\"' + stateChecked + ' />';
+                html += '<span style=\"font-weight: bold;\">state (default)</span>';
+                html += '</label>';
+                
+                // Other attributes
+                availableAttrs.forEach(attr => {
+                    const attrChecked = selection.attributes.includes(attr) ? ' checked' : '';
+                    html += '<label class=\"attr-option\">';
+                    html += '<input type=\"checkbox\" onchange=\"toggleEntityAttribute(' + idx + ', \\'' + attr + '\\')\"' + attrChecked + ' />';
+                    html += attr;
+                    html += '</label>';
+                });
+                
+                html += '</div>';
+                html += '</div>';
+                
+                html += '</td>';
+                html += '<td style=\"padding: 8px; text-align: center;\">';
+                html += '<button type=\"button\" onclick=\"removeEntity(' + idx + ')\" style=\"background: #ff4444; color: white; border: none; border-radius: 4px; cursor: pointer; padding: 4px 12px; font-weight: bold;\" title=\"Remove\">X</button>';
+                html += '</td>';
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            display.innerHTML = html;
+        }
+
+        function toggleAttrDropdown(index) {
+            const dropdown = document.getElementById('attr-dropdown-' + index);
+            if (dropdown) {
+                const isVisible = dropdown.style.display !== 'none';
+                // Close all other dropdowns
+                document.querySelectorAll('.attr-dropdown').forEach(d => d.style.display = 'none');
+                // Toggle this dropdown
+                dropdown.style.display = isVisible ? 'none' : 'block';
+            }
+        }
+
+        function toggleEntityAttribute(index, attribute) {
+            if (index >= 0 && index < selectedEntities.length) {
+                const attrs = selectedEntities[index].attributes;
+                const attrIndex = attrs.indexOf(attribute);
+                
+                if (attrIndex >= 0) {
+                    // Remove attribute
+                    attrs.splice(attrIndex, 1);
+                } else {
+                    // Add attribute
+                    attrs.push(attribute);
+                }
+                
+                // Ensure at least one attribute is selected (default to state)
+                if (attrs.length === 0) {
+                    attrs.push('');
+                }
+                
+                updateSelectedEntitiesDisplay();
+                autoSubmitForm(); // Automatically update chart
+            }
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            if (!event.target.closest('.attr-select-container')) {
+                document.querySelectorAll('.attr-dropdown').forEach(d => d.style.display = 'none');
+            }
+        });
+
+        function toggleEntitySelection(entityId) {
+            const index = selectedEntities.findIndex(s => s.entity === entityId);
+            if (index >= 0) {
+                selectedEntities.splice(index, 1);
+            } else {
+                selectedEntities.push({ entity: entityId, attributes: [''] });
+            }
+            updateSelectedEntitiesDisplay();
+            renderEntityDropdown(); // Re-render to update checkboxes
+            autoSubmitForm(); // Automatically update chart
+        }
+
+        function removeEntity(index) {
+            if (index >= 0 && index < selectedEntities.length) {
+                selectedEntities.splice(index, 1);
+                updateSelectedEntitiesDisplay();
+                if (isDropdownVisible) {
+                    renderEntityDropdown(); // Update checkboxes if dropdown is open
+                }
+                autoSubmitForm(); // Automatically update chart
+            }
+        }
+
+        function autoSubmitForm() {
+            const entityForm = document.getElementById('entitySelectForm');
+            if (entityForm) {
+                // Manually add hidden inputs before submitting
+                const existingInputs = entityForm.querySelectorAll('input[name=\"entity_id\"], input[name=\"entity_attribute\"]');
+                existingInputs.forEach(input => input.remove());
+
+                selectedEntities.forEach(selection => {
+                    const hiddenEntityInput = document.createElement('input');
+                    hiddenEntityInput.type = 'hidden';
+                    hiddenEntityInput.name = 'entity_id';
+                    hiddenEntityInput.value = selection.entity;
+                    entityForm.appendChild(hiddenEntityInput);
+
+                    const hiddenAttrInput = document.createElement('input');
+                    hiddenAttrInput.type = 'hidden';
+                    hiddenAttrInput.name = 'entity_attribute';
+                    hiddenAttrInput.value = selection.attributes.join(',');
+                    entityForm.appendChild(hiddenAttrInput);
+                });
+
+                entityForm.submit();
+            }
         }
 
         function filterEntityOptions() {
@@ -198,9 +411,14 @@ def get_entity_js(entity):
                     const globalIndex = filteredEntities.indexOf(entity);
                     const nameColor = isDarkMode ? '#ffffff' : '#333333';
                     const idColor = isDarkMode ? '#cccccc' : '#666666';
-                    html += '<div class="entity-option" data-index="' + globalIndex + '" onclick="selectEntity(\\'' + entity.id + '\\')">';
+                    const isChecked = selectedEntities.some(s => s.entity === entity.id);
+
+                    html += '<div class="entity-option" data-index="' + globalIndex + '" onclick="toggleEntitySelection(\\'' + entity.id + '\\')">';
+                    html += '<input type="checkbox" ' + (isChecked ? 'checked' : '') + ' onclick="event.stopPropagation(); toggleEntitySelection(\\'' + entity.id + '\\')" style="margin-right: 8px;" />';
+                    html += '<div style="flex: 1; display: flex; justify-content: space-between;">';
                     html += '<span class="entity-name" style="color: ' + nameColor + ' !important;">' + entity.name + '</span>';
                     html += '<span class="entity-id" style="color: ' + idColor + ' !important;">' + entity.id + '</span>';
+                    html += '</div>';
                     html += '</div>';
                 });
             });
@@ -214,22 +432,6 @@ def get_entity_js(entity):
             dropdown.style.display = 'block';
             isDropdownVisible = true;
             selectedIndex = -1;
-        }
-
-        function selectEntity(entityId) {
-            const entity = allEntities.find(e => e.id === entityId);
-            if (entity) {
-                const input = document.getElementById('entitySearchInput');
-                const hiddenInput = document.getElementById('selectedEntityId');
-
-                input.value = entity.id;
-                hiddenInput.value = entity.id;
-
-                hideEntityDropdown();
-
-                // Submit the form
-                document.getElementById('entitySelectForm').submit();
-            }
         }
 
         function hideEntityDropdown() {
@@ -258,7 +460,7 @@ def get_entity_js(entity):
                     const entityIndex = parseInt(options[selectedIndex].getAttribute('data-index'));
                     const entity = filteredEntities[entityIndex];
                     if (entity) {
-                        selectEntity(entity.id);
+                        toggleEntitySelection(entity.id);
                     }
                 }
             } else if (event.key === 'Escape') {
@@ -297,7 +499,7 @@ def get_entity_css():
             background: white;
             border: 1px solid #ddd;
             border-top: none;
-            max-height: 300px;
+            max-height: 400px;
             overflow-y: auto;
             z-index: 1000;
             display: none;
@@ -308,13 +510,18 @@ def get_entity_css():
             cursor: pointer;
             border-bottom: 1px solid #eee;
             display: flex;
-            justify-content: space-between;
             align-items: center;
             gap: 10px;
         }
         .entity-option:hover,
         .entity-option.selected {
             background-color: #f0f0f0;
+        }
+        .entity-option input[type="checkbox"] {
+            flex-shrink: 0;
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
         }
         .entity-option .entity-name {
             font-weight: bold;
@@ -385,6 +592,111 @@ def get_entity_css():
         }
         body.dark-mode #clearEntitySearch:hover {
             color: #fff !important;
+        }
+        body.dark-mode #selectedEntitiesDisplay {
+            background-color: #2d2d2d !important;
+            border: 1px solid #555 !important;
+        }
+        body.dark-mode #selectedEntitiesDisplay table {
+            border: none !important;
+        }
+        body.dark-mode #selectedEntitiesDisplay th {
+            background-color: #444 !important;
+            color: #e0e0e0 !important;
+            border-bottom: 2px solid #555 !important;
+        }
+        body.dark-mode #selectedEntitiesDisplay td {
+            color: #e0e0e0 !important;
+            border-bottom: 1px solid #444 !important;
+        }
+        body.dark-mode #selectedEntitiesDisplay tr {
+            border-bottom: 1px solid #444 !important;
+        }
+        body.dark-mode #selectedEntitiesDisplay select {
+            background-color: #333 !important;
+            color: #e0e0e0 !important;
+            border: 1px solid #666 !important;
+        }
+        body.dark-mode #selectedEntitiesDisplay select option {
+            background-color: #333 !important;
+            color: #e0e0e0 !important;
+        }
+        body.dark-mode #selectedEntitiesDisplay button {
+            background-color: #cc3333 !important;
+            color: #e0e0e0 !important;
+            border: none !important;
+        }
+        body.dark-mode #selectedEntitiesDisplay button:hover {
+            background-color: #dd4444 !important;
+        }
+        
+        /* Attribute multi-select dropdown styles */
+        .attr-select-container {
+            position: relative;
+        }
+        .attr-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            align-items: center;
+        }
+        .attr-tag {
+            display: inline-block;
+            background: #4CAF50;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+        .attr-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            z-index: 1000;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 2px;
+        }
+        .attr-option {
+            display: block;
+            padding: 8px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .attr-option:hover {
+            background-color: #f5f5f5;
+        }
+        .attr-option input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        
+        /* Dark mode for attribute selector */
+        body.dark-mode .attr-tags {
+            background: #333 !important;
+            border-color: #666;
+            color: #e0e0e0;
+        }
+        body.dark-mode .attr-tag {
+            background: #2e7d32;
+        }
+        body.dark-mode .attr-dropdown {
+            background: #2a2a2a;
+            border-color: #555;
+        }
+        body.dark-mode .attr-option {
+            color: #e0e0e0;
+            border-bottom-color: #444;
+        }
+        body.dark-mode .attr-option:hover {
+            background-color: #333;
+        }
+        body.dark-mode .attr-option input[type="checkbox"] {
+            cursor: pointer;
         }
         </style>
 """

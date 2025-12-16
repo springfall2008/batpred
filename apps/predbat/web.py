@@ -36,10 +36,11 @@ from web_helper import (
     get_entity_js,
     get_restart_button_js,
     get_browse_css,
+    get_entity_detailed_row_js,
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string, history_attribute, prune_today
-from config import TIME_FORMAT, TIME_FORMAT_DAILY
+from config import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 import urllib.parse
 from component_base import ComponentBase
@@ -565,7 +566,11 @@ class WebInterface(ComponentBase):
 
             for entity_id in entity_list:
                 if hasattr(self.base, "dashboard_values") and self.base.dashboard_values:
-                    entity_friendly_name = self.base.dashboard_values.get(entity_id, {}).get("attributes", {}).get("friendly_name", entity_id)
+                    attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
+                    entity_friendly_name = attributes.get("friendly_name", entity_id)
+                    unit = attributes.get("unit_of_measurement", "")
+                    if unit:
+                        entity_friendly_name = f"{entity_friendly_name} ({unit})"
                 else:
                     entity_friendly_name = entity_id
 
@@ -577,6 +582,9 @@ class WebInterface(ComponentBase):
                 if self.base.user_config_item_enabled(item):
                     entity_id = item.get("entity", "")
                     entity_friendly_name = item.get("friendly_name", "")
+                    unit = item.get("unit", "")
+                    if unit:
+                        entity_friendly_name = f"{entity_friendly_name} ({unit})"
                     if entity_id:
                         entity_data_list.append({"id": entity_id, "name": entity_friendly_name, "group": "Config Settings"})
 
@@ -593,11 +601,113 @@ class WebInterface(ComponentBase):
             self.base.log(f"Error in html_api_get_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
 
+    def is_data_numerical(self, history, attribute=None):
+        """
+        Check if history data is numerical (supports both state and attribute checking)
+        Returns True if at least 10% of values are numeric or boolean
+        """
+        count_nums = 0
+        count_total = 0
+        
+        if history and len(history) >= 1:
+            for item in history[0]:
+                if attribute:
+                    # Check attribute value
+                    attr_value = item.get("attributes", {}).get(attribute, None)
+                    if attr_value is None:
+                        continue
+                    value = str(attr_value)
+                else:
+                    # Check state value
+                    value = item.get("state", None)
+                    if value is None:
+                        continue
+                    value = str(value)
+                
+                if value.lower() in ['on', 'off', 'true', 'false']:
+                    count_nums += 1
+                else:
+                    try:
+                        float(value)
+                        count_nums += 1
+                    except (ValueError, TypeError):
+                        pass
+                count_total += 1
+        
+        if count_total > 0 and (count_nums / count_total) >= 0.1:
+            return True
+        elif count_total == 0:
+            return True
+        return False
+    
+    def get_entity_attributes(self, history):
+        """
+        Scan history data to find all available attributes for an entity
+        Returns list of attribute names suitable for charting
+        """
+        attributes_set = set()
+        metadata_attrs = {"friendly_name", "icon", "device_class", "state_class", "unit_of_measurement"}
+        
+        if history and len(history) >= 1:
+            for item in history[0]:
+                attrs = item.get("attributes", {})
+                for attr_name in attrs.keys():
+                    if attr_name not in metadata_attrs:
+                        attributes_set.add(attr_name)
+        
+        return sorted(list(attributes_set))
+
+    async def get_history_with_now(self, entity_id, days, attribute=None):
+        """
+        Get history for an entity including the current state
+        """
+        history = self.get_history_wrapper(entity_id, days, required=False, tracked=False)
+        current_value = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
+        if current_value is not None:
+            if not history:
+                history = [[]]
+                if attribute:
+                    history[0].append({"attributes": {attribute: current_value}, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
+                else:
+                    history[0].append({"state": current_value, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
+            if attribute:
+                history[0].append({"attributes": {attribute: current_value}, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+            else:
+                history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+        
+        return history
+    
     async def html_entity(self, request):
         """
         Return the Predbat entity as an HTML page
         """
-        entity = request.query.get("entity_id", "")
+        # Support multiple entity_id parameters
+        entity_ids = request.query.getall("entity_id", [])
+        if not entity_ids:
+            # Fallback to single entity_id for backward compatibility
+            single_entity = request.query.get("entity_id", "")
+            entity_ids = [single_entity] if single_entity else []
+
+        # Get attribute selections (parallel to entity_ids)
+        entity_attributes = request.query.getall("entity_attribute", [])
+        
+        # Build entity_selections list pairing entity IDs with attributes
+        # Each entity can have multiple attributes (comma-separated)
+        entity_selections = []
+        for i, entity_id in enumerate(entity_ids):
+            if entity_id:
+                attr_string = entity_attributes[i] if i < len(entity_attributes) else ""
+                # Parse comma-separated attributes
+                if attr_string:
+                    # Keep empty strings (they represent state)
+                    attrs = [a.strip() if a.strip() else None for a in attr_string.split(",")]
+                else:
+                    attrs = [None]  # Default to state
+                
+                # Create one selection per attribute
+                for attr in attrs:
+                    entity_selections.append({"entity_id": entity_id, "attribute": attr})
+
         days = int(request.query.get("days", 7))  # Default to 7 days if not specified
 
         text = self.get_header("Predbat Entity", refresh=60)
@@ -611,36 +721,63 @@ class WebInterface(ComponentBase):
             self.default_page
         )
 
-        attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
-        unit_of_measurement = attributes.get("unit_of_measurement", "")
-        friendly_name = attributes.get("friendly_name", "")
+        # Collect available attributes for all selected entities
+        entity_attributes_map = {}
+        entity_data_fetch = {}
+        for selection in entity_selections:
+            entity_id = selection["entity_id"]
+            attribute = selection["attribute"]
+            # Fetch history to scan for attributes
+            history = await self.get_history_with_now(entity_id, days, attribute=None)
+            entity_data_fetch[entity_id] = history
+            available_attrs = self.get_entity_attributes(history)
+            entity_attributes_map[entity_id] = available_attrs
 
-        # Add entity dropdown selector with search functionality
+        # Build selected entities data structure with attributes grouped by entity
+        entity_attr_groups = {}
+        for selection in entity_selections:
+            entity_id = selection["entity_id"]
+            attr = selection["attribute"] or ""
+            if entity_id not in entity_attr_groups:
+                entity_attr_groups[entity_id] = []
+            if attr not in entity_attr_groups[entity_id]:
+                entity_attr_groups[entity_id].append(attr)
+        
+        # Convert to array format for JavaScript
+        selected_entities_data = [
+            {"entity": entity_id, "attributes": attrs}
+            for entity_id, attrs in entity_attr_groups.items()
+        ]
+        selected_entities_json = json.dumps(selected_entities_data)
+        entity_attributes_json = json.dumps(entity_attributes_map)
+
+        # Add entity multi-select dropdown with checkboxes
         text += """<div style="margin-bottom: 20px;">
-            <form id="entitySelectForm" style="display: flex; align-items: center;">
-                <label for="entitySearchInput" style="margin-right: 10px; font-weight: bold;">Select Entity: </label>
-                <div class="entity-search-container" style="position: relative; flex-grow: 1; max-width: 800px;">
+            <form id="entitySelectForm" method="get" action="./entity">
+                <label for="entitySearchInput" style="margin-right: 10px; font-weight: bold;">Select Entities: </label>
+                <div class="entity-search-container" style="position: relative; max-width: 800px;">
                     <input type="text" id="entitySearchInput" name="entity_search"
-                           placeholder="Type to search entities..."
+                           placeholder="Type to search entities... (click to show all)"
                            style="width: 100%; padding: 8px 30px 8px 8px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box;"
                            autocomplete="off" />
                     <button type="button" id="clearEntitySearch"
                             style="position: absolute; right: 5px; top: 50%; transform: translateY(-50%); background: none; border: none; font-size: 16px; color: #999; cursor: pointer; padding: 2px 5px;"
                             title="Clear search">×</button>
                     <div id="entityDropdown" class="entity-dropdown"
-                         style="position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-top: none; max-height: 300px; overflow-y: auto; z-index: 1000; display: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                         style="position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-top: none; max-height: 400px; overflow-y: auto; z-index: 1000; display: none; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                     </div>
-                    <input type="hidden" id="selectedEntityId" name="entity_id" value="{}" />
                 </div>
+                <div id="selectedEntitiesDisplay" style="margin-top: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; min-height: 40px; background-color: var(--background-secondary, #f9f9f9);"></div>
                 <input type="hidden" name="days" value="{}" />
+                <button type="submit" style="margin-top: 10px; padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update Chart</button>
             </form>
         </div>""".format(
-            entity, days
+            days
         )
 
         # Add days selector
         text += """<div style="margin-bottom: 20px;">
-            <form id="daysSelectForm" style="display: flex; align-items: center;">
+            <form id="daysSelectForm" style="display: flex; align-items: center;" method="get" action="./entity">
                 <label for="daysSelect" style="margin-right: 10px; font-weight: bold;">History Days: </label>
                 <select id="daysSelect" name="days" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd;" onchange="document.getElementById('daysSelectForm').submit();">
         """
@@ -652,68 +789,226 @@ class WebInterface(ComponentBase):
 
         text += """
                 </select>
-                <input type="hidden" name="entity_id" value="{}" />
+        """
+
+        # Add hidden inputs for all selected entities with attributes
+        for entity_id, attrs in entity_attr_groups.items():
+            attr_string = ",".join(attrs)
+            text += f'<input type="hidden" name="entity_id" value="{entity_id}" />'
+            text += f'<input type="hidden" name="entity_attribute" value="{attr_string}" />'
+
+        text += """
             </form>
-        </div>""".format(
-            entity
-        )
+        </div>"""
         # CSS
         text += get_entity_css()
 
-        # Add JavaScript and CSS for entity list and search
-        text += get_entity_js(entity)
+        # Add JavaScript and CSS for entity list and search (with attribute selection support)
+        text += get_entity_js(selected_entities_json, entity_attributes_json)
 
-        if entity:
-            config_text = self.html_config_item_text(entity)
-            if not config_text:
-                text += "<table>\n"
-                text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
-                text += self.html_get_entity_text(entity)
-                text += "</table>\n"
+        if entity_selections:
+            # Group entities by unit of measurement
+            entity_groups = {}
+            for selection in entity_selections:
+                entity_id = selection["entity_id"]
+                attribute = selection["attribute"]
+                
+                attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
+                unit = attributes.get("unit_of_measurement", "") or "(no unit)"
+
+                if unit not in entity_groups:
+                    entity_groups[unit] = []
+
+                entity_groups[unit].append({
+                    "id": entity_id, 
+                    "friendly_name": attributes.get("friendly_name", entity_id), 
+                    "unit": unit,
+                    "attribute": attribute,
+                    "available_attrs": entity_attributes_map.get(entity_id, [])
+                })
+
+            # Display entity details table for first selected entity
+            if len(entity_selections) == 1:
+                entity = entity_selections[0]["entity_id"]
+                config_text = self.html_config_item_text(entity)
+                if not config_text:
+                    text += "<table>\n"
+                    text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
+                    text += self.html_get_entity_text(entity)
+                    text += "</table>\n"
+                else:
+                    text += config_text
+
+                control_html = self.get_entity_control_html(entity, days)
+                if control_html:
+                    text += control_html
             else:
-                text += config_text
+                # Show summary of selected entities
+                text += "<h2>Selected Entities ({})</h2>\n".format(len(entity_selections))
+                text += "<table>\n"
+                text += "<tr><th>Name</th><th>Entity</th><th>Attribute</th><th>Current State</th><th>Unit</th></tr>\n"
+                for selection in entity_selections:
+                    entity_id = selection["entity_id"]
+                    attribute = selection["attribute"]
+                    if entity_id:
+                        text += self.html_get_entity_text(entity_id)
+                text += "</table>\n"
 
-            control_html = self.get_entity_control_html(entity, days)
-            if control_html:
-                text += control_html
-
-            text += "<h2>History Chart</h2>\n"
-            text += '<div id="chart"></div>'
+            # Create separate charts for each unit group
             now_str = self.now_utc.strftime(TIME_FORMAT)
-            history = self.get_history_wrapper(entity, days, required=False, tracked=False)
-            history_chart = history_attribute(history)
-            series_data = []
-            series_data.append({"name": "entity_id", "data": history_chart, "chart_type": "line", "stroke_width": "3", "stroke_curve": "stepline"})
-            text += self.render_chart(series_data, unit_of_measurement, friendly_name, now_str)
 
-            # History table
-            text += "<h2>History</h2>\n"
-            text += "<table>\n"
-            text += "<tr><th>Time</th><th>State</th></tr>\n"
+            for unit, entities in entity_groups.items():
+                text += "<h2>History Chart - {}</h2>\n".format(unit if unit != "(no unit)" else "(no unit)")
+                chart_id = "chart_{}".format(unit.replace("/", "_").replace(" ", "_").replace("(", "").replace(")", ""))
+                text += '<div id="{}"></div>'.format(chart_id)
+                is_numerical = False
 
-            prev_stamp = None
-            if history and len(history) >= 1:
-                history = history[0]
-                if history:
-                    count = 0
-                    history.reverse()
-                    for item in history:
-                        if "last_updated" not in item:
-                            continue
-                        last_updated_time = item["last_updated"]
-                        last_updated_stamp = str2time(last_updated_time)
-                        state = item.get("state", None)
-                        if state is None:
-                            state = "None"
-                        # Only show in 30 minute intervals
-                        if prev_stamp and ((prev_stamp - last_updated_stamp) < timedelta(minutes=30)):
-                            continue
-                        text += "<tr><td>{}</td><td>{}</td></tr>\n".format(last_updated_stamp.strftime(TIME_FORMAT), state)
-                        prev_stamp = last_updated_stamp
-                        count += 1
-            text += "</table>\n"
+                # First, collect all entity data
+                entity_data = []
+                for entity_info in entities:
+                    entity_id = entity_info["id"]
+                    friendly_name = entity_info["friendly_name"]
+                    attribute = entity_info.get("attribute")
+
+                    # Fetch history with attribute if specified
+                    history = entity_data_fetch[entity_id]
+                    
+                    # Check if data is numerical (supports both state and attribute)
+                    is_numerical = self.is_data_numerical(history, attribute=attribute)
+
+                    # Extract chart data using history_attribute
+                    if attribute:
+                        # Chart attribute data
+                        history_chart = history_attribute(history, state_key=attribute, attributes=True, is_numerical=is_numerical)
+                        display_name = f"{friendly_name} ({attribute})"
+                    else:
+                        # Chart state data (default)
+                        history_chart = history_attribute(history, is_numerical=is_numerical)
+                        display_name = friendly_name
+                    
+                    if history_chart:
+                        entity_data.append({"name": display_name, "entity_id": entity_id, "data": history_chart})
+
+                # Prepare data for the appropriate chart type
+                if is_numerical:
+                    series_data = [{"name": item["name"], "data": item["data"], "chart_type": "line", "stroke_width": "2", "stroke_curve": "stepline"} for item in entity_data]
+                    chart_unit = unit if unit != "(no unit)" else ""
+                    chart_title = "{} entities".format(len(entities)) if len(entities) > 1 else entities[0]["friendly_name"]
+                    text += self.render_chart(series_data, chart_unit, chart_title, now_str, tagname=chart_id)
+                else:
+                    # Render timeline chart for non-numerical data
+                    text += self.render_timeline_chart(entity_data, chart_id, days)
+
+            # History table showing all selected entities
+            if entity_selections:
+                text += "<h2>History</h2>\n"
+                text += """
+                <style>
+                .history-row { cursor: pointer; }
+                .history-row:hover { background-color: var(--hover-color, #f5f5f5); }
+                .detail-row { display: none; background-color: var(--detail-bg, #fafafa); }
+                .detail-row td { padding-left: 30px; font-size: 0.9em; color: var(--text-secondary, #666); }
+                .expanded { background-color: var(--expanded-bg, #e8f4f8) !important; }
+                </style>
+                """
+                text += "<table>\n"
+
+                # Build header row
+                text += "<tr><th>Time</th>"
+                for selection in entity_selections:
+                    entity_id = selection["entity_id"]
+                    attribute = selection["attribute"]
+                    attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
+                    friendly_name = attributes.get("friendly_name", entity_id)
+                    unit = attributes.get("unit_of_measurement", "")
+                    unit_display = f" ({unit})" if unit else ""
+                    attr_display = f" - {attribute}" if attribute else ""
+                    text += f"<th>{friendly_name}{attr_display}{unit_display}</th>"
+                text += "</tr>\n"
+
+                # Collect history data for all entities (both 30-min summary and 5-min detail)
+                entity_histories_30min = []
+                entity_histories_5min = []
+                all_timestamps_30min = set()
+
+                for selection in entity_selections:
+                    entity_id = selection["entity_id"]
+                    attribute = selection["attribute"]
+                    history = entity_data_fetch[entity_id]
+                    entity_data_30min = {}
+                    entity_data_5min = {}
+
+                    if history and len(history) >= 1:
+                        history = history[0]
+                        if history:
+                            history.reverse()
+                            for item in history:
+                                if "last_updated" not in item:
+                                    continue
+                                last_updated_time = item["last_updated"]
+                                last_updated_stamp = str2time(last_updated_time)
+                                
+                                # Get state or attribute value
+                                if attribute:
+                                    state = item.get("attributes", {}).get(attribute, None)
+                                else:
+                                    state = item.get("state", None)
+                                
+                                if state is None:
+                                    state = "None"
+
+                                # Store 5-minute interval data
+                                minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
+                                rounded_minutes_5 = (minutes // 5) * 5
+                                rounded_stamp_5 = last_updated_stamp.replace(minute=rounded_minutes_5 % 60, hour=rounded_minutes_5 // 60, second=0, microsecond=0)
+                                entity_data_5min[rounded_stamp_5] = state
+
+                                # Round to 30-minute intervals for summary
+                                rounded_minutes_30 = (minutes // 30) * 30
+                                rounded_stamp_30 = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
+                                entity_data_30min[rounded_stamp_30] = state
+                                all_timestamps_30min.add(rounded_stamp_30)
+
+                    entity_histories_30min.append(entity_data_30min)
+                    entity_histories_5min.append(entity_data_5min)
+
+                # Sort timestamps in reverse chronological order
+                sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
+
+                # Build table rows with expandable detail
+                row_index = 0
+                for timestamp_30 in sorted_timestamps_30min:
+                    # Main 30-minute row (clickable)
+                    text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
+                    text += f"<td>▶ {timestamp_30.strftime(TIME_FORMAT)}</td>"
+                    for entity_data in entity_histories_30min:
+                        state = entity_data.get(timestamp_30, "-")
+                        text += f"<td>{state}</td>"
+                    text += "</tr>\n"
+
+                    # Detail rows (5-minute intervals within this 30-minute period)
+                    # Calculate 5-minute timestamps for this 30-minute period
+                    detail_timestamps = []
+                    for offset in range(0, 30, 5):
+                        detail_time = timestamp_30 + timedelta(minutes=offset)
+                        detail_timestamps.append(detail_time)
+
+                    for detail_time in detail_timestamps:
+                        text += f'<tr class="detail-row" id="detail_{row_index}">'
+                        text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
+                        for entity_data_5min in entity_histories_5min:
+                            state = entity_data_5min.get(detail_time, "-")
+                            text += f"<td>{state}</td>"
+                        text += "</tr>\n"
+
+                    row_index += 1
+
+                text += "</table><br>\n"
+
+                # Add JavaScript for toggling detail rows
+                text += get_entity_detailed_row_js()
         else:
-            text += "<h2>Select an entity</h2>\n"
+            text += "<h2>Select one or more entities</h2>\n"
 
         # Return web response
         text += "</body></html>\n"
@@ -1089,6 +1384,222 @@ var options = {
         text += "chart.render();\n"
         text += "</script>\n"
         return text
+
+    def render_timeline_chart(self, timeline_data, tagname, days):
+        """
+        Render a timeline chart for non-numerical data (like on/off states)
+        Shows horizontal bars with different states as colored segments
+        """
+        # Build the initial template
+        text = """
+<script>
+window.onresize = function() {{ location.reload(); }};
+var width = window.innerWidth;
+var height = window.innerHeight;
+
+// Use full width minus small margins
+width = Math.max(800, width - 100);
+
+// Calculate height based on number of series (compact timeline view)
+var seriesCount = {0};
+var baseHeight = Math.max(200, seriesCount * 50 + 100);
+height = Math.min(400, baseHeight);
+
+var options = {{
+  chart: {{
+    type: 'rangeBar',
+    width: width,
+    height: height,
+    animations: {{
+      enabled: false
+    }},
+    toolbar: {{
+      show: true
+    }}
+  }},
+  plotOptions: {{
+    bar: {{
+      horizontal: true,
+      barHeight: '70%',
+      rangeBarGroupRows: false
+    }}
+  }},
+  series: [
+"""
+
+        # Process each entity's timeline data
+        first_series = True
+        all_states = set()
+
+        for entity_timeline in timeline_data:
+            entity_name = entity_timeline["name"]
+            history_chart = entity_timeline["data"]  # Dict with timestamp keys and state values
+
+            # Convert history data to timeline ranges
+            ranges = []
+            current_state = None
+            start_time = None
+
+            # Sort by timestamp - history_chart is a dict
+            sorted_items = sorted(history_chart.items(), key=lambda x: x[0])
+
+            # Downsample if needed - keep max 288 data points
+            max_points = 288
+            if len(sorted_items) > max_points:
+                # Calculate step size to keep approximately max_points
+                step = len(sorted_items) // max_points
+                if step < 1:
+                    step = 1
+                # Keep every Nth item, but always keep first and last
+                downsampled = [sorted_items[0]]  # Always keep first
+                # Add items at regular intervals
+                for i in range(step, len(sorted_items) - 1, step):
+                    downsampled.append(sorted_items[i])
+                # Always keep last if it's not already included
+                if len(sorted_items) > 1 and sorted_items[-1] not in downsampled:
+                    downsampled.append(sorted_items[-1])
+                sorted_items = downsampled
+
+            last_timestamp_ms = None
+            for timestamp_str, state in sorted_items:
+                state = str(state)
+                all_states.add(state)
+
+                # Convert timestamp string to milliseconds for ApexCharts
+                try:
+                    timestamp_dt = str2time(timestamp_str)
+                    timestamp_ms = int(timestamp_dt.timestamp() * 1000)
+                    last_timestamp_ms = timestamp_ms  # Track the last valid timestamp
+                except (ValueError, TypeError):
+                    continue
+
+                if current_state is None:
+                    # First point
+                    current_state = state
+                    start_time = timestamp_ms
+                elif current_state != state:
+                    # State changed, save previous range and start new one
+                    if start_time is not None:
+                        ranges.append({"x": entity_name, "y": [start_time, timestamp_ms], "fillColor": self.get_state_color(current_state), "label": current_state})
+                    current_state = state
+                    start_time = timestamp_ms
+                # else: state is the same, just extend the current range (don't create duplicate)
+
+            # Add final range
+            if start_time is not None and last_timestamp_ms is not None:
+                ranges.append({"x": entity_name, "y": [start_time, last_timestamp_ms], "fillColor": self.get_state_color(current_state), "label": current_state})
+
+            # Add series for this entity
+            if not first_series:
+                text += ","
+            first_series = False
+
+            text += "\n    {{\n"
+            text += f"      name: '{entity_name}',\n"
+            text += "      data: [\n"
+
+            first_range = True
+            for range_data in ranges:
+                if not first_range:
+                    text += ","
+                first_range = False
+                text += "        {{\n"
+                text += f"          x: '{range_data['x']}',\n"
+                text += f"          y: [{range_data['y'][0]}, {range_data['y'][1]}],\n"
+                text += f"          fillColor: '{range_data['fillColor']}',\n"
+                text += f"          label: '{range_data['label']}'\n"
+                text += "        }}\n"
+
+            text += "      ]\n"
+            text += "    }}\n"
+
+        text += """
+  ],
+  xaxis: {{
+    type: 'datetime',
+    labels: {{
+      datetimeUTC: false
+    }}
+  }},
+  yaxis: {{
+    show: true,
+    labels: {{
+      style: {{
+        fontSize: '14px'
+      }}
+    }}
+  }},
+  tooltip: {{
+    custom: function({{ seriesIndex, dataPointIndex, w }}) {{
+      var data = w.config.series[seriesIndex].data[dataPointIndex];
+      var start = new Date(data.y[0]);
+      var end = new Date(data.y[1]);
+      var duration = (data.y[1] - data.y[0]) / (1000 * 60); // minutes
+
+      return '<div style="padding: 10px;">' +
+        '<strong>' + data.x + '</strong><br/>' +
+        'State: <strong>' + data.label + '</strong><br/>' +
+        'From: ' + start.toLocaleString() + '<br/>' +
+        'To: ' + end.toLocaleString() + '<br/>' +
+        'Duration: ' + duration.toFixed(0) + ' minutes' +
+        '</div>';
+    }}
+  }},
+  legend: {{
+    show: false
+  }},
+  dataLabels: {{
+    enabled: true,
+    formatter: function(val, opts) {{
+      var label = opts.w.config.series[opts.seriesIndex].data[opts.dataPointIndex].label;
+      return label;
+    }},
+    style: {{
+      colors: ['#fff'],
+      fontSize: '14px',
+      fontWeight: 'bold'
+    }}
+  }}
+}};
+
+var chart = new ApexCharts(document.querySelector('#{1}'), options);
+chart.render();
+</script>
+"""
+
+        # Now format the entire string at once
+        return text.format(len(timeline_data), tagname)
+
+    def get_state_color(self, state):
+        """
+        Get a color for a given state value
+        """
+        state_lower = str(state).lower()
+
+        # Common state colors
+        color_map = {
+            "on": "#4CAF50",  # Green
+            "off": "#9E9E9E",  # Gray
+            "true": "#4CAF50",  # Green
+            "false": "#9E9E9E",  # Gray
+            "open": "#FF9800",  # Orange
+            "closed": "#2196F3",  # Blue
+            "active": "#4CAF50",  # Green
+            "inactive": "#9E9E9E",  # Gray
+            "home": "#4CAF50",  # Green
+            "away": "#FF9800",  # Orange
+            "charging": "#FFC107",  # Amber
+            "discharging": "#03A9F4",  # Light Blue
+            "idle": "#9E9E9E",  # Gray
+        }
+
+        if state_lower in color_map:
+            return color_map[state_lower]
+
+        # Generate a color based on hash of the state string
+        hash_val = sum(ord(c) for c in str(state))
+        hue = (hash_val * 137) % 360  # Use golden angle for better distribution
+        return "hsl({}, 65%, 50%)".format(hue)
 
     async def html_api_get_log(self, request):
         """
