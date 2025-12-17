@@ -11,6 +11,35 @@
 from datetime import timedelta
 
 
+def process_octopus_intelligent_slots(my_predbat):
+    """
+    Helper function to simulate the octopus intelligent slot processing from fetch_sensor_data
+    """
+    entity_id_config = my_predbat.get_arg("octopus_intelligent_slot", indirect=False)
+    
+    # Normalize to list
+    if entity_id_config and not isinstance(entity_id_config, list):
+        entity_id_list = [entity_id_config]
+    elif entity_id_config:
+        entity_id_list = entity_id_config
+    else:
+        entity_id_list = []
+    
+    # Process each car
+    for car_n in range(min(len(entity_id_list), my_predbat.num_cars)):
+        entity_id = entity_id_list[car_n]
+        if not entity_id:
+            continue
+        
+        completed = my_predbat.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or []
+        planned = my_predbat.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or []
+        
+        if completed:
+            my_predbat.octopus_slots += completed
+        if planned:
+            my_predbat.octopus_slots += planned
+
+
 def run_multi_car_iog_test(testname, my_predbat):
     """
     Test multi-car Intelligent Octopus Go (IOG) support
@@ -65,29 +94,7 @@ def run_multi_car_iog_test(testname, my_predbat):
     
     # Simulate the octopus intelligent slot processing from fetch_sensor_data
     my_predbat.octopus_slots = []
-    entity_id_config = my_predbat.get_arg("octopus_intelligent_slot", indirect=False)
-    
-    # Normalize to list
-    if entity_id_config and not isinstance(entity_id_config, list):
-        entity_id_list = [entity_id_config]
-    elif entity_id_config:
-        entity_id_list = entity_id_config
-    else:
-        entity_id_list = []
-    
-    # Process each car
-    for car_n in range(min(len(entity_id_list), my_predbat.num_cars)):
-        entity_id = entity_id_list[car_n]
-        if not entity_id:
-            continue
-        
-        completed = my_predbat.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or []
-        planned = my_predbat.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or []
-        
-        if completed:
-            my_predbat.octopus_slots += completed
-        if planned:
-            my_predbat.octopus_slots += planned
+    process_octopus_intelligent_slots(my_predbat)
     
     if len(my_predbat.octopus_slots) != 1:
         print("ERROR: Expected 1 slot for single car, got {}".format(len(my_predbat.octopus_slots)))
@@ -145,29 +152,7 @@ def run_multi_car_iog_test(testname, my_predbat):
     )
     
     # Simulate the octopus intelligent slot processing
-    entity_id_config = my_predbat.get_arg("octopus_intelligent_slot", indirect=False)
-    
-    # Normalize to list
-    if entity_id_config and not isinstance(entity_id_config, list):
-        entity_id_list = [entity_id_config]
-    elif entity_id_config:
-        entity_id_list = entity_id_config
-    else:
-        entity_id_list = []
-    
-    # Process each car
-    for car_n in range(min(len(entity_id_list), my_predbat.num_cars)):
-        entity_id = entity_id_list[car_n]
-        if not entity_id:
-            continue
-        
-        completed = my_predbat.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or []
-        planned = my_predbat.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or []
-        
-        if completed:
-            my_predbat.octopus_slots += completed
-        if planned:
-            my_predbat.octopus_slots += planned
+    process_octopus_intelligent_slots(my_predbat)
     
     # Should have slots from both cars merged
     if len(my_predbat.octopus_slots) != 2:
@@ -184,29 +169,7 @@ def run_multi_car_iog_test(testname, my_predbat):
     ]
     
     # Simulate the octopus intelligent slot processing
-    entity_id_config = my_predbat.get_arg("octopus_intelligent_slot", indirect=False)
-    
-    # Normalize to list
-    if entity_id_config and not isinstance(entity_id_config, list):
-        entity_id_list = [entity_id_config]
-    elif entity_id_config:
-        entity_id_list = entity_id_config
-    else:
-        entity_id_list = []
-    
-    # Process each car
-    for car_n in range(min(len(entity_id_list), my_predbat.num_cars)):
-        entity_id = entity_id_list[car_n]
-        if not entity_id:
-            continue
-        
-        completed = my_predbat.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or []
-        planned = my_predbat.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or []
-        
-        if completed:
-            my_predbat.octopus_slots += completed
-        if planned:
-            my_predbat.octopus_slots += planned
+    process_octopus_intelligent_slots(my_predbat)
     
     # Should have slots from first car only
     if len(my_predbat.octopus_slots) != 1:
