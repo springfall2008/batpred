@@ -247,9 +247,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.log("Warn: unit_conversion - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
         return state
 
-    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None):
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         """
         Wrapper function to get state from HA
+
+        entity_id = The entity id to get
+        default = Default value if not found
+        attribute = Specific attribute to get, if not set defaults to the current state
+        refresh = Force a refresh of the state from HA
+        required_unit = Convert the state to this unit if different
+        raw = Fetch the raw database information which includes state and all the attributes
         """
         if not self.ha_interface:
             self.log("Error: get_state_wrapper - No HA interface available")
@@ -259,8 +266,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         if entity_id and "$" in entity_id:
             entity_id, attribute = entity_id.split("$")
 
-        state = self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
-        state = self.unit_conversion(entity_id, state, None, required_unit)
+        state = self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh, raw=raw)
+        if not raw and required_unit:
+            state = self.unit_conversion(entity_id, state, None, required_unit)
 
         return state
 

@@ -640,23 +640,6 @@ class WebInterface(ComponentBase):
             return True
         return False
 
-    def get_entity_attributes(self, history):
-        """
-        Scan history data to find all available attributes for an entity
-        Returns list of attribute names suitable for charting
-        """
-        attributes_set = set()
-        metadata_attrs = {"friendly_name", "icon", "device_class", "state_class", "unit_of_measurement"}
-
-        if history and len(history) >= 1:
-            for item in history[0]:
-                attrs = item.get("attributes", {})
-                for attr_name in attrs.keys():
-                    if attr_name not in metadata_attrs:
-                        attributes_set.add(attr_name)
-
-        return sorted(list(attributes_set))
-
     async def get_history_with_now(self, entity_id, days, attribute=None):
         """
         Get history for an entity including the current state
@@ -676,6 +659,21 @@ class WebInterface(ComponentBase):
                 history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
 
         return history
+
+    def get_entity_attributes(self, entity_id):
+        """
+        get_entity_attributes returns a list of attribute names for the given entity_id
+        """
+        state_info = self.get_state_wrapper(entity_id=entity_id, raw=True)
+        if state_info and ("attributes" in state_info) and isinstance(state_info["attributes"], dict):
+            attr_list = sorted(list(state_info["attributes"].keys()))
+            for attr in ["friendly_name", "icon", "unit_of_measurement", "device_class", "state_class"]:
+                try:
+                    attr_list.remove(attr)
+                except ValueError:
+                    pass
+            return attr_list
+        return []
 
     async def html_entity(self, request):
         """
@@ -727,10 +725,9 @@ class WebInterface(ComponentBase):
         for selection in entity_selections:
             entity_id = selection["entity_id"]
             attribute = selection["attribute"]
-            # Fetch history to scan for attributes
             history = await self.get_history_with_now(entity_id, days, attribute=None)
             entity_data_fetch[entity_id] = history
-            available_attrs = self.get_entity_attributes(history)
+            available_attrs = self.get_entity_attributes(entity_id)
             entity_attributes_map[entity_id] = available_attrs
 
         # Build selected entities data structure with attributes grouped by entity

@@ -475,7 +475,7 @@ class HAInterface(ComponentBase):
 
         self.log("Info: Web Socket stopped")
 
-    def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
+    def get_state(self, entity_id=None, default=None, attribute=None, refresh=False, raw=False):
         """
         Get state from cached HA data
         """
@@ -489,7 +489,9 @@ class HAInterface(ComponentBase):
                 # Only refresh from DB/HA if we are not the primary data source
                 self.update_state(entity_id)
             state_info = self.state_data[entity_id.lower()]
-            if attribute:
+            if raw:
+                return state_info
+            elif attribute:
                 if attribute in state_info["attributes"]:
                     return state_info["attributes"][attribute]
                 else:

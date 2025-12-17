@@ -234,8 +234,8 @@ class ComponentBase(ABC):
     def get_history_wrapper(self, entity_id, days=30, required=True, tracked=True):
         return self.base.get_history_wrapper(entity_id, days=days, required=required, tracked=tracked)
 
-    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None):
-        return self.base.get_state_wrapper(entity_id, default=default, attribute=attribute, refresh=refresh, required_unit=required_unit)
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+        return self.base.get_state_wrapper(entity_id, default=default, attribute=attribute, refresh=refresh, required_unit=required_unit, raw=raw)
 
     def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
         return self.base.set_state_wrapper(entity_id, state, attributes=attributes, required_unit=required_unit)

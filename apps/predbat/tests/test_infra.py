@@ -59,12 +59,14 @@ class TestHAInterface:
             history.append({"state": state, "last_changed": point})
         self.history = history
 
-    def get_state(self, entity_id, default=None, attribute=None, refresh=False):
+    def get_state(self, entity_id, default=None, attribute=None, refresh=False, raw=False):
         if not entity_id:
             return {}
         elif entity_id in self.dummy_items:
             result = self.dummy_items[entity_id]
-            if isinstance(result, dict):
+            if raw:
+                return result
+            elif isinstance(result, dict):
                 if attribute:
                     result = result.get(attribute, "")
                 else:

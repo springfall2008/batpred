@@ -1081,3 +1081,272 @@ async def test_async_find_tariffs(my_predbat):
         print("\n**** All async_find_tariffs tests PASSED ****")
 
     return failed
+
+
+def test_edf_freephase_dynamic_url_wrapper(my_predbat):
+    """
+    Wrapper to run the async test function for EDF FreePhase Dynamic tariff URL
+    """
+    return asyncio.run(test_edf_freephase_dynamic_url(my_predbat))
+
+
+async def test_edf_freephase_dynamic_url(my_predbat):
+    """
+    Test the async_download_octopus_url and download_octopus_rates_func with EDF FreePhase Dynamic tariff data
+
+    Tests:
+    - Test 1: Verify EDF API response structure decodes correctly (async_download_octopus_url)
+    - Test 2: Verify pagination handling for EDF API (async_download_octopus_url)
+    - Test 3: Verify rate data structure matches expected format (async_download_octopus_url)
+    - Test 4: Verify download_octopus_rates_func with EDF data (single page)
+    - Test 5: Verify download_octopus_rates_func with EDF data (pagination)
+    """
+    print("**** Running EDF FreePhase Dynamic URL tests ****")
+    failed = False
+
+    # Create API instance
+    api = OctopusAPI(my_predbat, key="", account_id="", automatic=False)
+
+    # Test 1: Verify EDF API response structure decodes correctly
+    print("\n*** Test 1: Verify EDF API response decodes correctly ***")
+    with patch("requests.get") as mock_get:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        # Simulating actual EDF API response structure
+        mock_response.json.return_value = {
+            "count": 10126,
+            "next": None,
+            "previous": None,
+            "results": [
+                {"value_exc_vat": 15.775, "value_inc_vat": 16.56375, "valid_from": "2025-12-17T22:30:00Z", "valid_to": "2025-12-17T23:00:00Z", "payment_method": "DIRECT_DEBIT"},
+                {"value_exc_vat": 15.775, "value_inc_vat": 16.56375, "valid_from": "2025-12-17T22:00:00Z", "valid_to": "2025-12-17T22:30:00Z", "payment_method": "DIRECT_DEBIT"},
+                {"value_exc_vat": 16.025, "value_inc_vat": 16.82625, "valid_from": "2025-12-17T21:30:00Z", "valid_to": "2025-12-17T22:00:00Z", "payment_method": "DIRECT_DEBIT"},
+            ],
+        }
+
+        mock_get.return_value = mock_response
+
+        result = await api.async_download_octopus_url("https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates")
+
+        if len(result) != 3:
+            print("ERROR: Expected 3 results, got {}".format(len(result)))
+            print(result)
+            failed = True
+        elif not all("value_inc_vat" in r for r in result):
+            print("ERROR: Missing 'value_inc_vat' in results")
+            failed = True
+        elif not all("valid_from" in r for r in result):
+            print("ERROR: Missing 'valid_from' in results")
+            failed = True
+        elif not all("payment_method" in r for r in result):
+            print("ERROR: Missing 'payment_method' in results")
+            failed = True
+        else:
+            print("PASS: EDF API response decoded correctly with 3 results")
+
+    # Test 2: Verify pagination handling for EDF API
+    print("\n*** Test 2: Verify pagination handling for EDF API ***")
+    with patch("requests.get") as mock_get:
+        # First page
+        mock_response_page1 = Mock()
+        mock_response_page1.status_code = 200
+        mock_response_page1.json.return_value = {
+            "count": 200,
+            "next": "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates/?page=2",
+            "previous": None,
+            "results": [
+                {"value_exc_vat": 15.0, "value_inc_vat": 15.75, "valid_from": "2025-12-17T23:00:00Z", "valid_to": "2025-12-17T23:30:00Z", "payment_method": "DIRECT_DEBIT"},
+                {"value_exc_vat": 15.5, "value_inc_vat": 16.275, "valid_from": "2025-12-17T22:30:00Z", "valid_to": "2025-12-17T23:00:00Z", "payment_method": "DIRECT_DEBIT"},
+            ],
+        }
+
+        # Second page
+        mock_response_page2 = Mock()
+        mock_response_page2.status_code = 200
+        mock_response_page2.json.return_value = {
+            "count": 200,
+            "next": None,
+            "previous": "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates/?page=1",
+            "results": [
+                {"value_exc_vat": 16.0, "value_inc_vat": 16.8, "valid_from": "2025-12-17T22:00:00Z", "valid_to": "2025-12-17T22:30:00Z", "payment_method": "DIRECT_DEBIT"},
+            ],
+        }
+
+        # Configure mock to return different responses
+        mock_get.side_effect = [mock_response_page1, mock_response_page2]
+
+        result = await api.async_download_octopus_url("https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates")
+
+        if len(result) != 3:
+            print("ERROR: Expected 3 results from 2 pages, got {}".format(len(result)))
+            failed = True
+        else:
+            print("PASS: EDF API pagination handled correctly (3 results from 2 pages)")
+
+    # Test 3: Verify rate data structure matches expected format
+    print("\n*** Test 3: Verify rate data structure matches expected format ***")
+    with patch("requests.get") as mock_get:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "count": 1,
+            "next": None,
+            "previous": None,
+            "results": [
+                {
+                    "value_exc_vat": 15.775,
+                    "value_inc_vat": 16.56375,
+                    "valid_from": "2025-12-17T22:30:00Z",
+                    "valid_to": "2025-12-17T23:00:00Z",
+                    "payment_method": "DIRECT_DEBIT",
+                }
+            ],
+        }
+        mock_get.return_value = mock_response
+
+        result = await api.async_download_octopus_url("https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates")
+
+        if len(result) != 1:
+            print("ERROR: Expected 1 result, got {}".format(len(result)))
+            failed = True
+        else:
+            rate = result[0]
+            # Verify all expected fields are present
+            expected_fields = ["value_exc_vat", "value_inc_vat", "valid_from", "valid_to", "payment_method"]
+            missing_fields = [f for f in expected_fields if f not in rate]
+            if missing_fields:
+                print("ERROR: Missing expected fields: {}".format(missing_fields))
+                failed = True
+            # Verify values match expected types/values
+            elif rate["value_exc_vat"] != 15.775:
+                print("ERROR: Expected value_exc_vat 15.775, got {}".format(rate["value_exc_vat"]))
+                failed = True
+            elif rate["value_inc_vat"] != 16.56375:
+                print("ERROR: Expected value_inc_vat 16.56375, got {}".format(rate["value_inc_vat"]))
+                failed = True
+            elif rate["payment_method"] != "DIRECT_DEBIT":
+                print("ERROR: Expected payment_method 'DIRECT_DEBIT', got {}".format(rate["payment_method"]))
+                failed = True
+            else:
+                print("PASS: Rate data structure matches expected format with correct values")
+
+    # Test 4: Verify download_octopus_rates_func with EDF data (single page)
+    print("\n*** Test 4: Verify download_octopus_rates_func with EDF data (single page) ***")
+    my_predbat.debug_enable = False
+    my_predbat.failures_total = 0
+    test_url = "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates"
+
+    with patch("requests.get") as mock_get:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "count": 3,
+            "next": None,
+            "previous": None,
+            "results": [
+                {"value_exc_vat": 15.775, "value_inc_vat": 16.56375, "valid_from": "2025-12-17T22:30:00Z", "valid_to": "2025-12-17T23:00:00Z", "payment_method": "DIRECT_DEBIT"},
+                {"value_exc_vat": 15.775, "value_inc_vat": 16.56375, "valid_from": "2025-12-17T22:00:00Z", "valid_to": "2025-12-17T22:30:00Z", "payment_method": "DIRECT_DEBIT"},
+                {"value_exc_vat": 16.025, "value_inc_vat": 16.82625, "valid_from": "2025-12-17T21:30:00Z", "valid_to": "2025-12-17T22:00:00Z", "payment_method": "DIRECT_DEBIT"},
+            ],
+        }
+        mock_get.return_value = mock_response
+
+        result = my_predbat.download_octopus_rates_func(test_url)
+
+        # Result should be a dict mapping minutes to rates
+        # Times: 21:30-22:00 (1290-1319 min) = 16.8263 (rounded to 4dp), 22:00-22:30 (1320-1349 min) = 16.5637, 22:30-23:00 (1350-1379 min) = 16.5637
+        # Note: minute_data uses dp4() which rounds to 4 decimal places using Python's banker's rounding
+        if not isinstance(result, dict):
+            print("ERROR: Expected dict result from download_octopus_rates_func, got {}".format(type(result)))
+            failed = True
+        elif len(result) == 0:
+            print("ERROR: Expected non-empty result from download_octopus_rates_func")
+            failed = True
+        # Check specific minute values to verify correct rate mapping
+        elif result.get(1290) != 16.8263:  # 21:30 start (16.82625 rounded to 4dp)
+            print("ERROR: Expected rate 16.8263 at minute 1290 (21:30), got {}".format(result.get(1290)))
+            failed = True
+        elif result.get(1319) != 16.8263:  # 21:30 slot last minute
+            print("ERROR: Expected rate 16.8263 at minute 1319 (21:59), got {}".format(result.get(1319)))
+            failed = True
+        elif result.get(1320) != 16.5637:  # 22:00 start (16.56375 rounded to 4dp = 16.5637 banker's rounding)
+            print("ERROR: Expected rate 16.5637 at minute 1320 (22:00), got {}".format(result.get(1320)))
+            failed = True
+        elif result.get(1350) != 16.5637:  # 22:30 start
+            print("ERROR: Expected rate 16.5637 at minute 1350 (22:30), got {}".format(result.get(1350)))
+            failed = True
+        elif result.get(1379) != 16.5637:  # 22:30 slot last minute
+            print("ERROR: Expected rate 16.5637 at minute 1379 (22:59), got {}".format(result.get(1379)))
+            failed = True
+        else:
+            print("PASS: download_octopus_rates_func returned correct rate values at expected minutes")
+            print("      21:30-22:00 = 16.8263, 22:00-22:30 = 16.5637, 22:30-23:00 = 16.5637")
+
+    # Test 5: Verify download_octopus_rates_func with EDF data (pagination)
+    print("\n*** Test 5: Verify download_octopus_rates_func with EDF data (pagination) ***")
+    my_predbat.debug_enable = False
+    my_predbat.failures_total = 0
+
+    with patch("requests.get") as mock_get:
+        # First page
+        mock_response_page1 = Mock()
+        mock_response_page1.status_code = 200
+        mock_response_page1.json.return_value = {
+            "count": 200,
+            "next": "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates/?page=2",
+            "previous": None,
+            "results": [
+                {"value_exc_vat": 15.0, "value_inc_vat": 15.75, "valid_from": "2025-12-17T23:00:00Z", "valid_to": "2025-12-17T23:30:00Z", "payment_method": "DIRECT_DEBIT"},
+                {"value_exc_vat": 15.5, "value_inc_vat": 16.275, "valid_from": "2025-12-17T22:30:00Z", "valid_to": "2025-12-17T23:00:00Z", "payment_method": "DIRECT_DEBIT"},
+            ],
+        }
+
+        # Second page
+        mock_response_page2 = Mock()
+        mock_response_page2.status_code = 200
+        mock_response_page2.json.return_value = {
+            "count": 200,
+            "next": None,
+            "previous": "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates/?page=1",
+            "results": [
+                {"value_exc_vat": 16.0, "value_inc_vat": 16.8, "valid_from": "2025-12-17T22:00:00Z", "valid_to": "2025-12-17T22:30:00Z", "payment_method": "DIRECT_DEBIT"},
+            ],
+        }
+
+        # Configure mock to return different responses
+        mock_get.side_effect = [mock_response_page1, mock_response_page2]
+
+        result = my_predbat.download_octopus_rates_func(test_url)
+
+        # Result should have combined data from both pages
+        # Times: 22:00-22:30 (1320-1349 min) = 16.8, 22:30-23:00 (1350-1379 min) = 16.275, 23:00-23:30 (1380-1409 min) = 15.75
+        if not isinstance(result, dict):
+            print("ERROR: Expected dict result from download_octopus_rates_func with pagination, got {}".format(type(result)))
+            failed = True
+        elif len(result) == 0:
+            print("ERROR: Expected non-empty result from download_octopus_rates_func with pagination")
+            failed = True
+        # Check specific minute values across both pages
+        elif result.get(1320) != 16.8:  # 22:00 start (page 2)
+            print("ERROR: Expected rate 16.8 at minute 1320 (22:00), got {}".format(result.get(1320)))
+            failed = True
+        elif result.get(1349) != 16.8:  # 22:00 slot last minute (page 2)
+            print("ERROR: Expected rate 16.8 at minute 1349 (22:29), got {}".format(result.get(1349)))
+            failed = True
+        elif result.get(1350) != 16.275:  # 22:30 start (page 1)
+            print("ERROR: Expected rate 16.275 at minute 1350 (22:30), got {}".format(result.get(1350)))
+            failed = True
+        elif result.get(1380) != 15.75:  # 23:00 start (page 1)
+            print("ERROR: Expected rate 15.75 at minute 1380 (23:00), got {}".format(result.get(1380)))
+            failed = True
+        elif result.get(1409) != 15.75:  # 23:00 slot last minute (page 1)
+            print("ERROR: Expected rate 15.75 at minute 1409 (23:29), got {}".format(result.get(1409)))
+            failed = True
+        else:
+            print("PASS: download_octopus_rates_func handled pagination correctly with correct rate values")
+            print("      22:00-22:30 = 16.8, 22:30-23:00 = 16.275, 23:00-23:30 = 15.75")
+
+    if not failed:
+        print("\n**** All EDF FreePhase Dynamic URL tests PASSED ****")
+
+    return failed
