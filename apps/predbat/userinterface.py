@@ -1156,7 +1156,8 @@ class UserInterface:
         else:
             if value not in values_list:
                 values_list.append(value)
-                exclude_list.append(value)
+            # Always add to exclude list so it's removed from other conflicting manual dropdowns
+            exclude_list.append(value)
         item_value = ",".join(values_list)
         if item_value:
             item_value = "+" + item_value
@@ -1329,7 +1330,8 @@ class UserInterface:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
 
-                if (minutes - minutes_now) < manual_rate_max:
+                # Only include future times within the manual_rate_max window
+                if minutes >= minutes_now and (minutes - minutes_now) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
                     for minute in range(minutes, minutes + plan_interval):
                         rate_overrides_minutes[minute] = rate_value
@@ -1399,7 +1401,8 @@ class UserInterface:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
 
-                if (minutes - minutes_now) < manual_time_max:
+                # Only include future times within the manual_time_max window and avoid duplicates
+                if minutes >= minutes_now and (minutes - minutes_now) < manual_time_max and minutes not in time_overrides:
                     time_overrides.append(minutes)
 
         # Reconstruct the list in order based on minutes
