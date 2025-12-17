@@ -70,9 +70,9 @@ pred_bat:
   battery_min_soc:
     - 0
   reserve:
-  -  number.sigen_plant_ess_discharge_cut_off_state_of_charge
+    - number.sigen_plant_ess_discharge_cut_off_state_of_charge
   charge_limit:
-  -  number.sigen_plant_ess_charge_cut_off_state_of_charge
+    - number.sigen_plant_ess_charge_cut_off_state_of_charge
 
   # Services to control the inverter
   charge_start_service:

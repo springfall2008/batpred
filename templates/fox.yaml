@@ -25,11 +25,6 @@ pred_bat:
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
 
-  # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
-  # if it doesn't work or if you have more than one inverter you will need to list both
-  #geserial: 're:sensor.givtcp_(.+)_soc_kwh'
-  #geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
-
   # Sets the maximum period of zero load before the gap is filled, default 30 minutes
   # To disable set it to 1440
   load_filter_threshold: 30
@@ -43,13 +38,14 @@ pred_bat:
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
   load_today:
-    - sensor.load_energy_today
+    - sensor.foxess_load_energy_today
   import_today:
-    - sensor.grid_consumption_energy_today
+    - sensor.foxess_grid_consumption_energy_today
   export_today:
-    - sensor.feed_in_energy_today
+    - sensor.foxess_feed_in_energy_today
+  # I'm getting pv_total by monitoring the feed from my solar panels into my consumer unit with a ESPHome flashed Emporia Vue 2
   pv_today:
-    - sensor.solar_energy_today
+    - sensor.solar_daily_total
 
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
@@ -57,93 +53,139 @@ pred_bat:
   #load_forecast:
   #  - predheat.heat_energy$external
   #
-  # If you enable ge_cloud_data then the load/import and export data will be fetches from the GE cloud instead of from GivTCP sensors
-  # this is usually less efficient and of course prone to internet downtime, but could be useful if you lost your GivTCP data
-  # Set the serial to the inverter serial to pull the data from and the key to your API key
-  # When this is set load_today, import_today and export_today are not used
-  #
-  #ge_cloud_data: False
-  #ge_cloud_serial: '{geserial}'
-  #ge_cloud_key: 'xxxx'
-  #
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 1
   inverter_type: FoxESS
 
+  # Predbat statuses versus Fox work-modes
+  #
+  # PREDBAT           FOX
+  # Demand (Eco)      Self-Use
+  # This is the default, the load will be covered by solar and/or battery. Excess solar will
+  # charge the battery or be exported if the battery is full. This is described as 'Eco' Mode
+  # for GivEnergy inverters but other inverters use different terminology.
+  #
+  # Charging          Force Charge
+  # The battery charges from the grid and the grid also covers any load. Solar power will
+  # also be used to charge the battery.
+  #
+  # Freeze charging   Back-up (with reserve soc set to number.min_soc_on_grid)
+  # The battery is charging but the current battery level (SoC) is frozen (held). Think of
+  # it as a charge to the current battery level. The grid or solar covers any house load. 
+  # If there is a shortfall of Solar power to meet house load, the excess house load is met
+  # from grid import, but if there is excess Solar power above the house load, the excess 
+  # solar will be used to charge the battery,
+  #
+  # Hold charging     Back-up (with reserve soc set to number.min_soc_on_grid)
+  # A type of charge where the target SoC % is the same as the current SoC %, effectively the
+  # same as a charge freeze (but without being explicitly selected).
+  #
+  # No Charge         Self use
+  # A charge where the target SoC % is lower than the current battery SoC level so there will
+  # be no charging unless the usage is unexpectedly high.
+  #
+  # Exporting         Force Discharge 
+  # The battery is being force-discharged. The house load will be covered by the battery and
+  # any excess is exported to the grid. Any solar generated will be exported.
+  #
+  # Freeze exporting  Feed-in First 
+  # The battery is in demand mode, but with charging disabled. The battery or solar covers the
+  # house load. As charging is disabled, if there is excess solar generated, the current SoC
+  # level will be held and the excess solar will be exported. If there is a shortfall of
+  # generated solar power to meet the house load, the battery will discharge to meet the extra
+  # load.
+  #
+  # Hold exporting    Self use
+  # The plan was to force export but the minimum battery level was reached and thus the battery
+  # is kept in Demand mode. If the battery level again gets above the threshold it will be changed
+  # back to Export mode.
+  #
+  # Calibration       Needs an automation
+  # Fox inverters do not automatically calibrate, so to do this an automation is needed if required.
+  # At least once every 7 days the battery should hit the 100% SoC mark.  This can be done by setting
+  # the predbat min_keep, etc as needed if too much time has passed. 
+  #
+  # Error
+  # If there is a configuration error or other problem, you should check the Predbat log file for more
+  # details.
+
   # Services to control charging/discharging
+  # charge_start_service - Should be set to a service that is called when charging starts
   charge_start_service:
     service: select.select_option
-    entity_id: select.work_mode
+    entity_id: select.foxess_work_mode
     option: "Force Charge"
-  charge_stop_service:
-    service: select.select_option
-    entity_id: select.work_mode
-    option: "Self Use"
-  discharge_start_service:
-    service: select.select_option
-    entity_id: select.work_mode
-    option: "Force Discharge"
-  discharge_stop_service:
-    service: select.select_option
-    entity_id: select.work_mode
-    option: "Self Use"
-  discharge_freeze_service:
-    service: select.select_option
-    entity_id: select.work_mode
-    option: "Feed-in First"
+
+  # charge_freeze_service - If your inverter supports charge freeze set to a service that starts this mode
+  # The Back-up work mode does not exist on older firmware versions
   charge_freeze_service:
     service: select.select_option
-    entity_id: select.work_mode
+    entity_id: select.foxess_work_mode
     option: "Back-up"
+
+ # charge_stop_service - Should be set to a service that is called when charging/charge freeze stops
+  charge_stop_service:
+    service: select.select_option
+    entity_id: select.foxess_work_mode
+    option: "Self Use"
+
+  # discharge_start_service - Should be set to a service that is called when force export (discharge) starts
+  discharge_start_service:
+    service: select.select_option
+    entity_id: select.foxess_work_mode
+    option: "Force Discharge"
+
+  # discharge_stop_service - Should be set to a service that is called when export/export freeze stops
+  discharge_stop_service:
+    service: select.select_option
+    entity_id: select.foxess_work_mode
+    option: "Self Use"
+#    option: "Feed-in First"
+# Should be   option: "Self Use" but I like FiF better ###
+
+  # discharge_freeze_service - If your inverter supports export freeze set to a service that starts this mode
+  discharge_freeze_service:
+    service: select.select_option
+    entity_id: select.foxess_work_mode
+    option: "Feed-in First"
+
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   #balance_inverters_seconds: 60
   #
 
-  # Set the Inverter controls (one for each inverter)
+  # charge_rate and discharge_rate come from the https://github.com/nathanmarlor/foxess_modbus/ integration, they are in kW but works without problems.
   charge_rate:
-    - input_number.force_charge_power_w
+    - number.foxess_force_charge_power
   discharge_rate:
-    - input_number.force_discharge_power_w
+    - number.foxess_force_discharge_power
   battery_power:
-    - sensor.invbatpower
+    - sensor.foxess_invbatpower
   pv_power:
-    - sensor.pv_power_w
+    - sensor.circuit_8_power
   load_power:
-    - sensor.load_power
+    - sensor.foxess_load_power
+  # I'm getting grid_power by monitoring the mains feed into my consumer unit with a ESPHome flashed Emporia Vue 2
   grid_power:
-    - sensor.grid_ct
-  soc_kw:
-    - sensor.bms_actual_kwh_remaining
+    - sensor.mains_power
+  grid_power_invert:
+    - True
   soc_percent:
-    - sensor.battery_soc
+    - sensor.foxess_battery_soc
+  # I'm setting soc_max manually via a number helper to be the maximum battery capacity in kWh
   soc_max:
-    - 8.29
+    - input_number.soc_max
+  # I'm getting this from a template sensor (kWh, Stored Energy, Measurement to get statistics for the battery curve) off {{ ((float(states.sensor.foxess_battery_soc.state)/100) *float(states.sensor.foxess_bms_kwh_remaining.state)) }}
+  soc_kw:
+    - sensor.foxess_soc_kwh_remaining
   reserve:
-    - number.min_soc_on_grid
+    - number.foxess_min_soc_on_grid
+  # I'm setting battery_min_soc manually via a number helper
   battery_min_soc:
-    - number.min_soc
-  #reserve:
-  #  - number.givtcp_{geserial}_battery_power_reserve
-  #inverter_mode:
-  #  - select.givtcp_{geserial}_mode
-  #inverter_time:
-  #  - sensor.givtcp_{geserial}_invertor_time
-  #charge_start_time:
-  #  - select.givtcp_{geserial}_charge_start_time_slot_1
-  #charge_end_time:
-  #  - select.givtcp_{geserial}_charge_end_time_slot_1
-  #charge_limit:
-  #  - number.givtcp_{geserial}_target_soc
-  #scheduled_charge_enable:
-  #  - switch.givtcp_{geserial}_enable_charge_schedule
-  #scheduled_discharge_enable:
-  #  - switch.givtcp_{geserial}_enable_discharge_schedule
-  #discharge_start_time:
-  #  - select.givtcp_{geserial}_discharge_start_time_slot_1
-  #discharge_end_time:
-  #  - select.givtcp_{geserial}_discharge_end_time_slot_1
+    - input_number.battery_min_soc
+  battery_temperature:
+    - sensor.foxess_battery_temp
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
@@ -152,7 +194,7 @@ pred_bat:
 
   # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
-    - 4200
+    - 14112
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
@@ -166,19 +208,18 @@ pred_bat:
   #  - 200
 
   inverter_limit_charge:
-   - 4200
+   - 5000
 
   inverter_limit_discharge:
-   - 4000
+   - 5000
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
   #inverter_reserve_max : 98
 
   # Some batteries tail off their charge rate at high soc%
-  # enter the charging curve here as a % of the max charge rate for each soc percentage.
+  # enter the charging curve here as a % of the max charge rate for each soc percentage or set to 'auto' for predbat to determine the curves.
   # the default is 1.0 (full power)
-  # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
   #battery_charge_power_curve:
   #  100 : 0.15
   #  99 : 0.15
