@@ -52,7 +52,7 @@ from tests.test_previous_days_modal import test_previous_days_modal_filter
 from tests.test_octopus_free import test_octopus_free
 from tests.test_prune_today import test_prune_today
 from tests.test_cumulative import test_get_now_from_cumulative
-from tests.test_octopus_url import test_download_octopus_url_wrapper, test_async_get_day_night_rates_wrapper, test_get_saving_session_data, test_async_intelligent_update_sensor_wrapper, test_async_find_tariffs_wrapper
+from tests.test_octopus_url import test_download_octopus_url_wrapper, test_async_get_day_night_rates_wrapper, test_get_saving_session_data, test_async_intelligent_update_sensor_wrapper, test_async_find_tariffs_wrapper, test_edf_freephase_dynamic_url_wrapper
 from tests.test_octopus_cache import test_octopus_cache_wrapper
 from tests.test_octopus_events import test_octopus_events_wrapper
 from tests.test_octopus_refresh_token import test_octopus_refresh_token_wrapper
@@ -153,6 +153,7 @@ def main():
         ("saving_sessions", test_get_saving_session_data, "Octopus saving sessions tests", False),
         ("intelligent_dispatch", test_async_intelligent_update_sensor_wrapper, "Octopus intelligent dispatch tests", False),
         ("find_tariffs", test_async_find_tariffs_wrapper, "Octopus find tariffs tests", False),
+        ("edf_freephase_dynamic", test_edf_freephase_dynamic_url_wrapper, "EDF FreePhase Dynamic tariff tests", False),
         ("octopus_cache", test_octopus_cache_wrapper, "Octopus cache save/load tests", False),
         ("octopus_events", test_octopus_events_wrapper, "Octopus event handler tests", False),
         ("octopus_refresh_token", test_octopus_refresh_token_wrapper, "Octopus refresh token tests", False),
