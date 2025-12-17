@@ -51,7 +51,6 @@ coverage/venv/
 .venv/
 venv/
 coverage/temp_octopus/
-.coverage
 .pytest_cache/
 .tox/
 .nox/
