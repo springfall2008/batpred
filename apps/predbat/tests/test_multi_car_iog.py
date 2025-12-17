@@ -8,8 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime, timedelta
-from tests.test_infra import reset_rates
+from datetime import timedelta
 
 
 def run_multi_car_iog_test(testname, my_predbat):

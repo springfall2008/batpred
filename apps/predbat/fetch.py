@@ -616,7 +616,6 @@ class Fetch:
 
         # Get octopus intelligent slot configuration - could be single value or list for multiple cars
         entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
-        ohme_automatic = self.get_arg("ohme_automatic", False)
 
         # Normalize to list for multi-car support
         if entity_id_config and not isinstance(entity_id_config, list):
