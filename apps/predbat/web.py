@@ -725,7 +725,6 @@ class WebInterface(ComponentBase):
         for selection in entity_selections:
             entity_id = selection["entity_id"]
             attribute = selection["attribute"]
-            # Fetch history to scan for attributes
             history = await self.get_history_with_now(entity_id, days, attribute=None)
             entity_data_fetch[entity_id] = history
             available_attrs = self.get_entity_attributes(entity_id)
