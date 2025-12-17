@@ -1123,7 +1123,7 @@ async def test_edf_freephase_dynamic_url(my_predbat):
                 {"value_exc_vat": 16.025, "value_inc_vat": 16.82625, "valid_from": "2025-12-17T21:30:00Z", "valid_to": "2025-12-17T22:00:00Z", "payment_method": "DIRECT_DEBIT"},
             ],
         }
-   
+
         mock_get.return_value = mock_response
 
         result = await api.async_download_octopus_url("https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates")
