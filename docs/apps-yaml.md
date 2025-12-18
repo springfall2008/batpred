@@ -1309,8 +1309,13 @@ explains how the curve works and shows how Predbat automatically creates it.
 Setting this option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
 history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually configure the charge curve in `apps.yaml`.
 
-NB: For Predbat to calculate your charging curve it needs to have access to historical Home Assistant data for battery_charge_rate, battery_power and soc_kw.
+NB: For Predbat to calculate your charging curve it needs to have access to historical Home Assistant data for **battery_charge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
 These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
+
+Either **soc_percent** or **soc_kw** from `apps.yaml` can be used to generate the charge curve. If both are defined then **soc_percent** is used in preference.
+
+Predbat will search through the charge history of your inverter, looking for periods of where battery_charge_rate is at least 95% of the maximum inverter battery charge rate, and the battery charges up to 100%.
+From the corresponding battery_power readings, Predbat determines the charge curve. If suitable charge history cannot be found then Predbat will report that it cannot create the charge curve.
 
 If you have a GivEnergy inverter and are using the recommended default [REST mode to control your inverter](#inverter-control-configurations)
 then you will need to uncomment out the following entries in `apps.yaml`:
@@ -1353,8 +1358,13 @@ You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find
 
 Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
 
-In the same way, as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for battery_discharge_rate, battery_power and soc_kw.
+In the same way, as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for **battery_discharge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
 These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
+
+Either **soc_percent** or **soc_kw** from `apps.yaml` can be used to generate the disharge curve. If both are defined then **soc_percent** is used in preference.
+
+Predbat will search through the discharge history of your inverter, looking for periods of where battery_discharge_rate is at least 95% of the maximum inverter battery discharge rate, and the battery discharges down below 20%.
+From the corresponding battery_power readings, Predbat determines the discharge curve. If suitable discharge history cannot be found then Predbat will report that it cannot create the discharge curve.
 
 If you are using REST mode to control your GivEnergy inverter then the following entries in `apps.yaml` will need to be uncommented :
 
