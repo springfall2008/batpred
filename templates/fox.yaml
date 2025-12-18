@@ -1,8 +1,3 @@
-# Note that you will need to install the W/kW conversion automations
-# from https://github.com/TonyHoyle/foxess_predbat - place the
-# predbatt.yaml file from that repository into your HA configuration
-# directory, and edit the HA configuration.yaml as shown in the README.
-
 pred_bat:
   module: predbat
   class: PredBat
@@ -173,10 +168,9 @@ pred_bat:
     - True
   soc_percent:
     - sensor.foxess_battery_soc
-  # I'm setting soc_max manually via a number helper to be the maximum battery capacity in kWh
   soc_max:
-    - input_number.soc_max
-  # I'm getting this from a template sensor (kWh, Stored Energy, Measurement to get statistics for the battery curve) off {{ ((float(states.sensor.foxess_battery_soc.state)/100) *float(states.sensor.foxess_bms_kwh_remaining.state)) }}
+    - sensor.foxess_bms_kwh_remaining
+  # I'm getting this from a template sensor (kWh, Stored Energy, Measurement to get statistics for the battery curve) off
   soc_kw:
     - sensor.foxess_soc_kwh_remaining
   reserve:
