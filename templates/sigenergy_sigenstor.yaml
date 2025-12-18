@@ -103,7 +103,7 @@ pred_bat:
 
   # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
-    - sensor.sigen_plant_ess_rated_charging_power
+    - sensor.sigen_plant_available_max_active_power
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
