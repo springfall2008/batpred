@@ -99,7 +99,7 @@ pred_bat:
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
-    - sensor.sigen_plant_max_active_power
+    - sensor.sigen_plant_available_max_active_power
 
   # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
