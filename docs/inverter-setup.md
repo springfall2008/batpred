@@ -181,8 +181,10 @@ Thanks to the work of @PeterHaban, for this Predbat configuration for Fox ESS in
     template: {{ ((float(states.sensor.foxess_battery_soc.state)/100) *float(states.sensor.foxess_bms_kwh_remaining.state)) }}
 ```
 
-- You will need a method to record your solar generation and (ideally also) Grid power for Predbat to use.  The author of this configuration used an ESPHome flashed Emporia Vue 2, or you can use a Shelly EM or similar energy monitor.
+- You will ideally need a method to Grid power for Predbat to use.  The author of this configuration used an ESPHome flashed Emporia Vue 2, or you can use a Shelly EM or similar energy monitor.
 Note that grid_power is optional for Predbat, if omitted then its only the power flow on the Predbat dashboard that won't work.
+
+- If you have an AC-coupled FoxESS inverter you will need a similar energy monitor to determine Solar Generation, changing `apps.yaml` with the appropriate sensor names for **pv_today** and **pv_power**.
 
 ## Fox Cloud
 

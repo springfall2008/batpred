@@ -543,6 +543,8 @@ or
 
 - **battery_voltage** - Nominal maximum battery voltage (not current battery voltage) - only needed for inverters controlled via Amps and used internally by Predbat to convert Watts to Amps to control the inverter.
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
+Predbat also uses **battery_rate_max** when creating [charge and discharge curves](#battery-chargedischarge-curves), looking for charging or discharging at 95% of the max rate.
+Be careful of setting the rate at a value higher than your inverter can handle for grid charging in order for Predbat to be able to find the historical 'full rate' charging/discharging needed to correctly calculate the curves.
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
@@ -1361,7 +1363,7 @@ Setting This option to **auto** will cause the computed curve to be stored and u
 In the same way, as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for **battery_discharge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
 These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
 
-Either **soc_percent** or **soc_kw** from `apps.yaml` can be used to generate the disharge curve. If both are defined then **soc_percent** is used in preference.
+Either **soc_percent** or **soc_kw** from `apps.yaml` can be used to generate the discharge curve. If both are defined then **soc_percent** is used in preference.
 
 Predbat will search through the discharge history of your inverter, looking for periods of where battery_discharge_rate is at least 95% of the maximum inverter battery discharge rate, and the battery discharges down below 20%.
 From the corresponding battery_power readings, Predbat determines the discharge curve. If suitable discharge history cannot be found then Predbat will report that it cannot create the discharge curve.

@@ -38,7 +38,7 @@ pred_bat:
     - sensor.foxess_grid_consumption_energy_today
   export_today:
     - sensor.foxess_feed_in_energy_today
-  # I'm getting pv_total by monitoring the feed from my solar panels into my consumer unit with a ESPHome flashed Emporia Vue 2
+  # Replace pv_power with appropriate sensor name when using a separate solar power monitor for AC-coupled FoxESS
   pv_today:
     - sensor.solar_daily_total
 
@@ -157,11 +157,12 @@ pred_bat:
     - number.foxess_force_discharge_power
   battery_power:
     - sensor.foxess_invbatpower
+  # Replace pv_power with appropriate sensor name when using a separate solar power monitor for AC-coupled FoxESS
   pv_power:
-    - sensor.circuit_8_power
+    - sensor.foxess_pv_power
   load_power:
     - sensor.foxess_load_power
-  # I'm getting grid_power by monitoring the mains feed into my consumer unit with a ESPHome flashed Emporia Vue 2
+  # grid_power comes from monitoring mains feed into my consumer unit with a ESPHome flashed Emporia Vue 2
   grid_power:
     - sensor.mains_power
   grid_power_invert:
@@ -170,12 +171,12 @@ pred_bat:
     - sensor.foxess_battery_soc
   soc_max:
     - sensor.foxess_bms_kwh_remaining
-  # I'm getting this from a template sensor (kWh, Stored Energy, Measurement to get statistics for the battery curve) off
+  # Derived from a template sensor (kWh, Stored Energy, Measurement to get statistics for the battery curve) off
   soc_kw:
     - sensor.foxess_soc_kwh_remaining
   reserve:
     - number.foxess_min_soc_on_grid
-  # I'm setting battery_min_soc manually via a number helper
+  # battery_min_soc is set manually via a number helper
   battery_min_soc:
     - input_number.battery_min_soc
   battery_temperature:
