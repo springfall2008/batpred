@@ -134,7 +134,7 @@ def run_test_manual_times(my_predbat):
     my_predbat.midnight = my_predbat.midnight_utc.astimezone(my_predbat.local_tz)
     my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=600)  # 10:00am Thursday
     my_predbat.minutes_now = 600
-    
+
     # Clear previous selection and set Friday 14:00
     my_predbat.manual_select("manual_demand", "off")
 
@@ -154,7 +154,6 @@ def run_test_manual_times(my_predbat):
         failed = True
 
     # Restore time context to current time
-    from datetime import datetime as dt
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
