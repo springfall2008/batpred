@@ -67,6 +67,7 @@ def run_load_octopus_slots_tests(my_predbat):
     expected_slots5 = []
     expected_slots6 = []
     expected_slots7 = []
+    my_predbat.update_time()
     now_utc = my_predbat.now_utc
     now_utc = now_utc.replace(minute=5, second=0, microsecond=0, hour=14)
     my_predbat.minutes_now = int((now_utc - my_predbat.midnight_utc).total_seconds() / 60)

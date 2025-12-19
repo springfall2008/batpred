@@ -321,7 +321,7 @@ class GECloudDirect(ComponentBase):
                             if validation_rule.startswith("in:"):
                                 options_values = validation_rule.split(":")[1].split(",")
 
-                    if validation.startswith("Value must be one of:"):
+                    if validation and validation.startswith("Value must be one of:"):
                         pre, post = validation.split("(")
                         post = post.replace(")", "")
                         post = post.replace(", ", ",")
@@ -626,7 +626,7 @@ class GECloudDirect(ComponentBase):
                         attributes["device_class"] = "power"
                         attributes["unit_of_measurement"] = "W"
 
-            if validation.startswith("Value must be one of:"):
+            if validation and validation.startswith("Value must be one of:"):
                 pre, post = validation.split("(")
                 post = post.replace(")", "")
                 post = post.replace(", ", ",")
@@ -1463,7 +1463,7 @@ class GECloudData(ComponentBase):
                 del self.ge_url_cache[url]
             else:
                 age = now_utc - stamp
-                if age.seconds > (24 * 60 * 60):
+                if age.total_seconds() > (24 * 60 * 60):
                     del self.ge_url_cache[url]
 
     def get_ge_url(self, url, headers, now_utc, max_age_minutes=30):
@@ -1509,6 +1509,8 @@ class GECloudData(ComponentBase):
         last_time = None
         for item in darray:
             new_data = {}
+            if "time" not in item or "total" not in item:
+                continue
             this_time = str2time(item["time"])
             # Align this_time to 5 minute intervals
             if this_time:

@@ -140,3 +140,90 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
                 break
 
     return failed
+
+
+def test_saving_session_null_octopoints(my_predbat):
+    """
+    Test the octopus saving session with null octopoints_per_kwh
+    This tests the fix for GitHub issue #3079
+    """
+    print("Test saving session with null octopoints_per_kwh (issue #3079)")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    # Simulate data from a user who is no longer enrolled in saving sessions
+    # All octopoints_per_kwh values are null, which previously caused TypeError
+    session_sensor = f"""
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
+event_types: octopus_energy_all_octoplus_saving_sessions
+event_type: octopus_energy_all_octoplus_saving_sessions
+account_id: A-4DD6C5EE
+available_events: []
+joined_events:
+    - id: 1342
+      start: '2025-03-03T18:00:00+00:00'
+      end: '2025-03-03T19:00:00+00:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: 296
+      octopoints_per_kwh: null
+      code: null
+    - id: 1343
+      start: '2025-03-04T18:00:00+00:00'
+      end: '2025-03-04T19:00:00+00:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: 16
+      octopoints_per_kwh: null
+      code: null
+    - id: 1344
+      start: '2025-03-05T18:00:00+00:00'
+      end: '2025-03-05T19:00:00+00:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: 64
+      octopoints_per_kwh: null
+      code: null
+friendly_name: Octopus Intelligent Saving Sessions
+"""
+
+    session_binary = f"""
+state: off
+current_joined_event_start: null
+current_joined_event_end: null
+current_joined_event_duration_in_minutes: null
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:currency-usd
+friendly_name: Octopus Intelligent Saving Sessions
+"""
+
+    ha.dummy_items["binary_sensor.octopus_energy_a_12345678_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+    ha.dummy_items["event.octopus_energy_a_12345678_octoplus_saving_session_events"] = yaml.safe_load(session_sensor)
+    ha.dummy_items["sensor.octopus_free_session"] = {}
+    my_predbat.args["octopus_saving_session"] = "binary_sensor.octopus_energy_a_12345678_octoplus_saving_sessions"
+    my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+    if "octopus_free_url" in my_predbat.args:
+        del my_predbat.args["octopus_free_url"]
+    my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 8
+
+    # This should not raise TypeError anymore
+    try:
+        octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
+    except TypeError as e:
+        print(f"ERROR: TypeError raised when handling null octopoints_per_kwh: {e}")
+        failed = True
+        return failed
+
+    # All events with null octopoints_per_kwh should be ignored
+    if octopus_saving_slots:
+        print(f"ERROR: Expected no saving slots (null octopoints_per_kwh should be ignored), got {octopus_saving_slots}")
+        failed = True
+
+    if octopus_free_slots:
+        print("ERROR: Expecting no free slots")
+        failed = True
+
+    print("PASS: Null octopoints_per_kwh handled correctly - no TypeError raised, events ignored")
+    return failed
