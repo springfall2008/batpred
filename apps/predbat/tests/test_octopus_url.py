@@ -1234,6 +1234,8 @@ async def test_edf_freephase_dynamic_url(my_predbat):
     print("\n*** Test 4: Verify download_octopus_rates_func with EDF data (single page) ***")
     my_predbat.debug_enable = False
     my_predbat.failures_total = 0
+    # Set midnight_utc to match the test data (2025-12-17)
+    my_predbat.midnight_utc = datetime.strptime("2025-12-17T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
     test_url = "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates"
 
     with patch("requests.get") as mock_get:

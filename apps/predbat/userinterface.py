@@ -1328,8 +1328,9 @@ class UserInterface:
             if override_time:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
-                if (minutes - minutes_now) < manual_rate_max:
+                if (minutes - minutes_now_slot) >= 0 and (minutes - minutes_now) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
                     for minute in range(minutes, minutes + plan_interval):
                         rate_overrides_minutes[minute] = rate_value
@@ -1391,15 +1392,14 @@ class UserInterface:
                 continue
 
             # Parse time with day of week support using utility function
-            from utils import get_override_time_from_string
-
             override_time = get_override_time_from_string(self.now_utc, value, plan_interval)
 
             if override_time:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
-                if (minutes - minutes_now) < manual_time_max:
+                if (minutes >= minutes_now_slot) and (minutes - minutes_now_slot) < manual_time_max:
                     time_overrides.append(minutes)
 
         # Reconstruct the list in order based on minutes

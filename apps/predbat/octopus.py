@@ -2255,7 +2255,11 @@ class Octopus:
                         end = event.get("end", None)
                         start_time = str2time(start)  # reformat the saving session start & end time for improved readability
                         end_time = str2time(end)
-                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
+                        octopoints_kwh = event.get("octopoints_per_kwh", None)
+                        if octopoints_kwh is not None:
+                            saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
+                        else:
+                            saving_rate = saving_rate  # Use default if not specified
                         if code:  # Join the new Octopus saving event and send an alert
                             self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
@@ -2272,8 +2276,11 @@ class Octopus:
                 for event in joined_events:
                     start = event.get("start", None)
                     end = event.get("end", None)
-                    saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
-                    if start and end and saving_rate > 0:
+                    octopoints_kwh = event.get("octopoints_per_kwh", None)
+                    if octopoints_kwh is not None:
+                        saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
+                    # If octopoints_per_kwh is None, skip this event as it's a past event only
+                    if start and end and octopoints_kwh is not None and saving_rate > 0:
                         # Save the saving slot?
                         try:
                             start_time = str2time(start)
