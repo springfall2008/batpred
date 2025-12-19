@@ -164,27 +164,44 @@ Launch Predbat with hass.py (from the Predbat-addon repository) either via a Doc
 
 Thanks to the work of @PeterHaban, for this Predbat configuration for Fox ESS inverters which Peter has working with a ECS4100h7 and UK Octopus Cosy.  It runs off the work modes and charge/discharge rates.
 
-- Copy the Fox template over the top of your `apps.yaml`, and edit for your system.
+- Copy the Fox template over the top of the supplied `apps.yaml`, and edit for your system.
 
-- Create an input_number helper using the HA UI:
-
-```yaml
-  input_number.battery_min_soc  # this is the minimum battery soc level %, set to 10%
-    Min value: 0
-    Max value: 100
-```
-
-- Create a template sensor helper using the HA UI:
+- Create an input_number helper using the HA to hold the minimum battery soc level %, and set it to 10%:
 
 ```yaml
-  sensor.foxess_soc_kwh_remaining # this is the SoC remaining percentage converted to kWh
-    template: {{ ((float(states.sensor.foxess_battery_soc.state)/100) *float(states.sensor.foxess_bms_kwh_remaining.state)) }}
+  name: Battery Min SoC
+  Min value: 0
+  Max value: 100
 ```
 
-- You will ideally need a method to Grid power for Predbat to use.  The author of this configuration used an ESPHome flashed Emporia Vue 2, or you can use a Shelly EM or similar energy monitor.
-Note that grid_power is optional for Predbat, if omitted then its only the power flow on the Predbat dashboard that won't work.
+- Create a template sensor helper using the HA UI to hold the SoC remaining percentage converted to kWh
 
-- If you have an AC-coupled FoxESS inverter you will need a similar energy monitor to determine Solar Generation, changing `apps.yaml` with the appropriate sensor names for **pv_today** and **pv_power**.
+```yaml
+  - sensor:
+    - name: "FoxESS SoC kWh remaining"
+      unit_of_measurement: "kWh"
+      device_class: energy
+      state_class: total
+      state: >
+        {{ ((float(states.sensor.foxess_battery_soc.state)/100) *float(states.sensor.foxess_bms_kwh_remaining.state)) }}
+```
+
+- Create a template sensor helper using the HA UI to hold the net grid power, combining the separate FoxESS integration import and export power sensors
+
+```yaml
+  - sensor:
+    - name: "FoxESS Grid Power"
+      unit_of_measurement: "kW"
+      device_class: power
+      state_class: measurement
+      state: >
+        {% set import_p = states('sensor.foxess_grid_consumption') | float(0) %}
+        {% set export_p = states('sensor.foxess_feed_in') | float(0) %}
+        {{ import_p - export_p }}
+```
+
+- For an AC-coupled FoxESS inverter you will need a method to measure Solar Generation power and energy today for Predbat to use. The author of this configuration used an ESPHome flashed Emporia Vue 2, or you can use a Shelly EM or similar energy monitor.
+Replace the **pv_today** and **pv_power** entries in `apps.yaml` with the appropriate sensor names.
 
 ## Fox Cloud
 

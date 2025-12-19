@@ -38,9 +38,9 @@ pred_bat:
     - sensor.foxess_grid_consumption_energy_today
   export_today:
     - sensor.foxess_feed_in_energy_today
-  # Replace pv_power with appropriate sensor name when using a separate solar power monitor for AC-coupled FoxESS
+  # Replace pv_today sensor with appropriate sensor name when using a separate solar power monitor for AC-coupled FoxESS
   pv_today:
-    - sensor.solar_daily_total
+    - sensor.foxess_solar_energy_today
 
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
@@ -157,14 +157,13 @@ pred_bat:
     - number.foxess_force_discharge_power
   battery_power:
     - sensor.foxess_invbatpower
-  # Replace pv_power with appropriate sensor name when using a separate solar power monitor for AC-coupled FoxESS
+  # Replace pv_power sensor with appropriate sensor name when using a separate solar power monitor for AC-coupled FoxESS
   pv_power:
     - sensor.foxess_pv_power
   load_power:
     - sensor.foxess_load_power
-  # grid_power comes from monitoring mains feed into my consumer unit with a ESPHome flashed Emporia Vue 2
   grid_power:
-    - sensor.mains_power
+    - sensor.foxess_grid_power
   grid_power_invert:
     - True
   soc_percent:
