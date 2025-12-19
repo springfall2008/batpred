@@ -1399,7 +1399,10 @@ class UserInterface:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
 
-                if (minutes - minutes_now) < manual_time_max:
+                # Filter out past times and duplicates
+                # Only include times that are in the future (minutes >= minutes_now)
+                # and not already in the list (to prevent duplicates)
+                if 0 <= (minutes - minutes_now) < manual_time_max and minutes not in time_overrides:
                     time_overrides.append(minutes)
 
         # Reconstruct the list in order based on minutes

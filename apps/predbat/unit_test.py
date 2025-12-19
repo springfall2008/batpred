@@ -43,6 +43,7 @@ from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_find_charge_rate import test_find_charge_rate
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
+from tests.test_manual_times import run_test_manual_times
 from tests.test_minute_data import test_minute_data
 from tests.test_minute_data_state import test_minute_data_state
 from tests.test_format_time_ago import test_format_time_ago
@@ -176,6 +177,7 @@ def main():
         ("units", run_test_units, "Unit tests", False),
         ("manual_api", run_test_manual_api, "Manual API tests", False),
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
+        ("manual_times", run_test_manual_times, "Manual times cleanup tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
