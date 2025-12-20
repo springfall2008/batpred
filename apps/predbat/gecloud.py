@@ -529,7 +529,7 @@ class GECloudDirect(ComponentBase):
             value = registers[key].get("value", None)
             ha_name = regname_to_ha(reg_name)
 
-            if ("export_soc_percent_limit" in ha_name) or ("discharge_soc_percent_limit" in ha_name):
+            if ("export_soc_percent_limit" in ha_name) or ("discharge_soc_percent_limit" in ha_name) or ("lower_soc_percent_limit" in ha_name):
                 if not value or value > 4:
                     self.log("GECloud: Setting {} to 4 for {} was {}".format(ha_name, device, value))
                     result = await self.async_write_inverter_setting(device, key, 4)
@@ -540,7 +540,7 @@ class GECloudDirect(ComponentBase):
                     else:
                         self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
                         return False
-            if ("inverter_max_output_active_power_percent" in ha_name) or ("ac_charge_upper_percent_limit" in ha_name):
+            if ("inverter_max_output_active_power_percent" in ha_name) or ("ac_charge_upper_percent_limit" in ha_name) or ("_upper_soc_percent_limit" in ha_name):
                 if "enable_" in ha_name:
                     continue
 
@@ -554,6 +554,19 @@ class GECloudDirect(ComponentBase):
                     else:
                         self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
                         return False
+            # Reset AC charge start and end times to 00:00 to disable
+            for charge_id in range(2, 11):
+                if ("ac_charge_{}_start_time".format(charge_id) in ha_name) or ("ac_charge_{}_end_time".format(charge_id) in ha_name) or ("dc_discharge_{}_start_time".format(charge_id) in ha_name) or ("dc_discharge_{}_end_time".format(charge_id) in ha_name):
+                    if value and value != "00:00":
+                        self.log("GECloud: Setting {} to 00:00 for {} was {}".format(ha_name, device, value))
+                        result = await self.async_write_inverter_setting(device, key, "00:00")
+                        if result and ("value" in result):
+                            registers[key]["value"] = result["value"]
+                            await self.publish_registers(device, self.settings[device], select_key=key)
+                            return True
+                        else:
+                            self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
+                            return False
             if "real_time_control" in ha_name:
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
