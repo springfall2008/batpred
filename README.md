@@ -28,6 +28,11 @@ It also explains how you can contribute to the project.
 
 For support please raise a GitHub ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106)
 
+**Important**: This repository contains the Predbat core application code. For installation issues:
+
+- **Home Assistant Add-on installation issues**: Please use the [predbat_addon repository](https://github.com/springfall2008/predbat_addon/issues)
+- **Docker installation issues**: Please use the [Docker-specific repository](https://github.com/nipar4/predbat_addon/issues)
+
 Some inverters have their own groups also e.g:
 
 - [GivTCP](https://www.facebook.com/groups/615579009972782)

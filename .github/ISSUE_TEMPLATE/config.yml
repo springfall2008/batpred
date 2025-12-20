@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔧 Predbat Add-on Installation Issues
+    url: https://github.com/springfall2008/predbat_addon/issues
+    about: For issues related to the Predbat Home Assistant Add-on installation, Docker errors, or add-on configuration problems, please use the predbat_addon repository.
+  - name: 🐳 Docker Installation Issues
+    url: https://github.com/nipar4/predbat_addon/issues
+    about: For issues with the standalone Docker installation of Predbat (nipar44/predbat_addon), please use the Docker-specific repository.
+  - name: 💬 Community Support (Facebook)
+    url: https://www.facebook.com/groups/1477599886299106
+    about: Join the Predbat Facebook group for community support and discussions.
+  - name: 📚 Documentation
+    url: https://springfall2008.github.io/batpred/
+    about: Read the comprehensive Predbat documentation including installation guides, configuration, and FAQs.

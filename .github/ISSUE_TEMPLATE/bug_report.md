@@ -1,14 +1,28 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Report bugs in Predbat core functionality (NOT add-on installation issues)
 title: ''
 labels: ''
 assignees: springfall2008
 
 ---
 
+**⚠️ IMPORTANT: Is this an add-on installation or Docker issue?**
+
+If you are experiencing issues with:
+- Installing the Predbat Home Assistant Add-on
+- Docker build failures or container errors
+- Add-on configuration problems
+- `ha supervisor logs` errors
+
+**Please file your issue in the correct repository:**
+- **Predbat Add-on issues**: <https://github.com/springfall2008/predbat_addon/issues>
+- **Docker installation issues**: <https://github.com/nipar4/predbat_addon/issues>
+
+---
+
 **Describe the bug**
-A clear and concise description of what the bug is.
+A clear and concise description of what the bug is (related to Predbat's prediction, planning, or control functionality).
 
 **Expected behaviour**
 A clear and concise description of what you expected to happen.
