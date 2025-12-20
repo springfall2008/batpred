@@ -1232,8 +1232,10 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(my_predbat, "calibration", in_calibration=True, assert_status="Calibration", assert_charge_time_enable=False, assert_reserve=0, assert_soc_target=100)
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True)
     failed |= run_execute_test(my_predbat, "charge_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, assert_status="Read-Only", reserve=0)
-    failed |= run_execute_test(my_predbat, "charge_axle_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, set_read_only_axle=True, assert_status="Read-Only (Axle)", reserve=0)
-    
+    failed |= run_execute_test(
+        my_predbat, "charge_axle_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, set_read_only_axle=True, assert_status="Read-Only (Axle)", reserve=0
+    )
+
     failed |= run_execute_test(
         my_predbat,
         "charge3",
