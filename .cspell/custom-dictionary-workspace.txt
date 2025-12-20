@@ -255,6 +255,7 @@ rtype
 ruamel
 saverestore
 searr
+securetoken
 Segoe
 selectattr
 Selfrun
