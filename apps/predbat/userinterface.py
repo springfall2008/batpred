@@ -944,7 +944,14 @@ class UserInterface:
 
             if type == "input_number" and ha_value is not None:
                 try:
+                    # Convert to float first
                     ha_value = float(ha_value)
+                    # For entities with integer step, convert to int to preserve integer format
+                    step = item.get("step", 1)
+                    if isinstance(step, int) or (isinstance(step, float) and step == int(step)):
+                        # Step is an integer (e.g., 1, 2, etc.), so keep value as integer if it has no decimal part
+                        if ha_value == int(ha_value):
+                            ha_value = int(ha_value)
                 except (ValueError, TypeError):
                     ha_value = None
 

@@ -141,6 +141,7 @@ from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
+from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer
 
 
 # Mock the components and plugin system
@@ -306,6 +307,8 @@ def main():
         ("ge_cache_corrupt", test_load_ge_cache_corrupt_file, "GE Cloud cache corrupt file", False),
         ("ge_regname_to_ha", test_regname_to_ha, "GE Cloud regname to HA", False),
         ("ge_get_data", test_get_data, "GE Cloud get data", False),
+        ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
+        ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
         # Axle Energy VPP unit tests
         ("axle_init", test_axle_initialization, "Axle Energy initialization", False),
         ("axle_active_event", test_axle_fetch_with_active_event, "Axle Energy active event", False),
