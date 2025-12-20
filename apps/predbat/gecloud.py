@@ -556,7 +556,12 @@ class GECloudDirect(ComponentBase):
                         return False
             # Reset AC charge start and end times to 00:00 to disable
             for charge_id in range(2, 11):
-                if ("ac_charge_{}_start_time".format(charge_id) in ha_name) or ("ac_charge_{}_end_time".format(charge_id) in ha_name) or ("dc_discharge_{}_start_time".format(charge_id) in ha_name) or ("dc_discharge_{}_end_time".format(charge_id) in ha_name):
+                if (
+                    ("ac_charge_{}_start_time".format(charge_id) in ha_name)
+                    or ("ac_charge_{}_end_time".format(charge_id) in ha_name)
+                    or ("dc_discharge_{}_start_time".format(charge_id) in ha_name)
+                    or ("dc_discharge_{}_end_time".format(charge_id) in ha_name)
+                ):
                     if value and value != "00:00":
                         self.log("GECloud: Setting {} to 00:00 for {} was {}".format(ha_name, device, value))
                         result = await self.async_write_inverter_setting(device, key, "00:00")
