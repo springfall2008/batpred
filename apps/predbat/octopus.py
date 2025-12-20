@@ -1741,7 +1741,7 @@ class Octopus:
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
             # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale rates after midnight)
-            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:n
+            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
                 self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                 return pdata
             elif cached_midnight != self.midnight_utc:
