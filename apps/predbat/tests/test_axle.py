@@ -611,7 +611,7 @@ def test_axle_load_slot_export(my_predbat=None):
     return False
 
 
-def test_axle_active_function(my_predbat):
+def test_axle_active_function(my_predbat=None):
     """Test fetch_axle_active function to check if VPP event is currently active"""
     print("Testing fetch_axle_active function...")
 
