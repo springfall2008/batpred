@@ -255,6 +255,62 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 
 ---
 
+### Axle Energy VPP (axle)
+
+**Can be restarted:** Yes
+
+#### What it does (axle)
+
+Connects to Axle Energy's Virtual Power Plant (VPP) service to receive and track demand response events.
+When Axle schedules export or import events, this component will track them and store the history for up to 7 days.
+The component publishes a binary sensor that turns on when an event is currently active.
+
+If configured against Predbat apps.yaml setting **axle_session** (automatic by default) then Predbat will
+adjust the export energy rate to account for the extra payment from Axle.
+
+#### When to enable (axle)
+
+- You're enrolled in Axle Energy's VPP program
+- You want to track VPP events and payment information
+- You want Predbat to be aware of scheduled VPP events
+
+#### Important notes (axle)
+
+- Polls the Axle API every 10 minutes for updates
+- Stores event history for up to 7 days
+- Events are added to history as soon as they start (become active)
+- Binary sensor (`binary_sensor.predbat_axle_event`) is `on` when an event is currently active, `off` otherwise
+- Event details and history are available as sensor attributes
+
+#### Configuration Options (axle)
+
+| Option | Type | Required | Default | Config Key | Description |
+|--------|------|----------|---------|------------|-------------|
+| `api_key` | String | Yes | - | `axle_api_key` | Your Axle Energy API key from the VPP portal |
+| `pence_per_kwh` | Integer | No | 100 | `axle_pence_per_kwh` | Payment rate in pence per kWh for VPP events |
+| `automatic` | Bool | True | `axle_automatic` | When enabled configure Predbat to use the Axle data to adjust energy rates |
+
+#### How to get your API credentials (axle)
+
+1. Log in to your Axle Energy VPP portal at <https://vpp.axle.energy>
+2. Navigate to the Home Assistant integration section
+3. Copy your API key
+4. Paste it into `axle_api_key` in apps.yaml
+
+#### Sensor Attributes (axle)
+
+The binary sensor `binary_sensor.predbat_axle_event` provides the following attributes:
+
+- `event_current`: List containing the current event (if any), with fields:
+    - `start_time`: Event start time (timezone-aware datetime)
+    - `end_time`: Event end time (timezone-aware datetime)
+    - `import_export`: Event type ("import" or "export")
+    - `updated_at`: Last update timestamp
+    - `pence_per_kwh`: Payment rate for this event
+- `event_history`: List of past events (up to 7 days) with the same fields as above
+
+---
+
 ### Ohme Charger (ohme)
 
 **Can be restarted:** Yes

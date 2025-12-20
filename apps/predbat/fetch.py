@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
+from axle import fetch_axle_sessions, load_axle_slot
 
 
 class Fetch:
@@ -440,6 +441,7 @@ class Fetch:
         prev_octopus_slots = self.octopus_slots.copy()
         prev_octopus_saving_slots = self.octopus_saving_slots.copy()
         prev_octopus_free_slots = self.octopus_free_slots.copy()
+        prev_axle_sessions = self.axle_sessions.copy()
 
         self.rate_import = {}
         self.rate_import_replicated = {}
@@ -740,6 +742,7 @@ class Fetch:
 
         # Fetch octopus saving sessions and free sessions
         self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions()
+        self.axle_sessions = fetch_axle_sessions(self)
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
@@ -772,6 +775,7 @@ class Fetch:
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
+            load_axle_slot(self, self.axle_sessions, export=True, rate_replicate=self.rate_export_replicated)
             self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.rate_export, self.rate_export_replicated)
             self.rate_export = self.apply_manual_rates(self.rate_export, self.manual_export_rates, is_import=False, rate_replicate=self.rate_export_replicated)
             self.rate_scan_export(self.rate_export, print=True)
@@ -881,6 +885,9 @@ class Fetch:
             force_replan = True
         if str(prev_octopus_free_slots) != str(self.octopus_free_slots):
             self.log("Octopus free slots changed from {} to {}".format(prev_octopus_free_slots, self.octopus_free_slots))
+            force_replan = True
+        if str(prev_axle_sessions) != str(self.axle_sessions):
+            self.log("Axle sessions changed from {} to {}".format(prev_axle_sessions, self.axle_sessions))
             force_replan = True
         return force_replan
 

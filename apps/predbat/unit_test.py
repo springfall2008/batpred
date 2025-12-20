@@ -85,6 +85,21 @@ from tests.test_ge_cloud import (
     test_regname_to_ha,
     test_get_data,
 )
+from tests.test_axle import (
+    test_axle_initialization,
+    test_axle_fetch_with_active_event,
+    test_axle_fetch_with_future_event,
+    test_axle_fetch_with_past_event,
+    test_axle_fetch_no_event,
+    test_axle_http_error,
+    test_axle_request_exception,
+    test_axle_datetime_parsing_variations,
+    test_axle_run_method,
+    test_axle_history_loading,
+    test_axle_history_cleanup,
+    test_axle_fetch_sessions,
+    test_axle_load_slot_export,
+)
 from tests.test_web_if import run_test_web_if
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_find_charge_rate import test_find_charge_rate
@@ -294,6 +309,20 @@ def main():
         ("ge_get_data", test_get_data, "GE Cloud get data", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
+        # Axle Energy VPP unit tests
+        ("axle_init", test_axle_initialization, "Axle Energy initialization", False),
+        ("axle_active_event", test_axle_fetch_with_active_event, "Axle Energy active event", False),
+        ("axle_future_event", test_axle_fetch_with_future_event, "Axle Energy future event", False),
+        ("axle_past_event", test_axle_fetch_with_past_event, "Axle Energy past event", False),
+        ("axle_no_event", test_axle_fetch_no_event, "Axle Energy no event", False),
+        ("axle_http_error", test_axle_http_error, "Axle Energy HTTP error", False),
+        ("axle_request_error", test_axle_request_exception, "Axle Energy request exception", False),
+        ("axle_datetime_parsing", test_axle_datetime_parsing_variations, "Axle Energy datetime parsing", False),
+        ("axle_run_method", test_axle_run_method, "Axle Energy run method", False),
+        ("axle_history_loading", test_axle_history_loading, "Axle Energy history loading", False),
+        ("axle_history_cleanup", test_axle_history_cleanup, "Axle Energy history cleanup", False),
+        ("axle_fetch_sessions", test_axle_fetch_sessions, "Axle Energy fetch sessions", False),
+        ("axle_load_slot", test_axle_load_slot_export, "Axle Energy load slot export", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
