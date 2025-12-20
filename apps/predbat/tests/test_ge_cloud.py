@@ -1972,6 +1972,128 @@ def test_enable_default_options(my_predbat):
             print("ERROR: Should process first setting (key 100), got key {}".format(write_calls[0]["key"]))
             return 1
 
+        # Test 11: AC charge slot 2 start time needs resetting
+        write_calls = []
+        registers = {200: {"name": "AC_Charge_2_Start_Time", "value": "05:30", "validation_rules": []}}
+        ge_cloud.async_write_inverter_setting = mock_write
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when resetting AC charge 2 start time")
+            return 1
+        if len(write_calls) != 1:
+            print("ERROR: Expected 1 write call for AC charge 2 start time, got {}".format(len(write_calls)))
+            return 1
+        if write_calls[0]["value"] != "00:00":
+            print("ERROR: Expected value='00:00' for AC charge 2 start time, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        # Test 12: AC charge slot 5 end time needs resetting
+        write_calls = []
+        registers = {201: {"name": "AC_Charge_5_End_Time", "value": "08:00", "validation_rules": []}}
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when resetting AC charge 5 end time")
+            return 1
+        if write_calls[0]["value"] != "00:00":
+            print("ERROR: Expected value='00:00' for AC charge 5 end time, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        # Test 13: DC discharge slot 3 start time needs resetting
+        write_calls = []
+        registers = {202: {"name": "DC_Discharge_3_Start_Time", "value": "14:00", "validation_rules": []}}
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when resetting DC discharge 3 start time")
+            return 1
+        if write_calls[0]["value"] != "00:00":
+            print("ERROR: Expected value='00:00' for DC discharge 3 start time, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        # Test 14: DC discharge slot 10 end time needs resetting
+        write_calls = []
+        registers = {203: {"name": "DC_Discharge_10_End_Time", "value": "22:30", "validation_rules": []}}
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when resetting DC discharge 10 end time")
+            return 1
+        if write_calls[0]["value"] != "00:00":
+            print("ERROR: Expected value='00:00' for DC discharge 10 end time, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        # Test 15: AC charge slot 2 start time already at 00:00 - should not write
+        write_calls = []
+        registers = {200: {"name": "AC_Charge_2_Start_Time", "value": "00:00", "validation_rules": []}}
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if result:
+            print("ERROR: enable_default_options should return False when AC charge 2 start time already 00:00")
+            return 1
+        if len(write_calls) != 0:
+            print("ERROR: Should not write when time already 00:00, got {} calls".format(len(write_calls)))
+            return 1
+
+        # Test 16: AC charge slot 2 start time is None - should not write
+        write_calls = []
+        registers = {200: {"name": "AC_Charge_2_Start_Time", "value": None, "validation_rules": []}}
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if result:
+            print("ERROR: enable_default_options should return False when AC charge 2 start time is None")
+            return 1
+        if len(write_calls) != 0:
+            print("ERROR: Should not write when time is None, got {} calls".format(len(write_calls)))
+            return 1
+
+        # Test 17: AC charge slot 1 should NOT be reset (slots 2-10 only)
+        write_calls = []
+        registers = {210: {"name": "AC_Charge_1_Start_Time", "value": "05:30", "validation_rules": []}}
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if result:
+            print("ERROR: enable_default_options should return False for AC charge 1 (not in range 2-10)")
+            return 1
+        if len(write_calls) != 0:
+            print("ERROR: Should not write to AC charge 1 slot, got {} calls".format(len(write_calls)))
+            return 1
+
+        # Test 18: Lower SOC percent limit needs fixing
+        write_calls = []
+        registers = {220: {"name": "Lower_SOC_Percent_Limit", "value": 10, "validation_rules": []}}
+        ge_cloud.async_write_inverter_setting = mock_write
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when setting lower SOC limit")
+            return 1
+        if write_calls[0]["value"] != 4:
+            print("ERROR: Expected value=4 for lower SOC limit, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        # Test 19: Upper SOC percent limit needs fixing
+        write_calls = []
+        registers = {221: {"name": "DC_Discharge_Upper_SOC_Percent_Limit", "value": 95, "validation_rules": []}}
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when setting upper SOC limit")
+            return 1
+        if write_calls[0]["value"] != 100:
+            print("ERROR: Expected value=100 for upper SOC limit, got {}".format(write_calls[0]["value"]))
+            return 1
+
         return 0
 
     return run_async(test())
