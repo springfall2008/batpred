@@ -144,6 +144,98 @@ from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer
+from tests.test_carbon import (
+    test_carbon_initialization,
+    test_fetch_carbon_data_success,
+    test_fetch_carbon_data_http_error,
+    test_fetch_carbon_data_timeout,
+    test_fetch_carbon_data_json_error,
+    test_fetch_carbon_data_empty,
+    test_fetch_carbon_data_cache_skip,
+    test_fetch_carbon_data_cache_refresh,
+    test_publish_carbon_data_current,
+    test_publish_carbon_data_forecast,
+    test_publish_carbon_data_unknown,
+    test_postcode_stripping,
+    test_multiple_date_fetches,
+    test_time_format_conversion,
+    test_timezone_handling,
+    test_json_data_collection,
+    test_failure_counter,
+    test_run_first_call,
+    test_run_15min_interval,
+    test_automatic_config_flow,
+)
+from tests.test_ohme import (
+    test_ohme_time_next_occurs_today,
+    test_ohme_time_next_occurs_tomorrow,
+    test_ohme_slot_list_empty,
+    test_ohme_slot_list_single,
+    test_ohme_slot_list_merged,
+    test_ohme_vehicle_to_name_custom,
+    test_ohme_vehicle_to_name_model,
+    test_ohme_client_status_charging,
+    test_ohme_client_status_unplugged,
+    test_ohme_client_status_pending_approval,
+    test_ohme_client_mode_smart_charge,
+    test_ohme_client_mode_max_charge,
+    test_ohme_client_power,
+    test_ohme_client_target_soc_in_progress,
+    test_ohme_client_target_soc_paused,
+    test_ohme_client_target_time,
+    test_ohme_client_slots,
+    test_ohme_client_vehicles,
+    test_ohme_client_current_vehicle,
+    test_ohme_client_async_pause_charge,
+    test_ohme_client_async_resume_charge,
+    test_ohme_client_async_approve_charge,
+    test_ohme_client_async_max_charge_enable,
+    test_ohme_client_async_max_charge_disable,
+    test_ohme_client_async_set_target,
+    test_ohme_client_async_get_charge_session,
+    test_ohme_client_async_update_device_info,
+    test_ohme_client_async_login_success,
+    test_ohme_client_async_refresh_session_no_token,
+    test_ohme_client_async_refresh_session_recent_token,
+    test_ohme_client_async_refresh_session_expired_token,
+    test_ohme_client_async_refresh_session_failure,
+    test_ohme_client_make_request_get_success,
+    test_ohme_client_make_request_put_success,
+    test_ohme_client_make_request_post_json,
+    test_ohme_client_make_request_post_skip_json,
+    test_ohme_client_make_request_api_error,
+    test_ohme_client_make_request_creates_session,
+    test_ohme_client_async_get_charge_session_retry,
+    test_ohme_client_async_set_mode_max_charge,
+    test_ohme_client_async_set_mode_smart_charge,
+    test_ohme_client_async_set_mode_paused,
+    test_ohme_client_async_set_mode_string,
+    test_ohme_client_async_set_vehicle_found,
+    test_ohme_client_async_set_vehicle_not_found,
+    test_ohme_client_async_update_schedule_all_params,
+    test_ohme_client_async_update_schedule_partial_params,
+    test_ohme_client_async_update_schedule_no_rule,
+    test_ohme_publish_data,
+    test_ohme_publish_data_disconnected,
+    test_ohme_run_first_call,
+    test_ohme_run_periodic_30min,
+    test_ohme_run_periodic_120s,
+    test_ohme_run_no_periodic,
+    test_ohme_run_with_queued_events,
+    test_ohme_run_event_handler_exception,
+    test_ohme_run_first_with_octopus_intelligent,
+    test_ohme_select_event_handler_target_time,
+    test_ohme_select_event_handler_invalid_time,
+    test_ohme_number_event_handler_target_soc,
+    test_ohme_number_event_handler_target_soc_invalid,
+    test_ohme_number_event_handler_preconditioning,
+    test_ohme_number_event_handler_preconditioning_off,
+    test_ohme_number_event_handler_preconditioning_invalid,
+    test_ohme_switch_event_handler_max_charge_on,
+    test_ohme_switch_event_handler_max_charge_off,
+    test_ohme_switch_event_handler_approve_charge,
+    test_ohme_switch_event_handler_approve_charge_wrong_status,
+)
 
 
 # Mock the components and plugin system
@@ -327,6 +419,96 @@ def main():
         ("axle_fetch_sessions", test_axle_fetch_sessions, "Axle Energy fetch sessions", False),
         ("axle_load_slot", test_axle_load_slot_export, "Axle Energy load slot export", False),
         ("axle_active", test_axle_active_function, "Axle Energy active check", False),
+        # Carbon Intensity API unit tests
+        ("carbon_init", test_carbon_initialization, "Carbon API initialization", False),
+        ("carbon_fetch_success", test_fetch_carbon_data_success, "Carbon API fetch success", False),
+        ("carbon_http_error", test_fetch_carbon_data_http_error, "Carbon API HTTP error handling", False),
+        ("carbon_timeout", test_fetch_carbon_data_timeout, "Carbon API timeout handling", False),
+        ("carbon_json_error", test_fetch_carbon_data_json_error, "Carbon API JSON parsing error", False),
+        ("carbon_empty_data", test_fetch_carbon_data_empty, "Carbon API empty data response", False),
+        ("carbon_cache_skip", test_fetch_carbon_data_cache_skip, "Carbon API cache skip (<4 hours)", False),
+        ("carbon_cache_refresh", test_fetch_carbon_data_cache_refresh, "Carbon API cache refresh (>4 hours)", False),
+        ("carbon_publish_current", test_publish_carbon_data_current, "Carbon API publish current intensity", False),
+        ("carbon_publish_forecast", test_publish_carbon_data_forecast, "Carbon API publish forecast", False),
+        ("carbon_publish_unknown", test_publish_carbon_data_unknown, "Carbon API publish unknown state", False),
+        ("carbon_postcode_strip", test_postcode_stripping, "Carbon API postcode stripping", False),
+        ("carbon_multiple_dates", test_multiple_date_fetches, "Carbon API multiple date fetches", False),
+        ("carbon_time_format", test_time_format_conversion, "Carbon API time format conversion", False),
+        ("carbon_timezone", test_timezone_handling, "Carbon API timezone handling", False),
+        ("carbon_data_merge", test_json_data_collection, "Carbon API data collection from multiple dates", False),
+        ("carbon_failure_count", test_failure_counter, "Carbon API failure counter", False),
+        ("carbon_run_first", test_run_first_call, "Carbon API run() first call", False),
+        ("carbon_run_interval", test_run_15min_interval, "Carbon API run() 15-minute interval", False),
+        ("carbon_auto_config", test_automatic_config_flow, "Carbon API automatic config flow", False),
+        # Ohme EV charger API unit tests
+        ("ohme_time_next_today", test_ohme_time_next_occurs_today, "Ohme time_next_occurs today", False),
+        ("ohme_time_next_tomorrow", test_ohme_time_next_occurs_tomorrow, "Ohme time_next_occurs tomorrow", False),
+        ("ohme_slot_list_empty", test_ohme_slot_list_empty, "Ohme slot_list empty", False),
+        ("ohme_slot_list_single", test_ohme_slot_list_single, "Ohme slot_list single", False),
+        ("ohme_slot_list_merged", test_ohme_slot_list_merged, "Ohme slot_list merged", False),
+        ("ohme_vehicle_name_custom", test_ohme_vehicle_to_name_custom, "Ohme vehicle_to_name custom", False),
+        ("ohme_vehicle_name_model", test_ohme_vehicle_to_name_model, "Ohme vehicle_to_name model", False),
+        ("ohme_status_charging", test_ohme_client_status_charging, "Ohme status CHARGING", False),
+        ("ohme_status_unplugged", test_ohme_client_status_unplugged, "Ohme status UNPLUGGED", False),
+        ("ohme_status_pending", test_ohme_client_status_pending_approval, "Ohme status PENDING_APPROVAL", False),
+        ("ohme_mode_smart", test_ohme_client_mode_smart_charge, "Ohme mode SMART_CHARGE", False),
+        ("ohme_mode_max", test_ohme_client_mode_max_charge, "Ohme mode MAX_CHARGE", False),
+        ("ohme_power", test_ohme_client_power, "Ohme power property", False),
+        ("ohme_target_soc_progress", test_ohme_client_target_soc_in_progress, "Ohme target_soc in progress", False),
+        ("ohme_target_soc_paused", test_ohme_client_target_soc_paused, "Ohme target_soc paused", False),
+        ("ohme_target_time", test_ohme_client_target_time, "Ohme target_time", False),
+        ("ohme_slots", test_ohme_client_slots, "Ohme slots property", False),
+        ("ohme_vehicles", test_ohme_client_vehicles, "Ohme vehicles property", False),
+        ("ohme_current_vehicle", test_ohme_client_current_vehicle, "Ohme current_vehicle", False),
+        ("ohme_pause_charge", test_ohme_client_async_pause_charge, "Ohme async_pause_charge", False),
+        ("ohme_resume_charge", test_ohme_client_async_resume_charge, "Ohme async_resume_charge", False),
+        ("ohme_approve_charge", test_ohme_client_async_approve_charge, "Ohme async_approve_charge", False),
+        ("ohme_max_charge_enable", test_ohme_client_async_max_charge_enable, "Ohme max_charge enable", False),
+        ("ohme_max_charge_disable", test_ohme_client_async_max_charge_disable, "Ohme max_charge disable", False),
+        ("ohme_set_target", test_ohme_client_async_set_target, "Ohme async_set_target", False),
+        ("ohme_get_session", test_ohme_client_async_get_charge_session, "Ohme async_get_charge_session", False),
+        ("ohme_update_device", test_ohme_client_async_update_device_info, "Ohme async_update_device_info", False),
+        ("ohme_login_success", test_ohme_client_async_login_success, "Ohme login success", False),
+        ("ohme_refresh_no_token", test_ohme_client_async_refresh_session_no_token, "Ohme refresh session no token", False),
+        ("ohme_refresh_recent", test_ohme_client_async_refresh_session_recent_token, "Ohme refresh session recent token", False),
+        ("ohme_refresh_expired", test_ohme_client_async_refresh_session_expired_token, "Ohme refresh session expired", False),
+        ("ohme_refresh_failure", test_ohme_client_async_refresh_session_failure, "Ohme refresh session failure", False),
+        ("ohme_make_request_get", test_ohme_client_make_request_get_success, "Ohme _make_request GET", False),
+        ("ohme_make_request_put", test_ohme_client_make_request_put_success, "Ohme _make_request PUT", False),
+        ("ohme_make_request_post_json", test_ohme_client_make_request_post_json, "Ohme _make_request POST JSON", False),
+        ("ohme_make_request_post_text", test_ohme_client_make_request_post_skip_json, "Ohme _make_request POST text", False),
+        ("ohme_make_request_error", test_ohme_client_make_request_api_error, "Ohme _make_request API error", False),
+        ("ohme_make_request_session", test_ohme_client_make_request_creates_session, "Ohme _make_request creates session", False),
+        ("ohme_session_retry", test_ohme_client_async_get_charge_session_retry, "Ohme session retry on CALCULATING", False),
+        ("ohme_set_mode_max", test_ohme_client_async_set_mode_max_charge, "Ohme async_set_mode MAX_CHARGE", False),
+        ("ohme_set_mode_smart", test_ohme_client_async_set_mode_smart_charge, "Ohme async_set_mode SMART_CHARGE", False),
+        ("ohme_set_mode_paused", test_ohme_client_async_set_mode_paused, "Ohme async_set_mode PAUSED", False),
+        ("ohme_set_mode_string", test_ohme_client_async_set_mode_string, "Ohme async_set_mode string", False),
+        ("ohme_set_vehicle_found", test_ohme_client_async_set_vehicle_found, "Ohme async_set_vehicle found", False),
+        ("ohme_set_vehicle_not_found", test_ohme_client_async_set_vehicle_not_found, "Ohme async_set_vehicle not found", False),
+        ("ohme_update_schedule_all", test_ohme_client_async_update_schedule_all_params, "Ohme async_update_schedule all params", False),
+        ("ohme_update_schedule_partial", test_ohme_client_async_update_schedule_partial_params, "Ohme async_update_schedule partial", False),
+        ("ohme_update_schedule_no_rule", test_ohme_client_async_update_schedule_no_rule, "Ohme async_update_schedule no rule", False),
+        ("ohme_publish_data", test_ohme_publish_data, "Ohme publish_data", False),
+        ("ohme_publish_disconnected", test_ohme_publish_data_disconnected, "Ohme publish_data disconnected", False),
+        ("ohme_run_first", test_ohme_run_first_call, "Ohme run first call", False),
+        ("ohme_run_30min", test_ohme_run_periodic_30min, "Ohme run 30min periodic", False),
+        ("ohme_run_120s", test_ohme_run_periodic_120s, "Ohme run 120s periodic", False),
+        ("ohme_run_no_periodic", test_ohme_run_no_periodic, "Ohme run no periodic", False),
+        ("ohme_run_queued_events", test_ohme_run_with_queued_events, "Ohme run with queued events", False),
+        ("ohme_run_exception", test_ohme_run_event_handler_exception, "Ohme run event handler exception", False),
+        ("ohme_run_octopus", test_ohme_run_first_with_octopus_intelligent, "Ohme run with octopus intelligent", False),
+        ("ohme_select_target_time", test_ohme_select_event_handler_target_time, "Ohme select_event_handler target_time", False),
+        ("ohme_select_invalid_time", test_ohme_select_event_handler_invalid_time, "Ohme select_event_handler invalid time", False),
+        ("ohme_number_target_soc", test_ohme_number_event_handler_target_soc, "Ohme number_event_handler target_soc", False),
+        ("ohme_number_target_soc_invalid", test_ohme_number_event_handler_target_soc_invalid, "Ohme number_event_handler invalid SoC", False),
+        ("ohme_number_preconditioning", test_ohme_number_event_handler_preconditioning, "Ohme number_event_handler preconditioning", False),
+        ("ohme_number_preconditioning_off", test_ohme_number_event_handler_preconditioning_off, "Ohme number_event_handler preconditioning off", False),
+        ("ohme_number_preconditioning_invalid", test_ohme_number_event_handler_preconditioning_invalid, "Ohme number_event_handler invalid preconditioning", False),
+        ("ohme_switch_max_charge_on", test_ohme_switch_event_handler_max_charge_on, "Ohme switch_event_handler max_charge on", False),
+        ("ohme_switch_max_charge_off", test_ohme_switch_event_handler_max_charge_off, "Ohme switch_event_handler max_charge off", False),
+        ("ohme_switch_approve_charge", test_ohme_switch_event_handler_approve_charge, "Ohme switch_event_handler approve_charge", False),
+        ("ohme_switch_approve_wrong_status", test_ohme_switch_event_handler_approve_charge_wrong_status, "Ohme switch_event_handler approve wrong status", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
@@ -342,6 +524,7 @@ def main():
     parser.add_argument("--octopus_api", action="store", help="Run Octopus API tests with given token")
     parser.add_argument("--octopus_account", action="store", help="Octopus API account ID")
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
+    parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
     parser.add_argument("--quick", "-q", action="store_true", help="Skip slow tests (optimise_levels, optimise_windows, debug_cases)")
     args = parser.parse_args()
@@ -357,6 +540,7 @@ def main():
         print("\nUsage: python unit_test.py --test <test_name>")
         print("       python unit_test.py --test basic_rates")
         print("       python unit_test.py --test basic_rates --test units  # Multiple tests")
+        print("       python unit_test.py -k carbon_  # Run all tests matching 'carbon_'")
         print("       python unit_test.py --quick  # Skip slow tests")
         sys.exit(0)
 
@@ -387,6 +571,32 @@ def main():
     if not failed and args.octopus_api:
         failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
+
+    # Run tests matching keyword pattern if requested
+    if args.keyword:
+        keyword = args.keyword
+        matching_tests = [(name, func, desc, slow) for name, func, desc, slow in TEST_REGISTRY if keyword in name]
+        if not matching_tests:
+            print(f"ERROR: No tests found matching keyword '{keyword}'")
+            sys.exit(1)
+        print(f"**** Running {len(matching_tests)} test(s) matching '{keyword}' ****")
+        for name, func, desc, slow in matching_tests:
+            if args.quick and slow:
+                print(f"**** Skipping: {name} (slow) ****")
+                continue
+            print(f"**** Running test: {name} - {desc} ****")
+            start_time = time.time()
+            test_failed = func(my_predbat)
+            elapsed = time.time() - start_time
+            if test_failed:
+                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s ****")
+                failed = True
+                break
+            else:
+                print(f"**** Test {name} PASSED in {elapsed:.2f}s ****")
+        if failed:
+            sys.exit(1)
+        sys.exit(0)
 
     # Run specific tests if requested
     if args.test:
