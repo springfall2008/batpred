@@ -284,11 +284,6 @@ def fetch_axle_sessions(base):
 
     # Get the sensor entity_id from configuration
     entity_id = base.get_arg("axle_session", indirect=False)
-
-    if not entity_id:
-        # If not configured, use the default sensor name
-        entity_id = "binary_sensor." + base.prefix + "_axle_event"
-
     if entity_id:
         # Fetch current event(s)
         event_current = base.get_state_wrapper(entity_id=entity_id, attribute="event_current")
@@ -344,3 +339,21 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
                             base.rate_import[minute] += pence_per_kwh
                             base.load_scaling_dynamic[minute] = base.load_scaling_saving
                             rate_replicate[minute] = "saving"
+
+
+def fetch_axle_active(base):
+    """
+    Check if an Axle VPP event is currently active
+
+    Args:
+        base: PredBat instance with access to get_arg and get_state_wrapper
+
+    Returns:
+        bool: True if an Axle event is currently active (sensor state is "on"), False otherwise
+    """
+    entity_id = base.get_arg("axle_session", indirect=False)
+    if not entity_id:
+        return False
+
+    state = base.get_state_wrapper(entity_id=entity_id, default="off")
+    return str(state).lower() == "on"

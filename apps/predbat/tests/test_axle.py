@@ -12,7 +12,8 @@
 from axle import AxleAPI
 import asyncio
 from unittest.mock import MagicMock, patch
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from config import TIME_FORMAT
 
 
 def run_async(coro):
@@ -461,6 +462,10 @@ def test_axle_fetch_sessions(my_predbat=None):
     axle = MockAxleAPI()
     axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
 
+    # Configure axle_session in config_args
+    sensor_id = "binary_sensor.predbat_axle_event"
+    axle.config_args["axle_session"] = sensor_id
+
     # Set current time
     now = datetime(2025, 12, 20, 15, 0, 0, tzinfo=timezone.utc)
     axle._now_utc = now
@@ -491,7 +496,6 @@ def test_axle_fetch_sessions(my_predbat=None):
     }
 
     # Store in mock state
-    sensor_id = "binary_sensor.predbat_axle_event"
     axle._state_store[sensor_id] = {
         "state": "on",
         "attributes": {
@@ -607,6 +611,58 @@ def test_axle_load_slot_export(my_predbat=None):
     return False
 
 
+def test_axle_active_function(my_predbat):
+    """Test fetch_axle_active function to check if VPP event is currently active"""
+    print("Testing fetch_axle_active function...")
+
+    # Test with active event
+    now = datetime.now(timezone.utc)
+    active_event = {
+        "id": "evt_active_123",
+        "start_time": (now - timedelta(hours=1)).strftime(TIME_FORMAT),
+        "end_time": (now + timedelta(hours=1)).strftime(TIME_FORMAT),
+        "import_export": "export",
+        "status": "active",
+        "payment_pence_per_kwh": 150,
+    }
+
+    # Create test interface with active event sensor
+    test_interface = MockAxleAPI()
+    test_interface.config_args["axle_session"] = "binary_sensor.predbat_axle_event"
+
+    # Manually set the sensor state to "on" since fetch_axle_event hasn't been called yet
+    test_interface.dashboard_item(
+        entity_id="binary_sensor.predbat_axle_event",
+        state="on",
+        attributes={"event_current": [active_event], "event_history": []},
+    )
+
+    # Test fetch_axle_active returns True when event is active
+    from axle import fetch_axle_active
+
+    result = fetch_axle_active(test_interface)
+    assert result is True, "fetch_axle_active should return True when sensor is 'on'"
+
+    # Test with no active event
+    test_interface.dashboard_item(
+        entity_id="binary_sensor.predbat_axle_event",
+        state="off",
+        attributes={"event_current": [], "event_history": []},
+    )
+
+    result = fetch_axle_active(test_interface)
+    assert result is False, "fetch_axle_active should return False when sensor is 'off'"
+
+    # Test with missing sensor (no axle_session config)
+    test_interface_no_config = MockAxleAPI()
+    test_interface_no_config.config_args["axle_session"] = None
+
+    result = fetch_axle_active(test_interface_no_config)
+    assert result is False, "fetch_axle_active should return False when axle_session is not configured"
+
+    print("✓ fetch_axle_active function test passed")
+
+
 # Run all tests
 if __name__ == "__main__":
     print("\n=== Axle API Component Tests ===\n")
@@ -624,5 +680,6 @@ if __name__ == "__main__":
     test_axle_history_cleanup()
     test_axle_fetch_sessions()
     test_axle_load_slot_export()
+    test_axle_active_function()
 
     print("\n=== All Axle API tests passed! ===\n")

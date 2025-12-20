@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
-from axle import fetch_axle_sessions, load_axle_slot
+from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 
 class Fetch:
@@ -1815,6 +1815,14 @@ class Fetch:
         self.export_slot_split = self.plan_interval_minutes
         self.calculate_best = True
         self.set_read_only = self.get_arg("set_read_only")
+        self.set_read_only_axle = False
+
+        # Check if Axle control is enabled and an event is active
+        if self.get_arg("axle_control", False) and not self.set_read_only:
+            if fetch_axle_active(self):
+                self.log("Axle VPP event is active - enabling read-only mode")
+                self.set_read_only = True
+                self.set_read_only_axle = True
 
         # hard wired options, can be configured per inverter later on
         self.set_soc_enable = True

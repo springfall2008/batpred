@@ -549,6 +549,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.balance_inverters_threshold_discharge = 1.0
         self.load_inday_adjustment = 1.0
         self.set_read_only = True
+        self.set_read_only_axle = False
         self.metric_cloud_coverage = 0.0
         self.future_energy_rates_import = {}
         self.future_energy_rates_export = {}
