@@ -67,6 +67,7 @@ def test_octopus_download_rates(my_predbat):
     my_predbat.octopus_url_cache = {
         test_url: {
             "stamp": fresh_timestamp,
+            "midnight_utc": my_predbat.midnight_utc,
             "data": cached_data
         }
     }
@@ -94,6 +95,7 @@ def test_octopus_download_rates(my_predbat):
     my_predbat.octopus_url_cache = {
         test_url: {
             "stamp": stale_timestamp,
+            "midnight_utc": my_predbat.midnight_utc,
             "data": stale_data
         }
     }
@@ -117,6 +119,7 @@ def test_octopus_download_rates(my_predbat):
     my_predbat.octopus_url_cache = {
         test_url: {
             "stamp": datetime.now() - timedelta(minutes=50),
+            "midnight_utc": my_predbat.midnight_utc,
             "data": cached_data
         }
     }
@@ -130,6 +133,38 @@ def test_octopus_download_rates(my_predbat):
         failed = True
     else:
         print("✓ Test 4 passed - Download failure returns stale cache")
+
+    # Test 4a: Cache invalidation - midnight crossing
+    print("\nTest 4a: Cache invalidation - midnight crossing")
+    test_url = "https://api.octopus.energy/test-midnight"
+    yesterday_midnight = my_predbat.midnight_utc - timedelta(days=1)
+    cached_data = {0: 5.0, 60: 6.0}
+    new_data = {0: 10.0, 60: 12.0}
+    fresh_timestamp = datetime.now() - timedelta(minutes=10)  # 10 minutes ago (normally fresh)
+
+    my_predbat.octopus_url_cache = {
+        test_url: {
+            "stamp": fresh_timestamp,
+            "midnight_utc": yesterday_midnight,  # Different midnight (yesterday)
+            "data": cached_data
+        }
+    }
+
+    # Mock download_octopus_rates_func - SHOULD be called due to midnight change
+    with patch.object(my_predbat, 'download_octopus_rates_func', return_value=new_data) as mock_download:
+        result = my_predbat.download_octopus_rates(test_url)
+
+    if result != new_data:
+        print(f"✗ Test 4a failed - Expected new data {new_data}, got {result}")
+        failed = True
+    elif not mock_download.called:
+        print("✗ Test 4a failed - download_octopus_rates_func should be called after midnight crossing")
+        failed = True
+    elif my_predbat.octopus_url_cache[test_url]["midnight_utc"] != my_predbat.midnight_utc:
+        print(f"✗ Test 4a failed - Cache should be updated with new midnight_utc {my_predbat.midnight_utc}, got {my_predbat.octopus_url_cache[test_url]['midnight_utc']}")
+        failed = True
+    else:
+        print("✓ Test 4a passed - Cache invalidated after midnight crossing")
 
     # Test 5: Download failure - raises ValueError when no cache available
     print("\nTest 5: Download failure - raises ValueError when no cache")

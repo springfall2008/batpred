@@ -1575,11 +1575,16 @@ class Octopus:
         now = datetime.now()
         if url in self.octopus_url_cache:
             stamp = self.octopus_url_cache[url]["stamp"]
+            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
-            if age.total_seconds() < (30 * 60):
+
+            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
+            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
                 self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                 return pdata
+            elif cached_midnight != self.midnight_utc:
+                self.log("Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         try:
             r = requests.get(url)
@@ -1596,6 +1601,7 @@ class Octopus:
         # Return new data
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
+        self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = r.text
         return r.text
 
@@ -1731,11 +1737,15 @@ class Octopus:
         now = datetime.now()
         if url in self.octopus_url_cache:
             stamp = self.octopus_url_cache[url]["stamp"]
+            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
-            if age.total_seconds() < (30 * 60):
+            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale rates after midnight)
+            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:n
                 self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                 return pdata
+            elif cached_midnight != self.midnight_utc:
+                self.log("Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         # Retry up to 3 minutes
         for retry in range(3):
@@ -1756,6 +1766,7 @@ class Octopus:
         # Cache New Octopus data
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
+        self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = pdata
         return pdata
 
