@@ -14,6 +14,7 @@ from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
+from axle import AxleAPI
 from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
@@ -210,6 +211,16 @@ COMPONENT_LIST = {
         "args": {
             "postcode": {"required": True, "config": "carbon_postcode"},
             "automatic": {"required": False, "config": "carbon_automatic", "default": False},
+        },
+        "phase": 1,
+    },
+    "axle": {
+        "class": AxleAPI,
+        "name": "Axle Energy",
+        "args": {
+            "api_key": {"required": True, "config": "axle_api_key"},
+            "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100},
+            "automatic": {"required": False, "config": "axle_automatic", "default": True},
         },
         "phase": 1,
     },
