@@ -144,6 +144,28 @@ from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer
+from tests.test_carbon import (
+    test_carbon_initialization,
+    test_fetch_carbon_data_success,
+    test_fetch_carbon_data_http_error,
+    test_fetch_carbon_data_timeout,
+    test_fetch_carbon_data_json_error,
+    test_fetch_carbon_data_empty,
+    test_fetch_carbon_data_cache_skip,
+    test_fetch_carbon_data_cache_refresh,
+    test_publish_carbon_data_current,
+    test_publish_carbon_data_forecast,
+    test_publish_carbon_data_unknown,
+    test_postcode_stripping,
+    test_multiple_date_fetches,
+    test_time_format_conversion,
+    test_timezone_handling,
+    test_json_data_collection,
+    test_failure_counter,
+    test_run_first_call,
+    test_run_15min_interval,
+    test_automatic_config_flow,
+)
 
 
 # Mock the components and plugin system
@@ -327,6 +349,27 @@ def main():
         ("axle_fetch_sessions", test_axle_fetch_sessions, "Axle Energy fetch sessions", False),
         ("axle_load_slot", test_axle_load_slot_export, "Axle Energy load slot export", False),
         ("axle_active", test_axle_active_function, "Axle Energy active check", False),
+        # Carbon Intensity API unit tests
+        ("carbon_init", test_carbon_initialization, "Carbon API initialization", False),
+        ("carbon_fetch_success", test_fetch_carbon_data_success, "Carbon API fetch success", False),
+        ("carbon_http_error", test_fetch_carbon_data_http_error, "Carbon API HTTP error handling", False),
+        ("carbon_timeout", test_fetch_carbon_data_timeout, "Carbon API timeout handling", False),
+        ("carbon_json_error", test_fetch_carbon_data_json_error, "Carbon API JSON parsing error", False),
+        ("carbon_empty_data", test_fetch_carbon_data_empty, "Carbon API empty data response", False),
+        ("carbon_cache_skip", test_fetch_carbon_data_cache_skip, "Carbon API cache skip (<4 hours)", False),
+        ("carbon_cache_refresh", test_fetch_carbon_data_cache_refresh, "Carbon API cache refresh (>4 hours)", False),
+        ("carbon_publish_current", test_publish_carbon_data_current, "Carbon API publish current intensity", False),
+        ("carbon_publish_forecast", test_publish_carbon_data_forecast, "Carbon API publish forecast", False),
+        ("carbon_publish_unknown", test_publish_carbon_data_unknown, "Carbon API publish unknown state", False),
+        ("carbon_postcode_strip", test_postcode_stripping, "Carbon API postcode stripping", False),
+        ("carbon_multiple_dates", test_multiple_date_fetches, "Carbon API multiple date fetches", False),
+        ("carbon_time_format", test_time_format_conversion, "Carbon API time format conversion", False),
+        ("carbon_timezone", test_timezone_handling, "Carbon API timezone handling", False),
+        ("carbon_data_merge", test_json_data_collection, "Carbon API data collection from multiple dates", False),
+        ("carbon_failure_count", test_failure_counter, "Carbon API failure counter", False),
+        ("carbon_run_first", test_run_first_call, "Carbon API run() first call", False),
+        ("carbon_run_interval", test_run_15min_interval, "Carbon API run() 15-minute interval", False),
+        ("carbon_auto_config", test_automatic_config_flow, "Carbon API automatic config flow", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
@@ -342,6 +385,7 @@ def main():
     parser.add_argument("--octopus_api", action="store", help="Run Octopus API tests with given token")
     parser.add_argument("--octopus_account", action="store", help="Octopus API account ID")
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
+    parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
     parser.add_argument("--quick", "-q", action="store_true", help="Skip slow tests (optimise_levels, optimise_windows, debug_cases)")
     args = parser.parse_args()
@@ -357,6 +401,7 @@ def main():
         print("\nUsage: python unit_test.py --test <test_name>")
         print("       python unit_test.py --test basic_rates")
         print("       python unit_test.py --test basic_rates --test units  # Multiple tests")
+        print("       python unit_test.py -k carbon_  # Run all tests matching 'carbon_'")
         print("       python unit_test.py --quick  # Skip slow tests")
         sys.exit(0)
 
@@ -387,6 +432,32 @@ def main():
     if not failed and args.octopus_api:
         failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
+
+    # Run tests matching keyword pattern if requested
+    if args.keyword:
+        keyword = args.keyword
+        matching_tests = [(name, func, desc, slow) for name, func, desc, slow in TEST_REGISTRY if keyword in name]
+        if not matching_tests:
+            print(f"ERROR: No tests found matching keyword '{keyword}'")
+            sys.exit(1)
+        print(f"**** Running {len(matching_tests)} test(s) matching '{keyword}' ****")
+        for name, func, desc, slow in matching_tests:
+            if args.quick and slow:
+                print(f"**** Skipping: {name} (slow) ****")
+                continue
+            print(f"**** Running test: {name} - {desc} ****")
+            start_time = time.time()
+            test_failed = func(my_predbat)
+            elapsed = time.time() - start_time
+            if test_failed:
+                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s ****")
+                failed = True
+                break
+            else:
+                print(f"**** Test {name} PASSED in {elapsed:.2f}s ****")
+        if failed:
+            sys.exit(1)
+        sys.exit(0)
 
     # Run specific tests if requested
     if args.test:
