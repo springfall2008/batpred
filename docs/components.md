@@ -281,6 +281,9 @@ adjust the export energy rate to account for the extra payment from Axle.
 - Events are added to history as soon as they start (become active)
 - Binary sensor (`binary_sensor.predbat_axle_event`) is `on` when an event is currently active, `off` otherwise
 - Event details and history are available as sensor attributes
+- When **axle_control** is enabled (set to True in apps.yaml), Predbat will enter read-only mode during active VPP events
+- Read-only mode prevents Predbat from controlling the inverter while VPP events are running
+- Status will show "Read Only (Axle)" when this feature is active
 
 #### Configuration Options (axle)
 

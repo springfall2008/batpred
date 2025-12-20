@@ -1033,11 +1033,11 @@ class OctopusAPI(ComponentBase):
             age = datetime.now() - stamp
 
             # Fresh cache (< 30 minutes) - return immediately
-            if age.seconds < (30 * 60):
+            if age.total_seconds() < (30 * 60):
                 return cached_data["data"]
 
             # Stale cache (30-35 minutes) - serve stale while ONE pod refreshes
-            if age.seconds < (35 * 60):
+            if age.total_seconds() < (35 * 60):
                 lock_file = f"{self.urls_cache_path}/{url_hash}.lock"
                 try:
                     # Try to acquire lock atomically (non-blocking)
@@ -1578,6 +1578,7 @@ class Octopus:
             cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
+
             # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
             if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
                 self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))

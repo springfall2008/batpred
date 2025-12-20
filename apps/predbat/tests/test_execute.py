@@ -161,6 +161,7 @@ def run_execute_test(
     soc_max=10,
     car_charging_from_battery=False,
     read_only=False,
+    set_read_only_axle=False,
     set_soc_enable=True,
     set_charge_window=False,
     set_export_window=False,
@@ -206,6 +207,7 @@ def run_execute_test(
     my_predbat.log("Run scenario {}".format(name))
     failed = False
     my_predbat.set_read_only = read_only
+    my_predbat.set_read_only_axle = set_read_only_axle
     my_predbat.car_charging_slots = [car_slot]
     my_predbat.num_cars = 1
     my_predbat.inverter_hybrid = inverter_hybrid
@@ -1230,6 +1232,10 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(my_predbat, "calibration", in_calibration=True, assert_status="Calibration", assert_charge_time_enable=False, assert_reserve=0, assert_soc_target=100)
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True)
     failed |= run_execute_test(my_predbat, "charge_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, assert_status="Read-Only", reserve=0)
+    failed |= run_execute_test(
+        my_predbat, "charge_axle_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, set_read_only_axle=True, assert_status="Read-Only (Axle)", reserve=0
+    )
+
     failed |= run_execute_test(
         my_predbat,
         "charge3",

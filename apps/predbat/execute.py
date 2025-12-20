@@ -45,7 +45,10 @@ class Execute:
 
             # Read-only mode
             if self.set_read_only:
-                status = "Read-Only"
+                if self.set_read_only_axle:
+                    status = "Read-Only (Axle)"
+                else:
+                    status = "Read-Only"
                 continue
             # Inverter is in calibration mode
             if inverter.in_calibration:

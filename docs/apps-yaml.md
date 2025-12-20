@@ -892,6 +892,7 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **axle_pence_per_kwh** - Sets the payment rate in pence per kWh for Axle Energy VPP events (default: 100)
 - **axle_automatic** - When True (default) automatically set **axle_session** to point to the right sensor.
 - **axle_session** - Set to point to the Axle component binary sensor to enable adjustment of export rates.
+- **axle_control** - When True, Predbat operates in read-only mode during active Axle VPP events, preventing inverter control while events are running (default: False)
 - **plan_interval_minutes** - Sets time duration of the slots used by Predbat for planning
 
 Note that gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)

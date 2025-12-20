@@ -22,6 +22,7 @@ from tests.test_perf import run_perf_test
 from tests.test_model import run_model_tests
 from tests.test_execute import run_execute_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests
+from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_window2minutes import test_window2minutes
 from tests.test_history_attribute import test_history_attribute
@@ -99,6 +100,7 @@ from tests.test_axle import (
     test_axle_history_cleanup,
     test_axle_fetch_sessions,
     test_axle_load_slot_export,
+    test_axle_active_function,
 )
 from tests.test_web_if import run_test_web_if
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
@@ -234,6 +236,7 @@ def main():
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
         ("fetch_url_cached", test_fetch_url_cached, "Fetch URL cached tests", False),
+        ("fetch_config_options", test_fetch_config_options, "Fetch config options tests", False),
         ("load_free_slot", test_load_free_slot, "Load free slot tests", False),
         ("add_now_to_octopus_slot", test_add_now_to_octopus_slot, "Add now to Octopus slot tests", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
@@ -323,6 +326,7 @@ def main():
         ("axle_history_cleanup", test_axle_history_cleanup, "Axle Energy history cleanup", False),
         ("axle_fetch_sessions", test_axle_fetch_sessions, "Axle Energy fetch sessions", False),
         ("axle_load_slot", test_axle_load_slot_export, "Axle Energy load slot export", False),
+        ("axle_active", test_axle_active_function, "Axle Energy active check", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
@@ -337,7 +341,7 @@ def main():
     parser.add_argument("--gecloud", action="store_true", help="Run tests for GivEnergy Cloud")
     parser.add_argument("--octopus_api", action="store", help="Run Octopus API tests with given token")
     parser.add_argument("--octopus_account", action="store", help="Octopus API account ID")
-    parser.add_argument("--test", "-t", action="store", help="Run a specific test by name (use --list to see available tests)")
+    parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
     parser.add_argument("--quick", "-q", action="store_true", help="Skip slow tests (optimise_levels, optimise_windows, debug_cases)")
     args = parser.parse_args()
@@ -352,6 +356,7 @@ def main():
         print("-" * 70)
         print("\nUsage: python unit_test.py --test <test_name>")
         print("       python unit_test.py --test basic_rates")
+        print("       python unit_test.py --test basic_rates --test units  # Multiple tests")
         print("       python unit_test.py --quick  # Skip slow tests")
         sys.exit(0)
 
@@ -383,24 +388,27 @@ def main():
         failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
 
-    # Run a specific test if requested
+    # Run specific tests if requested
     if args.test:
-        test_found = False
-        for name, func, desc, slow in TEST_REGISTRY:
-            if name == args.test:
-                test_found = True
-                print(f"**** Running single test: {name} - {desc} ****")
-                start_time = time.time()
-                failed = func(my_predbat)
-                elapsed = time.time() - start_time
-                if failed:
-                    print(f"**** ERROR: Test {args.test} FAILED in {elapsed:.2f}s ****")
-                else:
-                    print(f"**** Test {args.test} PASSED in {elapsed:.2f}s ****")
-                break
-        if not test_found:
-            print(f"ERROR: Test '{args.test}' not found. Use --list to see available tests.")
-            sys.exit(1)
+        tests_to_run = args.test
+        for test_name in tests_to_run:
+            test_found = False
+            for name, func, desc, slow in TEST_REGISTRY:
+                if name == test_name:
+                    test_found = True
+                    print(f"**** Running test: {name} - {desc} ****")
+                    start_time = time.time()
+                    test_failed = func(my_predbat)
+                    elapsed = time.time() - start_time
+                    if test_failed:
+                        print(f"**** ERROR: Test {test_name} FAILED in {elapsed:.2f}s ****")
+                        failed = True
+                    else:
+                        print(f"**** Test {test_name} PASSED in {elapsed:.2f}s ****")
+                    break
+            if not test_found:
+                print(f"ERROR: Test '{test_name}' not found. Use --list to see available tests.")
+                sys.exit(1)
         if failed:
             sys.exit(1)
         sys.exit(0)
