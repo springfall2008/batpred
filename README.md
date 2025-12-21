@@ -15,6 +15,9 @@ Also known by some as Batpred or Batman!
 If you want to buy me a beer then please use [Paypal](https://paypal.me/predbat?country.x=GB&locale.x=en_GB) or [GitHub sponsor](https://github.com/springfall2008)
 ![image](https://github.com/springfall2008/batpred/assets/48591903/b3a533ef-0862-4e0b-b272-30e254f58467)
 
+* Use my referal code for Octopus Energy: https://share.octopus.energy/jolly-eel-176
+* Use my referal code for Axle Energy (UK): https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA
+
 ## Predbat documentation
 
 You can find the latest Predbat documentation at [https://springfall2008.github.io/batpred/](https://springfall2008.github.io/batpred/) and
