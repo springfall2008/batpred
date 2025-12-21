@@ -261,12 +261,15 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 
 #### What it does (axle)
 
-Connects to Axle Energy's Virtual Power Plant (VPP) service to receive and track demand response events.
+Connects to Axle Energy's Virtual Power Plant (VPP) [UK] service to receive and track demand response events.
 When Axle schedules export or import events, this component will track them and store the history for up to 7 days.
 The component publishes a binary sensor that turns on when an event is currently active.
 
 If configured against Predbat apps.yaml setting **axle_session** (automatic by default) then Predbat will
 adjust the export energy rate to account for the extra payment from Axle.
+
+Sign up with my referral code here: <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
+Select control my battery for events only.
 
 #### When to enable (axle)
 
