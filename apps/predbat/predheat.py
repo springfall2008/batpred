@@ -210,7 +210,7 @@ class PredHeat:
             except (ValueError, TypeError):
                 history = []
 
-            if history:
+            if history and len(history[0]) > 0:
                 item = history[0][0]
                 try:
                     last_updated_time = str2time(item["last_updated"])
@@ -223,7 +223,7 @@ class PredHeat:
                 else:
                     age_days = min(age_days, age.days)
 
-            if history:
+            if history and len(history[0]) > 0:
                 data_points, _ = minute_data(
                     history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=smoothing, scale=scaling / total_count, clean_increment=incrementing, accumulate=data_points, max_increment=MAX_INCREMENT
                 )
