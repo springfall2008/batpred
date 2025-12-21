@@ -1775,14 +1775,14 @@ class Inverter:
                 self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
                 self.idle_end_minutes = idle_end_minutes
 
-    def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
+    def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None, export_target_soc=None):
         """
         Adjust force export on/off and set the time window correctly
 
         Inverter Class Parameters
         =========================
 
-            None
+            export_target_soc: Target SoC percentage for export (default: reserve_percent if not provided)
 
         Output Entities:
         ================
@@ -1791,6 +1791,7 @@ class Inverter:
             ----------                         ----          -----
             discharge_start_time               string
             discharge_end_time                 string
+            discharge_target_soc               int           %
             *discharge_start_hour              int
             *discharge_start_minute            int
             *discharge_end_hour                int
@@ -1906,8 +1907,18 @@ class Inverter:
             else:
                 self.log("Warn: Inverter {} unable write export end time as neither REST or discharge_end_time are set".format(self.id))
 
-        # REST export target, always set to minimum
+        # REST export target
+        # For inverters that use target_soc for discharge (e.g., FoxCloud), set to the export target
+        # For other inverters (e.g., GivEnergy), set to reserve (minimum discharge level)
         if force_export:
+            # Determine target based on inverter type
+            if self.inv_target_soc_used_for_discharge and export_target_soc is not None:
+                # For inverters like FoxCloud, discharge_target_soc is the target level to discharge to
+                target_soc_percent = export_target_soc
+            else:
+                # For inverters like GivEnergy, discharge_target_soc is the minimum level (reserve)
+                target_soc_percent = self.reserve_percent
+
             if self.rest_data and self.rest_v3:
                 if "raw" in self.rest_data and "invertor" in self.rest_data["raw"] and "discharge_target_soc_1" in self.rest_data["raw"]["invertor"]:
                     current = self.rest_data["raw"]["invertor"]["discharge_target_soc_1"]
@@ -1916,8 +1927,8 @@ class Inverter:
                     except (ValueError, TypeError) as e:
                         current = 0
 
-                    if current > self.reserve_percent:
-                        self.rest_setDischargeTarget(int(self.reserve_percent))
+                    if current != target_soc_percent:
+                        self.rest_setDischargeTarget(int(target_soc_percent))
                     else:
                         self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
@@ -1926,8 +1937,8 @@ class Inverter:
                     current = float(current)
                 except (ValueError, TypeError) as e:
                     current = 0
-                if current > self.reserve_percent:
-                    self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id, required_unit="%"), int(self.reserve_percent))
+                if current != target_soc_percent:
+                    self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id, required_unit="%"), int(target_soc_percent))
                 else:
                     self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
 

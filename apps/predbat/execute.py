@@ -327,7 +327,8 @@ class Execute:
                 # Turn minutes into time
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + export_adjust))  # Add in 1 minute margin to allow Predbat to restore demand mode
-                discharge_soc = max((int(self.export_limits_best[0]) * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
+                # Calculate discharge SoC in kWh - don't truncate percentage before multiplying to avoid precision loss
+                discharge_soc = max((self.export_limits_best[0] * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.export_limits_best[0] < 100.0):
                     if not self.set_export_freeze_only and self.export_limits_best[0] < 99.0 and (self.soc_kw > discharge_soc):
@@ -340,7 +341,9 @@ class Execute:
 
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * export_rate_adjust * MINUTE_WATT)
                         resetDischarge = False
-                        inverter.adjust_force_export(True, discharge_start_time, discharge_end_time)
+                        # Pass the export limit percentage as the discharge target SoC
+                        export_target_percent = int(self.export_limits_best[0])
+                        inverter.adjust_force_export(True, discharge_start_time, discharge_end_time, export_target_percent)
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_charge_rate(0)
                             resetCharge = False
@@ -383,7 +386,8 @@ class Execute:
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 99.0):
                         # We can't schedule freeze export only full export
-                        inverter.adjust_force_export(inverter.inv_has_discharge_enable_time, discharge_start_time, discharge_end_time)
+                        export_target_percent = int(self.export_limits_best[0])
+                        inverter.adjust_force_export(inverter.inv_has_discharge_enable_time, discharge_start_time, discharge_end_time, export_target_percent)
                     else:
                         self.log("Not setting export as we are not yet within the export window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
                         inverter.adjust_force_export(False)

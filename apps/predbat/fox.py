@@ -1390,7 +1390,7 @@ class FoxAPI(ComponentBase):
                     )
                 elif direction == "discharge":
                     new_schedule.append(
-                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
+                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": reserve, "fdPwr": float(power), "minSocOnGrid": reserve}
                     )
         new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max)
         self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
