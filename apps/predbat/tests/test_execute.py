@@ -105,8 +105,9 @@ class ActiveTestInverter:
         self.immediate_discharge_soc_target = target_soc
         self.immediate_discharge_soc_freeze = freeze
 
-    def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
+    def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None, export_target_soc=None):
         self.force_export = force_export
+        self.export_target_soc = export_target_soc
         if new_start_time is not None:
             delta = new_start_time - self.midnight_utc
             self.discharge_start_time_minutes = delta.total_seconds() / 60
