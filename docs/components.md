@@ -268,7 +268,7 @@ The component publishes a binary sensor that turns on when an event is currently
 If configured against Predbat apps.yaml setting **axle_session** (automatic by default) then Predbat will
 adjust the export energy rate to account for the extra payment from Axle.
 
-Sign up with my referal code here: https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA
+Sign up with my referal code here: <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
 Select control my battery for events only.
 
 #### When to enable (axle)
