@@ -30,7 +30,9 @@ from web_helper import (
     get_apps_js,
     get_components_css,
     get_entity_modal_css,
+    get_component_edit_modal_css,
     get_entity_modal_js,
+    get_component_edit_modal_js,
     get_logfile_js,
     get_entity_toggle_js,
     get_entity_control_css,
@@ -101,6 +103,8 @@ class WebInterface(ComponentBase):
         app.router.add_get("/components", self.html_components)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
+        app.router.add_get("/component_config", self.html_component_config)
+        app.router.add_post("/component_config_save", self.html_component_config_save)
         app.router.add_get("/debug_yaml", self.html_debug_yaml)
         app.router.add_get("/debug_log", self.html_debug_log)
         app.router.add_get("/debug_apps", self.html_debug_apps)
@@ -3582,7 +3586,9 @@ chart.render();
         text += "<body>\n"
         text += get_components_css()
         text += get_entity_modal_css()
+        text += get_component_edit_modal_css()
         text += get_entity_modal_js()
+        text += get_component_edit_modal_js()
 
         text += "<h2>Component Status</h2>\n"
         text += "<div class='components-grid'>\n"
@@ -3620,6 +3626,9 @@ chart.render();
             # Add restart button for active components
             if is_active and can_restart:
                 text += f'<button class="restart-button" onclick="restartComponent(\'{component_name}\')" title="Restart this component">Restart</button>\n'
+
+            # Add edit button for all components
+            text += f'<button class="edit-button" onclick="showComponentEditModal(\'{component_name}\')" title="Edit component configuration">&#9998;</button>\n'
 
             text += f"</div>\n"
 
@@ -3720,6 +3729,22 @@ chart.render();
         <div id="entityEmptyState" class="entity-empty-state" style="display: none;">No entities found</div>
     </div>
 </div>
+
+<!-- Component Edit Modal -->
+<div id="componentEditModal" class="entity-modal">
+    <div class="entity-modal-content component-edit-modal-content">
+        <span class="entity-modal-close" onclick="closeComponentEditModal()">&times;</span>
+        <h2 id="componentEditModalTitle">Edit Component Configuration</h2>
+        <div id="componentEditForm" class="component-edit-form">
+            <!-- Form will be populated dynamically -->
+        </div>
+        <div id="componentEditError" class="component-edit-error"></div>
+        <div class="component-edit-buttons">
+            <button id="componentEditSaveBtn" class="save-button" onclick="saveComponentConfig()">Save</button>
+            <button class="cancel-button" onclick="closeComponentEditModal()">Cancel</button>
+        </div>
+    </div>
+</div>
 """
 
         text += get_restart_button_js()
@@ -3770,6 +3795,211 @@ chart.render();
 
         except Exception as e:
             self.log(f"ERROR: Failed to restart component: {str(e)}")
+            return web.json_response({"success": False, "message": str(e)}, status=500)
+
+    async def html_component_config(self, request):
+        """
+        Get component configuration for editing
+        """
+        try:
+            from components import COMPONENT_LIST
+            from config import APPS_SCHEMA
+
+            args = request.query
+            component_name = args.get("component_name")
+
+            if not component_name:
+                return web.json_response({"success": False, "message": "Missing component_name parameter"}, status=400)
+
+            if component_name not in COMPONENT_LIST:
+                return web.json_response({"success": False, "message": f"Component '{component_name}' not found"}, status=404)
+
+            component_info = COMPONENT_LIST[component_name]
+            args_info = component_info.get("args", {})
+            required_or = component_info.get("required_or", [])
+            display_name = component_info.get("name", component_name)
+
+            result_args = []
+
+            for arg_name, arg_info in args_info.items():
+                config_key = arg_info.get("config", "")
+                if not config_key:
+                    continue
+
+                required = arg_info.get("required", False)
+                default = arg_info.get("default", None)
+
+                # Get current value from self.args
+                current_value = self.args.get(config_key, None)
+
+                # Determine type from APPS_SCHEMA
+                field_type = "text"
+                if config_key in APPS_SCHEMA:
+                    schema_entry = APPS_SCHEMA[config_key]
+                    if isinstance(schema_entry, dict):
+                        schema_type_str = schema_entry.get("type", "text")
+                        if "boolean" in schema_type_str:
+                            field_type = "boolean"
+                        elif "integer" in schema_type_str or "int" in schema_type_str:
+                            field_type = "integer"
+                        elif "float" in schema_type_str:
+                            field_type = "float"
+                        elif "string_list" in schema_type_str:
+                            field_type = "string_list"
+                        elif "dict_list" in schema_type_str or "dict" == schema_type_str:
+                            field_type = "dict"
+                        else:
+                            field_type = "text"
+                else:
+                    # Infer from default value
+                    if isinstance(default, bool):
+                        field_type = "boolean"
+                    elif isinstance(default, int):
+                        field_type = "integer"
+                    elif isinstance(default, float):
+                        field_type = "float"
+                    elif isinstance(default, list):
+                        field_type = "string_list"
+                    elif isinstance(default, dict):
+                        field_type = "dict"
+
+                # Check if in required_or list
+                is_required_or = config_key in required_or or arg_name in required_or
+
+                result_args.append({"config_key": config_key, "required": required, "required_or": is_required_or, "current_value": current_value, "default": default, "type": field_type})
+
+            return web.json_response({"success": True, "component_name": component_name, "display_name": display_name, "args": result_args})
+
+        except Exception as e:
+            self.log(f"ERROR: Failed to get component config: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
+            return web.json_response({"success": False, "message": str(e)}, status=500)
+
+    async def html_component_config_save(self, request):
+        """
+        Save component configuration using ruamel.yaml
+        """
+        try:
+            from ruamel.yaml import YAML
+            from config import APPS_SCHEMA
+
+            json_data = await request.json()
+            component_name = json_data.get("component_name")
+            changes = json_data.get("changes", {})
+            deletions = json_data.get("deletions", [])
+
+            if not component_name:
+                return web.json_response({"success": False, "message": "Missing component_name"}, status=400)
+
+            self.log(f"Component config save requested: {component_name}, changes={list(changes.keys())}, deletions={deletions}")
+
+            # Read and parse apps.yaml
+            apps_yaml_path = "apps.yaml"
+            yaml = YAML()
+            yaml.preserve_quotes = True
+
+            try:
+                with open(apps_yaml_path, "r") as f:
+                    data = yaml.load(f)
+            except Exception as e:
+                return web.json_response({"success": False, "message": f"Error reading apps.yaml: {str(e)}"}, status=500)
+
+            if ROOT_YAML_KEY not in data:
+                return web.json_response({"success": False, "message": f"{ROOT_YAML_KEY} section not found in apps.yaml"}, status=500)
+
+            # Process changes
+            for config_key, new_value in changes.items():
+                # Look up type in APPS_SCHEMA
+                field_type = "text"
+                if config_key in APPS_SCHEMA:
+                    schema_entry = APPS_SCHEMA[config_key]
+                    if isinstance(schema_entry, dict):
+                        schema_type_str = schema_entry.get("type", "text")
+                        if "boolean" in schema_type_str:
+                            field_type = "boolean"
+                        elif "integer" in schema_type_str or "int" in schema_type_str:
+                            field_type = "integer"
+                        elif "float" in schema_type_str:
+                            field_type = "float"
+                        elif "string_list" in schema_type_str:
+                            field_type = "string_list"
+                        elif "dict_list" in schema_type_str or "dict" == schema_type_str:
+                            field_type = "dict"
+
+                # Convert value based on type
+                try:
+                    if field_type == "boolean":
+                        if isinstance(new_value, bool):
+                            converted_value = new_value
+                        else:
+                            converted_value = str(new_value).lower() == "true"
+                    elif field_type == "integer":
+                        converted_value = int(new_value)
+                    elif field_type == "float":
+                        converted_value = float(new_value)
+                    elif field_type == "string_list":
+                        # Already should be a list from JSON
+                        converted_value = new_value if isinstance(new_value, list) else [new_value]
+                    elif field_type == "dict":
+                        # Parse JSON/YAML string from frontend
+                        if isinstance(new_value, dict):
+                            converted_value = new_value
+                        elif isinstance(new_value, list):
+                            converted_value = new_value
+                        else:
+                            # Try JSON first, then fall back to YAML
+                            import json
+
+                            try:
+                                converted_value = json.loads(str(new_value))
+                            except json.JSONDecodeError:
+                                # Fall back to YAML parser
+                                from ruamel.yaml import YAML
+
+                                yaml_parser = YAML()
+                                from io import StringIO
+
+                                stream = StringIO(str(new_value))
+                                converted_value = yaml_parser.load(stream)
+                    else:
+                        converted_value = str(new_value)
+
+                    data[ROOT_YAML_KEY][config_key] = converted_value
+
+                    # Mask password values in log
+                    log_value = converted_value
+                    if any(sensitive in config_key.lower() for sensitive in ["password", "key", "secret", "token"]):
+                        log_value = "***"
+                    self.log(f"Setting {config_key} = {log_value}")
+
+                except ValueError as e:
+                    return web.json_response({"success": False, "message": f"Invalid {field_type} value for {config_key}: {str(e)}"}, status=400)
+
+            # Process deletions
+            for config_key in deletions:
+                if config_key in data[ROOT_YAML_KEY]:
+                    del data[ROOT_YAML_KEY][config_key]
+                    self.log(f"Deleted {config_key}")
+
+            # Write back to file
+            try:
+                with open(apps_yaml_path, "w") as f:
+                    yaml.dump(data, f)
+
+                self.log(f"Component {component_name} config updated successfully")
+
+                return web.json_response({"success": True, "message": "Configuration saved. Predbat will restart automatically."})
+
+            except Exception as e:
+                return web.json_response({"success": False, "message": f"Error writing to apps.yaml: {str(e)}"}, status=500)
+
+        except Exception as e:
+            self.log(f"ERROR: Failed to save component config: {str(e)}")
+            import traceback
+
+            traceback.print_exc()
             return web.json_response({"success": False, "message": str(e)}, status=500)
 
     async def html_browse(self, request):
