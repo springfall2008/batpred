@@ -473,6 +473,27 @@ Predbat accepts no responsibility for any violations:
   futurerate_peak_end: "19:00:00"
 ```
 
+## Axle VPP
+
+[Axle in the UK](https://vpp.axle.energy/landing) provide a Virtual Power Plant (VPP) service to the National Grid. In times of strain in the energy grid, Axle will command inverters to export, and in return you get paid £1/kWh.
+
+If you sign up to the Axle VPP service (currently only available for Fox, GivEnergy and SigEnergy inverters), Predbat can automatically retrieve details of the Axle event and include the necessary export within the Predbat plan.
+
+You should signup for the Axle 'Events Only' service, not 'Full Control' which provides a service similar to Predbat (except not as good of course !)
+
+Once signed up to Axle, Predbat's [Axle Energy VPP component](https://springfall2008.github.io/batpred/components/#axle-energy-vpp-axle) polls the Axle API to obtain details of future events and add Axle event details to **binary_sensor.predbat_axle_event**.
+
+The following configuration options for the Axle VPP can be set in `apps.yaml`:
+
+- **axle_api_key** - Sets your API key to communicate with the Axle Energy VPP (Virtual Power Plant) service
+- **axle_pence_per_kwh** - Sets the payment rate in pence per kWh for Axle Energy VPP events (optional, default: 100)
+- **axle_automatic** - When True (default) Predbat will automatically use **binary_sensor.predbat_axle_event** to record details of current and historic Axle events
+- **axle_session** - Optional, enables you to manually configure the Axle binary sensor name if you don't wish to use the Predbat default name
+- **axle_control** - Optional, when set to True will set Predbat into Read-Only mode for the duration of the Axle session so Axle can control your inverter.
+Defaults to False so Predbat will control export of your inverter according to the Axle event details.
+
+To use the Axle VPP service only **axle_api_key** is required to be configured in `apps.yaml`.
+
 ## Grid Carbon intensity
 
 Predbat can also track Carbon intensity by linking it to an integration which provides this data.

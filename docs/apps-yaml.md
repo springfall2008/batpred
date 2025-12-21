@@ -890,6 +890,11 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
 - **octopus_api_key** - Sets API key to communicate directly with octopus
 - **octopus_account** - Sets Octopus account number
+- **axle_api_key** - API key to communicate with Axle Energy VPP (Virtual Power Plant) service
+- **axle_pence_per_kwh** - Payment rate in pence per kWh for Axle Energy VPP events (default: 100)
+- **axle_automatic** - Optional, whether to use the default entity name **binary_sensor.predbat_axle_event** for axle event details (default True, use the default entity name)
+- **axle_session** - Optional, enables manual override of the Axle event entity name
+- **axle_control** - Optional, whether to switch Predbat to read-only mode during active Axle VPP events (default: False)
 - **plan_interval_minutes** - Sets time duration of the slots used by Predbat for planning
 
 Note that gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)
