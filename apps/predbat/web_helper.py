@@ -2555,6 +2555,285 @@ body.dark-mode .restart-button:disabled {
     return text
 
 
+def get_entity_modal_css():
+    """
+    Return CSS for entity modal popup
+    """
+    text = """
+<style>
+/* Entity Modal Styles */
+.entity-modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+.entity-modal-content {
+    background-color: #fff;
+    margin: 5% auto;
+    padding: 20px;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 1200px;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    color: #333;
+}
+
+.entity-modal-close {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.entity-modal-close:hover,
+.entity-modal-close:focus {
+    color: #000;
+}
+
+.entity-search-input {
+    width: 100%;
+    padding: 10px;
+    margin: 10px 0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.entity-list-table-container {
+    overflow-x: auto;
+    margin-top: 10px;
+}
+
+.entity-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+.entity-list-table th {
+    background-color: #4CAF50;
+    color: white;
+    padding: 12px;
+    text-align: left;
+    border: 1px solid #ddd;
+    font-weight: bold;
+}
+
+.entity-list-table td {
+    padding: 10px;
+    border: 1px solid #ddd;
+    color: #333;
+}
+
+.entity-list-table tbody tr:hover {
+    background-color: #f1f1f1;
+}
+
+.entity-list-table a {
+    color: #2196F3;
+    text-decoration: none;
+}
+
+.entity-list-table a:hover {
+    text-decoration: underline;
+}
+
+.entity-empty-state {
+    text-align: center;
+    padding: 20px;
+    color: #999;
+    font-size: 16px;
+}
+
+/* Dark mode support */
+body.dark-mode .entity-modal-content {
+    background-color: #2c2c2c;
+    color: #e0e0e0;
+}
+
+body.dark-mode .entity-modal-close {
+    color: #aaa;
+}
+
+body.dark-mode .entity-modal-close:hover,
+body.dark-mode .entity-modal-close:focus {
+    color: #fff;
+}
+
+body.dark-mode .entity-search-input {
+    background-color: #333;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .entity-list-table th {
+    background-color: #333;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .entity-list-table td {
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .entity-list-table tbody tr:hover {
+    background-color: #3c3c3c;
+}
+
+body.dark-mode .entity-list-table a {
+    color: #64B5F6;
+}
+
+body.dark-mode .entity-empty-state {
+    color: #999;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .entity-modal-content {
+        width: 90%;
+        margin: 10% auto;
+        padding: 15px;
+    }
+
+    .entity-list-table th,
+    .entity-list-table td {
+        padding: 8px;
+        font-size: 0.9em;
+    }
+}
+</style>
+"""
+    return text
+
+
+def get_entity_modal_js():
+    """
+    Return JavaScript for entity modal popup
+    """
+    text = """
+<script>
+let currentEntityData = [];
+
+async function showEntityModal(filter) {
+    const modal = document.getElementById('entityModal');
+    const modalTitle = document.getElementById('entityModalTitle');
+    const tableBody = document.getElementById('entityTableBody');
+    const emptyState = document.getElementById('entityEmptyState');
+    const searchInput = document.getElementById('entitySearchInput');
+    
+    // Clear search input
+    searchInput.value = '';
+    
+    // Show modal
+    modal.style.display = 'block';
+    modalTitle.textContent = 'Entities matching: ' + filter;
+    
+    // Clear table
+    tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center;">Loading...</td></tr>';
+    emptyState.style.display = 'none';
+    
+    try {
+        // Fetch entities
+        const response = await fetch('./component_entities?filter=' + encodeURIComponent(filter));
+        const data = await response.json();
+        
+        currentEntityData = data.entities || [];
+        
+        // Populate table
+        if (currentEntityData.length === 0) {
+            tableBody.innerHTML = '';
+            emptyState.style.display = 'block';
+        } else {
+            renderEntityTable(currentEntityData);
+        }
+    } catch (error) {
+        console.error('Error fetching entities:', error);
+        tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: red;">Error loading entities</td></tr>';
+    }
+}
+
+function renderEntityTable(entities) {
+    const tableBody = document.getElementById('entityTableBody');
+    const emptyState = document.getElementById('entityEmptyState');
+    
+    if (entities.length === 0) {
+        tableBody.innerHTML = '';
+        emptyState.style.display = 'block';
+        return;
+    }
+    
+    emptyState.style.display = 'none';
+    
+    let html = '';
+    for (const entity of entities) {
+        const entityUrl = './entity?entity_id=' + encodeURIComponent(entity.entity_id);
+        // Combine state and unit in one column
+        let stateWithUnit = escapeHtml(entity.state);
+        if (entity.unit_of_measurement && entity.unit_of_measurement !== '?' && entity.unit_of_measurement !== 'None') {
+            stateWithUnit += ' ' + escapeHtml(entity.unit_of_measurement);
+        }
+        html += '<tr>';
+        html += '<td><a href="' + entityUrl + '">' + escapeHtml(entity.entity_id) + '</a></td>';
+        html += '<td>' + escapeHtml(entity.friendly_name) + '</td>';
+        html += '<td>' + stateWithUnit + '</td>';
+        html += '</tr>';
+    }
+    tableBody.innerHTML = html;
+}
+
+function filterEntityTable() {
+    const searchInput = document.getElementById('entitySearchInput');
+    const searchTerm = searchInput.value.toLowerCase();
+    
+    if (!searchTerm) {
+        renderEntityTable(currentEntityData);
+        return;
+    }
+    
+    const filtered = currentEntityData.filter(entity => 
+        entity.entity_id.toLowerCase().includes(searchTerm) ||
+        entity.friendly_name.toLowerCase().includes(searchTerm)
+    );
+    
+    renderEntityTable(filtered);
+}
+
+function closeEntityModal() {
+    const modal = document.getElementById('entityModal');
+    modal.style.display = 'none';
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Close modal when clicking outside of it
+window.onclick = function(event) {
+    const modal = document.getElementById('entityModal');
+    if (event.target === modal) {
+        closeEntityModal();
+    }
+}
+</script>
+"""
+    return text
+
+
 def get_charts_css():
     text = """
 <style>

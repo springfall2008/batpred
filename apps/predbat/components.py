@@ -217,6 +217,7 @@ COMPONENT_LIST = {
     "axle": {
         "class": AxleAPI,
         "name": "Axle Energy",
+        "event_filter": "predbat_axle_",
         "args": {
             "api_key": {"required": True, "config": "axle_api_key"},
             "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100},

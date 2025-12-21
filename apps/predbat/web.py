@@ -29,6 +29,8 @@ from web_helper import (
     get_html_config_css,
     get_apps_js,
     get_components_css,
+    get_entity_modal_css,
+    get_entity_modal_js,
     get_logfile_js,
     get_entity_toggle_js,
     get_entity_control_css,
@@ -97,6 +99,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/dash", self.html_dash)
         app.router.add_post("/dash", self.html_dash_post)
         app.router.add_get("/components", self.html_components)
+        app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/debug_yaml", self.html_debug_yaml)
         app.router.add_get("/debug_log", self.html_debug_log)
@@ -3524,6 +3527,57 @@ chart.render();
             self.log(f"Error counting entities for filter '{event_filter}': {e}")
         return count
 
+    def get_entities_matching_filter(self, event_filter):
+        """
+        Get a list of entities that match the given event filter pattern.
+        Returns a list of dicts with entity_id, state, unit_of_measurement, and friendly_name.
+        Sorted by entity_id.
+        """
+        entities = []
+        try:
+            # Get all entities from Home Assistant
+            all_entities = self.get_state_wrapper()
+            if all_entities:
+                for entity_id in all_entities.keys():
+                    if event_filter in entity_id:
+                        entity_data = all_entities[entity_id]
+                        state = entity_data.get("state", "")
+                        attributes = entity_data.get("attributes", {})
+                        unit_of_measurement = attributes.get("unit_of_measurement", "")
+                        friendly_name = attributes.get("friendly_name", entity_id)
+                        
+                        entities.append({
+                            "entity_id": entity_id,
+                            "state": str(state),
+                            "unit_of_measurement": str(unit_of_measurement) if unit_of_measurement else "",
+                            "friendly_name": friendly_name
+                        })
+                
+                # Sort by entity_id
+                entities.sort(key=lambda x: x["entity_id"])
+        except Exception as e:
+            self.log(f"Error getting entities for filter '{event_filter}': {e}")
+        
+        return entities
+
+    async def html_component_entities(self, request):
+        """
+        API endpoint to return entities matching a filter as JSON
+        """
+        try:
+            args = request.query
+            event_filter = args.get("filter", "")
+            
+            if not event_filter:
+                return web.json_response({"entities": []}, status=200)
+            
+            entities = self.get_entities_matching_filter(event_filter)
+            return web.json_response({"entities": entities}, status=200)
+        
+        except Exception as e:
+            self.log(f"Error in html_component_entities: {e}")
+            return web.json_response({"error": str(e)}, status=500)
+
     async def html_components(self, request):
         """
         Return the Components view as an HTML page showing status of all components
@@ -3532,6 +3586,8 @@ chart.render();
         text = self.get_header("Predbat Components", refresh=60)
         text += "<body>\n"
         text += get_components_css()
+        text += get_entity_modal_css()
+        text += get_entity_modal_js()
 
         text += "<h2>Component Status</h2>\n"
         text += "<div class='components-grid'>\n"
@@ -3631,12 +3687,45 @@ chart.render();
                 # Count entities that match the filter
                 entity_count = self.count_entities_matching_filter(event_filter)
                 count_class = "entity-count-zero" if entity_count == 0 else "entity-count-positive"
-                text += f'<p><strong>Entities:</strong> <span class="{count_class}">num_entities: {entity_count}</span></p>\n'
+                
+                # Make entity count clickable only if count > 0
+                if entity_count > 0:
+                    onclick_attr = f'onclick="showEntityModal(\'{event_filter}\')">'
+                    style_attr = 'style="cursor: pointer; text-decoration: underline;"'
+                    text += f'<p><strong>Entities:</strong> <span class="{count_class}" {style_attr} {onclick_attr}num_entities: {entity_count}</span></p>\n'
+                else:
+                    text += f'<p><strong>Entities:</strong> <span class="{count_class}">num_entities: {entity_count}</span></p>\n'
 
             text += f"</div>\n"
             text += f"</div>\n"
 
         text += "</div>\n"
+
+        # Add entity modal container
+        text += '''
+<!-- Entity Modal -->
+<div id="entityModal" class="entity-modal">
+    <div class="entity-modal-content">
+        <span class="entity-modal-close" onclick="closeEntityModal()">&times;</span>
+        <h2 id="entityModalTitle">Entities</h2>
+        <input type="text" id="entitySearchInput" class="entity-search-input" placeholder="Search entities..." oninput="filterEntityTable()">
+        <div class="entity-list-table-container">
+            <table class="entity-list-table" id="entityTable">
+                <thead>
+                    <tr>
+                        <th>Entity ID</th>
+                        <th>Friendly Name</th>
+                        <th>State</th>
+                    </tr>
+                </thead>
+                <tbody id="entityTableBody">
+                </tbody>
+            </table>
+        </div>
+        <div id="entityEmptyState" class="entity-empty-state" style="display: none;">No entities found</div>
+    </div>
+</div>
+'''
 
         text += get_restart_button_js()
 
