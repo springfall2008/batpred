@@ -31,6 +31,9 @@ No warranty is given, either expressed or implied
 For support please raise a GitHub ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106) and
 watch my [YouTube Channel](https://www.youtube.com/@springfall2008)
 
+- Use my referral code for Octopus Energy: <https://share.octopus.energy/jolly-eel-176>
+- Use my referral code for Axle Energy (UK): <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
+
 Some inverters have their own groups e.g.:
 
 - [GivTCP](https://www.facebook.com/groups/615579009972782)
