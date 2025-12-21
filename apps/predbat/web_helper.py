@@ -2733,25 +2733,25 @@ async function showEntityModal(filter) {
     const tableBody = document.getElementById('entityTableBody');
     const emptyState = document.getElementById('entityEmptyState');
     const searchInput = document.getElementById('entitySearchInput');
-    
+
     // Clear search input
     searchInput.value = '';
-    
+
     // Show modal
     modal.style.display = 'block';
     modalTitle.textContent = 'Entities matching: ' + filter;
-    
+
     // Clear table
     tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center;">Loading...</td></tr>';
     emptyState.style.display = 'none';
-    
+
     try {
         // Fetch entities
         const response = await fetch('./component_entities?filter=' + encodeURIComponent(filter));
         const data = await response.json();
-        
+
         currentEntityData = data.entities || [];
-        
+
         // Populate table
         if (currentEntityData.length === 0) {
             tableBody.innerHTML = '';
@@ -2768,15 +2768,15 @@ async function showEntityModal(filter) {
 function renderEntityTable(entities) {
     const tableBody = document.getElementById('entityTableBody');
     const emptyState = document.getElementById('entityEmptyState');
-    
+
     if (entities.length === 0) {
         tableBody.innerHTML = '';
         emptyState.style.display = 'block';
         return;
     }
-    
+
     emptyState.style.display = 'none';
-    
+
     let html = '';
     for (const entity of entities) {
         const entityUrl = './entity?entity_id=' + encodeURIComponent(entity.entity_id);
@@ -2797,17 +2797,17 @@ function renderEntityTable(entities) {
 function filterEntityTable() {
     const searchInput = document.getElementById('entitySearchInput');
     const searchTerm = searchInput.value.toLowerCase();
-    
+
     if (!searchTerm) {
         renderEntityTable(currentEntityData);
         return;
     }
-    
-    const filtered = currentEntityData.filter(entity => 
+
+    const filtered = currentEntityData.filter(entity =>
         entity.entity_id.toLowerCase().includes(searchTerm) ||
         entity.friendly_name.toLowerCase().includes(searchTerm)
     );
-    
+
     renderEntityTable(filtered);
 }
 
