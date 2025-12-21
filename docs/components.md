@@ -6,23 +6,23 @@ This document provides a comprehensive overview of all Predbat components, their
 
 - [Overview](#overview)
 - [Component List](#component-list)
-  - [Database Manager (db)](#database-manager-db)
-  - [Home Assistant Interface (ha)](#home-assistant-interface-ha)
-  - [Home Assistant History (ha_history)](#home-assistant-history-ha_history)
-  - [Web Interface (web)](#web-interface-web)
-  - [MCP Server (mcp)](#mcp-server-mcp)
-  - [GivEnergy Cloud Direct (gecloud)](#givenergy-cloud-direct-gecloud)
-  - [GivEnergy Cloud Data (gecloud_data)](#givenergy-cloud-data-gecloud_data)
-  - [Octopus Energy Direct (octopus)](#octopus-energy-direct-octopus)
-  - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
-  - [Ohme Charger (ohme)](#ohme-charger-ohme)
-  - [Fox ESS API (fox)](#fox-ess-api-fox)
-  - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
-  - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
+    - [Database Manager (db)](#database-manager-db)
+    - [Home Assistant Interface (ha)](#home-assistant-interface-ha)
+    - [Home Assistant History (ha_history)](#home-assistant-history-ha_history)
+    - [Web Interface (web)](#web-interface-web)
+    - [MCP Server (mcp)](#mcp-server-mcp)
+    - [GivEnergy Cloud Direct (gecloud)](#givenergy-cloud-direct-gecloud)
+    - [GivEnergy Cloud Data (gecloud_data)](#givenergy-cloud-data-gecloud_data)
+    - [Octopus Energy Direct (octopus)](#octopus-energy-direct-octopus)
+    - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
+    - [Ohme Charger (ohme)](#ohme-charger-ohme)
+    - [Fox ESS API (fox)](#fox-ess-api-fox)
+    - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
+    - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
 - [Managing Components](#managing-components)
-  - [Checking Component Status](#checking-component-status)
-  - [Restarting Components](#restarting-components)
-  - [Component Health](#component-health)
+    - [Checking Component Status](#checking-component-status)
+    - [Restarting Components](#restarting-components)
+    - [Component Health](#component-health)
 
 ## Overview
 
@@ -305,8 +305,8 @@ Select control my battery for events only.
 - Binary sensor (`binary_sensor.predbat_axle_event`) is `on` when an event is currently active, `off` otherwise
 - Event details and history are available as sensor attributes
 - When **axle_control** is enabled (set to True in apps.yaml), Predbat will enter read-only mode during active VPP events (default is False)
-  - Read-only mode prevents Predbat from controlling the inverter while VPP events are running
-  - Status will show "Read Only (Axle)" when this feature is active
+    - Read-only mode prevents Predbat from controlling the inverter while VPP events are running
+    - Status will show "Read Only (Axle)" when this feature is active
 
 #### Configuration Options (axle)
 
