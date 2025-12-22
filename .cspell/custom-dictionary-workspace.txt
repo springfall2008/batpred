@@ -223,8 +223,8 @@ perc
 percnt
 PeterHaban
 pitem
-Plenticore
 pkwh
+Plenticore
 postdata
 powercontrolmode
 powerline

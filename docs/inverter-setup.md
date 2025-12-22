@@ -405,7 +405,7 @@ Thanks to the work of @mbuhansen for this Predbat configuration for Kostal Plent
                                 address: 1034
                                 hub: kostalplenticore
                                 value: |-
-                                  [ 
+                                  [
                                     {{ '0x%x' % unpack(pack((states('input_number.predbat_charge_rate')|float(0)) * -1, ">f"), ">H", offset=2) | abs }},
                                     {{ '0x%04x' % unpack(pack((states('input_number.predbat_charge_rate')|float(0)) * -1, ">f"), ">H") | abs }}
                                   ]
@@ -897,7 +897,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
           {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
           {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
           {% endif %}
-    
+
     - choose:
         # Freeze Charging
         # Docs:

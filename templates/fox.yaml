@@ -67,9 +67,9 @@ pred_bat:
   #
   # Freeze charging   Back-up (with reserve soc set to number.min_soc_on_grid)
   # The battery is charging but the current battery level (SoC) is frozen (held). Think of
-  # it as a charge to the current battery level. The grid or solar covers any house load. 
+  # it as a charge to the current battery level. The grid or solar covers any house load.
   # If there is a shortfall of Solar power to meet house load, the excess house load is met
-  # from grid import, but if there is excess Solar power above the house load, the excess 
+  # from grid import, but if there is excess Solar power above the house load, the excess
   # solar will be used to charge the battery,
   #
   # Hold charging     Back-up (with reserve soc set to number.min_soc_on_grid)
@@ -80,11 +80,11 @@ pred_bat:
   # A charge where the target SoC % is lower than the current battery SoC level so there will
   # be no charging unless the usage is unexpectedly high.
   #
-  # Exporting         Force Discharge 
+  # Exporting         Force Discharge
   # The battery is being force-discharged. The house load will be covered by the battery and
   # any excess is exported to the grid. Any solar generated will be exported.
   #
-  # Freeze exporting  Feed-in First 
+  # Freeze exporting  Feed-in First
   # The battery is in demand mode, but with charging disabled. The battery or solar covers the
   # house load. As charging is disabled, if there is excess solar generated, the current SoC
   # level will be held and the excess solar will be exported. If there is a shortfall of
@@ -99,7 +99,7 @@ pred_bat:
   # Calibration       Needs an automation
   # Fox inverters do not automatically calibrate, so to do this an automation is needed if required.
   # At least once every 7 days the battery should hit the 100% SoC mark.  This can be done by setting
-  # the predbat min_keep, etc as needed if too much time has passed. 
+  # the predbat min_keep, etc as needed if too much time has passed.
   #
   # Error
   # If there is a configuration error or other problem, you should check the Predbat log file for more

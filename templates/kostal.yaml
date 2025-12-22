@@ -86,7 +86,7 @@ pred_bat:
       entity_id: input_boolean.charge_freeze_service
     - service: input_boolean.turn_off
       entity_id: input_boolean.discharge_freeze_service
-  charge_freeze_service: 	
+  charge_freeze_service:
     - service: input_boolean.turn_on
       entity_id: input_boolean.charge_freeze_service
     - service: input_boolean.turn_off
@@ -126,7 +126,7 @@ pred_bat:
   #  - sensor.battery_external_battery_voltage 	#from Sunspec integration
   battery_power:
     - sensor.scb_battery_power
-  pv_power: 
+  pv_power:
     - sensor.scb_sum_power_of_all_pv_dc_inputs
   load_power:
     - sensor.scb_home_power
@@ -266,9 +266,9 @@ pred_bat:
   #       event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
   #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
   # Predbat will automatically find the event. entities from the link below to the sensors
-  metric_energidataservice_import: 
+  metric_energidataservice_import:
     - sensor.energi_fyn_kostpris
-  metric_energidataservice_export: 
+  metric_energidataservice_export:
     - sensor.energi_data_service_export
 
   # Standing charge in pounds, can be set to a sensor or manually entered (e.g. 0.50 is 50p)
@@ -364,7 +364,7 @@ pred_bat:
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not
   # It's assumed to be in Kwh but scaling can be applied if need be
 
-  #iboost_energy_today: 
+  #iboost_energy_today:
   #iboost_energy_scaling: 1.0
 
   # Nordpool market energy rates
