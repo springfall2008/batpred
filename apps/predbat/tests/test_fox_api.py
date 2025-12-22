@@ -87,6 +87,15 @@ class MockFoxAPIWithRequests(FoxAPI):
         # Track method calls for run() testing
         self.method_calls = []
 
+        # Rate limiting attributes
+        self.requests_today = 0
+        self.rate_limit_errors_today = 0
+        self.start_time_today = None
+        self.last_midnight_utc = None
+
+        # Mock base object for ComponentBase properties
+        self.base = type("obj", (object,), {"midnight_utc": datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)})()
+
     def log(self, message):
         """Mock log method"""
         pass
@@ -1565,6 +1574,100 @@ def test_api_get_device_history_empty(my_predbat):
     return False
 
 
+def test_api_get_available_variables(my_predbat):
+    """
+    Test get_available_variables API endpoint
+    """
+    print("  - test_api_get_available_variables")
+
+    fox = MockFoxAPIWithRequests()
+
+    # Mock response with available variables list
+    fox.set_mock_response(
+        "/op/v0/device/variable/get",
+        [
+            {
+                "pvPower": {
+                    "unit": "kW",
+                    "Grid-tied inverter": True,
+                    "name": {"en": "PVPower", "zh-CN": "光伏功率"},
+                    "Energy-storage inverter": True,
+                }
+            },
+            {
+                "SoC": {
+                    "unit": "%",
+                    "Grid-tied inverter": False,
+                    "name": {"en": "SoC", "zh-CN": "电池电量"},
+                    "Energy-storage inverter": True,
+                }
+            },
+            {
+                "batTemperature": {
+                    "unit": "℃",
+                    "Grid-tied inverter": False,
+                    "name": {"en": "batTemperature", "zh-CN": "电池温度"},
+                    "Energy-storage inverter": True,
+                }
+            },
+            {
+                "loadsPower": {
+                    "unit": "kW",
+                    "Grid-tied inverter": True,
+                    "name": {"en": "Load Power", "zh-CN": "负载功率"},
+                    "Energy-storage inverter": True,
+                }
+            },
+        ],
+    )
+
+    run_async(fox.get_available_variables())
+
+    # Verify available_variables was populated correctly
+    assert "pvPower" in fox.available_variables
+    assert fox.available_variables["pvPower"]["unit"] == "kW"
+    assert fox.available_variables["pvPower"]["name"] == "PVPower"  # English name extracted
+    assert fox.available_variables["pvPower"]["Grid-tied inverter"] == True
+    assert fox.available_variables["pvPower"]["Energy-storage inverter"] == True
+
+    assert "SoC" in fox.available_variables
+    assert fox.available_variables["SoC"]["unit"] == "%"
+    assert fox.available_variables["SoC"]["name"] == "SoC"
+    assert fox.available_variables["SoC"]["Grid-tied inverter"] == False
+
+    assert "batTemperature" in fox.available_variables
+    assert fox.available_variables["batTemperature"]["unit"] == "℃"
+    assert fox.available_variables["batTemperature"]["name"] == "batTemperature"
+
+    assert "loadsPower" in fox.available_variables
+    assert fox.available_variables["loadsPower"]["name"] == "Load Power"
+
+    # Verify request was made correctly
+    assert len(fox.request_log) == 1
+    assert fox.request_log[0]["path"] == "/op/v0/device/variable/get"
+
+    return False
+
+
+def test_api_get_available_variables_empty(my_predbat):
+    """
+    Test get_available_variables with empty or None response
+    """
+    print("  - test_api_get_available_variables_empty")
+
+    fox = MockFoxAPIWithRequests()
+
+    # Mock empty response
+    fox.set_mock_response("/op/v0/device/variable/get", None)
+
+    run_async(fox.get_available_variables())
+
+    # Verify available_variables is empty dict
+    assert fox.available_variables == {}
+
+    return False
+
+
 def test_api_get_device_setting(my_predbat):
     """
     Test get_device_setting API endpoint
@@ -2821,6 +2924,15 @@ class MockFoxAPIForRequestTesting(FoxAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.log_messages = []
 
+        # Rate limiting attributes
+        self.requests_today = 0
+        self.rate_limit_errors_today = 0
+        self.start_time_today = datetime.now(pytz.utc)
+        self.last_midnight_utc = None
+
+        # Mock base object for ComponentBase properties
+        self.base = type("obj", (object,), {"midnight_utc": datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)})()
+
     def log(self, message):
         """Mock log method - captures messages"""
         self.log_messages.append(message)
@@ -3144,6 +3256,57 @@ def test_request_get_real_post_with_data(my_predbat):
     return False
 
 
+def test_request_get_rate_limiting_prevents_retry(my_predbat):
+    """
+    Test request_get does NOT retry when rate limiting is active (>60 requests/hour)
+    """
+    print("  - test_request_get_rate_limiting_prevents_retry")
+
+    from datetime import datetime, timezone, timedelta
+
+    fox = MockFoxAPIForRequestTesting()
+
+    # Set up rate limiting scenario: 35 requests in 30 minutes = 70/hour
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+    current_time = start_time + timedelta(minutes=30)
+
+    fox.start_time_today = start_time
+    fox.requests_today = 35
+
+    # Mock response that triggers rate limit error (which normally retries)
+    mock_response = MagicMock()
+    mock_response.status_code = 429
+
+    call_count = [0]
+
+    def side_effect(*args, **kwargs):
+        call_count[0] += 1
+        return mock_response
+
+    with patch("fox.datetime") as mock_datetime:
+        # Mock datetime.now() to return our test time
+        mock_datetime.now.return_value = current_time
+
+        # Verify rate limiting is active with mocked time
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        assert hourly_rate > 60, f"Test setup error: hourly_rate should be >60, got {hourly_rate}"
+        assert not fox.should_allow_retry(), "Test setup error: should_allow_retry should be False"
+
+        with patch("fox.requests.get", side_effect=side_effect):
+            with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                result = run_async(fox.request_get("/op/v0/device/list"))
+
+    # Verify NO retry occurred due to rate limiting
+    assert result is None
+    assert call_count[0] == 1, f"Expected only 1 call (no retries), but got {call_count[0]} calls"
+
+    # Verify log message was captured
+    assert any("rate limiting" in msg.lower() for msg in fox.log_messages), "Expected rate limiting log message"
+
+    return False
+
+
 # ============================================================================
 # run() Method Tests
 # ============================================================================
@@ -3324,6 +3487,59 @@ def test_run_without_automatic_config(my_predbat):
     assert result == True
     assert fox.automatic_config_called == False
     assert "automatic_config" not in fox.method_calls
+
+    return False
+
+
+def test_run_midnight_reset(my_predbat):
+    """
+    Test run() resets daily counters when midnight boundary is crossed
+    """
+    print("  - test_run_midnight_reset")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+
+    # First run - initialize counters on day 1
+    day1_midnight = datetime(2025, 12, 22, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight_utc = day1_midnight
+    fox.base.midnight_utc = day1_midnight
+
+    # Simulate some requests on day 1
+    fox.requests_today = 45
+    fox.rate_limit_errors_today = 3
+
+    result = run_async(fox.run(0, first=True))
+    assert result == True
+
+    # Verify counters are initialized on first run
+    initial_start_time = fox.start_time_today
+    assert fox.last_midnight_utc == day1_midnight
+    assert fox.requests_today == 45  # Unchanged from initial value
+    assert fox.rate_limit_errors_today == 3  # Unchanged from initial value
+
+    # Second run - same day, counters should NOT be reset
+    result = run_async(fox.run(0, first=False))
+    assert result == True
+    assert fox.requests_today == 45  # Still unchanged
+    assert fox.rate_limit_errors_today == 3  # Still unchanged
+    assert fox.last_midnight_utc == day1_midnight
+
+    # Third run - simulate midnight crossing to day 2
+    day2_midnight = datetime(2025, 12, 23, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight_utc = day2_midnight
+    fox.base.midnight_utc = day2_midnight
+
+    result = run_async(fox.run(0, first=False))
+    assert result == True
+
+    # Verify counters are reset after midnight
+    assert fox.requests_today == 0, f"Expected requests_today to be reset to 0, got {fox.requests_today}"
+    assert fox.rate_limit_errors_today == 0, f"Expected rate_limit_errors_today to be reset to 0, got {fox.rate_limit_errors_today}"
+    assert fox.last_midnight_utc == day2_midnight, "Expected last_midnight_utc to be updated to day 2"
+    assert fox.start_time_today > initial_start_time, "Expected start_time_today to be reset to current time"
 
     return False
 
@@ -4513,6 +4729,245 @@ def test_automatic_config_no_scheduler_error(my_predbat):
     return False
 
 
+def test_fox_rate_limiting_normal_operation(my_predbat):
+    """Test that normal operation under 60/hour allows retries"""
+    print("  - test_fox_rate_limiting_normal_operation")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    # Create FoxAPI instance
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    # Mock time - start at 12:00:00
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+    current_time = start_time
+
+    with patch("fox.datetime") as mock_datetime:
+        mock_datetime.now.return_value = current_time
+
+        # Simulate 30 requests over 1 hour (well under 60/hour limit)
+        fox.start_time_today = start_time
+
+        for i in range(30):
+            fox.requests_today += 1
+            current_time = start_time + timedelta(minutes=i * 2)  # 2 minutes apart
+            mock_datetime.now.return_value = current_time
+
+        # After 1 hour, rate should be 30/hour
+        elapsed_seconds = (current_time - start_time).total_seconds()
+        hourly_rate = (fox.requests_today * 3600) / max(elapsed_seconds, 1800)
+
+        retry_allowed = fox.should_allow_retry()
+
+        assert fox.requests_today == 30, f"Expected 30 requests, got {fox.requests_today}"
+        assert retry_allowed, "Retries should be allowed at 30/hour"
+        assert hourly_rate <= 60, f"Hourly rate {hourly_rate} should be <= 60"
+
+    return False
+
+
+def test_fox_rate_limiting_exceeds_threshold(my_predbat):
+    """Test that exceeding 60/hour disables retries"""
+    print("  - test_fox_rate_limiting_exceeds_threshold")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    # Mock time - start at 12:00:00
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    with patch("fox.datetime") as mock_datetime:
+        # Set start time (30 minutes minimum)
+        fox.start_time_today = start_time
+        current_time = start_time + timedelta(minutes=30)
+        mock_datetime.now.return_value = current_time
+
+        # Simulate 35 requests in 30 minutes (70/hour rate)
+        fox.requests_today = 35
+
+        # Calculate rate
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+
+        # Check if retry is allowed
+        retry_allowed = fox.should_allow_retry()
+
+        assert fox.requests_today == 35, f"Expected 35 requests, got {fox.requests_today}"
+        assert not retry_allowed, "Retries should not be allowed when exceeding 60/hour"
+        assert hourly_rate > 60, f"Hourly rate {hourly_rate} should be > 60"
+
+    return False
+
+
+def test_fox_rate_limiting_re_enables(my_predbat):
+    """Test that dropping below 60/hour re-enables retries immediately"""
+    print("  - test_fox_rate_limiting_re_enables")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    # Mock time
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    with patch("fox.datetime") as mock_datetime:
+        # Start with high rate (35 requests in 30 minutes = 70/hour)
+        fox.start_time_today = start_time
+        current_time = start_time + timedelta(minutes=30)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 35
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        retry_allowed = fox.should_allow_retry()
+
+        assert not retry_allowed, "Should not allow retry with high rate"
+
+        # Time passes - now 1 hour elapsed with same 35 requests
+        current_time = start_time + timedelta(hours=1)
+        mock_datetime.now.return_value = current_time
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        retry_allowed = fox.should_allow_retry()
+
+        assert retry_allowed, "Retries should be allowed when rate drops below 60/hour"
+        assert hourly_rate <= 60, f"Hourly rate {hourly_rate} should be <= 60"
+
+    return False
+
+
+def test_fox_rate_limiting_midnight_reset(my_predbat):
+    """Test that midnight reset clears counters and timestamps"""
+    print("  - test_fox_rate_limiting_midnight_reset")
+
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    # Day 1 - accumulate requests
+    day1_midnight = datetime(2025, 12, 22, 0, 0, 0, tzinfo=timezone.utc)
+    day1_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    fox.start_time_today = day1_time
+    fox.last_midnight_utc = day1_midnight
+    fox.requests_today = 100
+    fox.rate_limit_errors_today = 5
+
+    # Day 2 - simulate midnight crossing
+    day2_midnight = datetime(2025, 12, 23, 0, 0, 0, tzinfo=timezone.utc)
+    day2_time = datetime(2025, 12, 23, 0, 5, 0, tzinfo=timezone.utc)
+
+    # Update the base object's midnight_utc to simulate day change
+    my_predbat.midnight_utc = day2_midnight
+
+    with patch("fox.datetime") as mock_datetime, patch.object(fox, "log") as mock_log, patch.object(fox, "should_allow_retry", return_value=True):
+        # Mock datetime.now() to return day2_time
+        mock_datetime.now.return_value = day2_time
+        # Mock datetime.now(timezone.utc) calls inside run()
+        mock_datetime.now.side_effect = lambda tz=None: day2_time if tz else day2_time
+
+        # Call run() to trigger midnight reset logic
+        run_async(fox.run(seconds=0, first=False))
+
+    assert fox.requests_today == 0, f"Requests should be reset to 0, got {fox.requests_today}"
+    assert fox.rate_limit_errors_today == 0, f"Rate limit errors should be reset to 0, got {fox.rate_limit_errors_today}"
+    assert fox.last_midnight_utc == day2_midnight, "Last midnight should be updated"
+
+    return False
+
+
+def test_fox_rate_limiting_30min_floor(my_predbat):
+    """Test that 30-minute floor prevents false positives during cold start"""
+    print("  - test_fox_rate_limiting_30min_floor")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    with patch("fox.datetime") as mock_datetime:
+        fox.start_time_today = start_time
+
+        # Scenario 1: 20 requests in first 5 minutes (would be 240/hour without floor!)
+        current_time = start_time + timedelta(minutes=5)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 20
+
+        # Calculate with 30-minute floor
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+
+        assert elapsed_seconds == 1800, f"Elapsed should be floored at 1800 seconds, got {elapsed_seconds}"
+        assert hourly_rate == 40.0, f"Hourly rate should be 40/hour with floor, got {hourly_rate}"
+        retry_allowed = fox.should_allow_retry()
+        assert retry_allowed, "Retries should be allowed with 30-min floor protection"
+
+        # Scenario 2: After 40 minutes, same 20 requests (now 30/hour)
+        current_time = start_time + timedelta(minutes=40)
+        mock_datetime.now.return_value = current_time
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+
+        assert hourly_rate == 30.0, f"Hourly rate should be 30/hour, got {hourly_rate}"
+        retry_allowed = fox.should_allow_retry()
+        assert retry_allowed, "Retries should still be allowed"
+
+    return False
+
+
+def test_fox_rate_limiting_variable_pattern(my_predbat):
+    """Test realistic variable request pattern over multiple hours"""
+    print("  - test_fox_rate_limiting_variable_pattern")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    with patch("fox.datetime") as mock_datetime:
+        fox.start_time_today = start_time
+
+        # Hour 1: 20 requests
+        current_time = start_time + timedelta(hours=1)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 20
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        assert hourly_rate <= 60
+
+        # Hour 2: 100 more requests (120 total over 2 hours = 60/hour average)
+        current_time = start_time + timedelta(hours=2)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 120
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        assert hourly_rate == 60.0
+
+        # Hour 3: 10 more requests (130 total over 3 hours = 43.3/hour average)
+        current_time = start_time + timedelta(hours=3)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 130
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        assert hourly_rate < 60
+
+    return False
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -4563,6 +5018,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_get_device_detail(my_predbat)
         failed |= test_api_get_device_history(my_predbat)
         failed |= test_api_get_device_history_empty(my_predbat)
+        failed |= test_api_get_available_variables(my_predbat)
+        failed |= test_api_get_available_variables_empty(my_predbat)
         failed |= test_api_get_device_setting(my_predbat)
         failed |= test_api_set_device_setting(my_predbat)
         failed |= test_api_get_device_settings(my_predbat)
@@ -4625,6 +5082,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_request_get_real_no_retry_on_auth_error(my_predbat)
         failed |= test_request_get_real_max_retries(my_predbat)
         failed |= test_request_get_real_post_with_data(my_predbat)
+        failed |= test_request_get_rate_limiting_prevents_retry(my_predbat)
 
         # run() method tests
         failed |= test_run_first_call_with_devices(my_predbat)
@@ -4633,6 +5091,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_run_hourly_update(my_predbat)
         failed |= test_run_with_automatic_config(my_predbat)
         failed |= test_run_without_automatic_config(my_predbat)
+        failed |= test_run_midnight_reset(my_predbat)
 
         # Event handler tests
         failed |= test_apply_service_to_toggle_turn_on(my_predbat)
@@ -4683,6 +5142,14 @@ def run_fox_api_tests(my_predbat):
         failed |= test_automatic_config_multiple_batteries(my_predbat)
         failed |= test_automatic_config_battery_and_pv_inverter(my_predbat)
         failed |= test_automatic_config_no_scheduler_error(my_predbat)
+
+        # Rate limiting tests
+        failed |= test_fox_rate_limiting_normal_operation(my_predbat)
+        failed |= test_fox_rate_limiting_exceeds_threshold(my_predbat)
+        failed |= test_fox_rate_limiting_re_enables(my_predbat)
+        failed |= test_fox_rate_limiting_midnight_reset(my_predbat)
+        failed |= test_fox_rate_limiting_30min_floor(my_predbat)
+        failed |= test_fox_rate_limiting_variable_pattern(my_predbat)
     except Exception as e:
         print(f"ERROR: Fox API test failed with exception: {e}")
         import traceback
