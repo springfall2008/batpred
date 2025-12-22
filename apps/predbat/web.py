@@ -438,7 +438,7 @@ class WebInterface(ComponentBase):
         if status and (("Warn:" in status) or ("Error:" in status)):
             text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
         elif not is_running:
-            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (unhealthy)</td></tr>\n".format(status)
+            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (unhealthy, Predbat not running)</td></tr>\n".format(status)
         else:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
@@ -3118,7 +3118,7 @@ chart.render();
             id = compare.get("id", "")
             series_data.append({"name": name, "data": compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
         series_data.append({"name": "Actual", "data": cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
-        if self.base.car_charging_hold:
+        if self.base.num_cars > 0:
             series_data.append({"name": "Actual (no car)", "data": cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
 
         now_str = self.now_utc.strftime(TIME_FORMAT)

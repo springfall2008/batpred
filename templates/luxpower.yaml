@@ -79,16 +79,21 @@ pred_bat:
     clock_time_format: "%Y-%m-%d %H:%M:%S"
     write_and_poll_sleep: 10
     has_time_window: False
-    support_charge_freeze: False
+    support_charge_freeze: True
   # if you have a LuxPower inverter with 'Charge Last' feature then change support_discharge_freeze to True
     support_discharge_freeze: False
 
   charge_start_service:
     - service: switch.turn_on
       entity_id: "switch.lux_ac_charge_enable"
+  charge_freeze_service:
+    - service: automation.turn_on
+      entity_id: "automation.luxpower_freeze_charge"
   charge_stop_service:
     - service: switch.turn_off
       entity_id: "switch.lux_ac_charge_enable"
+    - service: automation.turn_off
+      entity_id: "automation.luxpower_freeze_charge"
   discharge_start_service:
     - service: switch.turn_on
       entity_id: "switch.lux_force_discharge_enable"

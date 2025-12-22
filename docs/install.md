@@ -26,14 +26,18 @@ You will need to install an integration to communicate with and control your inv
 The specific integration you need will depend on the brand of inverter you have, please see [Inverter Setup](inverter-setup.md) for details on installing and configuring the appropriate inverter control software
 so that Home Assistant is able to 'see' and manage your inverter.
 
+For many inverters there are specific additional configuration steps for Predbat and additional controls, automations and scripts to be created for the inverter for Predbat to be able to control it.
+
 You will need at least 24 hours of history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
 
 ## Editing Configuration Files in Home Assistant
 
 The basic configuration for Predbat is stored in a configuration file called `apps.yaml`.
-A standard template apps.yaml file will be installed as part of the Predbat installation and you will need to edit and customise this configuration file for your own system setup.
 
-You will therefore need a method of editing configuration files within your Home Assistant environment.
+A standard GivEnergy template `apps.yaml` file for GivTCP will be installed as part of the Predbat installation and you will need to edit and customise this configuration file for your own system setup.
+If you have a [different inverter](inverter-setup.md) then you will need to use the appropriate `apps.yaml` template for that inverter.
+
+You will need a method of editing configuration files within your Home Assistant environment.
 
 There are several ways to achieve this in Home Assistant, but two of the simplest are to use either the File Editor or Studio Code Server add-ons.
 Whichever you use is a personal preference. File Editor is a bit simpler, Studio Code Server is more powerful

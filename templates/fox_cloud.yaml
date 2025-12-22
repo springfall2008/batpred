@@ -184,6 +184,9 @@ pred_bat:
   # Alternative scraper from Octopus web site if the above is not working
   # octopus_free_url: 'http://octopus.energy/free-electricity'
 
+  # Enter your Axle VPP API key if you have signed up to the Axle service in the UK
+  # axle_api_key: "xxxxxxx"
+
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
 

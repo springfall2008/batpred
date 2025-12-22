@@ -840,9 +840,9 @@ class Output:
             metric_midnight_tomorrow -= metric_midnight_today
 
         if metric_midnight_tomorrow is None:
-            sentence += "- Your estimated bill for today is {}{}\n".format(self.currency_symbols[0], dp2(metric_midnight_today / 100))
+            sentence += "- Your estimated bill for today is {}{:.2f}\n".format(self.currency_symbols[0], dp2(metric_midnight_today / 100))
         else:
-            sentence += "- Your estimated bill for today is {}{} and tomorrow is {}{}\n".format(
+            sentence += "- Your estimated bill for today is {}{:.2f} and tomorrow is {}{:.2f}\n".format(
                 self.currency_symbols[0],
                 dp2(metric_midnight_today / 100),
                 self.currency_symbols[0],

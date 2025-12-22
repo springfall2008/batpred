@@ -531,14 +531,18 @@ class Inverter:
         if "soc_percent" in self.base.args:
             soc_kwh_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
             soc_kwh_percent = True
+            soc_label = "soc_percent"
         else:
             soc_kwh_percent = False
+            soc_label = "soc_kwh"
             soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
 
         if discharge:
             charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
+            curve_label = "empty"
         else:
             charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+            curve_label = "full"
 
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
         battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
@@ -559,7 +563,7 @@ class Inverter:
 
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
-            self.log("Find {} curve with sensors {} and {} and {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
+            self.log("Find {} curve with sensors {}, {}, {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
             if soc_kwh_percent:
                 soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
             else:
@@ -804,12 +808,16 @@ class Inverter:
                     else:
                         self.log("Note: Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(curve_type))
                 else:
-                    self.log("Note: Cannot find battery {} curve (no final curve), one of the required settings for predbat.status, soc_kw, battery_power and {}_rate do not have history, check apps.yaml".format(curve_type, curve_type))
+                    self.log(
+                        "Note: Cannot find battery {} curve (no final curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
+                            curve_type, curve_label, soc_label, curve_type
+                        )
+                    )
             else:
-                self.log("Note: Cannot find battery {} curve (missing history), one of the required settings for predbat.status, soc_kw, battery_power and {}_rate do not have history, check apps.yaml".format(curve_type, curve_type))
-                self.log("Note: Sensor with history data lengths: soc_kwh {}, charge_rate {}, battery_power {}, predbat_status {}".format(len(soc_kwh), len(charge_rate), len(battery_power), len(predbat_status)))
+                self.log("Note: Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(curve_type, soc_label, curve_type))
+                self.log("Note: Sensor with history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
         else:
-            self.log("Note: Cannot find battery {} curve (settings missing), one of the required settings for soc_kw, battery_power and {}_rate are missing from apps.yaml".format(curve_type, curve_type))
+            self.log("Note: Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(curve_type, soc_label, curve_type))
         return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class="None"):
@@ -1047,7 +1055,7 @@ class Inverter:
                         self.base.time_abs_str(self.charge_start_time_minutes),
                         self.base.time_abs_str(self.charge_end_time_minutes),
                         self.current_charge_limit,
-                        self.charge_rate_now * 60.0,
+                        dp2(self.charge_rate_now * 60.0),
                     )
                 )
             else:
