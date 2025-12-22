@@ -86,17 +86,15 @@ class MockFoxAPIWithRequests(FoxAPI):
 
         # Track method calls for run() testing
         self.method_calls = []
-        
+
         # Rate limiting attributes
         self.requests_today = 0
         self.rate_limit_errors_today = 0
         self.start_time_today = None
         self.last_midnight_utc = None
-        
+
         # Mock base object for ComponentBase properties
-        self.base = type('obj', (object,), {
-            'midnight_utc': datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        })()
+        self.base = type("obj", (object,), {"midnight_utc": datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)})()
 
     def log(self, message):
         """Mock log method"""
@@ -2925,17 +2923,15 @@ class MockFoxAPIForRequestTesting(FoxAPI):
         self.device_detail = {}
         self.local_tz = pytz.timezone("Europe/London")
         self.log_messages = []
-        
+
         # Rate limiting attributes
         self.requests_today = 0
         self.rate_limit_errors_today = 0
         self.start_time_today = datetime.now(pytz.utc)
         self.last_midnight_utc = None
-        
+
         # Mock base object for ComponentBase properties
-        self.base = type('obj', (object,), {
-            'midnight_utc': datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        })()
+        self.base = type("obj", (object,), {"midnight_utc": datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)})()
 
     def log(self, message):
         """Mock log method - captures messages"""
@@ -3273,7 +3269,7 @@ def test_request_get_rate_limiting_prevents_retry(my_predbat):
     # Set up rate limiting scenario: 35 requests in 30 minutes = 70/hour
     start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
     current_time = start_time + timedelta(minutes=30)
-    
+
     fox.start_time_today = start_time
     fox.requests_today = 35
 
@@ -3290,7 +3286,7 @@ def test_request_get_rate_limiting_prevents_retry(my_predbat):
     with patch("fox.datetime") as mock_datetime:
         # Mock datetime.now() to return our test time
         mock_datetime.now.return_value = current_time
-        
+
         # Verify rate limiting is active with mocked time
         elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
         hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
@@ -3304,7 +3300,7 @@ def test_request_get_rate_limiting_prevents_retry(my_predbat):
     # Verify NO retry occurred due to rate limiting
     assert result is None
     assert call_count[0] == 1, f"Expected only 1 call (no retries), but got {call_count[0]} calls"
-    
+
     # Verify log message was captured
     assert any("rate limiting" in msg.lower() for msg in fox.log_messages), "Expected rate limiting log message"
 
