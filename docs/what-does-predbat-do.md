@@ -104,6 +104,8 @@ but is set to prevent discharging into the car (requires **switch.predbat_car_ch
 
 - **Read-Only** - Predbat is in [read-only mode](customisation.md#manual-control), the plan will be produced and updated but no instructions will be sent to the inverter to charge or discharge.
 
+- **Read-Only (Axle)** - Predbat is in [read-only mode for the duration of an Axle VPP export event](energy-rates.md#axle-vpp), and will automatically return to a normal execution mode at the end of the Axle event.
+
 - **[Alert]** will be appended to the Predbat status if an [Alert is active](apps-yaml.md#alert-system).
 
 - **Calibration** - The inverter is calibrating the batteries.
