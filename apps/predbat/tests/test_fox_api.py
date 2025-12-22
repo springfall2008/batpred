@@ -4322,7 +4322,7 @@ def test_apply_battery_schedule_discharge_only(my_predbat):
             assert group["startMinute"] == 0
             assert group["endHour"] == 18
             assert group["endMinute"] == 59
-            assert group["fdSoc"] == 10
+            assert group["fdSoc"] == 15  # fdsoc_min is 10, reserve is 15, so fdSoc should be max(10,15)=15
             assert group["fdPwr"] == 5000
             assert group["maxSoc"] == 15, f"Expected maxSoc=15, got {group['maxSoc']}"
             assert group["minSocOnGrid"] == 15, f"Expected minSocOnGrid=15, got {group['minSocOnGrid']}"
