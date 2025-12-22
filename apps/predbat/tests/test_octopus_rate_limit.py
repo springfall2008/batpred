@@ -5,7 +5,7 @@ Tests for Octopus API rate limiting error handling
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
-from octopus import OctopusAPI, integration_context_header
+from octopus import OctopusAPI
 
 
 def test_octopus_rate_limit_wrapper(my_predbat):
@@ -149,9 +149,7 @@ async def test_octopus_rate_limit(my_predbat):
     # Set up existing data
     existing_device = {
         "device_id": "persistent-device",
-        "completed_dispatches": [
-            {"start": "2025-12-22T00:00:00Z", "end": "2025-12-22T04:00:00Z", "charge_in_kwh": 20.0}
-        ],
+        "completed_dispatches": [{"start": "2025-12-22T00:00:00Z", "end": "2025-12-22T04:00:00Z", "charge_in_kwh": 20.0}],
     }
     api.intelligent_device = existing_device.copy()
     api.tariffs = {
@@ -191,9 +189,7 @@ async def test_octopus_rate_limit(my_predbat):
     # Set up existing data
     existing_device = {
         "device_id": "old-device",
-        "completed_dispatches": [
-            {"start": "2025-12-21T00:00:00Z", "end": "2025-12-21T04:00:00Z", "charge_in_kwh": 10.0}
-        ],
+        "completed_dispatches": [{"start": "2025-12-21T00:00:00Z", "end": "2025-12-21T04:00:00Z", "charge_in_kwh": 10.0}],
     }
     api.intelligent_device = existing_device.copy()
     api.tariffs = {

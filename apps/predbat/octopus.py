@@ -1244,7 +1244,7 @@ class OctopusAPI(ComponentBase):
             async with client.post(url, json=payload, headers=headers) as response:
                 # Process response (which reads the text)
                 response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
-                
+
                 # Check for auth errors and retry once
                 if response_body and "errors" in response_body and _retry_count == 0:
                     for error in response_body.get("errors", []):
@@ -1260,7 +1260,7 @@ class OctopusAPI(ComponentBase):
                             # Token is now refreshed and cached in self.graphql_token
                             # Retry the query with new token (_retry_count=1 prevents infinite loop)
                             return await self.async_graphql_query(query, request_context, returns_data=returns_data, ignore_errors=ignore_errors, _retry_count=1)
-                
+
                 # Check for other errors (non-auth)
                 if response_body and "errors" in response_body and not ignore_errors:
                     msg = f'Warn: Octopus API: Errors in request ({url}): {response_body["errors"]}'
@@ -1269,7 +1269,7 @@ class OctopusAPI(ComponentBase):
                     if returns_data:
                         self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
                     return None
-                
+
                 if response_body and ("data" in response_body):
                     self.update_success_timestamp()
                     return response_body["data"]

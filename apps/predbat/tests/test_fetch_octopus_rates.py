@@ -34,7 +34,7 @@ def test_fetch_octopus_rates(my_predbat):
     my_predbat.forecast_days = 2
     my_predbat.midnight_utc = datetime.strptime("2025-01-01T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
     my_predbat.io_adjusted = {}
-    
+
     # Clear dummy_items from previous tests
     my_predbat.ha_interface.dummy_items.clear()
 
