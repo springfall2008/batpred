@@ -7,7 +7,7 @@
 # -----------------------------------------------------------------------------
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 import hashlib
 import requests
@@ -216,6 +216,24 @@ class FoxAPI(ComponentBase):
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
+        # Rate limiting tracking
+        self.requests_today = 0
+        self.rate_limit_errors_today = 0
+        self.start_time_today = None
+        self.last_midnight_utc = None
+
+    def should_allow_retry(self):
+        """
+        Calculate if retries should be allowed based on current API usage rate.
+        Returns True if rate is <= 60/hour, False otherwise.
+        Uses 30-minute minimum floor to prevent false positives during cold start.
+        """
+        if not self.start_time_today:
+            return True
+        
+        elapsed_seconds = max((datetime.now(timezone.utc) - self.start_time_today).total_seconds(), 1800)
+        hourly_rate = (self.requests_today * 3600) / elapsed_seconds
+        return hourly_rate <= 60
 
     def is_alive(self):
         """
@@ -227,6 +245,35 @@ class FoxAPI(ComponentBase):
         """
         Main run loop
         """
+        # Initialize start time on first run
+        if first:
+            self.start_time_today = datetime.now(timezone.utc)
+            self.last_midnight_utc = self.midnight_utc
+
+        # Check for midnight boundary crossing and reset daily counters
+        current_midnight = self.midnight_utc
+        if self.last_midnight_utc is not None and self.last_midnight_utc != current_midnight:
+            # Midnight has passed - reset daily counters
+            self.log(
+                f"Fox: Midnight reset - requests_today: {self.requests_today}, "
+                f"rate_limit_errors_today: {self.rate_limit_errors_today}"
+            )
+            self.requests_today = 0
+            self.rate_limit_errors_today = 0
+            self.start_time_today = datetime.now(timezone.utc)
+            self.last_midnight_utc = current_midnight
+
+        # Log API usage statistics
+        if self.start_time_today:
+            elapsed_seconds = max((datetime.now(timezone.utc) - self.start_time_today).total_seconds(), 1800)
+            elapsed_minutes = elapsed_seconds / 60
+            hourly_rate = (self.requests_today * 3600) / elapsed_seconds
+            retry_allowed = self.should_allow_retry()
+            self.log(
+                f"Fox: API usage: {self.requests_today} requests over {elapsed_minutes:.1f} minutes "
+                f"({hourly_rate:.1f}/hour), retry_allowed={retry_allowed}"
+            )
+
         if first:
             # Only do these once as battery charging times are ignored with the scheduler
             # and we get the realtime data every 5 minutes
@@ -983,18 +1030,28 @@ class FoxAPI(ComponentBase):
         """
         retries = 0
         self.log("Fox: API Requesting {} {} - data {}".format("POST" if post else "GET", path, datain))
+        
         while retries < FOX_RETRIES:
             result, allow_retry = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
                 return result
             if not allow_retry:
                 break
+            
+            # Check if rate limiting prevents retry
+            if not self.should_allow_retry():
+                self.log("Fox: Retries disabled due to rate limiting (>60/hour average)")
+                break
+            
             retries += 1
             await asyncio.sleep(retries * random.random())
         self.log("Fox: API Response failed after {} retries for {}".format(FOX_RETRIES, path))
         return result
 
     async def request_get_func(self, path, post=False, datain=None):
+        # Track API request
+        self.requests_today += 1
+        
         headers = self.get_headers(path)
         url = FOX_DOMAIN + path
         self.log("Fox: API Request: path {} post {} datain {}".format(path, post, datain))
@@ -1037,7 +1094,8 @@ class FoxAPI(ComponentBase):
             if errno != 0:
                 self.failures_total += 1
                 if errno in [40400, 41200, 41201, 41202, 41203, 41935, 44098]:
-                    # Rate limiting so wait up to 31 seconds
+                    # Rate limiting detected
+                    self.rate_limit_errors_today += 1
                     self.log(f"Info: Fox: Rate limiting or comms issue detected {msg}:{errno}, waiting...")
                     await asyncio.sleep(random.random() * 30 + 1)
                     return None, True
