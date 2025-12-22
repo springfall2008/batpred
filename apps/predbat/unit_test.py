@@ -130,6 +130,7 @@ from tests.test_octopus_cache import test_octopus_cache_wrapper
 from tests.test_octopus_events import test_octopus_events_wrapper
 from tests.test_octopus_refresh_token import test_octopus_refresh_token_wrapper
 from tests.test_octopus_read_response import test_octopus_read_response_wrapper
+from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
 from tests.test_fetch_octopus_rates import test_fetch_octopus_rates
 from tests.test_fetch_tariffs import test_fetch_tariffs
@@ -324,6 +325,7 @@ def main():
         ("octopus_events", test_octopus_events_wrapper, "Octopus event handler tests", False),
         ("octopus_refresh_token", test_octopus_refresh_token_wrapper, "Octopus refresh token tests", False),
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
+        ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
