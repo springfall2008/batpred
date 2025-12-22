@@ -4866,16 +4866,14 @@ def test_fox_rate_limiting_midnight_reset(my_predbat):
     # Update the base object's midnight_utc to simulate day change
     my_predbat.midnight_utc = day2_midnight
 
-    with patch("fox.datetime") as mock_datetime:
+    with patch("fox.datetime") as mock_datetime, patch.object(fox, "log") as mock_log, patch.object(fox, "should_allow_retry", return_value=True):
+        # Mock datetime.now() to return day2_time
         mock_datetime.now.return_value = day2_time
+        # Mock datetime.now(timezone.utc) calls inside run()
+        mock_datetime.now.side_effect = lambda tz=None: day2_time if tz else day2_time
 
-        # Simulate midnight check (from run() method)
-        current_midnight = fox.midnight_utc
-        if fox.last_midnight_utc is not None and fox.last_midnight_utc != current_midnight:
-            fox.requests_today = 0
-            fox.rate_limit_errors_today = 0
-            fox.start_time_today = datetime.now(timezone.utc)
-            fox.last_midnight_utc = current_midnight
+        # Call run() to trigger midnight reset logic
+        run_async(fox.run(seconds=0, first=False))
 
     assert fox.requests_today == 0, f"Requests should be reset to 0, got {fox.requests_today}"
     assert fox.rate_limit_errors_today == 0, f"Rate limit errors should be reset to 0, got {fox.rate_limit_errors_today}"
