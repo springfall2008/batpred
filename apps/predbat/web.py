@@ -3694,9 +3694,9 @@ chart.render();
 
                 # Make entity count clickable only if count > 0
                 if entity_count > 0:
-                    onclick_attr = f"onclick=\"showEntityModal('{event_filter}')\">"
+                    onclick_attr = f"onclick=\"showEntityModal('{event_filter}')\""
                     style_attr = 'style="cursor: pointer; text-decoration: underline;"'
-                    text += f'<p><strong>Entities:</strong> <span class="{count_class}" {style_attr} {onclick_attr}num_entities: {entity_count}</span></p>\n'
+                    text += f'<p><strong>Entities:</strong> <span class="{count_class}" {style_attr} {onclick_attr}> num_entities: {entity_count}</span></p>\n'
                 else:
                     text += f'<p><strong>Entities:</strong> <span class="{count_class}">num_entities: {entity_count}</span></p>\n'
 
