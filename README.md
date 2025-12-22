@@ -12,8 +12,11 @@ Also known by some as Batpred or Batman!
 
 ![icon](https://github.com/springfall2008/batpred/assets/48591903/7c207423-1423-4f88-beb2-d1da5cfbfeeb) ![image](https://github.com/springfall2008/batpred/assets/48591903/e98a0720-d2cf-4b71-94ab-97fe09b3cee1)
 
-If you want to buy me a beer then please use [Paypal](https://paypal.me/predbat?country.x=GB&locale.x=en_GB) or [Github sponsor](https://github.com/springfall2008)
+If you want to buy me a beer then please use [Paypal](https://paypal.me/predbat?country.x=GB&locale.x=en_GB) or [GitHub sponsor](https://github.com/springfall2008)
 ![image](https://github.com/springfall2008/batpred/assets/48591903/b3a533ef-0862-4e0b-b272-30e254f58467)
+
+* Use my referral code for Octopus Energy: <https://share.octopus.energy/jolly-eel-176>
+* Use my referral code for Axle Energy (UK): <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
 
 ## Predbat documentation
 
@@ -26,12 +29,12 @@ It also explains how you can contribute to the project.
 
 ## Support
 
-For support please raise a Github ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106)
+For support please raise a GitHub ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106)
 
 Some inverters have their own groups also e.g:
 
-- [GivTCP](https://www.facebook.com/groups/615579009972782)
-- [Solis](https://www.facebook.com/groups/288045168816481)
+* [GivTCP](https://www.facebook.com/groups/615579009972782)
+* [Solis](https://www.facebook.com/groups/288045168816481)
 
 ## License
 

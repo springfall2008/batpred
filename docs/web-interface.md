@@ -37,7 +37,7 @@ The initial view is the Dash view which gives a summary of Predbat's status and 
 
 ![image](images/web-interface-dash-view.png)
 
-The Debug panel provides easy access to a number of files that are useful in diagnosing a problem and are usually required if you raise a [Predbat Github issue](https://github.com/springfall2008/batpred/issues):
+The Debug panel provides easy access to a number of files that are useful in diagnosing a problem and are usually required if you raise a [Predbat GitHub issue](https://github.com/springfall2008/batpred/issues):
 
 - **Download apps.yaml** - provides a link to download your [apps.yaml file](apps-yaml.md). This is useful to identify issues with your Predbat configuration
 - **Create predbat_debug.yaml** - turns Predbat's debug mode on and creates a Predbat debug file which contains your entire Predbat Home Assistant configuration;
@@ -46,8 +46,8 @@ This debug file enables your setup to be recreated to identify any configuration
 - **Download predbat.log** - provides a link to download the current [Predbat logfile](output-data.md#predbat-logfile) which contains progress and any error messages that occur whilst Predbat is running
 - **Download predbat_plan.html** - provides a link to download the current [Predbat HTML plan](output-data.md#viewing-the-predbat-plan)
 
-Note that before you can attach a downloaded apps.yaml or predbat_debug.yaml file to a Github issue you must rename the file extension, e.g. to '.txt', so for example `apps.txt` and `predbat_debug.txt`.
-This is because Github does not accept .yaml file attachments.
+Note that before you can attach a downloaded apps.yaml or predbat_debug.yaml file to a GitHub issue you must rename the file extension, e.g. to '.txt', so for example `apps.txt` and `predbat_debug.txt`.
+This is because GitHub does not accept .yaml file attachments.
 
 Underneath the Debug panel is the Power Flow diagram.  The Power Flow gives an 'instantaneous Power' snapshot of your PV generation, Battery charge/discharge, Grid import/export and House consumption using the **power_xx** entities defined in `apps.yaml`.
 

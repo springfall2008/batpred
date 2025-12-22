@@ -309,4 +309,4 @@ There is a [Home Assistant automation that will alert you if GivTCP stops sendin
 
 ## I have another problem not listed above
 
-If you are still having trouble feel free to raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support
+If you are still having trouble feel free to raise a [GitHub ticket](https://github.com/springfall2008/batpred/issues) for support

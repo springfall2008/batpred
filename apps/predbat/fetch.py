@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
+from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 
 class Fetch:
@@ -440,6 +441,7 @@ class Fetch:
         prev_octopus_slots = self.octopus_slots.copy()
         prev_octopus_saving_slots = self.octopus_saving_slots.copy()
         prev_octopus_free_slots = self.octopus_free_slots.copy()
+        prev_axle_sessions = self.axle_sessions.copy()
 
         self.rate_import = {}
         self.rate_import_replicated = {}
@@ -473,6 +475,15 @@ class Fetch:
             alert_feed = self.components.get_component("alert_feed")
             if alert_feed:
                 self.alerts, self.alert_active_keep = alert_feed.process_alerts(self.minutes_now, self.midnight_utc)
+
+        # Combine keep from alerts and manual SOC into all_active_keep
+        self.all_active_keep = self.alert_active_keep.copy()
+        if self.manual_soc_keep:
+            for minute, soc_value in self.manual_soc_keep.items():
+                if minute in self.all_active_keep:
+                    self.all_active_keep[minute] = max(self.all_active_keep[minute], soc_value)
+                else:
+                    self.all_active_keep[minute] = soc_value
 
         # iBoost load data
         if "iboost_energy_today" in self.args:
@@ -731,6 +742,7 @@ class Fetch:
 
         # Fetch octopus saving sessions and free sessions
         self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions()
+        self.axle_sessions = fetch_axle_sessions(self)
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
@@ -763,6 +775,7 @@ class Fetch:
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
+            load_axle_slot(self, self.axle_sessions, export=True, rate_replicate=self.rate_export_replicated)
             self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.rate_export, self.rate_export_replicated)
             self.rate_export = self.apply_manual_rates(self.rate_export, self.manual_export_rates, is_import=False, rate_replicate=self.rate_export_replicated)
             self.rate_scan_export(self.rate_export, print=True)
@@ -872,6 +885,9 @@ class Fetch:
             force_replan = True
         if str(prev_octopus_free_slots) != str(self.octopus_free_slots):
             self.log("Octopus free slots changed from {} to {}".format(prev_octopus_free_slots, self.octopus_free_slots))
+            force_replan = True
+        if str(prev_axle_sessions) != str(self.axle_sessions):
+            self.log("Axle sessions changed from {} to {}".format(prev_axle_sessions, self.axle_sessions))
             force_replan = True
         return force_replan
 
@@ -1420,6 +1436,8 @@ class Fetch:
         curr = self.currency_symbols[1]
 
         have_alerts = len(self.alert_active_keep) > 0
+        have_manual_soc = len(self.manual_soc_keep) > 0
+
         car_planning_on_rates = self.num_cars > 0 and not self.octopus_intelligent_charging
         car_charging_max_price = max(self.car_charging_plan_max_price[: self.num_cars]) if car_planning_on_rates else 0.0
 
@@ -1427,7 +1445,7 @@ class Fetch:
             self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts:
+            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts or have_manual_soc:
                 self.rate_import_cost_threshold = self.rate_max + 0.1
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
@@ -1733,6 +1751,12 @@ class Fetch:
                 self.log("Warn: battery_charge_power_curve is incorrectly configured - ignoring")
                 self.record_status("battery_charge_power_curve is incorrectly configured - ignoring", had_errors=True)
 
+        self.battery_charge_power_curve_default = self.args.get("battery_charge_power_curve_default", {})
+        if not isinstance(self.battery_charge_power_curve_default, dict):
+            self.battery_charge_power_curve_default = {}
+            self.log("Warn: battery_charge_power_curve_default is incorrectly configured - ignoring")
+            self.record_status("battery_charge_power_curve_default is incorrectly configured - ignoring", had_errors=True)
+
         # Discharge curve
         if self.args.get("battery_discharge_power_curve", "") == "auto":
             self.battery_discharge_power_curve_auto = True
@@ -1744,6 +1768,12 @@ class Fetch:
                 self.battery_discharge_power_curve = {}
                 self.log("Warn: battery_discharge_power_curve is incorrectly configured - ignoring")
                 self.record_status("battery_discharge_power_curve is incorrectly configured - ignoring", had_errors=True)
+
+        self.battery_discharge_power_curve_default = self.args.get("battery_discharge_power_curve_default", {})
+        if not isinstance(self.battery_discharge_power_curve_default, dict):
+            self.battery_discharge_power_curve_default = {}
+            self.log("Warn: battery_discharge_power_curve_default is incorrectly configured - ignoring")
+            self.record_status("battery_discharge_power_curve_default is incorrectly configured - ignoring", had_errors=True)
 
         # Temperature curve charge
         self.battery_temperature_charge_curve = self.args.get("battery_temperature_charge_curve", {})
@@ -1785,6 +1815,14 @@ class Fetch:
         self.export_slot_split = self.plan_interval_minutes
         self.calculate_best = True
         self.set_read_only = self.get_arg("set_read_only")
+        self.set_read_only_axle = False
+
+        # Check if Axle control is enabled and an event is active
+        if self.get_arg("axle_control", False) and not self.set_read_only:
+            if fetch_axle_active(self):
+                self.log("Axle VPP event is active - enabling read-only mode")
+                self.set_read_only = True
+                self.set_read_only_axle = True
 
         # hard wired options, can be configured per inverter later on
         self.set_soc_enable = True
@@ -1909,6 +1947,7 @@ class Fetch:
         self.manual_import_rates = self.manual_rates("manual_import_rates", default_rate=self.get_arg("manual_import_value"))
         self.manual_export_rates = self.manual_rates("manual_export_rates", default_rate=self.get_arg("manual_export_value"))
         self.manual_load_adjust = self.manual_rates("manual_load_adjust", default_rate=self.get_arg("manual_load_value"))
+        self.manual_soc_keep = self.manual_rates("manual_soc", default_rate=self.get_arg("manual_soc_value"))
 
         # Update list of config options to save/restore to
         self.update_save_restore_list()

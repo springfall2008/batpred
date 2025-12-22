@@ -26,7 +26,8 @@ class Execute:
         status_hold_iboost = ""  # iBoost hold status text
         status_freeze_export = ""  # freeze export during demand status text
 
-        in_alert = self.alert_active_keep.get(self.minutes_now, 0)
+        in_alert = self.alert_active_keep.get(self.minutes_now, 0) > 0
+        in_manual_soc = self.manual_soc_keep.get(self.minutes_now, 0) > 0
 
         if self.holiday_days_left > 0:
             status = "Demand (Holiday)"
@@ -44,7 +45,10 @@ class Execute:
 
             # Read-only mode
             if self.set_read_only:
-                status = "Read-Only"
+                if self.set_read_only_axle:
+                    status = "Read-Only (Axle)"
+                else:
+                    status = "Read-Only"
                 continue
             # Inverter is in calibration mode
             if inverter.in_calibration:
@@ -595,6 +599,8 @@ class Execute:
 
         if in_alert > 0:
             status += " [Alert]"
+        if in_manual_soc:
+            status += " [Manual SoC]"
 
         return status, status_extra
 
@@ -706,16 +712,27 @@ class Execute:
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
                 curve = inverter.find_charge_curve(discharge=False)
-                if curve and self.battery_charge_power_curve_auto:
+                if curve and (self.battery_charge_power_curve_auto or not self.computed_charge_curve):
                     self.log("Saved computed battery charge power curve")
                     self.battery_charge_power_curve = curve
-                self.computed_charge_curve = True
+                    self.computed_charge_curve = True
+                else:
+                    if self.battery_charge_power_curve_default and not self.battery_charge_power_curve:
+                        self.battery_charge_power_curve = self.battery_charge_power_curve_default
+                        self.computed_charge_curve = True
+                        self.log("Using default battery charge power curve")
+
             if id == 0 and (not self.computed_discharge_curve or self.battery_discharge_power_curve_auto) and not self.battery_discharge_power_curve:
                 curve = inverter.find_charge_curve(discharge=True)
-                if curve and self.battery_discharge_power_curve_auto:
+                if curve and (self.battery_discharge_power_curve_auto or not self.computed_discharge_curve):
                     self.log("Saved computed battery discharge power curve")
                     self.battery_discharge_power_curve = curve
-                self.computed_discharge_curve = True
+                    self.computed_discharge_curve = True
+                else:
+                    if self.battery_discharge_power_curve_default and not self.battery_discharge_power_curve:
+                        self.battery_discharge_power_curve = self.battery_discharge_power_curve_default
+                        self.computed_discharge_curve = True
+                        self.log("Using default battery discharge power curve")
 
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
             if not found_first:
@@ -840,7 +857,7 @@ class Execute:
             },
         )
 
-    def balance_inverters(self):
+    def balance_inverters(self, test_mode=False):
         """
         Attempt to balance multiple inverters
         """
@@ -864,8 +881,11 @@ class Execute:
 
         inverters = []
         for id in range(num_inverters):
-            inverter = Inverter(self, id, quiet=True)
-            inverter.update_status(self.minutes_now, quiet=True)
+            if test_mode:
+                inverter = self.inverters[id]
+            else:
+                inverter = Inverter(self, id, quiet=True)
+                inverter.update_status(self.minutes_now, quiet=True)
             if inverter.in_calibration:
                 self.log("Inverter {} is in calibration mode, not balancing".format(id))
                 return
@@ -909,12 +929,12 @@ class Execute:
                 reserves,
                 battery_powers,
                 total_battery_power,
-                dp0(battery_max_rates),
-                dp0(charge_rates),
-                dp0(pv_powers),
-                dp0(load_powers),
+                [dp0(x) for x in battery_max_rates],
+                [dp0(x) for x in charge_rates],
+                [dp0(x) for x in pv_powers],
+                [dp0(x) for x in load_powers],
                 dp0(total_charge_rates),
-                dp0(discharge_rates),
+                [dp0(x) for x in discharge_rates],
                 dp0(total_discharge_rates),
             )
         )
@@ -931,8 +951,8 @@ class Execute:
         soc_low = []
         soc_high = []
         for inverter in inverters:
-            soc_low.append(inverter.soc_percent < soc_max and (abs(inverter.soc_percent - soc_max) >= self.balance_inverters_discharge))
-            soc_high.append(inverter.soc_percent > soc_min and (abs(inverter.soc_percent - soc_min) >= self.balance_inverters_charge))
+            soc_low.append(inverter.soc_percent < soc_max and (abs(inverter.soc_percent - soc_max) >= self.balance_inverters_threshold_discharge))
+            soc_high.append(inverter.soc_percent > soc_min and (abs(inverter.soc_percent - soc_min) >= self.balance_inverters_threshold_charge))
 
         above_reserve = []  # Is the battery above reserve?
         below_full = []  # Is the battery below full?
@@ -984,18 +1004,18 @@ class Execute:
             elif self.balance_inverters_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross charging during discharge, attempting to balance it".format(this_inverter))
                 if soc_low[this_inverter] and can_power_house[other_inverter]:
-                    balance_reset_discharge[this_inverter] = True
-                    inverters[this_inverter].adjust_discharge_rate(0, notify=False)
-                else:
                     balance_reset_charge[this_inverter] = True
                     inverters[this_inverter].adjust_charge_rate(0, notify=False)
+                elif can_power_house[this_inverter]:
+                    balance_reset_discharge[other_inverter] = True
+                    inverters[other_inverter].adjust_discharge_rate(0, notify=False)
             elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
                 balance_reset_discharge[this_inverter] = True
                 inverters[this_inverter].adjust_discharge_rate(0, notify=False)
 
         for id in range(num_inverters):
-            if not balance_reset_charge.get(id, False) and total_charge_rates != 0 and charge_rates[id] == 0:
+            if not balance_reset_charge.get(id, False) and total_charge_rates > 0 and charge_rates[id] == 0:
                 self.log("BALANCE: Inverter {} reset charge rate to {} now balanced".format(id, inverter.battery_rate_max_charge * MINUTE_WATT))
                 inverters[id].adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT, notify=False)
             if not balance_reset_discharge.get(id, False) and total_discharge_rates != 0 and discharge_rates[id] == 0:

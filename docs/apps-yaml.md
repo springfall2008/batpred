@@ -1056,7 +1056,7 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
-An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's Github.
+An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
 
 ## Ohme car charger - direct integration
 
@@ -1382,6 +1382,65 @@ If you are using REST mode to control your GivEnergy inverter then the following
     - sensor.givtcp_{geserial}_battery_power
   soc_kw:
     - sensor.givtcp_{geserial}_soc_kwh
+```
+
+- **battery_charge_power_curve_default** - This optional configuration item provides a fallback charging curve when Predbat cannot auto-detect the curve from your inverter.
+
+This is useful when:
+
+- Your inverter doesn't provide historical charging data needed for auto-detection
+- You've recently installed Predbat and don't have sufficient historical data yet
+- Auto-detection fails but you know your battery's charging characteristics
+
+The default curve is only used if:
+
+- You have not manually configured `battery_charge_power_curve` (i.e., it is not set, or is set to `"auto"`)
+- Auto-detection from inverter history fails or returns no curve
+
+**Precedence:** If you manually configure `battery_charge_power_curve` (with any value other than `"auto"`),
+it will be used exclusively and neither auto-detection nor the default will be considered.
+Only if `battery_charge_power_curve` is set to `"auto"` or not configured at all will the system attempt auto-detection,
+with the default as a fallback if auto-detection fails.
+
+Example:
+
+```yaml
+  battery_charge_power_curve_default:
+    91 : 0.91
+    92 : 0.81
+    93 : 0.71
+    94 : 0.62
+    95 : 0.52
+    96 : 0.43
+    97 : 0.33
+    98 : 0.24
+    99 : 0.24
+    100 : 0.24
+```
+
+- **battery_discharge_power_curve_default** - This optional configuration item provides a fallback discharging curve when Predbat cannot auto-detect the curve from your inverter.
+
+Similar to the charge curve default above, this is used as a fallback, but only if you have not manually configured
+`battery_discharge_power_curve` (or have set it to `"auto"`).
+
+**Precedence:** If you manually configure `battery_discharge_power_curve`, it takes absolute precedence and is always used.
+Only if `battery_discharge_power_curve` is set to `"auto"` or not configured at all will Predbat attempt to auto-detect
+the curve from inverter history; if that fails, the default `battery_discharge_power_curve_default` is used as a fallback.
+
+Example:
+
+```yaml
+  battery_discharge_power_curve_default:
+    10 : 0.85
+    9 : 0.75
+    8 : 0.65
+    7 : 0.55
+    6 : 0.45
+    5 : 0.35
+    4 : 0.25
+    3 : 0.15
+    2 : 0.10
+    1 : 0.05
 ```
 
 ## Battery temperature curves

@@ -944,7 +944,14 @@ class UserInterface:
 
             if type == "input_number" and ha_value is not None:
                 try:
+                    # Convert to float first
                     ha_value = float(ha_value)
+                    # For entities with integer step, convert to int to preserve integer format
+                    step = item.get("step", 1)
+                    if isinstance(step, int) or (isinstance(step, float) and step == int(step)):
+                        # Step is an integer (e.g., 1, 2, etc.), so keep value as integer if it has no decimal part
+                        if ha_value == int(ha_value):
+                            ha_value = int(ha_value)
                 except (ValueError, TypeError):
                     ha_value = None
 
@@ -1175,6 +1182,9 @@ class UserInterface:
             elif "_load" in item["name"]:
                 # Manual load rate
                 self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_load_value"))
+            elif "_soc" in item["name"]:
+                # Manual soc rate
+                self.manual_rates(config_item, new_value=item_value, default_rate=self.get_arg("manual_soc_value"))
             else:
                 self.log("Warn: Manual rate sensor {} not recognised".format(config_item))
         else:
@@ -1251,10 +1261,14 @@ class UserInterface:
                     prev_no_eq = prev.split("=")[0]
                 elif "?" in prev:
                     prev_no_eq = prev.split("?")[0]
+                else:
+                    prev_no_eq = prev
                 if "=" in value:
                     value_no_eq = value.split("=")[0]
                 elif "?" in value:
                     value_no_eq = value.split("?")[0]
+                else:
+                    value_no_eq = value
                 if prev_no_eq == value_no_eq:
                     time_overrides.remove(prev)
             time_overrides.append(value)
@@ -1321,8 +1335,9 @@ class UserInterface:
             if override_time:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
-                if (minutes - minutes_now) < manual_rate_max:
+                if (minutes - minutes_now_slot) >= 0 and (minutes - minutes_now) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
                     for minute in range(minutes, minutes + plan_interval):
                         rate_overrides_minutes[minute] = rate_value
@@ -1384,15 +1399,14 @@ class UserInterface:
                 continue
 
             # Parse time with day of week support using utility function
-            from utils import get_override_time_from_string
-
             override_time = get_override_time_from_string(self.now_utc, value, plan_interval)
 
             if override_time:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
-                if (minutes - minutes_now) < manual_time_max:
+                if (minutes >= minutes_now_slot) and (minutes - minutes_now_slot) < manual_time_max:
                     time_overrides.append(minutes)
 
         # Reconstruct the list in order based on minutes

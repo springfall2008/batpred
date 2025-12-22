@@ -654,7 +654,18 @@ Similar to manual_import_rates, if this selector is used in an automation you ca
 The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load for a slot, the adjustment in kWh (which is added to the predicted load) will be that
 configured in **input_number.predbat_manual_load_value** which can be adjusted prior to making a selection (default 0.5kWh).
 
-If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM=adjustment e.g. 12:30=0.5
+If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=adjustment e.g. 12:30:00=0.5
+
+The **select.predbat_manual_soc** selector is used to set a target State of Charge (SoC) percentage by a specific time.
+This is useful when you know you need a certain battery level at a particular time, for example before peak rates start or when you expect higher than normal consumption.
+The SoC target percentage will be that configured in **input_number.predbat_manual_soc_value** (default 100%) which can be adjusted prior to making a selection.
+
+For example, if you want the battery to be at 100% by 05:30, select that time slot. Predbat will plan charging to ensure the battery reaches the target SOC by that time.
+If this selector is used in an automation you can set the time and SoC together by making a selection in the format HH:MM:SS=percentage e.g. 05:30:00=100
+
+The manual SoC target works in conjunction with the weather alert system - if both are active at the same time, the higher SoC target will be used.
+
+When you use the manual override features you can only select times in the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
 
 _NOTE_: once you select a time slot from any of the **select.predbat_manual_XX** selectors the selected time slot is immediately marked on the drop-down and you can then make another change.
 Predbat still has to update the plan which it will be doing so in the background,

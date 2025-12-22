@@ -102,6 +102,7 @@ fline
 FLOMASTA
 Forestfire
 foxess
+freephase
 futurerate
 gecloud
 gekey
@@ -109,6 +110,7 @@ generationmix
 generationpower
 geserial
 geseriale
+getall
 Ginlong
 GivEnergy
 givtcp
@@ -207,6 +209,7 @@ octoplus
 octopoints
 Ohme
 ohmepy
+onblur
 onchange
 oncharge
 oninput
@@ -260,6 +263,7 @@ rtype
 ruamel
 saverestore
 searr
+securetoken
 Segoe
 selectattr
 Selfrun

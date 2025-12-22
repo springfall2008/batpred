@@ -1575,7 +1575,7 @@ template:
 Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla).
 Ed's setup only covered Predbat controlling charging the Powerwall, the below configuration (thanks @Slee2112) covers both charging and discharging (exporting).
 
-*Note:* This Predbat Tesla configuration has been developed with a Powerwall 3. It may require changes for older Powerwall models. Please raise a Github issue with details of any changes you find are required so the documentation can be updated.
+*Note:* This Predbat Tesla configuration has been developed with a Powerwall 3. It may require changes for older Powerwall models. Please raise a GitHub issue with details of any changes you find are required so the documentation can be updated.
 
 - The Predbat Tesla `apps.yaml` configuration was developed using the Tesla Fleet integration, and you can use this, or you can use the Teslemetry integration which provides easier access to Tesla API's, but requires a [Teslemetry subscription](https://teslemetry.com/)
 - Install and configure either the Tesla Fleet integration or Teslemetry integration in Home Assistant

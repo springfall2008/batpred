@@ -26,8 +26,7 @@ Before committing code, ALWAYS run pre-commit hooks to ensure code quality:
 
 ```bash
 cd coverage
-source venv/bin/activate
-pre-commit run --all-files
+./run_pre_commit
 ```
 
 Common pre-commit checks:
@@ -183,7 +182,8 @@ Use --quick argument to skip long tests:
 - Mock HA via `TestHAInterface` class which stores dummy state in `dummy_items` dict
 - Tests must be run from the coverage directory
 - Run all tests: `./run_all`
-- Run named unit tests `./run_all --test test_name`
+- Run named unit tests `./run_all --test test_name --test test_name2`
+- Run tests matching pattern: `./run_all -k axle_`
 - Run specific debug scenarios: `python3 ../apps/predbat/unit_test.py --debug predbat_debug_file.yaml`
 - Performance tests: `./run_all --perf-only`
 

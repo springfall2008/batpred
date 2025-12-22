@@ -14,7 +14,6 @@ import aiohttp
 import json
 import os
 import yaml
-from config import TIME_FORMAT
 import json
 import pytz
 
@@ -323,16 +322,25 @@ class OctopusAPI(ComponentBase):
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_device = {}
-        self.cache_path = self.config_root + "/cache"
         self.automatic = automatic
         self.commands = []
 
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
-        if not os.path.exists(self.cache_path):
-            os.makedirs(self.cache_path)
-        self.cache_file = self.cache_path + "/octopus.yaml"
+
+        # Shared cache directories for tariffs and URLs (shared across all users)
+        self.cache_path = self.config_root + "/octopus"
+        self.shared_cache_path = self.config_root + "/octopus/shared"
+        self.urls_cache_path = self.shared_cache_path + "/urls"
+
+        for path in [self.cache_path, self.shared_cache_path, self.urls_cache_path]:
+            if not os.path.exists(path):
+                os.makedirs(path, exist_ok=True)
+
+        # User-specific cache file (account_data, intelligent_device, saving_sessions only)
+        self.user_cache_file = self.cache_path + "/octopus_user_{}.yaml".format(self.account_id)
+        self.log("Octopus API: Initialized with account ID {} cache {} shared {}".format(self.account_id, self.user_cache_file, self.shared_cache_path))
 
     async def select_event(self, entity_id, value):
         if entity_id == self.get_entity_name("select", "intelligent_target_time"):
@@ -346,7 +354,7 @@ class OctopusAPI(ComponentBase):
             try:
                 value = int(value)
             except ValueError:
-                self.log("Error: Invalid value for intelligent target soc: {}".format(value))
+                self.log("Error: Octopus API: Invalid value for intelligent target soc: {}".format(value))
                 return
             self.commands.append({"command": "set_intelligent_target_percentage", "value": value})
 
@@ -426,45 +434,128 @@ class OctopusAPI(ComponentBase):
                 done_command = True
         return done_command
 
+    def get_tariff_cache_key(self, tariff_data):
+        """
+        Generate cache key for a tariff based on product_code and tariff_code
+        Returns: filename safe string like "AGILE-FLEX-22-11-25_E-1R-AGILE-FLEX-22-11-25-C"
+        """
+        product_code = tariff_data.get("productCode", "unknown")
+        tariff_code = tariff_data.get("tariffCode", "unknown")
+        # Sanitize for filesystem safety
+        key = f"{product_code}_{tariff_code}".replace("/", "_").replace("\\", "_")
+        return key
+
+    def load_url_from_cache(self, url):
+        """
+        Load cached HTTP response for a URL
+        Returns: cached data or None
+        """
+        import hashlib
+
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+        cache_file = f"{self.urls_cache_path}/{url_hash}.yaml"
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r") as f:
+                    return yaml.safe_load(f)
+            except Exception as e:
+                self.log(f"Warn: Failed to load URL cache {url_hash}: {e}")
+        return None
+
+    def save_url_to_cache(self, url, data):
+        """
+        Save HTTP response to cache for a URL
+        No locking needed - each URL is in a separate file
+        """
+        import hashlib
+
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+        cache_file = f"{self.urls_cache_path}/{url_hash}.yaml"
+        try:
+            with open(cache_file, "w") as f:
+                yaml.dump(data, f)
+        except Exception as e:
+            self.log(f"Warn: Failed to save URL cache {url_hash}: {e}")
+
+    def decode_kraken_token_expiry(self, token):
+        """
+        Extract expiration timestamp from Kraken JWT token without verification.
+        Returns datetime object if successful, None otherwise.
+        """
+        import base64
+        import json
+
+        if not token:
+            return None
+
+        try:
+            parts = token.split(".")
+            if len(parts) != 3:
+                return None
+
+            # Decode payload (add padding if needed)
+            payload = parts[1] + "=" * (4 - len(parts[1]) % 4)
+            payload_decoded = json.loads(base64.urlsafe_b64decode(payload))
+
+            if "exp" in payload_decoded:
+                return datetime.fromtimestamp(payload_decoded["exp"])
+            return None
+        except Exception as e:
+            self.log(f"Warn: Failed to decode Kraken token expiry: {e}")
+            return None
+
     async def load_octopus_cache(self):
         """
         Load the octopus cache
+        User-specific data from user file, tariffs/URLs from shared individual files
         """
+        # Load user-specific data
         data = {}
-        if os.path.exists(self.cache_file):
+        if os.path.exists(self.user_cache_file):
             try:
-                with open(self.cache_file, "r") as f:
+                with open(self.user_cache_file, "r") as f:
                     data = yaml.safe_load(f)
             except Exception as e:
-                self.log("Warn: Octopus API: Failed to load cache from {} - {}".format(self.cache_file, e))
+                self.log("Warn: Octopus API: Failed to load cache from {} - {}".format(self.user_cache_file, e))
 
             if data:
                 self.account_data = data.get("account_data", {})
-                self.tariffs = data.get("tariffs", {})
                 self.saving_sessions = data.get("saving_sessions", {})
-                self.url_cache = data.get("url_cache", {})
                 self.intelligent_device = data.get("intelligent_device", {})
-            if self.tariffs is None:
-                self.tariffs = {}
-            if self.account_data is None:
-                self.account_data = {}
-            if self.saving_sessions is None:
-                self.saving_sessions = {}
-            if self.intelligent_device is None:
-                self.intelligent_device = {}
+                self.graphql_token = data.get("kraken_token")
+
+        # Load tariffs from individual shared cache files
+        # Tariffs will be loaded on-demand when needed via load_tariff_from_cache()
+        self.tariffs = {}
+
+        # Load URL cache from individual shared files
+        # URL cache will be checked on-demand via load_url_from_cache()
+        self.url_cache = {}
+        if self.tariffs is None:
+            self.tariffs = {}
+        if self.account_data is None:
+            self.account_data = {}
+        if self.saving_sessions is None:
+            self.saving_sessions = {}
+        if self.intelligent_device is None:
+            self.intelligent_device = {}
 
     async def save_octopus_cache(self):
         """
         Save the octopus cache
+        User-specific data to user file, tariffs/URLs to individual shared files
         """
+        # Save user-specific data only
         octopus_cache = {}
         octopus_cache["account_data"] = self.account_data
-        octopus_cache["tariffs"] = self.tariffs
         octopus_cache["saving_sessions"] = self.saving_sessions
-        octopus_cache["url_cache"] = self.url_cache
         octopus_cache["intelligent_device"] = self.intelligent_device
-        with open(self.cache_file, "w") as f:
+        octopus_cache["kraken_token"] = self.graphql_token
+        with open(self.user_cache_file, "w") as f:
             yaml.dump(octopus_cache, f)
+
+        # URL cache entries are saved on-demand via save_url_to_cache()
+        # These allow the re-loading of tariffs so we don't need to save them directly
 
     def get_tariff(self, tariff_type):
         if tariff_type in self.tariffs:
@@ -812,7 +903,7 @@ class OctopusAPI(ComponentBase):
         Get day and night rates from Octopus
         """
         mdata = []
-        self.log("Info: Octopus tariff has day and night rates, fetching both")
+        self.log("Info: Octopus API: tariff has day and night rates, fetching both")
         url_day = url.replace("standard-unit-rates", "day-unit-rates")
         url_night = url.replace("standard-unit-rates", "night-unit-rates")
         result_day = await self.fetch_url_cached(url_day)
@@ -904,31 +995,78 @@ class OctopusAPI(ComponentBase):
 
     async def clean_url_cache(self):
         """
-        Clean the URL cache
+        Clean the URL cache - now uses individual files in shared cache
         """
         now = datetime.now()
-        for url in list(self.url_cache.keys()):
-            stamp = self.url_cache[url]["stamp"]
-            age = now - stamp
-            if age.seconds > (24 * 60 * 60):
-                del self.url_cache[url]
+
+        # Clean old cache files from shared URLs directory
+        if os.path.exists(self.urls_cache_path):
+            for filename in os.listdir(self.urls_cache_path):
+                filepath = os.path.join(self.urls_cache_path, filename)
+                if filename.endswith(".yaml"):
+                    try:
+                        with open(filepath, "r") as f:
+                            cache_entry = yaml.safe_load(f)
+                        if cache_entry and "stamp" in cache_entry:
+                            stamp = cache_entry["stamp"]
+                            age = now - stamp
+                            if age.total_seconds() > (24 * 60 * 60):
+                                os.remove(filepath)
+                                self.log(f"Octopus API: Cleaned old URL cache file: {filename}")
+                    except Exception as e:
+                        self.log(f"Warn: Octopus API: Failed to clean cache file {filename}: {e}")
 
     async def fetch_url_cached(self, url):
         """
         Fetch a URL from the cache or reload it
+        Uses individual file per URL in shared cache directory
+        Implements stale-while-revalidate to prevent thundering herd
         """
-        if url in self.url_cache:
-            stamp = self.url_cache[url]["stamp"]
-            pdata = self.url_cache[url]["data"]
-            age = datetime.now() - stamp
-            if age.seconds < (30 * 60):
-                return pdata
+        import hashlib
 
+        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+
+        # Check shared file cache first
+        cached_data = self.load_url_from_cache(url)
+        if cached_data and "stamp" in cached_data and "data" in cached_data:
+            stamp = cached_data["stamp"]
+            age = datetime.now() - stamp
+
+            # Fresh cache (< 30 minutes) - return immediately
+            if age.total_seconds() < (30 * 60):
+                return cached_data["data"]
+
+            # Stale cache (30-35 minutes) - serve stale while ONE pod refreshes
+            if age.total_seconds() < (35 * 60):
+                lock_file = f"{self.urls_cache_path}/{url_hash}.lock"
+                try:
+                    # Try to acquire lock atomically (non-blocking)
+                    # cspell:ignore CREAT WRONLY
+                    fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    try:
+                        # We got the lock! Refresh in background
+                        data = await self.async_download_octopus_url(url)
+                        if data:
+                            cache_entry = {"stamp": datetime.now(), "data": data}
+                            self.save_url_to_cache(url, cache_entry)
+                            self.log(f"Octopus API: Refreshed stale cache for {url_hash}")
+                    finally:
+                        os.close(fd)
+                        os.remove(lock_file)
+                except FileExistsError:
+                    # Another pod is refreshing, serve stale data
+                    self.log(f"Octopus API: Serving stale cache due to file access lock {url_hash}")
+                    pass
+
+                # Serve stale data (either we just refreshed, or another pod is refreshing)
+                return cached_data["data"]
+
+        # Cache completely missing or too stale (>35 min) - must fetch
         data = await self.async_download_octopus_url(url)
         if data:
-            self.url_cache[url] = {}
-            self.url_cache[url]["stamp"] = datetime.now()
-            self.url_cache[url]["data"] = data
+            # Save to shared file cache
+            cache_entry = {"stamp": datetime.now(), "data": data}
+            self.save_url_to_cache(url, cache_entry)
             return data
         else:
             self.log("Warn: Unable to download Octopus data from URL {}".format(url))
@@ -944,6 +1082,7 @@ class OctopusAPI(ComponentBase):
             product_code = tariffs[tariff]["productCode"]
             tariff_code = tariffs[tariff]["tariffCode"]
 
+            # Fetch from URL or URL cache
             if tariff == "gas":
                 tariff_type = "gas"
             else:
@@ -1004,7 +1143,7 @@ class OctopusAPI(ComponentBase):
             return pdata
         else:
             # No tariff
-            self.log("OctopusDirect: tariff {} not available, using zero".format(tariff_type))
+            self.log("Octopus API: tariff {} not available, using zero".format(tariff_type))
             return {n: 0 for n in range(0, 60 * 24)}
 
     async def async_read_response(self, response, url, ignore_errors=False):
@@ -1052,11 +1191,13 @@ class OctopusAPI(ComponentBase):
 
     async def async_refresh_token(self):
         """
-        Refresh the token
+        Refresh the token using JWT expiry from the token itself
         """
-
-        if self.graphql_expiration is not None and (self.graphql_expiration - timedelta(minutes=5)) > datetime.now():
-            return self.graphql_token
+        # Check if we have a valid token by decoding its expiry
+        if self.graphql_token:
+            expiry = self.decode_kraken_token_expiry(self.graphql_token)
+            if expiry and expiry > datetime.now() + timedelta(minutes=5):
+                return self.graphql_token
 
         client = await self.api.async_create_client_session()
         url = f"{self.api.base_url}/v1/graphql/"
@@ -1074,7 +1215,8 @@ class OctopusAPI(ComponentBase):
                     and "token" in token_response_body["data"]["obtainKrakenToken"]
                 ):
                     self.graphql_token = token_response_body["data"]["obtainKrakenToken"]["token"]
-                    self.graphql_expiration = datetime.now() + timedelta(hours=1)
+                    # Save token to cache immediately
+                    await self.save_octopus_cache()
                     return self.graphql_token
                 else:
                     self.log("Warn: Octopus API: Failed to retrieve auth token")
@@ -1083,9 +1225,9 @@ class OctopusAPI(ComponentBase):
             self.log(f"Failed to connect. Timeout of {self.api.timeout} exceeded.")
             return None
 
-    async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False):
+    async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0):
         """
-        Execute a graphql query
+        Execute a graphql query with automatic token refresh on auth errors
         """
         await self.async_refresh_token()
         try:
@@ -1095,7 +1237,19 @@ class OctopusAPI(ComponentBase):
             payload = {"query": query}
             headers = {"Authorization": f"JWT {self.graphql_token}", integration_context_header: request_context}
             async with client.post(url, json=payload, headers=headers) as response:
+                # Process response (which reads the text)
                 response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
+
+                # Check for auth errors and retry once
+                if response_body and "errors" in response_body and _retry_count == 0:
+                    for error in response_body.get("errors", []):
+                        error_code = error.get("extensions", {}).get("errorCode")
+                        if error_code in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
+                            self.log(f"Kraken token invalid (error {error_code}), forcing refresh and retry")
+                            self.graphql_token = None
+                            await self.async_refresh_token()
+                            return await self.async_graphql_query(query, request_context, returns_data, ignore_errors, _retry_count=1)
+
                 if response_body and ("data" in response_body):
                     self.update_success_timestamp()
                     return response_body["data"]
@@ -1421,11 +1575,16 @@ class Octopus:
         now = datetime.now()
         if url in self.octopus_url_cache:
             stamp = self.octopus_url_cache[url]["stamp"]
+            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
-            if age.seconds < (30 * 60):
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+
+            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
+            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
+                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                 return pdata
+            elif cached_midnight != self.midnight_utc:
+                self.log("Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         try:
             r = requests.get(url)
@@ -1442,6 +1601,7 @@ class Octopus:
         # Return new data
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
+        self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = r.text
         return r.text
 
@@ -1565,112 +1725,6 @@ class Octopus:
             self.log(f"Error in create_free_session_simple: {e}")
             return None
 
-    def html_to_text(self, html):
-        """
-        Convert HTML to human-readable text by removing tags and normalizing whitespace.
-        Simple text extraction that preserves line breaks for human-like reading.
-        """
-        # Remove HTML tags but preserve some structure
-        text = html
-
-        # Replace block elements with newlines for better text flow
-        block_elements = ["</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>", "</p>", "</div>", "</section>", "</article>", "</li>", "</br>", "<br/>", "<br>"]
-        for element in block_elements:
-            text = text.replace(element, "\n")
-
-        # Remove remaining HTML tags
-        text = re.sub(r"<[^>]+>", "", text)
-
-        # Decode HTML entities
-        text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&#39;", "'")
-
-        # Normalize whitespace but preserve line breaks
-        lines = []
-        for line in text.split("\n"):
-            # Clean up each line
-            cleaned = re.sub(r"\s+", " ", line.strip())
-            if cleaned:  # Only keep non-empty lines
-                lines.append(cleaned)
-
-        return "\n".join(lines)
-
-    def create_free_session(self, time_slot, day_of_week, day_num, month, original_line):
-        """
-        Create a free session dictionary from parsed components.
-        Returns None if the session cannot be properly parsed.
-        """
-        try:
-            # Parse the time slot (e.g., "12-2pm", "7-9am")
-            time_match = re.match(r"(\d{1,2})(?::(\d{2}))?(?:am|pm)?-(\d{1,2})(?::(\d{2}))?(am|pm)", time_slot.lower())
-            if not time_match:
-                self.log(f"Warning: Cannot parse time slot '{time_slot}' in: {original_line[:100]}")
-                return None
-
-            start_hour = int(time_match.group(1))
-            start_min = int(time_match.group(2) or 0)
-            end_hour = int(time_match.group(3))
-            end_min = int(time_match.group(4) or 0)
-            period = time_match.group(5)  # am or pm
-
-            # Adjust for PM times
-            if period == "pm" and start_hour != 12:
-                start_hour += 12
-                end_hour += 12
-            elif period == "am" and start_hour == 12:
-                start_hour = 0
-                if end_hour == 12:
-                    end_hour = 0
-
-            # Handle cases like "11pm-1am" (crosses midnight)
-            if end_hour < start_hour:
-                end_hour += 24
-
-            # Parse date components
-            day = int(re.sub(r"[^\d]", "", day_num))  # Remove "st", "nd", "rd", "th"
-
-            # Estimate year (current year or next year if date has passed)
-            now = datetime.now()
-            year = now.year
-
-            # Try to parse the month
-            month_names = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
-            month_num = None
-            for i, month_name in enumerate(month_names, 1):
-                if month.lower().startswith(month_name[:3]):  # Match "sep", "sept", "september"
-                    month_num = i
-                    break
-
-            if not month_num:
-                self.log(f"Warning: Cannot parse month '{month}' in: {original_line[:100]}")
-                return None
-
-            # Create datetime objects
-            try:
-                start_time = datetime(year, month_num, day, start_hour, start_min)
-                end_time = datetime(year, month_num, day, end_hour % 24, end_min)
-
-                # If end time crosses midnight, adjust the date
-                if end_hour >= 24:
-                    end_time += timedelta(days=1)
-
-                # If the date is in the past, assume it's next year
-                if start_time < now:
-                    start_time = start_time.replace(year=year + 1)
-                    end_time = end_time.replace(year=year + 1)
-
-            except ValueError as e:
-                self.log(f"Warning: Cannot create datetime from {day}/{month_num}/{year} {start_hour}:{start_min}: {e}")
-                return None
-
-            # Format for PredBat (uses TIME_FORMAT from config.py)
-            session = {"start": start_time.strftime(TIME_FORMAT), "end": end_time.strftime(TIME_FORMAT), "rate": 0.0}  # Free electricity
-
-            return session
-
-        except Exception as e:
-            self.log(f"Error creating free session from '{time_slot}' '{day_of_week}' '{day_num}' '{month}': {e}")
-            return None
-
     def download_octopus_rates(self, url):
         """
         Download octopus rates directly from a URL or return from cache if recent
@@ -1683,11 +1737,15 @@ class Octopus:
         now = datetime.now()
         if url in self.octopus_url_cache:
             stamp = self.octopus_url_cache[url]["stamp"]
+            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
-            if age.seconds < (30 * 60):
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale rates after midnight)
+            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
+                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                 return pdata
+            elif cached_midnight != self.midnight_utc:
+                self.log("Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         # Retry up to 3 minutes
         for retry in range(3):
@@ -1708,6 +1766,7 @@ class Octopus:
         # Cache New Octopus data
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
+        self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = pdata
         return pdata
 
@@ -2066,7 +2125,6 @@ class Octopus:
         """
         data_all = []
         rate_data = {}
-
         if entity_id:
             # From 9.0.0 of the Octopus plugin the data is split between previous rate, current rate and next rate
             # and the sensor is replaced with an event - try to support the old settings and find the new events
@@ -2101,6 +2159,7 @@ class Octopus:
                 or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
                 or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
             )
+
             if data_import:
                 data_all += data_import
             else:
@@ -2207,7 +2266,11 @@ class Octopus:
                         end = event.get("end", None)
                         start_time = str2time(start)  # reformat the saving session start & end time for improved readability
                         end_time = str2time(end)
-                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
+                        octopoints_kwh = event.get("octopoints_per_kwh", None)
+                        if octopoints_kwh is not None:
+                            saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
+                        else:
+                            saving_rate = saving_rate  # Use default if not specified
                         if code:  # Join the new Octopus saving event and send an alert
                             self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
@@ -2224,8 +2287,11 @@ class Octopus:
                 for event in joined_events:
                     start = event.get("start", None)
                     end = event.get("end", None)
-                    saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
-                    if start and end and saving_rate > 0:
+                    octopoints_kwh = event.get("octopoints_per_kwh", None)
+                    if octopoints_kwh is not None:
+                        saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
+                    # If octopoints_per_kwh is None, skip this event as it's a past event only
+                    if start and end and octopoints_kwh is not None and saving_rate > 0:
                         # Save the saving slot?
                         try:
                             start_time = str2time(start)

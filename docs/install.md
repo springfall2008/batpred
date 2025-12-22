@@ -17,7 +17,7 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 - [Setting up the Energy dashboard for GivEnergy inverters from Speak to the Geek](https://www.youtube.com/watch?v=YPPpwTKIz7M)
 - [Power Flow Card Plus from Speak to the Geek](https://www.youtube.com/watch?v=C4Zh35E9wJE)
 
-If you get stuck, please read the [FAQs](faq.md) and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
+If you get stuck, please read the [FAQs](faq.md) and if necessary raise a [GitHub ticket](https://github.com/springfall2008/batpred/issues) for support.
 
 ## Inverter Control install
 

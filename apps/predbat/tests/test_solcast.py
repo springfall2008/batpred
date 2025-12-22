@@ -50,11 +50,13 @@ class MockBase:
         """Track dashboard_item calls"""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None):
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         """Mock get_state_wrapper"""
         if entity_id in self.mock_ha_states:
             result = self.mock_ha_states[entity_id]
-            if isinstance(result, dict):
+            if raw:
+                return result
+            elif isinstance(result, dict):
                 if attribute:
                     return result.get(attribute, default)
                 return result.get("state", default)

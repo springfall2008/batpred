@@ -27,10 +27,10 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.29.5"
+THIS_VERSION = "v8.30.2"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py"]
+PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -81,7 +81,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
     def download_predbat_releases_url(self, url):
         """
-        Download release data from github, but use the cache for 2 hours
+        Download release data from GitHub, but use the cache for 2 hours
         """
         # Check the cache first
         now = datetime.now()
@@ -90,19 +90,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             pdata = self.github_url_cache[url]["data"]
             age = now - stamp
             if age.seconds < (120 * 60):
-                self.log("Using cached GITHub data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+                self.log("Using cached GitHub data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
                 return pdata
 
         try:
             r = requests.get(url)
         except Exception:
-            self.log("Warn: Unable to load data from Github URL: {}".format(url))
+            self.log("Warn: Unable to load data from GitHub URL: {}".format(url))
             return []
 
         try:
             pdata = r.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Unable to decode data from Github URL: {}".format(url))
+            self.log("Warn: Unable to decode data from GitHub URL: {}".format(url))
             return []
 
         # Save to cache
@@ -197,7 +197,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             self.expose_config("version", new_version, force=True)
 
         else:
-            self.log("Warn: Unable to download Predbat version information from github, return code: {}".format(data))
+            self.log("Warn: Unable to download Predbat version information from GitHub, return code: {}".format(data))
             self.expose_config("version", False, force=True)
 
         return self.releases
@@ -247,9 +247,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.log("Warn: unit_conversion - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
         return state
 
-    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None):
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         """
         Wrapper function to get state from HA
+
+        entity_id = The entity id to get
+        default = Default value if not found
+        attribute = Specific attribute to get, if not set defaults to the current state
+        refresh = Force a refresh of the state from HA
+        required_unit = Convert the state to this unit if different
+        raw = Fetch the raw database information which includes state and all the attributes
         """
         if not self.ha_interface:
             self.log("Error: get_state_wrapper - No HA interface available")
@@ -259,8 +266,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         if entity_id and "$" in entity_id:
             entity_id, attribute = entity_id.split("$")
 
-        state = self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
-        state = self.unit_conversion(entity_id, state, None, required_unit)
+        state = self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh, raw=raw)
+        if not raw and required_unit:
+            state = self.unit_conversion(entity_id, state, None, required_unit)
 
         return state
 
@@ -541,13 +549,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.balance_inverters_threshold_discharge = 1.0
         self.load_inday_adjustment = 1.0
         self.set_read_only = True
+        self.set_read_only_axle = False
         self.metric_cloud_coverage = 0.0
         self.future_energy_rates_import = {}
         self.future_energy_rates_export = {}
         self.load_scaling_dynamic = {}
         self.battery_charge_power_curve = {}
+        self.battery_charge_power_curve_default = {}
         self.battery_charge_power_curve_auto = False
         self.battery_discharge_power_curve = {}
+        self.battery_discharge_power_curve_default = {}
         self.battery_discharge_power_curve_auto = False
         self.computed_charge_curve = False
         self.computed_discharge_curve = False
@@ -570,6 +581,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = []
+        self.axle_sessions = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
@@ -621,6 +633,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.battery_temperature_prediction = {}
         self.alerts = []
         self.alert_active_keep = {}
+        self.manual_soc_keep = {}
+        self.all_active_keep = {}
         self.calculate_tweak_plan = False
         self.set_charge_low_power = False
         self.set_export_low_power = False
@@ -683,6 +697,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.expose_config("active", True)
         self.fetch_config_options()
         sensor_force_replan = self.fetch_sensor_data()
+
         if sensor_force_replan:
             self.log("Sensor changes require a replan, will recompute the plan")
             recompute = True
@@ -916,10 +931,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             active_components = self.components.get_active()
             error_count = 0
             component_status = {}
+            component_error_count = {}
             all_healthy = True
             for component_name in all_components:
                 is_active = self.components.is_active(component_name)
                 is_alive = self.components.is_alive(component_name)
+                component_error_count[component_name] = self.components.get_error_count(component_name)
                 if is_active and not is_alive:
                     # Component is active but not alive - error state
                     component_status[component_name] = "error"
@@ -936,6 +953,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "friendly_name": "Predbat components healthy",
                     "icon": "mdi:cog-outline" if all_healthy else "mdi:cog-off-outline",
                     "components": component_status,
+                    "component_error_count": component_error_count,
                     "active_count": len(active_components),
                     "total_count": len(all_components),
                     "error_count": error_count,

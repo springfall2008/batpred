@@ -14,6 +14,7 @@ from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
+from axle import AxleAPI
 from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
@@ -213,6 +214,17 @@ COMPONENT_LIST = {
         },
         "phase": 1,
     },
+    "axle": {
+        "class": AxleAPI,
+        "name": "Axle Energy",
+        "event_filter": "predbat_axle_",
+        "args": {
+            "api_key": {"required": True, "config": "axle_api_key"},
+            "pence_per_kwh": {"required": False, "config": "axle_pence_per_kwh", "default": 100},
+            "automatic": {"required": False, "config": "axle_automatic", "default": True},
+        },
+        "phase": 1,
+    },
 }
 
 
@@ -382,6 +394,16 @@ class Components:
     def get_all(self):
         all_components = [name for name in self.components.keys()]
         return all_components
+
+    def get_error_count(self, name):
+        """Get error count for a component"""
+        if name not in self.components:
+            return None
+        if not self.components[name]:
+            return None
+        if "get_error_count" not in dir(self.components[name]):
+            return None
+        return self.components[name].get_error_count()
 
     def can_restart(self, name):
         """Check if a component can be restarted"""

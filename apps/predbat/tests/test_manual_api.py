@@ -143,6 +143,11 @@ def run_test_manual_api(my_predbat):
         print("ERROR: T16 Expecting inverter limit 1 to be {} got {}".format(400, limit1))
         failed = 1
 
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
     del my_predbat.args["inverter_limit_charge"]
+
+    my_predbat.api_select("manual_api", "off")
+    my_predbat.manual_api = my_predbat.api_select_update("manual_api")
 
     return failed

@@ -941,7 +941,10 @@ class Output:
         plan_debug = self.plan_debug
         mode = self.predbat_mode
         if self.set_read_only:
-            mode += " (read only)"
+            if self.set_read_only_axle:
+                mode += " (read only - Axle)"
+            else:
+                mode += " (read only)"
         if self.debug_enable:
             mode += " (debug)"
         html += "<table>"
@@ -1001,7 +1004,6 @@ class Output:
             rate_value_export = dp2(self.rate_export.get(minute, 0))
             charge_window_n = -1
             export_window_n = -1
-            in_alert = True if self.alert_active_keep.get(minute, 0) > 0 else False
             periods_left = int((end_plan - minute + self.plan_interval_minutes - 1) / self.plan_interval_minutes)
 
             show_limit = ""
@@ -1056,6 +1058,9 @@ class Output:
                     minute_relative_end = self.export_window_best[export_window_n]["end"] - minute_now_align
                 else:
                     rowspan = 0
+
+            in_alert = self.alert_active_keep.get(minute, 0) > 0
+            in_manual_soc = self.manual_soc_keep.get(minute, 0) > 0
 
             pv_forecast = 0
             load_forecast = 0
@@ -1303,7 +1308,9 @@ class Output:
 
             # Alert
             if in_alert:
-                state = "&#9888;" + state
+                soc_sym = "&#9888; " + soc_sym
+            if in_manual_soc:
+                soc_sym = "&#9998; " + soc_sym
 
             # Import and export rates -> to string
             adjust_type = self.rate_import_replicated.get(minute, None)
@@ -1465,7 +1472,7 @@ class Output:
                 html += "<td id=car bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
                 html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
-            html += "<td id=soc bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
+            html += "<td id=soc data-minute=" + str(minute) + " bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td id=cost bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
             html += "<td id=total_cost bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             if self.carbon_enable:
@@ -2313,6 +2320,15 @@ class Output:
             self.call_notify("Predbat status change to: " + message + extra)
             self.previous_status = message
 
+        error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
+        try:
+            error_count = int(error_count)
+        except (ValueError, TypeError):
+            error_count = 0
+
+        if had_errors:
+            error_count += 1
+
         self.dashboard_item(
             self.prefix + ".status",
             state=message,
@@ -2324,6 +2340,7 @@ class Output:
                 "debug": debug,
                 "version": THIS_VERSION,
                 "error": (had_errors or self.had_errors),
+                "error_count": error_count,
             },
         )
 
