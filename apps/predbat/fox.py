@@ -840,17 +840,6 @@ class FoxAPI(ComponentBase):
                         app="fox",
                     )
 
-    def getMinSocOnGrid(self, deviceSN):
-        """
-        Get the MinSocOnGrid setting for the device
-        """
-        value = self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
-        try:
-            value = int(float(value))
-        except ValueError:
-            value = 10
-        return value
-
     async def get_schedule_settings_ha(self, deviceSN):
         """
         Get the current schedule from HA database
@@ -1390,7 +1379,7 @@ class FoxAPI(ComponentBase):
                     )
                 elif direction == "discharge":
                     new_schedule.append(
-                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
+                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": max(soc, reserve), "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
                     )
         new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max)
         self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
