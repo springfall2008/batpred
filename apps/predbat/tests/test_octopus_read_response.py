@@ -147,7 +147,7 @@ async def test_octopus_read_response(my_predbat):
     else:
         print("PASS: Invalid JSON handled gracefully, returns None")
 
-    # Test 8: GraphQL errors with ignore_errors=False
+    # Test 8: GraphQL errors with ignore_errors=False (returns data, caller filters)
     print("\n*** Test 8: GraphQL errors with ignore_errors=False ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
@@ -156,11 +156,11 @@ async def test_octopus_read_response(my_predbat):
 
     result = await api.async_read_response(response, "https://api.octopus.energy/v1/graphql/", ignore_errors=False)
 
-    if result is not None:
-        print(f"ERROR: Expected None for GraphQL errors, got {result}")
+    if result != response_data:
+        print(f"ERROR: Expected full response data for GraphQL errors, got {result}")
         failed = True
     else:
-        print("PASS: GraphQL errors with ignore_errors=False returns None")
+        print("PASS: GraphQL errors returned to caller for handling")
 
     # Test 9: GraphQL errors with ignore_errors=True
     print("\n*** Test 9: GraphQL errors with ignore_errors=True ***")
@@ -177,7 +177,7 @@ async def test_octopus_read_response(my_predbat):
     else:
         print("PASS: GraphQL errors with ignore_errors=True returns data")
 
-    # Test 10: GraphQL auth token errors
+    # Test 10: GraphQL auth token errors (returned to caller, not filtered)
     print("\n*** Test 10: GraphQL auth token errors ***")
     api = OctopusAPI(my_predbat, key="test-key", account_id="test-account", automatic=False)
 
@@ -187,12 +187,12 @@ async def test_octopus_read_response(my_predbat):
 
         result = await api.async_read_response(response, "https://api.octopus.energy/v1/graphql/", ignore_errors=False)
 
-        if result is not None:
-            print(f"ERROR: Expected None for auth token error {error_code}, got {result}")
+        if result != response_data:
+            print(f"ERROR: Expected full response for auth token error {error_code}, got {result}")
             failed = True
             break
     else:
-        print("PASS: GraphQL auth token errors (KT-CT-*) logged and return None")
+        print("PASS: GraphQL auth token errors returned to caller for retry logic")
 
     # Test 11: Response with integration context header
     print("\n*** Test 11: Response with integration context header ***")

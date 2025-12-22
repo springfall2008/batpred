@@ -1177,16 +1177,16 @@ class OctopusAPI(ComponentBase):
             self.log(f"Warn: Octopus API: Failed to extract response json: {e} - {url} - {text}")
             return None
 
-        if ("graphql" in url) and ("errors" in data_as_json) and (ignore_errors == False):
-            msg = f'Warn: Octopus API: Errors in request ({url}): {data_as_json["errors"]}'
-            errors = list(map(lambda error: error["message"], data_as_json["errors"]))
-            self.log(msg)
+        # Check for rate limit errors - these should return None immediately (no retry)
+        if ("graphql" in url) and data_as_json and ("errors" in data_as_json):
+            for error in data_as_json.get("errors", []):
+                error_code = error.get("extensions", {}).get("errorCode")
+                if error_code == "KT-CT-1199":
+                    msg = f'Warn: Octopus API: Rate limit error in request ({url}): {data_as_json["errors"]}'
+                    self.log(msg)
+                    return None
 
-            for error in data_as_json["errors"]:
-                if error["extensions"]["errorCode"] in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
-                    self.log(f"Warn: Octopus API: Token error - {msg} {errors}")
-            return None
-
+        # Return the response as-is - let caller handle other errors (including auth errors that need retry)
         return data_as_json
 
     async def async_refresh_token(self):
@@ -1229,7 +1229,12 @@ class OctopusAPI(ComponentBase):
         """
         Execute a graphql query with automatic token refresh on auth errors
         """
-        await self.async_refresh_token()
+        token = await self.async_refresh_token()
+        if token is None:
+            self.failures_total += 1
+            if returns_data:
+                self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context} - token refresh failed")
+            return None
         try:
             self.requests_total += 1
             client = await self.api.async_create_client_session()
@@ -1239,17 +1244,32 @@ class OctopusAPI(ComponentBase):
             async with client.post(url, json=payload, headers=headers) as response:
                 # Process response (which reads the text)
                 response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
-
+                
                 # Check for auth errors and retry once
                 if response_body and "errors" in response_body and _retry_count == 0:
                     for error in response_body.get("errors", []):
                         error_code = error.get("extensions", {}).get("errorCode")
                         if error_code in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
-                            self.log(f"Kraken token invalid (error {error_code}), forcing refresh and retry")
+                            self.log(f"Octopus API: Kraken token invalid (error {error_code}), forcing refresh and retry")
                             self.graphql_token = None
-                            await self.async_refresh_token()
-                            return await self.async_graphql_query(query, request_context, returns_data, ignore_errors, _retry_count=1)
-
+                            retry_token = await self.async_refresh_token()
+                            if retry_token is None:
+                                self.failures_total += 1
+                                self.log(f"Warn: Octopus API: Failed to refresh token for retry of graphql query {request_context}")
+                                return None
+                            # Token is now refreshed and cached in self.graphql_token
+                            # Retry the query with new token (_retry_count=1 prevents infinite loop)
+                            return await self.async_graphql_query(query, request_context, returns_data=returns_data, ignore_errors=ignore_errors, _retry_count=1)
+                
+                # Check for other errors (non-auth)
+                if response_body and "errors" in response_body and not ignore_errors:
+                    msg = f'Warn: Octopus API: Errors in request ({url}): {response_body["errors"]}'
+                    self.log(msg)
+                    self.failures_total += 1
+                    if returns_data:
+                        self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
+                    return None
+                
                 if response_body and ("data" in response_body):
                     self.update_success_timestamp()
                     return response_body["data"]
