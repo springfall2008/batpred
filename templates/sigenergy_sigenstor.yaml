@@ -234,6 +234,9 @@ pred_bat:
   octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
   octopus_saving_session_octopoints_per_penny: 8
 
+  # Enter your Axle VPP API key if you have signed up to the Axle service in the UK
+  # axle_api_key: "xxxxxxx"
+
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
 

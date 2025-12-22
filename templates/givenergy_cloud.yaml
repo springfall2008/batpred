@@ -293,6 +293,9 @@ pred_bat:
   # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work
   octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
 
+  # Enter your Axle VPP API key if you have signed up to the Axle service in the UK
+  # axle_api_key: "xxxxxxx"
+
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
 

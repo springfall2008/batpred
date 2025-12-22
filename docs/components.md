@@ -488,7 +488,7 @@ Click the Pencil icon next to a component to change the component configuration,
 
 ![image](images/web-interface-component-configuration.png)
 
-Once you save the component configuration the changes will be written to `apps.yaml`.
+Once you save the component configuration the changes will be written to `apps.yaml` and Predbat and all components will be restarted.
 
 ### Component Health
 
