@@ -262,6 +262,7 @@ rstart
 rtype
 ruamel
 saverestore
+scalarstring
 searr
 securetoken
 Segoe

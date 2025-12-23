@@ -2217,6 +2217,161 @@ body.dark-mode .entity-value {
     return text
 
 
+def get_dashboard_collapsible_js():
+    """
+    Return JavaScript for dashboard collapsible sections
+    """
+    text = """
+<script>
+function updateExpandAllButton() {
+    const allSections = document.querySelectorAll('.dashboard-section-content');
+    const btn = document.getElementById('expandAllBtn');
+    if (!btn) return;
+
+    const allExpanded = Array.from(allSections).every(s => !s.classList.contains('collapsed'));
+    btn.textContent = allExpanded ? 'Collapse All' : 'Expand All';
+}
+
+function toggleDashboardSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    const icon = document.getElementById('icon-' + sectionId);
+
+    if (section.classList.contains('collapsed')) {
+        section.classList.remove('collapsed');
+        icon.textContent = '−';
+    } else {
+        section.classList.add('collapsed');
+        icon.textContent = '+';
+    }
+
+    // Update the expand all button text based on current state
+    updateExpandAllButton();
+}
+
+function toggleAllSections() {
+    const allSections = document.querySelectorAll('.dashboard-section-content');
+    const allIcons = document.querySelectorAll('.expand-icon');
+    const btn = document.getElementById('expandAllBtn');
+
+    // Check if all are expanded or not
+    const allExpanded = Array.from(allSections).every(s => !s.classList.contains('collapsed'));
+
+    allSections.forEach((section, index) => {
+        if (allExpanded) {
+            section.classList.add('collapsed');
+            if (allIcons[index]) allIcons[index].textContent = '+';
+        } else {
+            section.classList.remove('collapsed');
+            if (allIcons[index]) allIcons[index].textContent = '−';
+        }
+    });
+
+    btn.textContent = allExpanded ? 'Expand All' : 'Collapse All';
+}
+</script>
+"""
+    return text
+
+
+def get_dashboard_css():
+    """
+    Return CSS for dashboard collapsible sections
+    """
+    text = """
+<style>
+.expand-all-button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+}
+
+.expand-all-button:hover {
+    background-color: #45a049;
+}
+
+.dashboard-section {
+    margin: 0;
+    margin-bottom: 2px;
+}
+
+.dashboard-section-header {
+    cursor: pointer;
+    user-select: none;
+    padding: 6px 10px;
+    background-color: #f5f5f5;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+    display: flex;
+    align-items: center;
+    margin: 0;
+}
+
+.dashboard-section-header:hover {
+    background-color: #e8e8e8;
+}
+
+.expand-icon {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    text-align: center;
+    margin-right: 8px;
+    font-weight: bold;
+    font-size: 20px;
+    color: #4CAF50;
+}
+
+.dashboard-section-content {
+    transition: max-height 0.3s ease, opacity 0.3s ease;
+    overflow: hidden;
+    padding-bottom: 20px;
+}
+
+.dashboard-section-content.collapsed {
+    max-height: 0;
+    opacity: 0;
+}
+
+.dashboard-section-content:not(.collapsed) {
+    max-height: 10000px;
+    opacity: 1;
+}
+
+/* Dark mode for dashboard sections */
+body.dark-mode .expand-all-button {
+    background-color: #4CAF50;
+}
+
+body.dark-mode .expand-all-button:hover {
+    background-color: #45a049;
+}
+
+body.dark-mode .dashboard-section-header {
+    background-color: #333;
+    color: #e0e0e0;
+}
+
+body.dark-mode .dashboard-section-header:hover {
+    background-color: #3a3a3a;
+}
+
+body.dark-mode .expand-icon {
+    color: #4CAF50;
+}
+</style>
+"""
+    return text
+
+
 def get_components_css():
     """
     Return CSS for components page
@@ -2244,6 +2399,10 @@ def get_components_css():
 
 .component-card.active {
     border-color: #4CAF50;
+}
+
+.component-card.error {
+    border-color: #dc3545;
 }
 
 .component-card.inactive {
@@ -2438,6 +2597,10 @@ body.dark-mode .component-card {
 
 body.dark-mode .component-card.active {
     border-color: #4CAF50;
+}
+
+body.dark-mode .component-card.error {
+    border-color: #dc3545;
 }
 
 body.dark-mode .component-card.inactive {
@@ -2907,7 +3070,7 @@ def get_component_edit_modal_css():
 }
 
 input:checked + .toggle-slider {
-    background-color: #4CAF50;
+    background-color: #dc3545;
 }
 
 input:checked + .toggle-slider:before {
@@ -3016,6 +3179,10 @@ body.dark-mode .config-field-textarea {
 
 body.dark-mode .toggle-slider {
     background-color: #555;
+}
+
+body.dark-mode input:checked + .toggle-slider {
+    background-color: #dc3545;
 }
 
 body.dark-mode .deleted-indicator {
