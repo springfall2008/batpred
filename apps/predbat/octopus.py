@@ -990,7 +990,7 @@ class OctopusAPI(ComponentBase):
                             detail = data.get("detail", "")
 
                             self.failures_total += 1
-                            self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
+                            self.log("Warn: Error downloading Octopus data from URL {} (No Results) - {}".format(url, detail))
                             return {}
                         url = data.get("next", None)
                         pages += 1
