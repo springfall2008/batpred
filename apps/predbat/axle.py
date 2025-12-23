@@ -133,12 +133,12 @@ class AxleAPI(ComponentBase):
     def _request_with_retry(self, url, headers, max_retries=3):
         """
         Perform HTTP GET request with retry logic, check status code, and decode JSON
-        
+
         Args:
             url: URL to request
             headers: Request headers
             max_retries: Maximum number of retry attempts (default: 3)
-            
+
         Returns:
             Decoded JSON data if successful (status 200), None if failed or non-200 status
         """
@@ -156,7 +156,7 @@ class AxleAPI(ComponentBase):
                     return None
             except requests.RequestException as e:
                 if attempt < max_retries - 1:
-                    sleep_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    sleep_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
                     self.log(f"Warn: Axle API: Request attempt {attempt + 1} failed: {e}. Retrying in {sleep_time}s...")
                     time.sleep(sleep_time)
                 else:
