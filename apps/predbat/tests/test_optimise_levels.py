@@ -10,9 +10,6 @@
 from utils import calc_percent_limit
 from tests.test_infra import reset_rates, update_rates_import, update_rates_export, reset_inverter
 from prediction import Prediction
-from tests.test_infra import reset_inverter
-
-
 def run_optimise_levels(
     name,
     my_predbat,
