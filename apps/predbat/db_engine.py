@@ -22,6 +22,8 @@ class DatabaseEngine:
 
         self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
         self.db_cursor = self.db.cursor()
+        self.db_cursor.execute("PRAGMA journal_mode=WAL")
+        self.db_cursor.execute("PRAGMA synchronous=NORMAL")
         self.entity_id_cache = {}
 
         self._cleanup_db()
@@ -35,6 +37,13 @@ class DatabaseEngine:
             self.db.close()
             self.log("db_engine: Closed")
             self.db = None
+
+    def commit(self):
+        """
+        Commit changes to the database
+        """
+        if self.db:
+            self.db.commit()
 
     def _cleanup_db(self):
         """
@@ -106,7 +115,6 @@ class DatabaseEngine:
 
         # Put the entity_id into entities table if its not in already
         self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
-        self.db.commit()
         entity_index = self._get_entity_index_db(entity_id)
 
         # Convert time to GMT+0
@@ -185,7 +193,7 @@ class DatabaseEngine:
                     keep,
                 ),
             )
-            self.db.commit()
+            # self.db.commit() - removed to allow batch commits
         except sqlite3.IntegrityError:
             self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
 

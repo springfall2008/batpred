@@ -33,6 +33,7 @@ COMPONENT_LIST = {
         "args": {
             "db_enable": {"required": True, "config": "db_enable"},
             "db_days": {"required": False, "config": "db_days", "default": 30},
+            "db_commit_interval": {"required": False, "config": "db_commit_interval", "default": 0},
         },
         "can_restart": False,
         "phase": 0,
@@ -57,6 +58,8 @@ COMPONENT_LIST = {
         "name": "Web Interface",
         "args": {
             "web_port": {"required": False, "config": "web_port", "default": 5052},
+            "performance_mode": {"required": False, "config": "performance_mode", "default": False},
+            "hass_loop_interval": {"required": False, "config": "hass_loop_interval", "default": 1},
         },
         "phase": 0,
     },

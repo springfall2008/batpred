@@ -205,6 +205,15 @@ logger:
       - "State attributes for predbat.soc_kw_best10 exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
 ```
 
+## I see warnings like 'Warn: Callback ... took 9.98 seconds' in the logs
+
+You may see warnings in your logs indicating that a callback took a significant amount of time, for example: `Warn: Callback ... took 9.98 seconds`.
+
+**Short answer:** This is generally not a cause for concern.
+
+**Detail:** Predbat performs complex mathematical calculations to generate your battery plan, involving linear programming and matrix operations. It is normal for these calculations to take 5-20 seconds depending on your hardware. These warnings simply indicate that the "main loop" was busy doing this work.
+Recent optimizations in Predbat (such as `performance_mode` and main loop throttling) mean that the system is "sleeping" more often between these heavy lifting periods, reducing overall CPU usage even if the individual calculations still take time. As long as the calculation finishes successfully, this behavior is expected.
+
 ## Error - metric_octopus_import not set correctly or no energy rates can be read
 
 If you get this error in the Predbat log file:

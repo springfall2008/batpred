@@ -53,7 +53,7 @@ ROOT_YAML_KEY = "pred_bat"
 
 
 class WebInterface(ComponentBase):
-    def initialize(self, web_port):
+    def initialize(self, web_port, performance_mode=False, hass_loop_interval=1):
         self.default_page = "./dash"
         self.web_port = web_port
         self.default_log = "warnings"
@@ -438,7 +438,7 @@ class WebInterface(ComponentBase):
         if status and (("Warn:" in status) or ("Error:" in status)):
             text += "<tr><td>Status</td><td bgcolor=#ff7777>{}</td></tr>\n".format(status)
         elif not is_running:
-            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (unhealthy, Predbat not running)</td></tr>\n".format(status)
+            text += "<tr><td colspan='2' bgcolor='#ff7777'>{} (unhealthy)</td></tr>\n".format(status)
         else:
             text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
@@ -509,16 +509,11 @@ class WebInterface(ComponentBase):
             if app not in app_list:
                 app_list.append(app)
 
-        # Add expand/collapse all button
-        text += '<div style="margin: 20px 0;">\n'
-        text += '<button id="expandAllBtn" class="expand-all-button" onclick="toggleAllSections()">Expand All</button>\n'
-        text += "</div>\n"
-
         # Display per app
         for app in app_list:
-            section_id = f"section-{app}"
-
-            # Build entity list first to get count
+            text += "<h2>{} Entities</h2>\n".format(app[0].upper() + app[1:])
+            text += "<table>\n"
+            text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
             if app == "predbat":
                 entity_list = self.base.dashboard_index
             else:
@@ -527,22 +522,9 @@ class WebInterface(ComponentBase):
                     if self.base.dashboard_index_app[entity_id] == app:
                         entity_list.append(entity_id)
 
-            entity_count = len(entity_list)
-            entity_word = "entity" if entity_count == 1 else "entities"
-
-            text += f'<div class="dashboard-section">\n'
-            text += f'<h2 class="dashboard-section-header" onclick="toggleDashboardSection(\'{section_id}\')">\n'
-            text += f'<span class="expand-icon" id="icon-{section_id}">+</span> {app[0].upper() + app[1:]} Entities ({entity_count} {entity_word})\n'
-            text += "</h2>\n"
-            text += f'<div id="{section_id}" class="dashboard-section-content collapsed">\n'
-            text += "<table>\n"
-            text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
-
             for entity in entity_list:
                 text += self.html_get_entity_text(entity)
             text += "</table>\n"
-            text += "</div>\n"
-            text += "</div>\n"
 
         return text
 
@@ -2366,12 +2348,8 @@ chart.render();
         """
         Render apps.yaml as an HTML page
         """
-        from web_helper import get_dashboard_css, get_dashboard_collapsible_js
-
         self.default_page = "./dash"
         text = self.get_header("Predbat Dashboard", refresh=60)
-        text += get_dashboard_css()
-        text += get_dashboard_collapsible_js()
         text += "<body>\n"
         text += self.get_status_html(self.base.current_status, THIS_VERSION)
         text += "</body></html>\n"
@@ -3140,7 +3118,7 @@ chart.render();
             id = compare.get("id", "")
             series_data.append({"name": name, "data": compare_hist.get(id, {}).get("metric", {}), "chart_type": "bar"})
         series_data.append({"name": "Actual", "data": cost_yesterday_hist, "chart_type": "line", "stroke_width": "2"})
-        if self.base.num_cars > 0:
+        if self.base.car_charging_hold:
             series_data.append({"name": "Actual (no car)", "data": cost_yesterday_no_car, "chart_type": "line", "stroke_width": "2"})
 
         now_str = self.now_utc.strftime(TIME_FORMAT)
@@ -3633,10 +3611,7 @@ chart.render();
             time_ago_text = format_time_ago(last_updated_time)
 
             # Create component card
-            card_class = "active" if is_active else "inactive"
-            if is_active and not is_alive:
-                card_class += " error"
-            text += f'<div class="component-card {card_class}">\n'
+            text += f'<div class="component-card {"active" if is_active else "inactive"}">\n'
             text += f'<div class="component-header">\n'
             text += f'<h3>{component_info.get("name", component_name)}</h3>\n'
 
@@ -3908,7 +3883,6 @@ chart.render();
         """
         try:
             from ruamel.yaml import YAML
-            from ruamel.yaml.scalarstring import DoubleQuotedScalarString
             from config import APPS_SCHEMA
 
             json_data = await request.json()
@@ -3925,7 +3899,6 @@ chart.render();
             apps_yaml_path = "apps.yaml"
             yaml = YAML()
             yaml.preserve_quotes = True
-            yaml.default_flow_style = False
 
             try:
                 with open(apps_yaml_path, "r") as f:
@@ -3991,8 +3964,7 @@ chart.render();
                                 stream = StringIO(str(new_value))
                                 converted_value = yaml_parser.load(stream)
                     else:
-                        # String type - always quote strings for safety
-                        converted_value = DoubleQuotedScalarString(str(new_value))
+                        converted_value = str(new_value)
 
                     data[ROOT_YAML_KEY][config_key] = converted_value
 

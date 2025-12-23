@@ -50,6 +50,7 @@ Stores and manages all historical data for Predbat, including energy usage, sens
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `db_enable` | Boolean | Yes | - | `db_enable` | Set to `true` to enable the database, `false` to disable |
 | `db_days` | Integer | No | 30 | `db_days` | Number of days of historical data to keep in the database |
+| `db_commit_interval` | Integer | No | 30 | `db_commit_interval` | Frequency (in seconds) to write changes to disk (WAL mode) |
 
 ---
 
@@ -111,6 +112,8 @@ Provides a built-in web server that lets you view and manage Predbat through you
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `port` | Integer | No | 5052 | `web_port` | Port number for the web server |
+| `performance_mode` | Boolean | No | False | `performance_mode` | Enable performance optimizations (throttling, reduced I/O) |
+| `hass_loop_interval` | Integer | No | 1 | `hass_loop_interval` | Main loop sleep interval in seconds (default 5s in performance mode) |
 
 #### How to access (web)
 
