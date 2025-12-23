@@ -181,8 +181,7 @@ There are three key settings available to tune the performance of the Predbat ap
   performance_mode: True
   hass_loop_interval: 5
   db_commit_interval: 30
-```
-```
+
 
 ### Web interface
 
