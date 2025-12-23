@@ -1120,9 +1120,8 @@ class Plan:
                 save="best" if publish else None,
                 end_record=self.end_record,
             )
-            # round charge_limit_best (kWh) to 2 decimal places and export_limits_best (percentage) to nearest whole number
+            # round charge_limit_best (kWh) to 3 decimal places
             self.charge_limit_best = [dp3(elem) for elem in self.charge_limit_best]
-            self.export_limits_best = [dp3(elem) for elem in self.export_limits_best]
 
             self.log(
                 "Best charging limit SoC's {}kWh, export {}kWh gives import battery {}kWh, house {}kWh, export {}kWh, metric {}{}, metric10 {}{}".format(
