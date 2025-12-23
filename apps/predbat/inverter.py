@@ -447,7 +447,7 @@ class Inverter:
             self.reserve_percent = self.reserve_min
         else:
             self.reserve_percent = self.reserve_percent_current
-        self.reserve = dp2(self.soc_max * self.reserve_percent / 100.0)
+        self.reserve = dp3(self.soc_max * self.reserve_percent / 100.0)
 
         # Max inverter rate override
         if "inverter_limit" in self.base.args:

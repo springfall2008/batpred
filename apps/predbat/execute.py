@@ -110,7 +110,7 @@ class Execute:
                     self.log("Inverter {} Charge window will be: {} - {} - current SoC {}%, target {}%".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        target_soc = self.charge_limit_percent_best[0] if self.charge_limit_best[0] != self.reserve else calc_percent_limit(self.soc_kw, self.soc_max)
+                        target_soc = self.charge_limit_percent_best[0] if not self.is_freeze_charge(self.charge_limit_best[0]) else calc_percent_limit(self.soc_kw, self.soc_max)
                         inv_target_soc = self.adjust_battery_target_multi(inverter, target_soc, True, False, check=True)
 
                         current_charge_rate = inverter.get_current_charge_rate()
@@ -159,7 +159,7 @@ class Execute:
                             if not check.inv_has_timed_pause and (check.reserve_max < check.soc_percent):
                                 can_freeze_charge = False
                                 break
-                        if (self.charge_limit_best[0] == self.reserve) and self.soc_kw >= self.reserve and can_freeze_charge:
+                        if self.is_freeze_charge(self.charge_limit_best[0]) and self.soc_kw >= self.reserve and can_freeze_charge:
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
@@ -183,7 +183,7 @@ class Execute:
                         else:
                             # We can only hold charge if a) we have a way to hold the charge level on the reserve or with a pause feature
                             # and the current charge level is above the target for all inverters
-                            target_soc = calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
+                            target_soc = calc_percent_limit(max(self.charge_limit_best[0] if not self.is_freeze_charge(self.charge_limit_best[0]) else self.soc_kw, self.reserve), self.soc_max)
                             if self.set_soc_enable and self.soc_percent >= target_soc:
                                 status = "Hold charging"
                                 self.log("Inverter {} Hold charging as SoC {}% is above target SoC {}% set_discharge_during_charge {}".format(inverter.id, self.soc_percent, dp0(target_soc), self.set_discharge_during_charge))
@@ -235,7 +235,7 @@ class Execute:
                         if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes):
                             # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
                             # If we are going into freeze mode but haven't yet then don't configure the charge window as it will mean a spike of charging first
-                            if not isCharging and self.charge_limit_best[0] == self.reserve:
+                            if not isCharging and self.is_freeze_charge(self.charge_limit_best[0]):
                                 self.log("Charge window will be disabled as freeze charging is planned")
                                 inverter.disable_charge_window()
                             else:
@@ -499,7 +499,7 @@ class Execute:
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
                         # In charge freeze hold the target SoC at the current value
-                        if (self.charge_limit_best[0] == self.reserve) and (inverter.soc_kw >= inverter.reserve):
+                        if self.is_freeze_charge(self.charge_limit_best[0]) and (inverter.soc_kw >= inverter.reserve):
                             if isCharging:
                                 self.log("Within charge freeze setting target SoC to current SoC {}".format(dp0(inverter.soc_percent)))
                                 self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging, isExporting, isFreezeCharge=True)
@@ -516,10 +516,10 @@ class Execute:
                                 self.log("Resetting charging SoC as we are not charging and inverter_soc_reset is enabled")
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isExporting)
                             elif isCharging:
-                                target_soc = calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
+                                target_soc = calc_percent_limit(max(self.charge_limit_best[0] if not self.is_freeze_charge(self.charge_limit_best[0]) else self.soc_kw, self.reserve), self.soc_max)
                                 self.log("Setting charging SoC to {}% as per target".format(target_soc))
                                 self.adjust_battery_target_multi(inverter, target_soc, isCharging, isExporting)
-                                if self.charge_limit_best[0] == self.reserve:
+                                if self.is_freeze_charge(self.charge_limit_best[0]):
                                     inverter.adjust_charge_immediate(calc_percent_limit(max(inverter.soc_kw, inverter.reserve), inverter.soc_max), freeze=True)
                                 else:
                                     inverter.adjust_charge_immediate(target_soc)
@@ -527,7 +527,7 @@ class Execute:
                                 self.log("Setting charging SoC to 0% as we are not charging and inverter doesn't support target SoC")
                                 self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
                             else:
-                                target_soc = calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
+                                target_soc = calc_percent_limit(max(self.charge_limit_best[0] if not self.is_freeze_charge(self.charge_limit_best[0]) else self.soc_kw, self.reserve), self.soc_max)
                                 self.log("Setting charging SoC to {}% as per target for when charge window starts".format(target_soc))
                                 self.adjust_battery_target_multi(inverter, target_soc, isCharging, isExporting)
                     else:
@@ -566,7 +566,7 @@ class Execute:
 
                     # Charge immediate
                     if isCharging:
-                        if self.charge_limit_best[0] == self.reserve:
+                        if self.is_freeze_charge(self.charge_limit_best[0]):
                             inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
                         else:
                             inverter.adjust_charge_immediate(calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), freeze=True)
@@ -638,6 +638,13 @@ class Execute:
         if not check:
             inverter.adjust_battery_target(new_soc_percent, is_charging, is_exporting)
         return new_soc_percent
+
+    def is_freeze_charge(self, charge_limit_kwh):
+        """
+        Check if a charge limit (in kWh) represents a freeze charge (i.e., equals reserve)
+        Uses percentage comparison to avoid floating point rounding issues
+        """
+        return calc_percent_limit(charge_limit_kwh, self.soc_max) == self.reserve_percent
 
     def reset_inverter(self):
         """

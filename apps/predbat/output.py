@@ -738,7 +738,7 @@ class Output:
         """
         Get the charge type for the given charge limit
         """
-        if charge_limit == self.reserve:
+        if self.is_freeze_charge(charge_limit):
             if current:
                 return "freeze charging"
             else:
@@ -1218,7 +1218,7 @@ class Output:
 
                 limit_percent = calc_percent_limit(target, self.soc_max)
                 if limit > 0.0:
-                    if limit == self.reserve:
+                    if self.is_freeze_charge(limit):
                         state = "FrzChrg&rarr;"
                         state_color = "#EEEEEE"
                         raw_state = "FrzChrg"
