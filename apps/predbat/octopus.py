@@ -4,6 +4,7 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
+import asyncio
 import requests
 import re
 from datetime import datetime, timedelta, timezone
@@ -951,45 +952,52 @@ class OctopusAPI(ComponentBase):
         pages = 0
         while url and pages < 3:
             self.requests_total += 1
-            r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
-            if r.status_code not in [200, 201, 400]:
-                self.failures_total += 1
-                self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
-                return {}
+            timeout = aiohttp.ClientTimeout(total=20)
             try:
-                data = r.json()
-                self.last_success_timestamp = datetime.now(timezone.utc)
-            except requests.exceptions.JSONDecodeError:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}) as response:
+                        if response.status not in [200, 201, 400]:
+                            self.failures_total += 1
+                            self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, response.status))
+                            return {}
+                        try:
+                            data = await response.json()
+                            self.last_success_timestamp = datetime.now(timezone.utc)
+                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                            self.failures_total += 1
+                            self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
+                            return {}
+
+                        if response.status == 400:
+                            detail = data.get("detail", "")
+                            if "This tariff has day and night rates" in detail:
+                                self.log("Info: Octopus tariff has day and night rates, fetching both")
+                                mdata = await self.async_get_day_night_rates(url)
+                                if mdata:
+                                    return mdata
+                                else:
+                                    self.failures_total += 1
+                                    self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
+                                    return {}
+                            else:
+                                self.failures_total += 1
+                                self.log("Warn: Error downloading Octopus data from URL {} (400) - {}".format(url, detail))
+                                return {}
+
+                        if "results" in data:
+                            mdata += data["results"]
+                        else:
+                            detail = data.get("detail", "")
+
+                            self.failures_total += 1
+                            self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
+                            return {}
+                        url = data.get("next", None)
+                        pages += 1
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 self.failures_total += 1
-                self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
+                self.log("Warn: Error downloading Octopus data from URL {} - {}".format(url, e))
                 return {}
-
-            if r.status_code == 400:
-                detail = data.get("detail", "")
-                if "This tariff has day and night rates" in detail:
-                    self.log("Info: Octopus tariff has day and night rates, fetching both")
-                    mdata = await self.async_get_day_night_rates(url)
-                    if mdata:
-                        return mdata
-                    else:
-                        self.failures_total += 1
-                        self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
-                        return {}
-                else:
-                    self.failures_total += 1
-                    self.log("Warn: Error downloading Octopus data from URL {} (400) - {}".format(url, detail))
-                    return {}
-
-            if "results" in data:
-                mdata += data["results"]
-            else:
-                detail = data.get("detail", "")
-
-                self.failures_total += 1
-                self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
-                return {}
-            url = data.get("next", None)
-            pages += 1
 
         return mdata
 

@@ -10,21 +10,11 @@
 # fmt: on
 
 from carbon import CarbonAPI
-import asyncio
 import requests
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone, timedelta
 from config import TIME_FORMAT_HA
-
-
-def run_async(coro):
-    """Helper function to run async coroutines in sync test functions"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+from tests.test_infra import run_async
 
 
 class MockCarbonAPI(CarbonAPI):

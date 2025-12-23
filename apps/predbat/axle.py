@@ -9,8 +9,8 @@
 # API Documentation: https://vpp.axle.energy/landing/home-assistant
 
 from datetime import datetime, timedelta
-import time
-import requests
+import asyncio
+import aiohttp
 from component_base import ComponentBase
 from utils import str2time, minutes_to_time, TIME_FORMAT
 
@@ -130,35 +130,38 @@ class AxleAPI(ComponentBase):
         self.event_history.append(event_data.copy())
         self.log(f"Axle API: Added event to history - {event_data.get('import_export')} from {start_time_str} to {end_time_str}")
 
-    def _request_with_retry(self, url, headers, max_retries=3):
+    async def _request_with_retry(self, url, headers, max_retries=3):
         """
         Perform HTTP GET request with retry logic, check status code, and decode JSON
-        
+
         Args:
             url: URL to request
             headers: Request headers
             max_retries: Maximum number of retry attempts (default: 3)
-            
+
         Returns:
             Decoded JSON data if successful (status 200), None if failed or non-200 status
         """
+        timeout = aiohttp.ClientTimeout(total=30)
+
         for attempt in range(max_retries):
             try:
-                response = requests.get(url, headers=headers, timeout=30)
-                if response.status_code == 200:
-                    try:
-                        return response.json()
-                    except Exception as e:
-                        self.log(f"Warn: Axle API: Failed to parse JSON response: {e}")
-                        return None
-                else:
-                    self.log(f"Warn: Axle API: Failed to fetch data, status code {response.status_code}")
-                    return None
-            except requests.RequestException as e:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url, headers=headers) as response:
+                        if response.status == 200:
+                            try:
+                                return await response.json()
+                            except Exception as e:
+                                self.log(f"Warn: Axle API: Failed to parse JSON response: {e}")
+                                return None
+                        else:
+                            self.log(f"Warn: Axle API: Failed to fetch data, status code {response.status}")
+                            return None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < max_retries - 1:
-                    sleep_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    sleep_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
                     self.log(f"Warn: Axle API: Request attempt {attempt + 1} failed: {e}. Retrying in {sleep_time}s...")
-                    time.sleep(sleep_time)
+                    await asyncio.sleep(sleep_time)
                 else:
                     self.log(f"Warn: Axle API: Request failed after {max_retries} attempts: {e}")
                     return None
@@ -173,7 +176,7 @@ class AxleAPI(ComponentBase):
         url = "https://api.axle.energy/vpp/home-assistant/event"
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
-        data = self._request_with_retry(url, headers)
+        data = await self._request_with_retry(url, headers)
         if data is None:
             self.log("Axle API: Warn: No event data in response")
             self.failures_total += 1
