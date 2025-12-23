@@ -112,9 +112,8 @@ Provides a built-in web server that lets you view and manage Predbat through you
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `port` | Integer | No | 5052 | `web_port` | Port number for the web server |
-| `performance_mode` | Boolean | No | False | `performance_mode` | Enable performance optimizations (throttling, reduced I/O) |
-| `hass_loop_interval` | Integer | No | 1 | `hass_loop_interval` | Main loop sleep interval in seconds (default 5s in performance mode) |
 
+> Note: `performance_mode` and `hass_loop_interval` are core Predbat runtime options used by the main loop, not by the Web Interface component. See the main Predbat configuration documentation for details on these settings.
 #### How to access (web)
 
 If you use Predbat as a Home Assistant add on then click 'Open Web UI' from the add-on or add Predbat Web UI to your side bar.
