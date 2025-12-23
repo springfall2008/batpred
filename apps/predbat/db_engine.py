@@ -193,7 +193,7 @@ class DatabaseEngine:
                     keep,
                 ),
             )
-            # self.db.commit() - removed to allow batch commits
+            self.db.commit()  # Commit immediately to avoid data loss; WAL mode keeps this relatively cheap
         except sqlite3.IntegrityError:
             self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
 
