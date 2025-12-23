@@ -36,7 +36,7 @@ def run_optimise_levels(
     my_predbat.fetch_config_options()
     reset_inverter(my_predbat)
     my_predbat.forecast_minutes = 24 * 60
-    
+
     # Reset state that may have been set by previous tests
     my_predbat.best_soc_max = 0  # Reset SOC max cap - 0 means no cap
     my_predbat.best_soc_keep_weight = 0.5  # Reset to default
@@ -49,7 +49,6 @@ def run_optimise_levels(
 
     end_record = my_predbat.forecast_minutes
 
-    
     my_predbat.calculate_best_charge = True
     my_predbat.calculate_best_export = True
     my_predbat.soc_max = battery_size

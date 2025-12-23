@@ -86,19 +86,34 @@ def compute_metric_test(
         return True
     return False
 
+
 def save_state(my_predbat):
     state_dict = {}
-    save_items = ["metric_battery_value_scaling", "rate_export_min", "iboost_value_scaling",
-                  "inverter_loss", "battery_loss", "metric_battery_cycle", "pv_metric10_weight",
-                  "battery_loss_discharge", "metric_self_sufficiency", "rate_min", "rate_max",
-                  "carbon_enable", "carbon_metric", "rate_min_forward"]
+    save_items = [
+        "metric_battery_value_scaling",
+        "rate_export_min",
+        "iboost_value_scaling",
+        "inverter_loss",
+        "battery_loss",
+        "metric_battery_cycle",
+        "pv_metric10_weight",
+        "battery_loss_discharge",
+        "metric_self_sufficiency",
+        "rate_min",
+        "rate_max",
+        "carbon_enable",
+        "carbon_metric",
+        "rate_min_forward",
+    ]
     for item in save_items:
         state_dict[item] = getattr(my_predbat, item)
     return state_dict
 
+
 def restore_state(my_predbat, state_dict):
     for item, value in state_dict.items():
         setattr(my_predbat, item, value)
+
 
 def run_compute_metric_tests(my_predbat):
     """

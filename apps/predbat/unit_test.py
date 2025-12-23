@@ -294,6 +294,7 @@ def run_debug_cases(my_predbat):
 
     return failed
 
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -580,7 +581,7 @@ def main():
 
     # Collect tests to run based on arguments
     tests_to_run = []
-    
+
     if args.keyword:
         # Run tests matching keyword pattern
         keyword = args.keyword
@@ -603,7 +604,7 @@ def main():
     else:
         # Run all tests from the registry
         tests_to_run = TEST_REGISTRY
-    
+
     print(f"**** Running {len(tests_to_run)} test(s) ****")
     # Single loop to run all collected tests
     total_time = 0
@@ -613,18 +614,18 @@ def main():
             print(f"**** Skipping: {name} (slow) ****")
             skipped_count += 1
             continue
-        
+
         # Show descriptive message for keyword/specific tests, simple for full suite
         if args.keyword or args.test:
             print(f"**** Running test: {name} - {desc} ****")
         else:
             print(f"**** Running: {name} ****")
-        
+
         start_time = time.time()
         test_failed = func(my_predbat)
         elapsed = time.time() - start_time
         total_time += elapsed
-        
+
         if test_failed:
             if args.keyword or args.test:
                 print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s ****")
@@ -637,12 +638,12 @@ def main():
                 print(f"**** Test {name} PASSED in {elapsed:.2f}s ****")
             else:
                 print(f"**** {name}: PASSED in {elapsed:.2f}s ****")
-    
+
     # Report results
     if failed:
         print(f"**** ERROR: Some tests failed (total time: {total_time:.2f}s) ****")
         sys.exit(1)
-    
+
     if skipped_count > 0:
         print(f"**** All tests passed ({skipped_count} slow tests skipped, total time: {total_time:.2f}s) ****")
     else:
