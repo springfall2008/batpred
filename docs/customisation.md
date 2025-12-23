@@ -81,6 +81,7 @@ It's recommended for new users to start without expert mode and then maybe turn 
 
 Predbat includes a dedicated **Performance Mode** designed for resource-constrained hardware like Raspberry Pi or older devices.
 When `performance_mode` is enabled (see [apps.yaml basics](apps-yaml.md#performance-tuning)), Predbat optimizes its operation by:
+
 - **Throttling the Main Loop:** Increasing the idle sleep time from 1s to 5s to reduce CPU usage.
 - **Batching Database Writes:** Using Write-Ahead Logging (WAL) and committing to the disk only once every 30 seconds (configurable via `db_commit_interval`) to drastically reduce Disk I/O and SD card wear.
 - **Throttling File Checks:** Reducing the frequency of checking for file modifications.

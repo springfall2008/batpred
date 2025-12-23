@@ -104,7 +104,7 @@ class Hass:
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
         if not self.args.get("performance_mode", False):
-             self.logfile.flush()
+            self.logfile.flush()
         msg_lower = msg.lower()
         if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
@@ -209,7 +209,7 @@ class Hass:
                     t1 = time.time()
                     duration = t1 - t0
                     if duration > 0.1:
-                         self.log("Warn: Callback {} took {:.2f} seconds".format(item["callback"], duration), quiet=False)
+                        self.log("Warn: Callback {} took {:.2f} seconds".format(item["callback"], duration), quiet=False)
                 except Exception as e:
                     self.log("Error: {}".format(e), quiet=False)
                     print(traceback.format_exc())
