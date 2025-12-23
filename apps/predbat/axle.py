@@ -9,6 +9,7 @@
 # API Documentation: https://vpp.axle.energy/landing/home-assistant
 
 from datetime import datetime, timedelta
+import time
 import requests
 from component_base import ComponentBase
 from utils import str2time, minutes_to_time, TIME_FORMAT
@@ -129,6 +130,40 @@ class AxleAPI(ComponentBase):
         self.event_history.append(event_data.copy())
         self.log(f"Axle API: Added event to history - {event_data.get('import_export')} from {start_time_str} to {end_time_str}")
 
+    def _request_with_retry(self, url, headers, max_retries=3):
+        """
+        Perform HTTP GET request with retry logic, check status code, and decode JSON
+        
+        Args:
+            url: URL to request
+            headers: Request headers
+            max_retries: Maximum number of retry attempts (default: 3)
+            
+        Returns:
+            Decoded JSON data if successful (status 200), None if failed or non-200 status
+        """
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url, headers=headers, timeout=30)
+                if response.status_code == 200:
+                    try:
+                        return response.json()
+                    except Exception as e:
+                        self.log(f"Warn: Axle API: Failed to parse JSON response: {e}")
+                        return None
+                else:
+                    self.log(f"Warn: Axle API: Failed to fetch data, status code {response.status_code}")
+                    return None
+            except requests.RequestException as e:
+                if attempt < max_retries - 1:
+                    sleep_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    self.log(f"Warn: Axle API: Request attempt {attempt + 1} failed: {e}. Retrying in {sleep_time}s...")
+                    time.sleep(sleep_time)
+                else:
+                    self.log(f"Warn: Axle API: Request failed after {max_retries} attempts: {e}")
+                    return None
+        return None
+
     async def fetch_axle_event(self):
         """
         Fetch the latest VPP event from Axle Energy API
@@ -138,80 +173,55 @@ class AxleAPI(ComponentBase):
         url = "https://api.axle.energy/vpp/home-assistant/event"
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
-        try:
-            response = requests.get(url, headers=headers, timeout=30)
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-
-                    # Parse event data if present
-                    if data and isinstance(data, dict):
-                        # Convert ISO 8601 strings to timezone-aware datetime objects
-                        start_time = data.get("start_time")
-                        end_time = data.get("end_time")
-                        import_export = data.get("import_export")
-                        updated_at = data.get("updated_at")
-
-                        # Parse datetime strings
-                        if start_time:
-                            try:
-                                start_time = str2time(start_time)
-                            except Exception as e:
-                                self.log(f"Warn: Axle API: Failed to parse start_time: {e}")
-                                start_time = None
-
-                        if end_time:
-                            try:
-                                end_time = str2time(end_time)
-                            except Exception as e:
-                                self.log(f"Warn: Axle API: Failed to parse end_time: {e}")
-                                end_time = None
-
-                        if updated_at:
-                            try:
-                                updated_at = str2time(updated_at)
-                            except Exception as e:
-                                self.log(f"Warn: Axle API: Failed to parse updated_at: {e}")
-                                updated_at = None
-
-                        self.current_event = {
-                            "start_time": start_time.strftime(TIME_FORMAT) if start_time else None,
-                            "end_time": end_time.strftime(TIME_FORMAT) if end_time else None,
-                            "import_export": import_export,
-                            "updated_at": updated_at.strftime(TIME_FORMAT) if updated_at else None,
-                            "pence_per_kwh": self.pence_per_kwh,
-                        }
-
-                        # Add to history if event has started (active or past events)
-                        if start_time and end_time:
-                            self.add_event_to_history(self.current_event)
-
-                        self.update_success_timestamp()
-                        self.log(f"Axle API: Successfully fetched event data - {import_export} event from {start_time} to {end_time}" if start_time else "Axle API: No scheduled event")
-                    else:
-                        # Empty response - no event scheduled
-                        self.current_event = {
-                            "start_time": None,
-                            "end_time": None,
-                            "import_export": None,
-                            "updated_at": None,
-                            "pence_per_kwh": None,
-                        }
-                        self.log("Axle API: Warn: No event data in response")
-
-                    # Cleanup old events
-                    self.cleanup_event_history()
-                    self.publish_axle_event()
-
-                except Exception as e:
-                    self.failures_total += 1
-                    self.log(f"Warn: Axle API: Failed to parse JSON response: {e}")
-            else:
-                self.failures_total += 1
-                self.log(f"Warn: Axle API: Failed to fetch data, status code {response.status_code}")
-        except requests.RequestException as e:
+        data = self._request_with_retry(url, headers)
+        if data is None:
+            self.log("Axle API: Warn: No event data in response")
             self.failures_total += 1
-            self.log(f"Warn: Axle API: Request failed: {e}")
+        elif isinstance(data, dict):
+            # Convert ISO 8601 strings to timezone-aware datetime objects
+            start_time = data.get("start_time")
+            end_time = data.get("end_time")
+            import_export = data.get("import_export")
+            updated_at = data.get("updated_at")
+
+            # Parse datetime strings
+            if start_time:
+                try:
+                    start_time = str2time(start_time)
+                except Exception as e:
+                    self.log(f"Warn: Axle API: Failed to parse start_time: {e}")
+                    start_time = None
+
+            if end_time:
+                try:
+                    end_time = str2time(end_time)
+                except Exception as e:
+                    self.log(f"Warn: Axle API: Failed to parse end_time: {e}")
+                    end_time = None
+
+            if updated_at:
+                try:
+                    updated_at = str2time(updated_at)
+                except Exception as e:
+                    self.log(f"Warn: Axle API: Failed to parse updated_at: {e}")
+                    updated_at = None
+
+            self.current_event = {
+                "start_time": start_time.strftime(TIME_FORMAT) if start_time else None,
+                "end_time": end_time.strftime(TIME_FORMAT) if end_time else None,
+                "import_export": import_export,
+                "updated_at": updated_at.strftime(TIME_FORMAT) if updated_at else None,
+                "pence_per_kwh": self.pence_per_kwh,
+            }
+
+            # Add to history if event has started (active or past events)
+            if start_time and end_time:
+                self.add_event_to_history(self.current_event)
+
+            self.cleanup_event_history()
+            self.publish_axle_event()
+            self.log(f"Axle API: Successfully fetched event data - {import_export} event from {start_time} to {end_time}" if start_time else "Axle API: No scheduled event")
+            self.update_success_timestamp()
 
     def publish_axle_event(self):
         """
@@ -270,7 +280,11 @@ class AxleAPI(ComponentBase):
         Main run loop - poll API every 10 minutes (600 seconds)
         """
         if first or (seconds % (10 * 60) == 0):  # Every 10 minutes
-            await self.fetch_axle_event()
+            try:
+                await self.fetch_axle_event()
+            except Exception as e:
+                self.log(f"Warn: Axle API: Exception during fetch: {e}")
+                self.failures_total += 1
 
         return True
 

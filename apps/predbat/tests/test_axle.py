@@ -269,7 +269,7 @@ def test_axle_fetch_no_event(my_predbat=None):
 
 
 def test_axle_http_error(my_predbat=None):
-    """Test handling of HTTP errors"""
+    """Test handling of HTTP errors (no retry on non-200 status)"""
     print("Test: Axle API HTTP error handling")
 
     axle = MockAxleAPI()
@@ -279,19 +279,24 @@ def test_axle_http_error(my_predbat=None):
     mock_response = MagicMock()
     mock_response.status_code = 401
 
-    with patch("requests.get", return_value=mock_response):
-        run_async(axle.fetch_axle_event())
+    with patch("requests.get", return_value=mock_response) as mock_get:
+        with patch("time.sleep") as mock_sleep:
+            run_async(axle.fetch_axle_event())
+            
+            # Should only call once - no retries for non-200 status
+            assert mock_get.call_count == 1, "Should not retry on non-200 status code"
+            assert mock_sleep.call_count == 0, "Should not sleep on first failure with status code"
 
     assert axle.failures_total == 1, "Failure should be recorded for HTTP error"
     assert any("status code 401" in msg for msg in axle.log_messages), "Error should be logged"
 
-    print("  ✓ HTTP error handled correctly")
+    print("  ✓ HTTP error handled correctly (no retry)")
     return False
 
 
 def test_axle_request_exception(my_predbat=None):
-    """Test handling of request exceptions"""
-    print("Test: Axle API request exception handling")
+    """Test handling of request exceptions with retry mechanism"""
+    print("Test: Axle API request exception handling with retries")
 
     axle = MockAxleAPI()
     axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
@@ -299,13 +304,80 @@ def test_axle_request_exception(my_predbat=None):
     # Mock request exception
     import requests
 
-    with patch("requests.get", side_effect=requests.RequestException("Connection timeout")):
-        run_async(axle.fetch_axle_event())
+    with patch("requests.get", side_effect=requests.RequestException("Connection timeout")) as mock_get:
+        with patch("time.sleep") as mock_sleep:
+            run_async(axle.fetch_axle_event())
+            
+            # Should retry 3 times total
+            assert mock_get.call_count == 3, "Should retry 3 times on RequestException"
+            
+            # Should sleep twice (between retries): 1s, 2s
+            assert mock_sleep.call_count == 2, "Should sleep between retries"
+            
+            # Verify exponential backoff: 2^0=1s, 2^1=2s
+            sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
+            assert sleep_calls == [1, 2], f"Expected [1, 2] second sleeps, got {sleep_calls}"
 
     assert axle.failures_total == 1, "Failure should be recorded for request exception"
-    assert any("Request failed" in msg for msg in axle.log_messages), "Exception should be logged"
+    assert any("Request failed after 3 attempts" in msg for msg in axle.log_messages), "Exception should be logged with retry count"
+    assert any("Retrying in" in msg for msg in axle.log_messages), "Retry messages should be logged"
 
-    print("  ✓ Request exception handled correctly")
+    print("  ✓ Request exception handled correctly with 3 retries and exponential backoff")
+    return False
+
+
+def test_axle_retry_success_after_failure(my_predbat=None):
+    """Test successful request after initial failures (retry succeeds)"""
+    print("Test: Axle API retry success after failures")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+
+    # Set current time
+    now = datetime(2025, 12, 20, 14, 30, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Mock API response - fail twice, then succeed
+    import requests
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "start_time": "2025-12-20T14:00:00Z",
+        "end_time": "2025-12-20T16:00:00Z",
+        "import_export": "export",
+        "updated_at": "2025-12-20T13:45:00Z"
+    }
+    
+    # First two calls raise exception, third succeeds
+    side_effects = [
+        requests.RequestException("Timeout"),
+        requests.RequestException("Connection error"),
+        mock_response
+    ]
+
+    with patch("requests.get", side_effect=side_effects) as mock_get:
+        with patch("time.sleep") as mock_sleep:
+            run_async(axle.fetch_axle_event())
+            
+            # Should try 3 times total (2 failures, 1 success)
+            assert mock_get.call_count == 3, "Should retry until success"
+            
+            # Should sleep twice (between first 2 failures)
+            assert mock_sleep.call_count == 2, "Should sleep between retries"
+            
+            # Verify exponential backoff: 2^0=1s, 2^1=2s
+            sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
+            assert sleep_calls == [1, 2], f"Expected [1, 2] second sleeps, got {sleep_calls}"
+
+    # Verify event was successfully fetched after retries
+    assert axle.current_event["start_time"] == "2025-12-20T14:00:00+0000", "Event should be fetched after retry"
+    assert axle.current_event["import_export"] == "export"
+    assert axle.failures_total == 0, "No failure should be recorded when retry succeeds"
+    assert any("Successfully fetched event data" in msg for msg in axle.log_messages), "Success should be logged"
+    assert any("Retrying in" in msg for msg in axle.log_messages), "Retry attempts should be logged"
+
+    print("  ✓ Retry mechanism succeeds after initial failures")
     return False
 
 
@@ -335,6 +407,33 @@ def test_axle_datetime_parsing_variations(my_predbat=None):
     assert isinstance(axle.current_event["end_time"], str), "Should be stored as string"
 
     print("  ✓ Different datetime formats parsed correctly")
+    return False
+
+
+def test_axle_json_parse_error(my_predbat=None):
+    """Test handling of JSON parsing errors (no retry)"""
+    print("Test: Axle API JSON parsing error handling")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+
+    # Mock API response with invalid JSON
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.side_effect = ValueError("Invalid JSON")
+
+    with patch("requests.get", return_value=mock_response) as mock_get:
+        with patch("time.sleep") as mock_sleep:
+            run_async(axle.fetch_axle_event())
+            
+            # Should only call once - no retries for JSON parse errors
+            assert mock_get.call_count == 1, "Should not retry on JSON parse error"
+            assert mock_sleep.call_count == 0, "Should not sleep on JSON parse error"
+
+    assert axle.failures_total == 1, "Failure should be recorded for JSON parse error"
+    assert any("Failed to parse JSON response" in msg for msg in axle.log_messages), "Parse error should be logged"
+
+    print("  ✓ JSON parse error handled correctly (no retry)")
     return False
 
 
@@ -674,6 +773,8 @@ if __name__ == "__main__":
     test_axle_fetch_no_event()
     test_axle_http_error()
     test_axle_request_exception()
+    test_axle_retry_success_after_failure()
+    test_axle_json_parse_error()
     test_axle_datetime_parsing_variations()
     test_axle_run_method()
     test_axle_history_loading()
