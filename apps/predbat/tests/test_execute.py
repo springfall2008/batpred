@@ -2276,7 +2276,7 @@ def run_execute_tests(my_predbat):
     # Test for GitHub issue #3107: Floating point rounding causes freeze charge mismatch
     # When charge_limit_best is rounded to 0.5 kWh but reserve is 0.51 kWh (5% of 10.149 kWh)
     # they should both equal 5% and trigger freeze charge, not hold charge
-    charge_limit_best_rounded = [0.5]  # Rounded from 0.51 due to dp2() in plan.py
+    charge_limit_best_rounded = [0.5]  # 0.5 kWh is the charge limit rounded down by dp2() from ~0.507 (5% of 10.149 kWh)
     failed |= run_execute_test(
         my_predbat,
         "charge_freeze_rounding_issue_3107",
