@@ -175,7 +175,7 @@ There are three key settings available to tune the performance of the Predbat ap
 
 - **performance_mode** - Defaults to False. When set to True, it puts Predbat into a specialized mode that throttles the main loop and file modification checks to reduce CPU usage. This is highly recommended for users on Raspberry Pi or older hardware.
 - **hass_loop_interval** - Controls how many seconds Predbat waits between its main "heartbeat" loops. The default is 1 second, but in `performance_mode` this defaults to 5 seconds to reduce idle CPU usage.
-- **db_commit_interval** - Defaults to 30. This controls how often (in seconds) changes to the database are written to the physical disk. Increasing this (e.g. to 30 or 60) drastically reduces disk I/O and wear on SD cards.
+- **db_commit_interval** - Defaults to 0 (immediate commits). This controls how often (in seconds) changes to the database are written to the physical disk. Increasing this (e.g. to 30 or 60) drastically reduces disk I/O and wear on SD cards.
 
 ```yaml
   performance_mode: True
