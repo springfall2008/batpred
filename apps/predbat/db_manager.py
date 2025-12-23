@@ -74,6 +74,7 @@ class DatabaseManager(ComponentBase):
                 try:
                     await asyncio.wait_for(self.async_event.wait(), timeout=wait_time)
                 except asyncio.TimeoutError:
+                    # Timeout is expected when no new DB work arrives within wait_time; safe to ignore.
                     pass
                 self.async_event.clear()
                 continue
