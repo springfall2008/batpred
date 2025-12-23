@@ -265,6 +265,7 @@ def test_axle_http_error(my_predbat=None):
         with patch("asyncio.sleep") as mock_sleep:
             run_async(axle.fetch_axle_event())
 
+
             # Should only call once - no retries for non-200 status
             assert mock_sleep.call_count == 0, "Should not sleep on first failure with status code"
 
