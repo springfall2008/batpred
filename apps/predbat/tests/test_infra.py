@@ -400,6 +400,20 @@ def reset_inverter(my_predbat):
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True
     my_predbat.car_charging_soc_next = [None for car_n in range(4)]
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.export_window_best = []
+    my_predbat.charge_limit_percent_best = []
+    my_predbat.manual_charge_times = []
+    my_predbat.manual_demand_times = []
+    my_predbat.manual_export_times = []
+    my_predbat.manual_freeze_charge_times = []
+    my_predbat.manual_freeze_export_times = []
+    my_predbat.set_charge_window = True
+    my_predbat.set_export_window = True
+    my_predbat.set_charge_freeze = True
+    my_predbat.set_export_freeze = True
 
 
 def plot(name, prediction):

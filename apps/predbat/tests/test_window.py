@@ -10,6 +10,7 @@
 # fmt on
 from utils import remove_intersecting_windows
 from tests.test_infra import reset_rates, reset_inverter
+from prediction import Prediction
 
 
 def run_window_sort_test(name, my_predbat, charge_window_best, export_window_best, expected=[], inverter_loss=1.0, metric_battery_cycle=0.0, battery_loss=1.0, battery_loss_discharge=1.0):
@@ -78,6 +79,17 @@ def run_window_sort_tests(my_predbat):
     reset_inverter(my_predbat)
     reset_rates(my_predbat, import_rate, export_rate)
     failed = False
+
+    pv_amount = 0
+    load_amount = 0
+    pv_step = {}
+    load_step = {}
+    for minute in range(0, my_predbat.forecast_minutes, 5):
+        pv_step[minute] = pv_amount / (60 / 5)
+        load_step[minute] = load_amount / (60 / 5)
+    my_predbat.load_minutes_step = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
 
     failed |= run_window_sort_test("none", my_predbat, [], [], expected=[])
 

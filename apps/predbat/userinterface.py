@@ -698,7 +698,7 @@ class UserInterface:
             if current:
                 # print("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                 if current.get("value", None) != item.get("value", None):
-                    current["value"] = item["value"]
+                    current["value"] = item.get("value", None)
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
 
     def create_debug_yaml(self, write_file=True):
