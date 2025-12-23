@@ -292,6 +292,8 @@ If configured in Predbat's `apps.yaml` Predbat will control your inverter to exp
 
 Sign up with my referral code here: <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
 
+*Please note you are not allowed to be on Octoplus at the same time, so contact Octopus if you need to be removed from this scheme.*
+
 Select control my battery for 'Events Only'.
 
 #### When to enable (axle)
