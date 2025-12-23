@@ -294,6 +294,21 @@ def run_debug_cases(my_predbat):
 
     return failed
 
+def create_predbat():
+    my_predbat = PredBat()
+    my_predbat.states = {}
+    my_predbat.reset()
+    my_predbat.update_time()
+    my_predbat.ha_interface = TestHAInterface()
+    my_predbat.ha_interface.history_enable = False
+    my_predbat.auto_config()
+    my_predbat.load_user_config()
+    my_predbat.fetch_config_options()
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.ha_interface.history_enable = True
+    my_predbat.expose_config("plan_debug", True)
+    return my_predbat
+
 
 def main():
     # Test registry - table of all available tests
@@ -547,18 +562,7 @@ def main():
         sys.exit(0)
 
     print("**** Starting Predbat tests ****")
-    my_predbat = PredBat()
-    my_predbat.states = {}
-    my_predbat.reset()
-    my_predbat.update_time()
-    my_predbat.ha_interface = TestHAInterface()
-    my_predbat.ha_interface.history_enable = False
-    my_predbat.auto_config()
-    my_predbat.load_user_config()
-    my_predbat.fetch_config_options()
-    my_predbat.forecast_minutes = 24 * 60
-    my_predbat.ha_interface.history_enable = True
-    my_predbat.expose_config("plan_debug", True)
+    my_predbat = create_predbat()
     print("**** Testing Predbat ****")
     failed = False
 
@@ -574,80 +578,71 @@ def main():
         failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
 
-    # Run tests matching keyword pattern if requested
+    # Collect tests to run based on arguments
+    tests_to_run = []
+    
     if args.keyword:
+        # Run tests matching keyword pattern
         keyword = args.keyword
-        matching_tests = [(name, func, desc, slow) for name, func, desc, slow in TEST_REGISTRY if keyword in name]
-        if not matching_tests:
+        tests_to_run = [(name, func, desc, slow) for name, func, desc, slow in TEST_REGISTRY if keyword in name]
+        if not tests_to_run:
             print(f"ERROR: No tests found matching keyword '{keyword}'")
             sys.exit(1)
-        print(f"**** Running {len(matching_tests)} test(s) matching '{keyword}' ****")
-        for name, func, desc, slow in matching_tests:
-            if args.quick and slow:
-                print(f"**** Skipping: {name} (slow) ****")
-                continue
-            print(f"**** Running test: {name} - {desc} ****")
-            start_time = time.time()
-            test_failed = func(my_predbat)
-            elapsed = time.time() - start_time
-            if test_failed:
-                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s ****")
-                failed = True
-                break
-            else:
-                print(f"**** Test {name} PASSED in {elapsed:.2f}s ****")
-        if failed:
-            sys.exit(1)
-        sys.exit(0)
-
-    # Run specific tests if requested
-    if args.test:
-        tests_to_run = args.test
-        for test_name in tests_to_run:
+    elif args.test:
+        # Run specific tests by name
+        for test_name in args.test:
             test_found = False
             for name, func, desc, slow in TEST_REGISTRY:
                 if name == test_name:
+                    tests_to_run.append((name, func, desc, slow))
                     test_found = True
-                    print(f"**** Running test: {name} - {desc} ****")
-                    start_time = time.time()
-                    test_failed = func(my_predbat)
-                    elapsed = time.time() - start_time
-                    if test_failed:
-                        print(f"**** ERROR: Test {test_name} FAILED in {elapsed:.2f}s ****")
-                        failed = True
-                    else:
-                        print(f"**** Test {test_name} PASSED in {elapsed:.2f}s ****")
                     break
             if not test_found:
                 print(f"ERROR: Test '{test_name}' not found. Use --list to see available tests.")
                 sys.exit(1)
-        if failed:
-            sys.exit(1)
-        sys.exit(0)
-
-    # Run all tests from the registry
+    else:
+        # Run all tests from the registry
+        tests_to_run = TEST_REGISTRY
+    
+    print(f"**** Running {len(tests_to_run)} test(s) ****")
+    # Single loop to run all collected tests
     total_time = 0
     skipped_count = 0
-    for name, func, desc, slow in TEST_REGISTRY:
+    for name, func, desc, slow in tests_to_run:
         if args.quick and slow:
             print(f"**** Skipping: {name} (slow) ****")
             skipped_count += 1
             continue
-        print(f"**** Running: {name} ****")
+        
+        # Show descriptive message for keyword/specific tests, simple for full suite
+        if args.keyword or args.test:
+            print(f"**** Running test: {name} - {desc} ****")
+        else:
+            print(f"**** Running: {name} ****")
+        
         start_time = time.time()
         test_failed = func(my_predbat)
         elapsed = time.time() - start_time
         total_time += elapsed
+        
         if test_failed:
-            print(f"**** {name}: FAILED in {elapsed:.2f}s ****")
+            if args.keyword or args.test:
+                print(f"**** ERROR: Test {name} FAILED in {elapsed:.2f}s ****")
+            else:
+                print(f"**** {name}: FAILED in {elapsed:.2f}s ****")
             failed = True
             break
         else:
-            print(f"**** {name}: PASSED in {elapsed:.2f}s ****")
-
+            if args.keyword or args.test:
+                print(f"**** Test {name} PASSED in {elapsed:.2f}s ****")
+            else:
+                print(f"**** {name}: PASSED in {elapsed:.2f}s ****")
+    
+    # Report results
     if failed:
         print(f"**** ERROR: Some tests failed (total time: {total_time:.2f}s) ****")
         sys.exit(1)
+    
     if skipped_count > 0:
         print(f"**** All tests passed ({skipped_count} slow tests skipped, total time: {total_time:.2f}s) ****")
     else:

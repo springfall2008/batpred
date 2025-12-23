@@ -190,5 +190,9 @@ def test_expose_config_preserves_integer(my_predbat):
     else:
         print("! No decimal step entity found to test")
 
+    # Put config back to original state
+    for item in my_predbat.CONFIG_ITEMS:
+        my_predbat.expose_config(item.get("name"), item.get("default"), force_ha=True)
+
     print("✓ Test passed: expose_config preserves type correctly")
     return False
