@@ -62,8 +62,8 @@ class DatabaseManager(ComponentBase):
             # Check commit timer
             now = time.time()
             if self.commit_interval > 0 and (now - last_commit_time >= self.commit_interval):
-                 self.db_engine.commit()
-                 last_commit_time = now
+                self.db_engine.commit()
+                last_commit_time = now
 
             if not self.db_queue:
                 wait_time = 0.1

@@ -108,7 +108,7 @@ class Hass:
         log_levels = {"debug": 0, "info": 1, "warn": 2, "error": 3}
         configured_level = self.args.get("log_level", "debug").lower()
         min_level = log_levels.get(configured_level, 1)
-        
+
         msg_lower = msg.lower()
         # Determine message level
         if msg_lower.startswith("error"):
@@ -119,11 +119,11 @@ class Hass:
             msg_level = 1
         else:
             msg_level = 0  # debug/other
-        
+
         # Skip messages below configured level
         if msg_level < min_level:
             return
-        
+
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
         # Always flush errors/warnings to prevent loss on crash; otherwise respect performance_mode
@@ -232,7 +232,7 @@ class Hass:
                     t1 = time.time()
                     duration = t1 - t0
                     if duration > 0.1:
-                         self.log("Warn: Callback {} took {:.2f} seconds".format(item["callback"], duration), quiet=False)
+                        self.log("Warn: Callback {} took {:.2f} seconds".format(item["callback"], duration), quiet=False)
                 except Exception as e:
                     self.log("Error: {}".format(e), quiet=False)
                     print(traceback.format_exc())
