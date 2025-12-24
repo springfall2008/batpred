@@ -10,7 +10,7 @@
 # fmt on
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
-from gecloud import GE_API_DEVICES
+from gecloud import GE_API_DEVICES, GE_API_EVC_SEND_COMMAND
 import time
 import asyncio
 import json
@@ -318,6 +318,132 @@ def test_async_get_inverter_data_retry(my_predbat):
 # =============================================================================
 
 
+def test_async_get_inverter_data_post(my_predbat):
+    """Test POST requests with and without datain parameter"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        # Scenario 1: POST request with datain (JSON payload)
+        test_data_in = {"command": "start-charging", "params": {"target_soc": 80}}
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"success": True, "result": "command_sent"}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                result = await ge_cloud.async_get_inverter_data(GE_API_EVC_SEND_COMMAND, uuid="evc-001", command="start-charging", post=True, datain=test_data_in)
+
+                # Verify POST was called with json parameter
+                if not mock_session.post.called:
+                    print("ERROR: Expected session.post to be called")
+                    return 1
+
+                # Check that json parameter was passed
+                call_kwargs = mock_session.post.call_args[1]
+                if "json" not in call_kwargs:
+                    print("ERROR: Expected json parameter in POST call")
+                    return 1
+                if call_kwargs["json"] != test_data_in:
+                    print(f"ERROR: Expected json={test_data_in}, got {call_kwargs['json']}")
+                    return 1
+
+                # Verify response
+                if result != {"success": True, "result": "command_sent"}:
+                    print(f"ERROR: Expected success response, got {result}")
+                    return 1
+
+        # Scenario 2: POST request without datain (no JSON payload)
+        mock_response2 = create_aiohttp_mock_response(status=201, json_data={"data": {"status": "accepted"}})
+        mock_session2 = create_aiohttp_mock_session(mock_response2)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session2
+
+                result = await ge_cloud.async_get_inverter_data(GE_API_EVC_SEND_COMMAND, uuid="evc-002", command="stop-charging", post=True, datain=None)
+
+                # Verify POST was called without json parameter
+                if not mock_session2.post.called:
+                    print("ERROR: Expected session.post to be called")
+                    return 1
+
+                # Check that json parameter was NOT passed
+                call_kwargs = mock_session2.post.call_args[1]
+                if "json" in call_kwargs:
+                    print("ERROR: Expected no json parameter in POST call without datain")
+                    return 1
+
+                # Verify response
+                if result != {"status": "accepted"}:
+                    print(f"ERROR: Expected status response, got {result}")
+                    return 1
+
+        # Scenario 3: POST request with JSON decode error and datain
+        mock_response3 = create_aiohttp_mock_response(status=200, json_exception=json.JSONDecodeError("test", "doc", 0))
+        mock_session3 = create_aiohttp_mock_session(mock_response3)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session3
+
+                result = await ge_cloud.async_get_inverter_data(GE_API_EVC_SEND_COMMAND, uuid="evc-003", command="test", post=True, datain={"test": "data"})
+
+                # Verify returns empty dict for successful status with JSON error
+                if result != {}:
+                    print(f"ERROR: Expected empty dict for JSON decode error with 200, got {result}")
+                    return 1
+
+        # Scenario 4: POST request with JSON decode error but WITHOUT datain
+        mock_response4 = create_aiohttp_mock_response(status=200, json_exception=json.JSONDecodeError("test", "doc", 0))
+        mock_session4 = create_aiohttp_mock_session(mock_response4)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session4
+
+                result = await ge_cloud.async_get_inverter_data(GE_API_EVC_SEND_COMMAND, uuid="evc-004", command="test", post=True, datain=None)
+
+                # Verify returns empty dict for successful status with JSON error (no datain)
+                if result != {}:
+                    print(f"ERROR: Expected empty dict for JSON decode error with 200 (no datain), got {result}")
+                    return 1
+
+                # Verify POST was called without json parameter
+                call_kwargs = mock_session4.post.call_args[1]
+                if "json" in call_kwargs:
+                    print("ERROR: Expected no json parameter in POST call without datain")
+                    return 1
+
+        # Scenario 5: Verify GET method still works (not POST)
+        mock_response5 = create_aiohttp_mock_response(status=200, json_data={"data": [{"serial": "test456"}]})
+        mock_session5 = create_aiohttp_mock_session(mock_response5)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session5
+
+                result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES, post=False)
+
+                # Verify GET was called, not POST
+                if not mock_session5.get.called:
+                    print("ERROR: Expected session.get to be called")
+                    return 1
+                if mock_session5.post.called:
+                    print("ERROR: Did not expect session.post to be called")
+                    return 1
+
+                # Verify response
+                if result != [{"serial": "test456"}]:
+                    print(f"ERROR: Expected device list, got {result}")
+                    return 1
+
+        return 0
+
+    return run_async(test())
+
+
 def test_async_get_devices_with_ems(my_predbat):
     """Test device discovery with EMS device"""
 
@@ -620,6 +746,362 @@ def test_async_get_evc_commands(my_predbat):
 
             if result != {}:
                 print("ERROR: Expected empty dict when all commands blacklisted, got {}".format(result))
+                return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def test_async_send_evc_command(my_predbat):
+    """Test sending EV charger commands"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        # Test successful command send
+        test_uuid = "evc-001"
+        test_command = "start-charging"
+        test_params = {"target_soc": 80}
+
+        mock_success_response = {"success": True, "data": {"status": "accepted"}}
+
+        async def mock_get_inverter_data(*args, **kwargs):
+            return mock_success_response
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data = mock_get_inverter_data
+
+            result = await ge_cloud.async_send_evc_command(test_uuid, test_command, test_params)
+
+            if result != mock_success_response:
+                print("ERROR: Expected success response {}, got {}".format(mock_success_response, result))
+                return 1
+            if result["success"] != True:
+                print("ERROR: Expected success=True in response")
+                return 1
+
+        # Test command with success=False in response
+        mock_failed_response = {"success": False, "error": "Invalid command"}
+
+        async def mock_get_inverter_data_failed(*args, **kwargs):
+            return mock_failed_response
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data = mock_get_inverter_data_failed
+
+            result = await ge_cloud.async_send_evc_command(test_uuid, test_command, test_params)
+
+            if result is not None:
+                print("ERROR: Expected None for failed command, got {}".format(result))
+                return 1
+
+        # Test command with no response
+        async def mock_get_inverter_data_none(*args, **kwargs):
+            return None
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data = mock_get_inverter_data_none
+
+            result = await ge_cloud.async_send_evc_command(test_uuid, test_command, test_params)
+
+            if result is not None:
+                print("ERROR: Expected None for no response, got {}".format(result))
+                return 1
+
+        # Test command with retry logic
+        call_count = [0]
+
+        async def mock_get_inverter_data_retry(*args, **kwargs):
+            call_count[0] += 1
+            # Fail first 2 attempts, succeed on 3rd
+            if call_count[0] < 3:
+                return None
+            return mock_success_response
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data = mock_get_inverter_data_retry
+
+            result = await ge_cloud.async_send_evc_command(test_uuid, test_command, test_params)
+
+            if call_count[0] != 3:
+                print("ERROR: Expected 3 retry attempts, got {}".format(call_count[0]))
+                return 1
+            if result != mock_success_response:
+                print("ERROR: Expected success after retries, got {}".format(result))
+                return 1
+
+        # Test command with all retries failing
+        async def mock_get_inverter_data_all_fail(*args, **kwargs):
+            return None
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data = mock_get_inverter_data_all_fail
+
+            result = await ge_cloud.async_send_evc_command(test_uuid, test_command, test_params)
+
+            if result is not None:
+                print("ERROR: Expected None after all retries failed, got {}".format(result))
+                return 1
+
+            # Check that error was logged
+            error_logged = any("Failed to send EVC command" in msg for msg in ge_cloud.log_messages)
+            if not error_logged:
+                print("ERROR: Expected error log message after failed retries")
+                return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def test_async_get_evc_device_data(my_predbat):
+    """Test getting EV charger device data"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        # Scenario 1: Successful device data retrieval with valid measurements
+        test_uuid = "evc-001"
+        mock_data = {
+            "data": [
+                {
+                    "meter_id": 0,  # EVC_METER_CHARGER
+                    "timestamp": "2025-12-24T12:00:00Z",
+                    "measurements": [
+                        {"measurand": 1, "value": 32.5, "unit": "A"},  # Current.Import
+                        {"measurand": 13, "value": 7360, "unit": "W"},  # Power.Active.Import
+                        {"measurand": 19, "value": 75, "unit": "%"},  # SoC
+                        {"measurand": 21, "value": 230, "unit": "V"},  # Voltage
+                    ],
+                },
+                {
+                    "meter_id": 0,
+                    "timestamp": "2025-12-24T12:05:00Z",
+                    "measurements": [
+                        {"measurand": 1, "value": 30.0, "unit": "A"},
+                        {"measurand": 13, "value": 6900, "unit": "W"},
+                        {"measurand": 19, "value": 80, "unit": "%"},
+                        {"measurand": 21, "value": 230, "unit": "V"},
+                    ],
+                },
+            ]
+        }
+
+        async def mock_get_data_success(*args, **kwargs):
+            return mock_data
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_get_data_success
+
+            result = await ge_cloud.async_get_evc_device_data(test_uuid, {})
+
+            # Check that we got the latest measurements (from second data point)
+            if result.get(1) != 30.0:  # Current.Import
+                print(f"ERROR: Expected Current.Import 30.0, got {result.get(1)}")
+                return 1
+            if result.get(13) != 6900:  # Power.Active.Import
+                print(f"ERROR: Expected Power.Active.Import 6900, got {result.get(13)}")
+                return 1
+            if result.get(19) != 80:  # SoC
+                print(f"ERROR: Expected SoC 80, got {result.get(19)}")
+                return 1
+            if result.get(21) != 230:  # Voltage
+                print(f"ERROR: Expected Voltage 230, got {result.get(21)}")
+                return 1
+
+        # Scenario 2: No data returned (network issue) - should return previous data
+        previous_data = {1: 25.0, 13: 5750, 19: 70}
+
+        async def mock_get_data_none(*args, **kwargs):
+            return None
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_get_data_none
+
+            result = await ge_cloud.async_get_evc_device_data(test_uuid, previous_data)
+
+            # Should return previous data when API fails
+            if result != previous_data:
+                print(f"ERROR: Expected previous data to be returned, got {result}")
+                return 1
+
+        # Scenario 3: Empty data array - should return previous data (bug fix)
+        async def mock_get_data_empty(*args, **kwargs):
+            return {"data": []}
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_get_data_empty
+
+            result = await ge_cloud.async_get_evc_device_data(test_uuid, previous_data)
+
+            # Should return previous data when data array is empty (bug fix)
+            if result != previous_data:
+                print(f"ERROR: Expected previous data with empty data array, got {result}")
+                return 1
+
+        # Scenario 4: Wrong meter_id (not EVC_METER_CHARGER) - should return empty result
+        mock_data_wrong_meter = {
+            "data": [
+                {
+                    "meter_id": 1,  # Grid Meter, not EVC
+                    "timestamp": "2025-12-24T12:00:00Z",
+                    "measurements": [
+                        {"measurand": 1, "value": 10.0, "unit": "A"},
+                    ],
+                }
+            ]
+        }
+
+        async def mock_get_data_wrong_meter(*args, **kwargs):
+            return mock_data_wrong_meter
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_get_data_wrong_meter
+
+            result = await ge_cloud.async_get_evc_device_data(test_uuid, {})
+
+            # Should return empty result when meter_id doesn't match
+            if result != {}:
+                print(f"ERROR: Expected empty result for wrong meter_id, got {result}")
+                return 1
+
+        # Scenario 5: Measurements with invalid measurand (not in EVC_DATA_POINTS) - should be filtered out
+        mock_data_invalid_measurand = {
+            "data": [
+                {
+                    "meter_id": 0,
+                    "timestamp": "2025-12-24T12:00:00Z",
+                    "measurements": [
+                        {"measurand": 1, "value": 32.5, "unit": "A"},  # Valid
+                        {"measurand": 99, "value": 999, "unit": "X"},  # Invalid measurand
+                        {"measurand": 19, "value": 75, "unit": "%"},  # Valid
+                    ],
+                }
+            ]
+        }
+
+        async def mock_get_data_invalid_measurand(*args, **kwargs):
+            return mock_data_invalid_measurand
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_get_data_invalid_measurand
+
+            result = await ge_cloud.async_get_evc_device_data(test_uuid, {})
+
+            # Should only include valid measurands
+            if 99 in result:
+                print(f"ERROR: Invalid measurand 99 should not be in result")
+                return 1
+            if result.get(1) != 32.5:
+                print(f"ERROR: Expected measurand 1 to be 32.5, got {result.get(1)}")
+                return 1
+            if result.get(19) != 75:
+                print(f"ERROR: Expected measurand 19 to be 75, got {result.get(19)}")
+                return 1
+            if len(result) != 2:
+                print(f"ERROR: Expected 2 valid measurands, got {len(result)}")
+                return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def test_async_get_evc_device(my_predbat):
+    """Test getting a single EV charger device"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        # Scenario 1: Successful device retrieval
+        test_uuid = "evc-001"
+        mock_device = {
+            "uuid": "evc-001",
+            "alias": "Home EV Charger",
+            "serial_number": "EVC123456",
+            "online": True,
+            "went_offline_at": None,
+            "status": "charging",
+            "type": "ev_charger",
+        }
+
+        async def mock_get_device_success(*args, **kwargs):
+            return mock_device
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_get_device_success
+
+            result = await ge_cloud.async_get_evc_device(test_uuid, {})
+
+            # Check all fields are correctly extracted
+            if result["uuid"] != "evc-001":
+                print(f"ERROR: Expected uuid evc-001, got {result['uuid']}")
+                return 1
+            if result["alias"] != "Home EV Charger":
+                print(f"ERROR: Expected alias 'Home EV Charger', got {result['alias']}")
+                return 1
+            if result["serial_number"] != "EVC123456":
+                print(f"ERROR: Expected serial_number EVC123456, got {result['serial_number']}")
+                return 1
+            if result["online"] != True:
+                print(f"ERROR: Expected online True, got {result['online']}")
+                return 1
+            if result["status"] != "charging":
+                print(f"ERROR: Expected status 'charging', got {result['status']}")
+                return 1
+            if result["type"] != "ev_charger":
+                print(f"ERROR: Expected type 'ev_charger', got {result['type']}")
+                return 1
+
+        # Scenario 2: Device offline with went_offline_at timestamp
+        mock_device_offline = {
+            "uuid": "evc-002",
+            "alias": "Garage Charger",
+            "serial_number": "EVC789012",
+            "online": False,
+            "went_offline_at": "2025-12-24T10:30:00Z",
+            "status": "offline",
+            "type": "ev_charger",
+        }
+
+        async def mock_get_device_offline(*args, **kwargs):
+            return mock_device_offline
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_get_device_offline
+
+            result = await ge_cloud.async_get_evc_device(test_uuid, {})
+
+            if result["online"] != False:
+                print(f"ERROR: Expected online False, got {result['online']}")
+                return 1
+            if result["went_offline_at"] != "2025-12-24T10:30:00Z":
+                print(f"ERROR: Expected went_offline_at timestamp, got {result['went_offline_at']}")
+                return 1
+
+        # Scenario 3: No device returned (API failure) - should return previous data
+        previous_device = {
+            "uuid": "evc-003",
+            "alias": "Previous Charger",
+            "serial_number": "PREV123",
+            "online": True,
+            "went_offline_at": None,
+            "status": "idle",
+            "type": "ev_charger",
+        }
+
+        async def mock_get_device_none(*args, **kwargs):
+            return None
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_get_device_none
+
+            result = await ge_cloud.async_get_evc_device(test_uuid, previous_device)
+
+            # Should return previous data when API fails
+            if result != previous_device:
+                print(f"ERROR: Expected previous device data, got {result}")
                 return 1
 
         return 0

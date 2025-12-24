@@ -28,6 +28,7 @@ from tests.test_window2minutes import test_window2minutes
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
+from tests.test_find_charge_curve import run_find_charge_curve_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_car_charging_smart import run_car_charging_smart_tests
@@ -46,6 +47,7 @@ from tests.test_ge_cloud import (
     test_async_get_inverter_data_timeout,
     test_async_get_inverter_data_json_error,
     test_async_get_inverter_data_retry,
+    test_async_get_inverter_data_post,
     test_async_get_devices_with_ems,
     test_async_get_devices_with_gateway,
     test_async_get_devices_with_batteries,
@@ -53,6 +55,9 @@ from tests.test_ge_cloud import (
     test_async_get_evc_devices,
     test_async_get_smart_devices,
     test_async_get_evc_commands,
+    test_async_get_evc_device_data,
+    test_async_get_evc_device,
+    test_async_send_evc_command,
     test_async_get_smart_device,
     test_async_get_evc_sessions,
     test_run_method,
@@ -363,6 +368,7 @@ def main():
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
+        ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
         ("energydataservice", test_energydataservice, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
         ("saving_session_null", test_saving_session_null_octopoints, "Saving session null octopoints test (issue #3079)", False),
@@ -383,6 +389,7 @@ def main():
         ("ge_api_timeout", test_async_get_inverter_data_timeout, "GE Cloud API timeout", False),
         ("ge_api_json_error", test_async_get_inverter_data_json_error, "GE Cloud API JSON error", False),
         ("ge_api_retry", test_async_get_inverter_data_retry, "GE Cloud API retry logic", False),
+        ("ge_api_post", test_async_get_inverter_data_post, "GE Cloud API POST with/without datain", False),
         ("ge_devices_ems", test_async_get_devices_with_ems, "GE Cloud devices with EMS", False),
         ("ge_devices_gateway", test_async_get_devices_with_gateway, "GE Cloud devices with Gateway", False),
         ("ge_devices_batteries", test_async_get_devices_with_batteries, "GE Cloud devices with batteries", False),
@@ -390,6 +397,9 @@ def main():
         ("ge_evc_devices", test_async_get_evc_devices, "GE Cloud EV charger devices", False),
         ("ge_smart_devices", test_async_get_smart_devices, "GE Cloud smart devices", False),
         ("ge_evc_commands", test_async_get_evc_commands, "GE Cloud EV charger commands", False),
+        ("ge_evc_device_data", test_async_get_evc_device_data, "GE Cloud EV charger device data", False),
+        ("ge_evc_device", test_async_get_evc_device, "GE Cloud EV charger device", False),
+        ("ge_send_evc_command", test_async_send_evc_command, "GE Cloud send EV charger command", False),
         ("ge_smart_device", test_async_get_smart_device, "GE Cloud smart device", False),
         ("ge_evc_sessions", test_async_get_evc_sessions, "GE Cloud EV charger sessions", False),
         ("ge_run_method", test_run_method, "GE Cloud run method", False),

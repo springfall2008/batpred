@@ -187,6 +187,14 @@ Use --quick argument to skip long tests:
 - Run specific debug scenarios: `python3 ../apps/predbat/unit_test.py --debug predbat_debug_file.yaml`
 - Performance tests: `./run_all --perf-only`
 
+### Writing tests
+
+- Always add the test to TEST_REGISTRY in unit_test.py
+- Use `TestHAInterface` to mock HA state and services
+- Use assertions to validate expected outcomes
+- Never fix a failing tests if there is a bug in the main code - fix the bug instead
+- Check coverage and add tests for new features/coverage holes as required
+
 **Coverage analysis**:
 
 ```bash
