@@ -15,8 +15,10 @@ import tempfile
 from datetime import datetime
 from unittest.mock import patch, MagicMock
 import pytz
+import aiohttp
 
 from solcast import SolarAPI
+from tests.test_infra import run_async, create_aiohttp_mock_response
 
 
 class MockBase:
@@ -166,23 +168,49 @@ class TestSolarAPI:
     def dashboard_items(self):
         return self.mock_base.dashboard_items
 
-    def mock_requests_get(self, url, params=None):
-        """Mock requests.get that returns configured responses"""
-        self.request_log.append({"url": url, "params": params})
+    def mock_aiohttp_session(self, url=None, params=None):
+        """Create mock aiohttp ClientSession that returns configured responses based on URL"""
+        # Create a mock session that will return different responses based on URL
+        mock_session = MagicMock()
 
-        # Find matching mock response
-        for url_substring, mock in self.mock_responses.items():
-            if url_substring in url:
-                response = MagicMock()
-                response.status_code = mock["status_code"]
-                response.json.return_value = mock["data"]
-                response.text = json.dumps(mock["data"]) if mock["data"] else ""
-                return response
+        def get_side_effect(request_url, params=None):
+            """Track request and return appropriate mock response"""
+            self.request_log.append({"url": request_url, "params": params})
 
-        # No mock found - simulate connection error
-        from requests.exceptions import ConnectionError
+            # Find matching mock response
+            for url_substring, mock in self.mock_responses.items():
+                if url_substring in request_url:
+                    mock_response = create_aiohttp_mock_response(status=mock["status_code"], json_data=mock["data"])
+                    # Create mock context manager for the response
+                    mock_context = MagicMock()
 
-        raise ConnectionError(f"No mock for URL: {url}")
+                    async def aenter(*args, **kwargs):
+                        return mock_response
+
+                    async def aexit(*args):
+                        return None
+
+                    mock_context.__aenter__ = aenter
+                    mock_context.__aexit__ = aexit
+                    return mock_context
+
+            # No mock found - simulate connection error
+            raise aiohttp.ClientError(f"No mock for URL: {request_url}")
+
+        mock_session.get = MagicMock(side_effect=get_side_effect)
+        mock_session.post = MagicMock(side_effect=get_side_effect)
+
+        # Setup session context manager
+        async def session_aenter(*args):
+            return mock_session
+
+        async def session_aexit(*args):
+            return None
+
+        mock_session.__aenter__ = session_aenter
+        mock_session.__aexit__ = session_aexit
+
+        return mock_session
 
 
 def create_test_solar_api():
@@ -250,8 +278,11 @@ def test_cache_get_url_miss(my_predbat):
         params = {"param1": "value1"}
 
         # Patch requests.get to use our mock
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result = test_api.solar.cache_get_url(url, params, max_age=60)
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
 
         # Verify result
         if result != mock_data:
@@ -313,8 +344,11 @@ def test_cache_get_url_hit(my_predbat):
         test_api.set_mock_response("solcast.com.au/test/cached", {"fresh": "data"}, 200)
 
         # Call cache_get_url with max_age=60 - should use cache since file is fresh
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result = test_api.solar.cache_get_url(url, params, max_age=60)
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
 
         # Verify cached data was returned
         if result != cached_data:
@@ -368,8 +402,11 @@ def test_cache_get_url_stale(my_predbat):
         test_api.set_mock_response("solcast.com.au/test/stale", fresh_data, 200)
 
         # Call with max_age of 60 minutes - cache is 2 hours old so should re-fetch
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result = test_api.solar.cache_get_url(url, params, max_age=60)
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
 
         # Verify fresh data was returned
         if result != fresh_data:
@@ -423,8 +460,11 @@ def test_cache_get_url_failure_with_stale_cache(my_predbat):
         test_api.solar.solcast_failures_total = 0
 
         # Call cache_get_url - should return stale data on failure
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result = test_api.solar.cache_get_url(url, params, max_age=60)
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
 
         # Verify failure counter incremented
         if test_api.solar.solcast_failures_total != 1:
@@ -461,8 +501,11 @@ def test_cache_get_url_metrics_forecast_solar(my_predbat):
         test_api.solar.forecast_solar_failures_total = 0
         test_api.solar.solcast_requests_total = 0
 
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result = test_api.solar.cache_get_url(url, params, max_age=60)
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(url, params, max_age=60))
 
         # Should increment forecast_solar metrics, not solcast
         if test_api.solar.forecast_solar_requests_total != 1:
@@ -520,8 +563,11 @@ def test_download_solcast_data(my_predbat):
         test_api.set_mock_response("forecasts", forecast_response, 200)
 
         # Call download_solcast_data
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result = test_api.solar.download_solcast_data()
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.download_solcast_data())
 
         # Verify we got data back
         if result is None or len(result) == 0:
@@ -593,8 +639,11 @@ def test_download_solcast_data_multi_site(my_predbat):
         }
         test_api.set_mock_response("forecasts", forecast_response, 200)
 
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result = test_api.solar.download_solcast_data()
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.download_solcast_data())
 
         # Verify data was fetched for both sites (2 requests)
         if len(test_api.request_log) < 2:
@@ -657,8 +706,11 @@ def test_download_forecast_solar_data(my_predbat):
         }
         test_api.set_mock_response("forecast.solar", forecast_response, 200)
 
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result, max_kwh = test_api.solar.download_forecast_solar_data()
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
 
         # Verify we got data
         if result is None or len(result) == 0:
@@ -715,8 +767,11 @@ def test_download_forecast_solar_data_with_postcode(my_predbat):
         }
         test_api.set_mock_response("forecast.solar", forecast_response, 200)
 
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result, max_kwh = test_api.solar.download_forecast_solar_data()
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
 
         # Verify postcode API was called
         postcode_calls = [r for r in test_api.request_log if "postcodes.io" in r["url"]]
@@ -759,8 +814,11 @@ def test_download_forecast_solar_data_personal_api(my_predbat):
         forecast_response = {"result": {"watt_hours_period": {"2025-06-15T12:00:00+0000": 500}}, "message": {"info": {"time": "2025-06-15T11:30:00+0000"}}}
         test_api.set_mock_response("forecast.solar", forecast_response, 200)
 
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            result, max_kwh = test_api.solar.download_forecast_solar_data()
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
 
         # Verify personal API URL was used (contains api_key in path)
         forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
@@ -1129,8 +1187,11 @@ def test_fetch_pv_forecast_solcast_direct(my_predbat):
         }
         test_api.set_mock_response("forecasts", forecast_response, 200)
 
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            test_api.solar.fetch_pv_forecast()
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
 
         # Verify dashboard items were published
         if f"sensor.{test_api.mock_base.prefix}_pv_today" not in test_api.dashboard_items:
@@ -1172,8 +1233,11 @@ def test_fetch_pv_forecast_forecast_solar(my_predbat):
         }
         test_api.set_mock_response("forecast.solar", forecast_response, 200)
 
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            test_api.solar.fetch_pv_forecast()
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
 
         # Verify Forecast.Solar API was called
         forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
@@ -1229,8 +1293,11 @@ def test_fetch_pv_forecast_ha_sensors(my_predbat):
             },
         )
 
-        with patch("solcast.requests.get", test_api.mock_requests_get):
-            test_api.solar.fetch_pv_forecast()
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
 
         # Verify no external API calls were made
         if len(test_api.request_log) > 0:

@@ -10,6 +10,8 @@
 from datetime import datetime, timedelta
 from alertfeed import AlertFeed
 import json
+from unittest.mock import patch
+from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
 def test_alert_feed(my_predbat):
@@ -101,15 +103,18 @@ def test_alert_feed(my_predbat):
   </entry>
 </feed>
 """
-    print("Test alert feed")
+    print("*** Test alert feed ***")
 
     alert_feed = AlertFeed(my_predbat, alert_config={})
 
+    print("- Parse alert data")
     result = alert_feed.parse_alert_data(alert_data)
     if not result:
         print("ERROR: Could not parse stored alert data")
         failed = 1
         return failed
+
+    print("- Filter alert data")
 
     filter = alert_feed.filter_alerts(result, area="North West England")
     if len(filter) != 1:
@@ -147,6 +152,7 @@ def test_alert_feed(my_predbat):
         failed = 1
         return failed
 
+    print("- Apply alert data")
     alert_active_keep = alert_feed.apply_alerts(result, 1.0, my_predbat.minutes_now, my_predbat.midnight_utc)
     show = []
     for minute in range(0, 48 * 60, 15):
@@ -350,12 +356,46 @@ def test_alert_feed(my_predbat):
         failed = 1
 
     url = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
-    xml = alert_feed.download_alert_data(url)
+
+    print("- Test download function")
+    mock_response = create_aiohttp_mock_response(status=200, json_data=None)  # Will use text() method instead
+
+    # Override the text() method to return our alert_data
+    async def return_text():
+        return alert_data
+
+    mock_response.text = return_text
+    mock_session = create_aiohttp_mock_session(mock_response)
+    with patch("alertfeed.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        xml = run_async(alert_feed.download_alert_data(url))
+
     if not xml:
         print("ERROR: Could not download alert data")
         failed = 1
         return failed
 
+    # Verify the downloaded data matches our test data
+    if xml != alert_data:
+        print("ERROR: Downloaded data does not match expected test data, got {} expected {}".format(xml, alert_data))
+        failed = 1
+        return failed
+
+    print("- Test download function, cache")
+
+    # Second test checks the cache actually works
+    mock_response.text = "foobar"
+    mock_session = create_aiohttp_mock_session(mock_response)
+    with patch("alertfeed.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        xml = run_async(alert_feed.download_alert_data(url))
+    # Verify the downloaded data matches our test data
+    if xml != alert_data:
+        print("ERROR: Downloaded data cache failed, got {} expected {}".format(xml, alert_data))
+        failed = 1
+        return failed
+
+    print("- Test process alerts")
     alert_config = {
         "url": url,
         "area": "North West England",

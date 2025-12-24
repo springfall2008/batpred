@@ -15,7 +15,7 @@
 TIME_FORMAT_CARBON = "%Y-%m-%dT%H:%MZ"
 
 from datetime import datetime, timezone, timedelta
-import requests
+import aiohttp
 from config import TIME_FORMAT_HA
 from component_base import ComponentBase
 
@@ -55,37 +55,39 @@ class CarbonAPI(ComponentBase):
         for date in [date_now, date_plus_48]:
             url = f"https://api.carbonintensity.org.uk/regional/intensity/{date}/fw48h/postcode/{postcode}"
             try:
-                response = requests.get(url, timeout=30)
-                if response.status_code == 200:
-                    try:
-                        data = response.json()
-                        data_points = data.get("data", {}).get("data", [])
-                        if data_points:
-                            self.update_success_timestamp()
-                            self.last_updated_timestamp = self.last_updated_time()
-                            for point in data_points:
-                                from_time = point.get("from", None)
-                                to_time = point.get("to", None)
-                                intensity = point.get("intensity", {}).get("forecast", None)
-                                try:
-                                    # Use TIME_FORMAT_CARBON to parse time strings
-                                    from_time = datetime.strptime(from_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
-                                    to_time = datetime.strptime(to_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
-                                except Exception as e:
-                                    from_time = None
-                                    to_time = None
-                                if from_time and to_time and intensity is not None:
-                                    # Store using string of TIME_FORMAT_HA
-                                    collected_data.append({"from": from_time.strftime(TIME_FORMAT_HA), "to": to_time.strftime(TIME_FORMAT_HA), "intensity": intensity})
+                timeout = aiohttp.ClientTimeout(total=30)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            try:
+                                data = await response.json()
+                                data_points = data.get("data", {}).get("data", [])
+                                if data_points:
+                                    self.update_success_timestamp()
+                                    self.last_updated_timestamp = self.last_updated_time()
+                                    for point in data_points:
+                                        from_time = point.get("from", None)
+                                        to_time = point.get("to", None)
+                                        intensity = point.get("intensity", {}).get("forecast", None)
+                                        try:
+                                            # Use TIME_FORMAT_CARBON to parse time strings
+                                            from_time = datetime.strptime(from_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
+                                            to_time = datetime.strptime(to_time, TIME_FORMAT_CARBON).replace(tzinfo=timezone.utc)
+                                        except Exception as e:
+                                            from_time = None
+                                            to_time = None
+                                        if from_time and to_time and intensity is not None:
+                                            # Store using string of TIME_FORMAT_HA
+                                            collected_data.append({"from": from_time.strftime(TIME_FORMAT_HA), "to": to_time.strftime(TIME_FORMAT_HA), "intensity": intensity})
+                                else:
+                                    self.failures_total += 1
+                                    self.log("Warn: Carbon API: No data points found in response for date {}".format(date))
+                            except Exception as e:
+                                self.log(f"Warn: Carbon API: Failed to parse JSON response: {e}")
                         else:
                             self.failures_total += 1
-                            self.log("Warn: Carbon API: No data points found in response for date {}".format(date))
-                    except Exception as e:
-                        self.log(f"Warn: Carbon API: Failed to parse JSON response: {e}")
-                else:
-                    self.failures_total += 1
-                    self.log(f"Warn: Carbon API: Failed to fetch data, status code {response.status_code}")
-            except requests.RequestException as e:
+                            self.log(f"Warn: Carbon API: Failed to fetch data, status code {response.status}")
+            except (aiohttp.ClientError, Exception) as e:
                 self.failures_total += 1
                 self.log(f"Warn: Carbon API: Request failed: {e}")
         if collected_data:

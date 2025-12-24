@@ -1553,6 +1553,11 @@ async def test_fox_api(sn, api_key):
         if device_List:
             sn = device_List[0].get("deviceSN", None)
             print(f"Using first device SN: {sn}")
+
+    res = await fox_api.get_scheduler(sn, checkBattery=False)
+    print(res)
+    return 0
+
     # await fox_api.start()
     # res = await fox_api.get_device_settings(sn, checkBattery=False)
     # print(res)
@@ -1614,12 +1619,10 @@ async def test_fox_api(sn, api_key):
     print("Sending: {}".format(new_schedule))
     res = await fox_api.set_scheduler(sn, new_schedule)
 
-    res = await fox_api.get_scheduler(sn, checkBattery=False)
-    print(res)
-    res = await fox_api.compute_schedule(sn)
-    print(res)
-
-    print(res)
+    # res = await fox_api.get_scheduler(sn, checkBattery=False)
+    # print(res)
+    # res = await fox_api.compute_schedule(sn)
+    # print(res)
 
 
 def main():
