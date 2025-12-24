@@ -1472,6 +1472,10 @@ class Inverter:
     def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
+        if not entity_id:
+            self.base.log("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value))
+            self.base.record_status("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+            return False
         domain, entity_name = entity_id.split(".")
         current_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
 
@@ -1523,6 +1527,10 @@ class Inverter:
         """
         GivTCP Workaround, keep writing until correct
         """
+        if not entity_id:
+            self.base.log("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value))
+            self.base.record_status("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+            return False
         entity_base = entity_id.split(".")[0]
 
         if entity_base not in ["input_select", "select", "time"]:
