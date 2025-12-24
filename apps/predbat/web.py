@@ -53,7 +53,7 @@ ROOT_YAML_KEY = "pred_bat"
 
 
 class WebInterface(ComponentBase):
-    def initialize(self, web_port, performance_mode=False, hass_loop_interval=1):
+    def initialize(self, web_port, performance_mode=False, hass_loop_interval=1, log_level="debug"):
         self.default_page = "./dash"
         self.web_port = web_port
         self.default_log = "warnings"
@@ -3611,7 +3611,10 @@ chart.render();
             time_ago_text = format_time_ago(last_updated_time)
 
             # Create component card
-            text += f'<div class="component-card {"active" if is_active else "inactive"}">\n'
+            card_class = "active" if is_active else "inactive"
+            if is_active and not is_alive:
+                card_class += " error"
+            text += f'<div class="component-card {card_class}">\n'
             text += f'<div class="component-header">\n'
             text += f'<h3>{component_info.get("name", component_name)}</h3>\n'
 

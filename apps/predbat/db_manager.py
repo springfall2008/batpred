@@ -27,7 +27,7 @@ class DatabaseManager(ComponentBase):
         self.return_event = threading.Event()
         self.api_started = False
         self.last_success_timestamp = None
-        self.commit_interval = self.get_arg("db_commit_interval", 0)
+        self.commit_interval = db_commit_interval
         self.log("db_manager: Commit interval set to {} seconds".format(self.commit_interval))
 
     def bridge_event(self, loop):
@@ -62,19 +62,19 @@ class DatabaseManager(ComponentBase):
             # Check commit timer
             now = time.time()
             if self.commit_interval > 0 and (now - last_commit_time >= self.commit_interval):
-                self.db_engine.commit()
-                last_commit_time = now
+                 self.db_engine.commit()
+                 last_commit_time = now
 
             if not self.db_queue:
                 wait_time = 0.1
                 if self.commit_interval > 0:
                     remaining = self.commit_interval - (time.time() - last_commit_time)
-                    wait_time = max(0.1, remaining)
+                    # Cap wait to 1 second max to ensure commands are processed promptly
+                    wait_time = min(1.0, max(0.1, remaining)) if remaining > 0 else 0.1
 
                 try:
                     await asyncio.wait_for(self.async_event.wait(), timeout=wait_time)
                 except asyncio.TimeoutError:
-                    # Timeout is expected when no new DB work arrives within wait_time; safe to ignore.
                     pass
                 self.async_event.clear()
                 continue

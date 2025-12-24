@@ -52,6 +52,8 @@ class DatabaseEngine:
         self.db_cursor.execute("CREATE TABLE IF NOT EXISTS entities (entity_index INTEGER PRIMARY KEY AUTOINCREMENT, entity_name TEXT KEY UNIQUE)")
         self.db_cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
         self.db_cursor.execute("CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
+        # Create index for fast history queries (critical for performance)
+        self.db_cursor.execute("CREATE INDEX IF NOT EXISTS idx_states_entity_datetime ON states(entity_index, datetime)")
         self.db_cursor.execute(
             "DELETE FROM states WHERE datetime < ? AND keep != ?",
             (
@@ -115,6 +117,7 @@ class DatabaseEngine:
 
         # Put the entity_id into entities table if its not in already
         self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
+        # Note: No commit here - entity insert will be committed with the batch
         entity_index = self._get_entity_index_db(entity_id)
 
         # Convert time to GMT+0
@@ -193,7 +196,7 @@ class DatabaseEngine:
                     keep,
                 ),
             )
-            self.db.commit()  # Commit immediately to avoid data loss; WAL mode keeps this relatively cheap
+            # self.db.commit() - removed to allow batch commits
         except sqlite3.IntegrityError:
             self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
 

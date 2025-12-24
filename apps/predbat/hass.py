@@ -90,7 +90,9 @@ async def main():
 if __name__ == "__main__":
     try:
         set_start_method("fork")
-    except ValueError:
+    except (ValueError, RuntimeError):
+        # ValueError: fork not available on this platform (e.g., Windows)
+        # RuntimeError: context has already been set
         pass
     asyncio.run(main())
     sys.exit(0)
@@ -101,11 +103,31 @@ class Hass:
         """
         Log a message to the logfile
         """
+        # Log level filtering: debug < info < warn < error
+        log_levels = {"debug": 0, "info": 1, "warn": 2, "error": 3}
+        configured_level = self.args.get("log_level", "debug").lower()
+        min_level = log_levels.get(configured_level, 1)
+        
+        msg_lower = msg.lower()
+        # Determine message level
+        if msg_lower.startswith("error"):
+            msg_level = 3
+        elif msg_lower.startswith("warn"):
+            msg_level = 2
+        elif msg_lower.startswith("info"):
+            msg_level = 1
+        else:
+            msg_level = 0  # debug/other
+        
+        # Skip messages below configured level
+        if msg_level < min_level:
+            return
+        
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
-        if not self.args.get("performance_mode", False):
+        # Always flush errors/warnings to prevent loss on crash; otherwise respect performance_mode
+        if msg_lower.startswith("error") or msg_lower.startswith("warn") or not self.args.get("performance_mode", False):
             self.logfile.flush()
-        msg_lower = msg.lower()
         if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
 
@@ -209,7 +231,7 @@ class Hass:
                     t1 = time.time()
                     duration = t1 - t0
                     if duration > 0.1:
-                        self.log("Warn: Callback {} took {:.2f} seconds".format(item["callback"], duration), quiet=False)
+                         self.log("Warn: Callback {} took {:.2f} seconds".format(item["callback"], duration), quiet=False)
                 except Exception as e:
                     self.log("Error: {}".format(e), quiet=False)
                     print(traceback.format_exc())

@@ -60,6 +60,7 @@ COMPONENT_LIST = {
             "web_port": {"required": False, "config": "web_port", "default": 5052},
             "performance_mode": {"required": False, "config": "performance_mode", "default": False},
             "hass_loop_interval": {"required": False, "config": "hass_loop_interval", "default": 1},
+            "log_level": {"required": False, "config": "log_level", "default": "debug"},
         },
         "phase": 0,
     },
