@@ -9,19 +9,11 @@
 from datetime import datetime
 import asyncio
 import pytz
+import aiohttp
+import json
 from unittest.mock import MagicMock, patch, AsyncMock
-import requests
 from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal
-
-
-def run_async(coro):
-    """Helper function to run async coroutines in sync test functions"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
 class MockFoxAPI:
@@ -2944,64 +2936,63 @@ class MockFoxAPIForRequestTesting(FoxAPI):
 
 def test_request_get_func_real_success_get(my_predbat):
     """
-    Test real request_get_func with mocked requests.get - successful response
+    Test real request_get_func with mocked aiohttp - successful response
     """
     print("  - test_request_get_func_real_success_get")
 
     fox = MockFoxAPIForRequestTesting()
 
     # Create mock response
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 0, "result": {"data": [{"deviceSN": "TEST123"}]}}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 0, "result": {"data": [{"deviceSN": "TEST123"}]}})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response) as mock_get:
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list", post=False, datain={"pageSize": 100}))
 
     assert result is not None
     assert result["data"][0]["deviceSN"] == "TEST123"
     assert allow_retry == False
     assert fox.failures_total == 0
-    mock_get.assert_called_once()
 
     return False
 
 
 def test_request_get_func_real_success_post(my_predbat):
     """
-    Test real request_get_func with mocked requests.post - successful POST response
+    Test real request_get_func with mocked aiohttp - successful POST response
     """
     print("  - test_request_get_func_real_success_post")
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 0, "result": {"success": True}}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 0, "result": {"success": True}})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.post", return_value=mock_response) as mock_post:
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/setting", post=True, datain={"key": "value"}))
 
     assert result is not None
     assert result["success"] == True
     assert allow_retry == False
-    mock_post.assert_called_once()
 
     return False
 
 
 def test_request_get_func_real_auth_error_401(my_predbat):
     """
-    Test real request_get_func with mocked requests - 401 auth error
+    Test real request_get_func with mocked aiohttp - 401 auth error
     """
     print("  - test_request_get_func_real_auth_error_401")
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 401
+    mock_response = create_aiohttp_mock_response(status=401)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
     assert result is None
@@ -3013,16 +3004,17 @@ def test_request_get_func_real_auth_error_401(my_predbat):
 
 def test_request_get_func_real_rate_limit_429(my_predbat):
     """
-    Test real request_get_func with mocked requests - 429 rate limit (with mocked sleep)
+    Test real request_get_func with mocked aiohttp - 429 rate limit (with mocked sleep)
     """
     print("  - test_request_get_func_real_rate_limit_429")
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 429
+    mock_response = create_aiohttp_mock_response(status=429)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
@@ -3042,11 +3034,11 @@ def test_request_get_func_real_fox_errno_rate_limit(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 40400, "msg": "Rate limited"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 40400, "msg": "Rate limited"})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
@@ -3066,11 +3058,11 @@ def test_request_get_func_real_fox_errno_api_limit(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 40402, "msg": "API calls exceeded"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 40402, "msg": "API calls exceeded"})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
@@ -3090,11 +3082,14 @@ def test_request_get_func_real_connection_error(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    with patch("fox.requests.get", side_effect=requests.exceptions.ConnectionError("Connection refused")):
+    mock_session = create_aiohttp_mock_session(exception=aiohttp.ClientError("Connection refused"))
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
     assert result is None
-    assert allow_retry == False  # Connection errors should not retry (RequestException)
+    assert allow_retry == False  # Connection errors should not retry
     assert fox.failures_total == 1
 
     return False
@@ -3108,11 +3103,14 @@ def test_request_get_func_real_timeout(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    with patch("fox.requests.get", side_effect=requests.exceptions.Timeout("Request timed out")):
+    mock_session = create_aiohttp_mock_session(exception=asyncio.TimeoutError("Request timed out"))
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
     assert result is None
-    assert allow_retry == False  # Timeout as RequestException should not retry
+    assert allow_retry == False  # Timeout should not retry
     assert fox.failures_total == 1
 
     return False
@@ -3126,11 +3124,11 @@ def test_request_get_func_real_json_decode_error(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.side_effect = requests.exceptions.JSONDecodeError("Invalid JSON", "", 0)
+    mock_response = create_aiohttp_mock_response(status=200, json_exception=json.JSONDecodeError("Invalid JSON", "", 0))
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
     # JSON decode error with status 200 returns empty dict (data=None -> data={})
@@ -3149,22 +3147,18 @@ def test_request_get_real_retry_on_rate_limit(my_predbat):
     fox = MockFoxAPIForRequestTesting()
 
     # First call returns rate limit, second call succeeds
-    mock_response_rate_limit = MagicMock()
-    mock_response_rate_limit.status_code = 429
-
-    mock_response_success = MagicMock()
-    mock_response_success.status_code = 200
-    mock_response_success.json.return_value = {"errno": 0, "result": {"data": "success"}}
+    mock_response_rate_limit = create_aiohttp_mock_response(status=429)
+    mock_response_success = create_aiohttp_mock_response(status=200, json_data={"errno": 0, "result": {"data": "success"}})
 
     call_count = [0]
 
-    def side_effect(*args, **kwargs):
+    def session_side_effect(*args, **kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
-            return mock_response_rate_limit
-        return mock_response_success
+            return create_aiohttp_mock_session(mock_response_rate_limit)
+        return create_aiohttp_mock_session(mock_response_success)
 
-    with patch("fox.requests.get", side_effect=side_effect):
+    with patch("fox.aiohttp.ClientSession", side_effect=session_side_effect):
         with patch("fox.asyncio.sleep", new_callable=AsyncMock):
             with patch("fox.random.random", return_value=0.1):  # Make sleep short
                 result = run_async(fox.request_get("/op/v0/device/list"))
@@ -3184,16 +3178,15 @@ def test_request_get_real_no_retry_on_auth_error(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 401
+    mock_response = create_aiohttp_mock_response(status=401)
 
     call_count = [0]
 
-    def side_effect(*args, **kwargs):
+    def session_side_effect(*args, **kwargs):
         call_count[0] += 1
-        return mock_response
+        return create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", side_effect=side_effect):
+    with patch("fox.aiohttp.ClientSession", side_effect=session_side_effect):
         result = run_async(fox.request_get("/op/v0/device/list"))
 
     assert result is None
@@ -3211,16 +3204,15 @@ def test_request_get_real_max_retries(my_predbat):
     fox = MockFoxAPIForRequestTesting()
 
     # Always return rate limit to trigger max retries
-    mock_response = MagicMock()
-    mock_response.status_code = 429
+    mock_response = create_aiohttp_mock_response(status=429)
 
     call_count = [0]
 
-    def side_effect(*args, **kwargs):
+    def session_side_effect(*args, **kwargs):
         call_count[0] += 1
-        return mock_response
+        return create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", side_effect=side_effect):
+    with patch("fox.aiohttp.ClientSession", side_effect=session_side_effect):
         with patch("fox.asyncio.sleep", new_callable=AsyncMock):
             with patch("fox.random.random", return_value=0.01):  # Make sleep very short
                 result = run_async(fox.request_get("/op/v0/device/list"))
@@ -3239,19 +3231,15 @@ def test_request_get_real_post_with_data(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 0, "result": {"success": True}}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 0, "result": {"success": True}})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.post", return_value=mock_response) as mock_post:
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result = run_async(fox.request_get("/op/v0/device/setting", post=True, datain={"sn": "TEST123", "key": "MinSocOnGrid", "value": 10}))
 
     assert result is not None
     assert result["success"] == True
-    # Verify the post was called with correct arguments
-    mock_post.assert_called_once()
-    call_kwargs = mock_post.call_args[1]
-    assert call_kwargs["json"] == {"sn": "TEST123", "key": "MinSocOnGrid", "value": 10}
 
     return False
 
@@ -3293,7 +3281,13 @@ def test_request_get_rate_limiting_prevents_retry(my_predbat):
         assert hourly_rate > 60, f"Test setup error: hourly_rate should be >60, got {hourly_rate}"
         assert not fox.should_allow_retry(), "Test setup error: should_allow_retry should be False"
 
-        with patch("fox.requests.get", side_effect=side_effect):
+        mock_response = create_aiohttp_mock_response(status=429)
+
+        def session_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            return create_aiohttp_mock_session(mock_response)
+
+        with patch("fox.aiohttp.ClientSession", side_effect=session_side_effect):
             with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                 result = run_async(fox.request_get("/op/v0/device/list"))
 

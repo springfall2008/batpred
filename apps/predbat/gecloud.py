@@ -4,10 +4,11 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
-import requests
+import aiohttp
 from datetime import timedelta, datetime
 from utils import str2time, dp1
 import asyncio
+import json
 import random
 import time
 import yaml
@@ -1323,47 +1324,55 @@ class GECloudDirect(ComponentBase):
             "Accept": "application/json",
         }
 
+        timeout = aiohttp.ClientTimeout(total=TIMEOUT)
         try:
-            if post:
-                if datain:
-                    response = await asyncio.to_thread(requests.post, url, headers=headers, json=datain, timeout=TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                if post:
+                    if datain:
+                        async with session.post(url, headers=headers, json=datain) as response:
+                            status = response.status
+                            try:
+                                data = await response.json()
+                            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                                self.log("Warn: GeCloud: Failed to decode response from {}".format(url))
+                                data = None
+                    else:
+                        async with session.post(url, headers=headers) as response:
+                            status = response.status
+                            try:
+                                data = await response.json()
+                            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                                self.log("Warn: GeCloud: Failed to decode response from {}".format(url))
+                                data = None
                 else:
-                    response = await asyncio.to_thread(requests.post, url, headers=headers, timeout=TIMEOUT)
-            else:
-                response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=TIMEOUT)
-        except requests.exceptions.RequestException as e:
+                    async with session.get(url, headers=headers) as response:
+                        status = response.status
+                        try:
+                            data = await response.json()
+                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                            self.log("Warn: GeCloud: Failed to decode response from {}".format(url))
+                            data = None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
             self.failures_total += 1
             return None
-
-        try:
-            data = response.json()
-        except requests.exceptions.JSONDecodeError:
-            self.log("Warn: GeCloud: Failed to decode response from {}".format(url))
-            data = None
-        except (requests.Timeout, requests.exceptions.ReadTimeout):
-            self.log("Warn: GeCloud: Timeout from {}".format(url))
-            data = None
-        except (requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
-            self.log("Warn: GeCloud: Could not connect to {}".format(url))
-            data = None
 
         # Check data
         if data and "data" in data:
             data = data["data"]
         else:
             data = None
-        if response.status_code in [200, 201]:
+        if status in [200, 201]:
             if data is None:
                 data = {}
             self.update_success_timestamp()
             return data
-        if response.status_code in [401, 403, 404, 422]:
+        if status in [401, 403, 404, 422]:
             # Unauthorized
             self.failures_total += 1
-            self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, response.status_code))
+            self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, status))
             return {}
-        if response.status_code == 429:
+        if status == 429:
             # Rate limiting so wait up to 30 seconds
             self.failures_total += 1
             await asyncio.sleep(random.random() * 30)
@@ -1484,7 +1493,7 @@ class GECloudData(ComponentBase):
                 if age.total_seconds() > (24 * 60 * 60):
                     del self.ge_url_cache[url]
 
-    def get_ge_url(self, url, headers, now_utc, max_age_minutes=30):
+    async def get_ge_url(self, url, headers, now_utc, max_age_minutes=30):
         """
         Get data from GE Cloud
         """
@@ -1498,18 +1507,18 @@ class GECloudData(ComponentBase):
                 return mdata, url_next
 
         self.log("Fetching {}".format(url))
+        timeout = aiohttp.ClientTimeout(total=30)
         try:
-            r = requests.get(url, headers=headers)
-        except (requests.Timeout, requests.exceptions.ReadTimeout, requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
-            return {}, None
-
-        if r.status_code not in [200, 201]:
-            self.log("Warn: GeCloud: Failed to get data from {} status code {}".format(url, r.status_code))
-            return {}, None
-
-        try:
-            data = r.json()
-        except requests.exceptions.JSONDecodeError as e:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status not in [200, 201]:
+                        self.log("Warn: GeCloud: Failed to get data from {} status code {}".format(url, response.status))
+                        return {}, None
+                    try:
+                        data = await response.json()
+                    except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
+                        return {}, None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             return {}, None
 
         if not data or "data" not in data:
@@ -1587,7 +1596,7 @@ class GECloudData(ComponentBase):
                     url += "&pageSize=8000"
                 else:
                     url += "?pageSize=8000"
-                darray, url = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 18 * 60)
+                darray, url = await self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 18 * 60)
                 if darray is None:
                     # If we are less than 8 hours into today then ignore errors for today as data may not be available yet
                     if days_prev == 0:

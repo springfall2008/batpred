@@ -85,6 +85,7 @@ async def main():
             print("Stopping Predbat due to fatal error....")
             await p_han.stop_all()
             break
+        count += 1
 
 
 if __name__ == "__main__":
