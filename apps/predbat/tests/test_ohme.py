@@ -4,11 +4,11 @@
 Unit tests for Ohme EV charger integration
 """
 
-import asyncio
 import datetime
 import time
 from unittest.mock import patch, MagicMock, AsyncMock
 from typing import Dict, Optional
+from tests.test_infra import run_async
 
 # Import ohme module components
 import sys
@@ -28,20 +28,6 @@ from ohme import (
     slot_list,
     vehicle_to_name,
 )
-
-
-# ============================================================================
-# Async helper
-# ============================================================================
-
-def run_async(coro):
-    """Helper to run async functions in sync tests"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
 
 
 # ============================================================================

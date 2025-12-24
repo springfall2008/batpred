@@ -59,10 +59,11 @@ async def main():
     print("Watching {} for changes".format(py_files))
 
     # Runtime loop
+    count = 0
     while True:
         time.sleep(1)
         await p_han.timer_tick()
-        if check_modified(py_files, start_time):
+        if (count % 5 == 0) and check_modified(py_files, start_time):
             print("Stopping Predbat due to file changes....")
             await p_han.stop_all()
             break
@@ -70,6 +71,7 @@ async def main():
             print("Stopping Predbat due to fatal error....")
             await p_han.stop_all()
             break
+        count += 1
 
 
 if __name__ == "__main__":

@@ -10,20 +10,10 @@
 # fmt on
 
 from axle import AxleAPI
-import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from datetime import datetime, timezone, timedelta
 from config import TIME_FORMAT
-
-
-def run_async(coro):
-    """Helper function to run async coroutines in sync test functions"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
 
 
 class MockAxleAPI(AxleAPI):
@@ -120,20 +110,13 @@ def test_axle_fetch_with_active_event(my_predbat=None):
     now = datetime(2025, 12, 20, 14, 30, 0, tzinfo=timezone.utc)
     axle._now_utc = now
 
-    # Mock API response with an active event
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}
+    # Mock aiohttp response
+    json_data = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
-    with patch("requests.get", return_value=mock_response) as mock_get:
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         run_async(axle.fetch_axle_event())
-
-        # Verify API was called correctly
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        assert call_args[0][0] == "https://api.axle.energy/vpp/home-assistant/event"
-        assert call_args[1]["headers"]["Authorization"] == "Bearer test_key"
-        assert call_args[1]["timeout"] == 30
 
     # Verify current event data was parsed correctly (stored as strings)
     assert axle.current_event["start_time"] == "2025-12-20T14:00:00+0000"
@@ -178,11 +161,11 @@ def test_axle_fetch_with_future_event(my_predbat=None):
     axle._now_utc = now
 
     # Mock API response with a future event
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "import", "updated_at": "2025-12-20T13:25:00Z"}
+    json_data = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "import", "updated_at": "2025-12-20T13:25:00Z"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         run_async(axle.fetch_axle_event())
 
     # Verify event data was parsed (stored as strings)
@@ -214,11 +197,11 @@ def test_axle_fetch_with_past_event(my_predbat=None):
     axle._now_utc = now
 
     # Mock API response with a past event
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}
+    json_data = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         run_async(axle.fetch_axle_event())
 
     # Event should be added to history (ended)
@@ -243,11 +226,10 @@ def test_axle_fetch_no_event(my_predbat=None):
     axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
 
     # Mock API response with empty/null data
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={})
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         run_async(axle.fetch_axle_event())
 
     # Verify all event data is None
@@ -269,43 +251,122 @@ def test_axle_fetch_no_event(my_predbat=None):
 
 
 def test_axle_http_error(my_predbat=None):
-    """Test handling of HTTP errors"""
+    """Test handling of HTTP errors (no retry on non-200 status)"""
     print("Test: Axle API HTTP error handling")
 
     axle = MockAxleAPI()
     axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
 
     # Mock API response with error status
-    mock_response = MagicMock()
-    mock_response.status_code = 401
+    mock_response = create_aiohttp_mock_response(status=401)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
-    with patch("requests.get", return_value=mock_response):
-        run_async(axle.fetch_axle_event())
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        with patch("asyncio.sleep") as mock_sleep:
+            run_async(axle.fetch_axle_event())
+
+            # Should only call once - no retries for non-200 status
+            assert mock_sleep.call_count == 0, "Should not sleep on first failure with status code"
 
     assert axle.failures_total == 1, "Failure should be recorded for HTTP error"
     assert any("status code 401" in msg for msg in axle.log_messages), "Error should be logged"
 
-    print("  ✓ HTTP error handled correctly")
+    print("  ✓ HTTP error handled correctly (no retry)")
     return False
 
 
 def test_axle_request_exception(my_predbat=None):
-    """Test handling of request exceptions"""
-    print("Test: Axle API request exception handling")
+    """Test handling of request exceptions with retry mechanism"""
+    print("Test: Axle API request exception handling with retries")
 
     axle = MockAxleAPI()
     axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
 
     # Mock request exception
-    import requests
+    import aiohttp
 
-    with patch("requests.get", side_effect=requests.RequestException("Connection timeout")):
-        run_async(axle.fetch_axle_event())
+    mock_session = create_aiohttp_mock_session(exception=aiohttp.ClientError("Connection timeout"))
+
+    call_count = [0]
+    original_aenter = mock_session.__aenter__
+
+    async def count_calls(self):
+        call_count[0] += 1
+        return await original_aenter()
+
+    mock_session.__aenter__ = count_calls
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        with patch("asyncio.sleep") as mock_sleep:
+            run_async(axle.fetch_axle_event())
+
+            # Should retry 3 times total
+            assert call_count[0] == 3, f"Should retry 3 times on ClientError, got {call_count[0]}"
+
+            # Should sleep twice (between retries): 1s, 2s
+            assert mock_sleep.call_count == 2, "Should sleep between retries"
+
+            # Verify exponential backoff: 2^0=1s, 2^1=2s
+            sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
+            assert sleep_calls == [1, 2], f"Expected [1, 2] second sleeps, got {sleep_calls}"
 
     assert axle.failures_total == 1, "Failure should be recorded for request exception"
-    assert any("Request failed" in msg for msg in axle.log_messages), "Exception should be logged"
+    assert any("Request failed after 3 attempts" in msg for msg in axle.log_messages), "Exception should be logged with retry count"
+    assert any("Retrying in" in msg for msg in axle.log_messages), "Retry messages should be logged"
 
-    print("  ✓ Request exception handled correctly")
+    print("  ✓ Request exception handled correctly with 3 retries and exponential backoff")
+    return False
+
+
+def test_axle_retry_success_after_failure(my_predbat=None):
+    """Test successful request after initial failures (retry succeeds)"""
+    print("Test: Axle API retry success after failures")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+
+    # Set current time
+    now = datetime(2025, 12, 20, 14, 30, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Mock API response - fail twice, then succeed
+    import aiohttp
+
+    json_data = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}
+
+    # Create sessions - first two raise exceptions, third succeeds
+    call_count = [0]
+
+    def get_session(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] <= 2:
+            return create_aiohttp_mock_session(exception=aiohttp.ClientError(f"Error {call_count[0]}"))
+        else:
+            mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+            return create_aiohttp_mock_session(mock_response=mock_response)
+
+    with patch("aiohttp.ClientSession", side_effect=get_session):
+        with patch("asyncio.sleep") as mock_sleep:
+            run_async(axle.fetch_axle_event())
+
+            # Should try 3 times total (2 failures, 1 success)
+            assert call_count[0] == 3, f"Should retry until success, got {call_count[0]} attempts"
+
+            # Should sleep twice (between first 2 failures)
+            assert mock_sleep.call_count == 2, "Should sleep between retries"
+
+            # Verify exponential backoff: 2^0=1s, 2^1=2s
+            sleep_calls = [call[0][0] for call in mock_sleep.call_args_list]
+            assert sleep_calls == [1, 2], f"Expected [1, 2] second sleeps, got {sleep_calls}"
+
+    # Verify event was successfully fetched after retries
+    assert axle.current_event["start_time"] == "2025-12-20T14:00:00+0000", "Event should be fetched after retry"
+    assert axle.current_event["import_export"] == "export"
+    assert axle.failures_total == 0, "No failure should be recorded when retry succeeds"
+    assert any("Successfully fetched event data" in msg for msg in axle.log_messages), "Success should be logged"
+    assert any("Retrying in" in msg for msg in axle.log_messages), "Retry attempts should be logged"
+
+    print("  ✓ Retry mechanism succeeds after initial failures")
     return False
 
 
@@ -320,11 +381,11 @@ def test_axle_datetime_parsing_variations(my_predbat=None):
     axle._now_utc = datetime(2025, 12, 20, 17, 0, 0, tzinfo=timezone.utc)
 
     # Test with Z suffix (already handled)
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00+00:00", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}  # Alternative format
+    json_data = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00+00:00", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}  # Alternative format
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         run_async(axle.fetch_axle_event())
 
     # Timestamps should be converted to strings in TIME_FORMAT
@@ -335,6 +396,31 @@ def test_axle_datetime_parsing_variations(my_predbat=None):
     assert isinstance(axle.current_event["end_time"], str), "Should be stored as string"
 
     print("  ✓ Different datetime formats parsed correctly")
+    return False
+
+
+def test_axle_json_parse_error(my_predbat=None):
+    """Test handling of JSON parsing errors (no retry)"""
+    print("Test: Axle API JSON parsing error handling")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+
+    # Mock API response with invalid JSON
+    mock_response = create_aiohttp_mock_response(status=200, json_exception=ValueError("Invalid JSON"))
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        with patch("asyncio.sleep") as mock_sleep:
+            run_async(axle.fetch_axle_event())
+
+            # Should only call once - no retries for JSON parse errors
+            assert mock_sleep.call_count == 0, "Should not sleep on JSON parse error"
+
+    assert axle.failures_total == 1, "Failure should be recorded for JSON parse error"
+    assert any("Failed to parse JSON response" in msg for msg in axle.log_messages), "Parse error should be logged"
+
+    print("  ✓ JSON parse error handled correctly (no retry)")
     return False
 
 
@@ -674,6 +760,8 @@ if __name__ == "__main__":
     test_axle_fetch_no_event()
     test_axle_http_error()
     test_axle_request_exception()
+    test_axle_retry_success_after_failure()
+    test_axle_json_parse_error()
     test_axle_datetime_parsing_variations()
     test_axle_run_method()
     test_axle_history_loading()

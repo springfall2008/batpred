@@ -9,10 +9,11 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
-import requests
+import json
 from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, patch
 from octopus import OctopusAPI, DATE_TIME_STR_FORMAT
+from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
 def test_download_octopus_url_wrapper(my_predbat):
@@ -43,15 +44,14 @@ async def test_download_octopus_url(my_predbat):
 
     # Test 1: Successful download
     print("\n*** Test 1: Successful download with single page ***")
-    with patch("requests.get") as mock_get:
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "results": [{"value_inc_vat": 15.5, "valid_from": "2024-01-01T00:00:00Z", "valid_to": "2024-01-01T00:30:00Z"}, {"value_inc_vat": 16.0, "valid_from": "2024-01-01T00:30:00Z", "valid_to": "2024-01-01T01:00:00Z"}],
-            "next": None,
-        }
-        mock_get.return_value = mock_response
+    json_data = {
+        "results": [{"value_inc_vat": 15.5, "valid_from": "2024-01-01T00:00:00Z", "valid_to": "2024-01-01T00:30:00Z"}, {"value_inc_vat": 16.0, "valid_from": "2024-01-01T00:30:00Z", "valid_to": "2024-01-01T01:00:00Z"}],
+        "next": None,
+    }
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await api.async_download_octopus_url("https://example.com/rates")
 
         if len(result) != 2:
@@ -62,11 +62,10 @@ async def test_download_octopus_url(my_predbat):
 
     # Test 2: Non-200/201/400 status code
     print("\n*** Test 2: Non-200/201/400 status code (500) ***")
-    with patch("requests.get") as mock_get:
-        mock_response = Mock()
-        mock_response.status_code = 500
-        mock_get.return_value = mock_response
+    mock_response = create_aiohttp_mock_response(status=500)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await api.async_download_octopus_url("https://example.com/rates")
 
         if result != {}:
@@ -77,12 +76,10 @@ async def test_download_octopus_url(my_predbat):
 
     # Test 3: JSONDecodeError
     print("\n*** Test 3: JSONDecodeError ***")
-    with patch("requests.get") as mock_get:
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.side_effect = requests.exceptions.JSONDecodeError("msg", "doc", 0)
-        mock_get.return_value = mock_response
+    mock_response = create_aiohttp_mock_response(status=200, json_exception=json.JSONDecodeError("msg", "doc", 0))
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await api.async_download_octopus_url("https://example.com/rates")
 
         if result != {}:
@@ -93,19 +90,17 @@ async def test_download_octopus_url(my_predbat):
 
     # Test 4: 400 status with "day and night rates" detail
     print("\n*** Test 4: 400 status with 'day and night rates' detail ***")
-    with patch("requests.get") as mock_get:
-        # First call returns 400 with day/night message
-        mock_response_400 = Mock()
-        mock_response_400.status_code = 400
-        mock_response_400.json.return_value = {"detail": "This tariff has day and night rates"}
+    json_data = {"detail": "This tariff has day and night rates"}
+    mock_response = create_aiohttp_mock_response(status=400, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
-        # Mock async_get_day_night_rates to return data
-        async def mock_day_night_rates(url):
-            return [{"rate": "day"}, {"rate": "night"}]
+    # Mock async_get_day_night_rates to return data
+    async def mock_day_night_rates(url):
+        return [{"rate": "day"}, {"rate": "night"}]
 
-        api.async_get_day_night_rates = mock_day_night_rates
-        mock_get.return_value = mock_response_400
+    api.async_get_day_night_rates = mock_day_night_rates
 
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await api.async_download_octopus_url("https://example.com/rates")
 
         if len(result) != 2:
@@ -116,18 +111,17 @@ async def test_download_octopus_url(my_predbat):
 
     # Test 5: 400 status with "day and night rates" but no data returned
     print("\n*** Test 5: 400 status with 'day and night rates' but empty result ***")
-    with patch("requests.get") as mock_get:
-        mock_response_400 = Mock()
-        mock_response_400.status_code = 400
-        mock_response_400.json.return_value = {"detail": "This tariff has day and night rates"}
+    json_data = {"detail": "This tariff has day and night rates"}
+    mock_response = create_aiohttp_mock_response(status=400, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
-        # Mock async_get_day_night_rates to return empty
-        async def mock_day_night_rates_empty(url):
-            return []
+    # Mock async_get_day_night_rates to return empty
+    async def mock_day_night_rates_empty(url):
+        return []
 
-        api.async_get_day_night_rates = mock_day_night_rates_empty
-        mock_get.return_value = mock_response_400
+    api.async_get_day_night_rates = mock_day_night_rates_empty
 
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await api.async_download_octopus_url("https://example.com/rates")
 
         if result != {}:
@@ -138,12 +132,11 @@ async def test_download_octopus_url(my_predbat):
 
     # Test 6: 400 status with other error detail
     print("\n*** Test 6: 400 status with other error detail ***")
-    with patch("requests.get") as mock_get:
-        mock_response_400 = Mock()
-        mock_response_400.status_code = 400
-        mock_response_400.json.return_value = {"detail": "Invalid tariff code"}
-        mock_get.return_value = mock_response_400
+    json_data = {"detail": "Invalid tariff code"}
+    mock_response = create_aiohttp_mock_response(status=400, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await api.async_download_octopus_url("https://example.com/rates")
 
         if result != {}:
@@ -154,12 +147,11 @@ async def test_download_octopus_url(my_predbat):
 
     # Test 7: Missing "results" key in response
     print("\n*** Test 7: Missing 'results' key in response ***")
-    with patch("requests.get") as mock_get:
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"detail": "Some other data", "next": None}
-        mock_get.return_value = mock_response
+    json_data = {"detail": "Some other data", "next": None}
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await api.async_download_octopus_url("https://example.com/rates")
 
         if result != {}:
@@ -170,20 +162,20 @@ async def test_download_octopus_url(my_predbat):
 
     # Test 8: Pagination (multiple pages)
     print("\n*** Test 8: Pagination with multiple pages ***")
-    with patch("requests.get") as mock_get:
-        # First page
-        mock_response_page1 = Mock()
-        mock_response_page1.status_code = 200
-        mock_response_page1.json.return_value = {"results": [{"value": 1}, {"value": 2}], "next": "https://example.com/rates?page=2"}
+    # First page
+    json_data_page1 = {"results": [{"value": 1}, {"value": 2}], "next": "https://example.com/rates?page=2"}
+    mock_response_page1 = create_aiohttp_mock_response(status=200, json_data=json_data_page1)
 
-        # Second page
-        mock_response_page2 = Mock()
-        mock_response_page2.status_code = 200
-        mock_response_page2.json.return_value = {"results": [{"value": 3}, {"value": 4}], "next": None}
+    # Second page
+    json_data_page2 = {"results": [{"value": 3}, {"value": 4}], "next": None}
+    mock_response_page2 = create_aiohttp_mock_response(status=200, json_data=json_data_page2)
 
-        # Configure mock to return different responses
-        mock_get.side_effect = [mock_response_page1, mock_response_page2]
+    # Create sessions for each page
+    mock_session_page1 = create_aiohttp_mock_session(mock_response=mock_response_page1)
+    mock_session_page2 = create_aiohttp_mock_session(mock_response=mock_response_page2)
 
+    # Configure mock to return different sessions
+    with patch("aiohttp.ClientSession", side_effect=[mock_session_page1, mock_session_page2]):
         result = await api.async_download_octopus_url("https://example.com/rates")
 
         if len(result) != 4:
@@ -1109,23 +1101,20 @@ async def test_edf_freephase_dynamic_url(my_predbat):
 
     # Test 1: Verify EDF API response structure decodes correctly
     print("\n*** Test 1: Verify EDF API response decodes correctly ***")
-    with patch("requests.get") as mock_get:
-        mock_response = Mock()
-        mock_response.status_code = 200
-        # Simulating actual EDF API response structure
-        mock_response.json.return_value = {
-            "count": 10126,
-            "next": None,
-            "previous": None,
-            "results": [
-                {"value_exc_vat": 15.775, "value_inc_vat": 16.56375, "valid_from": "2025-12-17T22:30:00Z", "valid_to": "2025-12-17T23:00:00Z", "payment_method": "DIRECT_DEBIT"},
-                {"value_exc_vat": 15.775, "value_inc_vat": 16.56375, "valid_from": "2025-12-17T22:00:00Z", "valid_to": "2025-12-17T22:30:00Z", "payment_method": "DIRECT_DEBIT"},
-                {"value_exc_vat": 16.025, "value_inc_vat": 16.82625, "valid_from": "2025-12-17T21:30:00Z", "valid_to": "2025-12-17T22:00:00Z", "payment_method": "DIRECT_DEBIT"},
-            ],
-        }
+    json_data = {
+        "count": 10126,
+        "next": None,
+        "previous": None,
+        "results": [
+            {"value_exc_vat": 15.775, "value_inc_vat": 16.56375, "valid_from": "2025-12-17T22:30:00Z", "valid_to": "2025-12-17T23:00:00Z", "payment_method": "DIRECT_DEBIT"},
+            {"value_exc_vat": 15.775, "value_inc_vat": 16.56375, "valid_from": "2025-12-17T22:00:00Z", "valid_to": "2025-12-17T22:30:00Z", "payment_method": "DIRECT_DEBIT"},
+            {"value_exc_vat": 16.025, "value_inc_vat": 16.82625, "valid_from": "2025-12-17T21:30:00Z", "valid_to": "2025-12-17T22:00:00Z", "payment_method": "DIRECT_DEBIT"},
+        ],
+    }
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
-        mock_get.return_value = mock_response
-
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await api.async_download_octopus_url("https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates")
 
         if len(result) != 3:
@@ -1146,35 +1135,35 @@ async def test_edf_freephase_dynamic_url(my_predbat):
 
     # Test 2: Verify pagination handling for EDF API
     print("\n*** Test 2: Verify pagination handling for EDF API ***")
-    with patch("requests.get") as mock_get:
-        # First page
-        mock_response_page1 = Mock()
-        mock_response_page1.status_code = 200
-        mock_response_page1.json.return_value = {
-            "count": 200,
-            "next": "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates/?page=2",
-            "previous": None,
-            "results": [
-                {"value_exc_vat": 15.0, "value_inc_vat": 15.75, "valid_from": "2025-12-17T23:00:00Z", "valid_to": "2025-12-17T23:30:00Z", "payment_method": "DIRECT_DEBIT"},
-                {"value_exc_vat": 15.5, "value_inc_vat": 16.275, "valid_from": "2025-12-17T22:30:00Z", "valid_to": "2025-12-17T23:00:00Z", "payment_method": "DIRECT_DEBIT"},
-            ],
-        }
+    # First page
+    json_data_page1 = {
+        "count": 200,
+        "next": "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates/?page=2",
+        "previous": None,
+        "results": [
+            {"value_exc_vat": 15.0, "value_inc_vat": 15.75, "valid_from": "2025-12-17T23:00:00Z", "valid_to": "2025-12-17T23:30:00Z", "payment_method": "DIRECT_DEBIT"},
+            {"value_exc_vat": 15.5, "value_inc_vat": 16.275, "valid_from": "2025-12-17T22:30:00Z", "valid_to": "2025-12-17T23:00:00Z", "payment_method": "DIRECT_DEBIT"},
+        ],
+    }
+    mock_response_page1 = create_aiohttp_mock_response(status=200, json_data=json_data_page1)
 
-        # Second page
-        mock_response_page2 = Mock()
-        mock_response_page2.status_code = 200
-        mock_response_page2.json.return_value = {
-            "count": 200,
-            "next": None,
-            "previous": "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates/?page=1",
-            "results": [
-                {"value_exc_vat": 16.0, "value_inc_vat": 16.8, "valid_from": "2025-12-17T22:00:00Z", "valid_to": "2025-12-17T22:30:00Z", "payment_method": "DIRECT_DEBIT"},
-            ],
-        }
+    # Second page
+    json_data_page2 = {
+        "count": 200,
+        "next": None,
+        "previous": "https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates/?page=1",
+        "results": [
+            {"value_exc_vat": 16.0, "value_inc_vat": 16.8, "valid_from": "2025-12-17T22:00:00Z", "valid_to": "2025-12-17T22:30:00Z", "payment_method": "DIRECT_DEBIT"},
+        ],
+    }
+    mock_response_page2 = create_aiohttp_mock_response(status=200, json_data=json_data_page2)
 
-        # Configure mock to return different responses
-        mock_get.side_effect = [mock_response_page1, mock_response_page2]
+    # Create sessions for each page
+    mock_session_page1 = create_aiohttp_mock_session(mock_response=mock_response_page1)
+    mock_session_page2 = create_aiohttp_mock_session(mock_response=mock_response_page2)
 
+    # Configure mock to return different sessions
+    with patch("aiohttp.ClientSession", side_effect=[mock_session_page1, mock_session_page2]):
         result = await api.async_download_octopus_url("https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates")
 
         if len(result) != 3:
@@ -1185,25 +1174,24 @@ async def test_edf_freephase_dynamic_url(my_predbat):
 
     # Test 3: Verify rate data structure matches expected format
     print("\n*** Test 3: Verify rate data structure matches expected format ***")
-    with patch("requests.get") as mock_get:
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "count": 1,
-            "next": None,
-            "previous": None,
-            "results": [
-                {
-                    "value_exc_vat": 15.775,
-                    "value_inc_vat": 16.56375,
-                    "valid_from": "2025-12-17T22:30:00Z",
-                    "valid_to": "2025-12-17T23:00:00Z",
-                    "payment_method": "DIRECT_DEBIT",
-                }
-            ],
-        }
-        mock_get.return_value = mock_response
+    json_data = {
+        "count": 1,
+        "next": None,
+        "previous": None,
+        "results": [
+            {
+                "value_exc_vat": 15.775,
+                "value_inc_vat": 16.56375,
+                "valid_from": "2025-12-17T22:30:00Z",
+                "valid_to": "2025-12-17T23:00:00Z",
+                "payment_method": "DIRECT_DEBIT",
+            }
+        ],
+    }
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
 
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await api.async_download_octopus_url("https://api.edfgb-kraken.energy/v1/products/EDF_FREEPHASE_DYNAMIC_12M_HH/electricity-tariffs/E-1R-EDF_FREEPHASE_DYNAMIC_12M_HH-J/standard-unit-rates")
 
         if len(result) != 1:

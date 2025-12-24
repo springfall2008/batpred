@@ -10,7 +10,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import time
 import hashlib
-import requests
+import aiohttp
+import json
 import argparse
 import random
 from component_base import ComponentBase
@@ -1049,38 +1050,46 @@ class FoxAPI(ComponentBase):
         headers = self.get_headers(path)
         url = FOX_DOMAIN + path
         self.log("Fox: API Request: path {} post {} datain {}".format(path, post, datain))
+
+        timeout = aiohttp.ClientTimeout(total=TIMEOUT)
         try:
-            if post:
-                if datain:
-                    response = await asyncio.to_thread(requests.post, url, headers=headers, json=datain, timeout=TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                if post:
+                    if datain:
+                        async with session.post(url, headers=headers, json=datain) as response:
+                            status_code = response.status
+                            try:
+                                data = await response.json()
+                            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                                self.log("Warn: Fox: Failed to decode response from {} code {}".format(url, status_code))
+                                data = None
+                    else:
+                        async with session.post(url, headers=headers) as response:
+                            status_code = response.status
+                            try:
+                                data = await response.json()
+                            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                                self.log("Warn: Fox: Failed to decode response from {} code {}".format(url, status_code))
+                                data = None
                 else:
-                    response = await asyncio.to_thread(requests.post, url, headers=headers, timeout=TIMEOUT)
-            else:
-                response = await asyncio.to_thread(requests.get, url, headers=headers, params=datain, timeout=TIMEOUT)
-        except requests.exceptions.RequestException as e:
+                    async with session.get(url, headers=headers, params=datain) as response:
+                        status_code = response.status
+                        try:
+                            data = await response.json()
+                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                            self.log("Warn: Fox: Failed to decode response from {} code {}".format(url, status_code))
+                            data = None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: Fox: Exception during request to {url}: {e}")
             self.failures_total += 1
             return None, False
 
-        status_code = response.status_code
         if status_code in [400, 401, 402, 403]:
             self.log("Warn: Fox: Authentication error with status code {} from {}".format(status_code, url))
             self.failures_total += 1
             return None, False
 
-        try:
-            data = response.json()
-        except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Fox: Failed to decode response from {} code {}".format(url, status_code))
-            data = None
-        except (requests.Timeout, requests.exceptions.ReadTimeout):
-            self.log("Warn: Fox: Timeout from {}".format(url))
-            return None, True
-        except (requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
-            self.log("Warn: Fox: Could not connect to {}".format(url))
-            return None, True
-
-        if response.status_code in [200, 201]:
+        if status_code in [200, 201]:
             if data is None:
                 data = {}
             errno = data.get("errno", 0)
@@ -1119,7 +1128,7 @@ class FoxAPI(ComponentBase):
             return data, False
         else:
             self.failures_total += 1
-            if response.status_code == 429:
+            if status_code == 429:
                 # Rate limiting so wait up to 30 seconds
                 self.log("Info: Fox: Rate limiting detected, waiting...")
                 await asyncio.sleep(random.random() * 30 + 1)

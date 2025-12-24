@@ -11,7 +11,94 @@
 from datetime import datetime, timedelta
 from prediction import wrapped_run_prediction_single, Prediction
 from matplotlib import pyplot as plt
+import asyncio
 import numpy as np
+from unittest.mock import MagicMock
+
+
+def run_async(coro):
+    """Helper function to run async coroutines in sync test functions"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
+def create_aiohttp_mock_response(status=200, json_data=None, json_exception=None):
+    """Create a mock aiohttp response object"""
+    mock_response = MagicMock()
+    mock_response.status = status
+
+    if json_exception:
+        # If a JSON exception is explicitly provided
+        async def raise_json_exception():
+            raise json_exception
+
+        mock_response.json = raise_json_exception
+    elif json_data is not None:
+        # If JSON data is provided
+        async def return_json():
+            return json_data
+
+        mock_response.json = return_json
+    else:
+        # Default: return empty dict
+        async def return_empty_json():
+            return {}
+
+        mock_response.json = return_empty_json
+
+    # Setup async context manager
+    async def aenter(self):
+        return mock_response
+
+    async def aexit(self, *args):
+        pass
+
+    mock_response.__aenter__ = aenter
+    mock_response.__aexit__ = aexit
+    return mock_response
+
+
+def create_aiohttp_mock_session(mock_response=None, exception=None):
+    """Helper to create a mock aiohttp ClientSession"""
+    mock_session = MagicMock()
+
+    if exception:
+        # Raise exception when trying to perform request
+        mock_session.get = MagicMock(side_effect=exception)
+        mock_session.post = MagicMock(side_effect=exception)
+    else:
+        if mock_response is None:
+            mock_response = create_aiohttp_mock_response()
+
+        mock_context = MagicMock()
+
+        async def aenter(*args, **kwargs):
+            return mock_response
+
+        async def aexit(*args):
+            return None
+
+        mock_context.__aenter__ = aenter
+        mock_context.__aexit__ = aexit
+
+        # Setup both GET and POST methods
+        mock_session.get = MagicMock(return_value=mock_context)
+        mock_session.post = MagicMock(return_value=mock_context)
+
+    async def session_aenter(*args):
+        return mock_session
+
+    async def session_aexit(*args):
+        return None
+
+    mock_session.__aenter__ = session_aenter
+    mock_session.__aexit__ = session_aexit
+
+    return mock_session
 
 
 class DummyInverter:

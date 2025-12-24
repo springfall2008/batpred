@@ -13,20 +13,12 @@ from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_DEVICES
 import time
 import asyncio
+import json
 from unittest.mock import MagicMock, patch, AsyncMock
 import tempfile
 import os
 from datetime import datetime, timedelta
-
-
-def run_async(coro):
-    """Helper function to run async coroutines in sync test functions"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
 
 
 class MockGECloudDirect(GECloudDirect):
@@ -146,13 +138,12 @@ def test_async_get_inverter_data_success(my_predbat):
         ge_cloud = MockGECloudDirect()
 
         # Mock successful response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"data": {"serial": "test123", "status": "NORMAL"}}
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"serial": "test123", "status": "NORMAL"}})
+        mock_session = create_aiohttp_mock_session(mock_response)
 
-        with patch("gecloud.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        with patch("aiohttp.ClientSession") as mock_session_class:
             with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
-                mock_to_thread.return_value = mock_response
+                mock_session_class.return_value = mock_session
 
                 result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
 
@@ -176,13 +167,12 @@ def test_async_get_inverter_data_auth_error(my_predbat):
     async def test():
         ge_cloud = MockGECloudDirect()
 
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.json.return_value = {"error": "Unauthorized"}
+        mock_response = create_aiohttp_mock_response(status=401, json_data={"error": "Unauthorized"})
+        mock_session = create_aiohttp_mock_session(mock_response)
 
-        with patch("gecloud.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        with patch("aiohttp.ClientSession") as mock_session_class:
             with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
-                mock_to_thread.return_value = mock_response
+                mock_session_class.return_value = mock_session
 
                 result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
 
@@ -203,13 +193,12 @@ def test_async_get_inverter_data_rate_limit(my_predbat):
     async def test():
         ge_cloud = MockGECloudDirect()
 
-        mock_response = MagicMock()
-        mock_response.status_code = 429
-        mock_response.json.return_value = {"error": "Too many requests"}
+        mock_response = create_aiohttp_mock_response(status=429, json_data={"error": "Too many requests"})
+        mock_session = create_aiohttp_mock_session(mock_response)
 
-        with patch("gecloud.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        with patch("aiohttp.ClientSession") as mock_session_class:
             with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
-                mock_to_thread.return_value = mock_response
+                mock_session_class.return_value = mock_session
 
                 result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
 
@@ -230,11 +219,22 @@ def test_async_get_inverter_data_timeout(my_predbat):
     async def test():
         ge_cloud = MockGECloudDirect()
 
-        import requests
+        # Mock session that raises timeout
+        mock_session = MagicMock()
+        mock_session.get.side_effect = asyncio.TimeoutError("Timeout")
 
-        with patch("gecloud.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        async def session_aenter(self):
+            return mock_session
+
+        async def session_aexit(self, *args):
+            pass
+
+        mock_session.__aenter__ = session_aenter
+        mock_session.__aexit__ = session_aexit
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
             with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
-                mock_to_thread.side_effect = requests.exceptions.Timeout("Timeout")
+                mock_session_class.return_value = mock_session
 
                 result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
 
@@ -262,15 +262,12 @@ def test_async_get_inverter_data_json_error(my_predbat):
     async def test():
         ge_cloud = MockGECloudDirect()
 
-        import requests
+        mock_response = create_aiohttp_mock_response(status=200, json_exception=json.JSONDecodeError("Invalid JSON", "", 0))
+        mock_session = create_aiohttp_mock_session(mock_response)
 
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.side_effect = requests.exceptions.JSONDecodeError("Invalid JSON", "", 0)
-
-        with patch("gecloud.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+        with patch("aiohttp.ClientSession") as mock_session_class:
             with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
-                mock_to_thread.return_value = mock_response
+                mock_session_class.return_value = mock_session
 
                 result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
 
@@ -2113,11 +2110,10 @@ def test_download_ge_data_single_day(my_predbat):
             ge_data.max_days_previous = 0
 
             # Mock API response
-            with patch("requests.get") as mock_get:
-                mock_response = MagicMock()
-                mock_response.status_code = 200
-                mock_response.json.return_value = {"data": [{"time": "2024-12-17T10:00:00Z", "total": {"consumption": 1.5, "grid": {"import": 0.5, "export": 0.0}, "solar": 2.0}}]}
-                mock_get.return_value = mock_response
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                mock_response = create_aiohttp_mock_response(status=200, json_data={"data": [{"time": "2024-12-17T10:00:00Z", "total": {"consumption": 1.5, "grid": {"import": 0.5, "export": 0.0}, "solar": 2.0}}]})
+                mock_session = create_aiohttp_mock_session(mock_response)
+                mock_session_class.return_value = mock_session
 
                 now = datetime(2024, 12, 17, 12, 0, 0)
                 result = await ge_data.download_ge_data(now)
@@ -2149,13 +2145,14 @@ def test_download_ge_data_multi_day(my_predbat):
 
             def mock_response_fn(*args, **kwargs):
                 call_count[0] += 1
-                mock_response = MagicMock()
-                mock_response.status_code = 200
-                mock_response.json.return_value = {"data": [{"time": "2024-12-{:02d}T10:00:00Z".format(15 + call_count[0]), "total": {"consumption": 1.0 * call_count[0], "grid": {"import": 0.5, "export": 0.0}, "solar": 1.5}}]}
-                return mock_response
+                mock_response = create_aiohttp_mock_response(
+                    status=200, json_data={"data": [{"time": "2024-12-{:02d}T10:00:00Z".format(15 + call_count[0]), "total": {"consumption": 1.0 * call_count[0], "grid": {"import": 0.5, "export": 0.0}, "solar": 1.5}}]}
+                )
+                mock_session = create_aiohttp_mock_session(mock_response)
+                return mock_session
 
-            with patch("requests.get") as mock_get:
-                mock_get.side_effect = mock_response_fn
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                mock_session_class.side_effect = mock_response_fn
 
                 now = datetime(2024, 12, 17, 12, 0, 0)
                 result = await ge_data.download_ge_data(now)
@@ -2186,22 +2183,24 @@ def test_download_ge_data_pagination(my_predbat):
 
             def mock_response_fn(*args, **kwargs):
                 call_count[0] += 1
-                mock_response = MagicMock()
-                mock_response.status_code = 200
 
                 if call_count[0] == 1:
                     # First page with next link
-                    mock_response.json.return_value = {
-                        "data": [{"time": "2024-12-17T10:00:00Z", "total": {"consumption": 1.0, "grid": {"import": 0.5, "export": 0.0}, "solar": 1.5}}],
-                        "links": {"next": "https://api.givenergy.cloud/v1/inverter/test123/data-points/2024-12-17?page=2"},
-                    }
+                    mock_response = create_aiohttp_mock_response(
+                        status=200,
+                        json_data={
+                            "data": [{"time": "2024-12-17T10:00:00Z", "total": {"consumption": 1.0, "grid": {"import": 0.5, "export": 0.0}, "solar": 1.5}}],
+                            "links": {"next": "https://api.givenergy.cloud/v1/inverter/test123/data-points/2024-12-17?page=2"},
+                        },
+                    )
                 else:
                     # Second page without next link
-                    mock_response.json.return_value = {"data": [{"time": "2024-12-17T11:00:00Z", "total": {"consumption": 2.0, "grid": {"import": 0.5, "export": 0.0}, "solar": 2.5}}]}
-                return mock_response
+                    mock_response = create_aiohttp_mock_response(status=200, json_data={"data": [{"time": "2024-12-17T11:00:00Z", "total": {"consumption": 2.0, "grid": {"import": 0.5, "export": 0.0}, "solar": 2.5}}]})
+                mock_session = create_aiohttp_mock_session(mock_response)
+                return mock_session
 
-            with patch("requests.get") as mock_get:
-                mock_get.side_effect = mock_response_fn
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                mock_session_class.side_effect = mock_response_fn
 
                 now = datetime(2024, 12, 17, 12, 0, 0)
                 result = await ge_data.download_ge_data(now)
@@ -2232,13 +2231,13 @@ def test_get_ge_url_cache_hit(my_predbat):
         # Pre-populate cache with fresh data
         ge_data.ge_url_cache[url] = {"stamp": now - timedelta(minutes=10), "data": [{"test": "cached"}], "next": None}  # 10 minutes old
 
-        with patch("requests.get") as mock_get:
-            data, url_next = ge_data.get_ge_url(url, {}, now, max_age_minutes=30)
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            data, url_next = run_async(ge_data.get_ge_url(url, {}, now, max_age_minutes=30))
 
             if data != [{"test": "cached"}]:
                 print("ERROR: Expected cached data, got {}".format(data))
                 return 1
-            if mock_get.called:
+            if mock_session_class.called:
                 print("ERROR: Should not have called API for cache hit")
                 return 1
 
@@ -2256,14 +2255,13 @@ def test_get_ge_url_cache_miss(my_predbat):
         # Pre-populate cache with stale data
         ge_data.ge_url_cache[url] = {"stamp": now - timedelta(minutes=40), "data": [{"test": "old"}], "next": None}  # 40 minutes old
 
-        with patch("requests.get") as mock_get:
+        with patch("aiohttp.ClientSession") as mock_session_class:
             # Mock fresh API response
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {"data": [{"time": "2024-12-17T12:00:00Z", "total": {"consumption": 1.5, "grid": {"import": 0.5, "export": 0.2}, "solar": 2.0}}]}
-            mock_get.return_value = mock_response
+            mock_response = create_aiohttp_mock_response(status=200, json_data={"data": [{"time": "2024-12-17T12:00:00Z", "total": {"consumption": 1.5, "grid": {"import": 0.5, "export": 0.2}, "solar": 2.0}}]})
+            mock_session = create_aiohttp_mock_session(mock_response)
+            mock_session_class.return_value = mock_session
 
-            data, url_next = ge_data.get_ge_url(url, {}, now, max_age_minutes=30)
+            data, url_next = run_async(ge_data.get_ge_url(url, {}, now, max_age_minutes=30))
 
             if not data or len(data) == 0:
                 print("ERROR: Expected fresh data, got {}".format(data))
@@ -2271,7 +2269,7 @@ def test_get_ge_url_cache_miss(my_predbat):
             if data[0]["consumption"] != 1.5:
                 print("ERROR: Expected consumption=1.5, got {}".format(data[0]))
                 return 1
-            if not mock_get.called:
+            if not mock_session_class.called:
                 print("ERROR: Should have called API for cache miss")
                 return 1
 
