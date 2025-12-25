@@ -773,6 +773,10 @@ def test_download_forecast_solar_data_with_postcode(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
 
+        # Verify we received a sensible maximum kWh value from the forecast
+        if max_kwh <= 0:
+            print("ERROR: Expected positive max_kwh from forecast.solar data")
+            failed = True
         # Verify postcode API was called
         postcode_calls = [r for r in test_api.request_log if "postcodes.io" in r["url"]]
         if len(postcode_calls) == 0:
