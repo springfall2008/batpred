@@ -45,6 +45,8 @@ class AlertFeed(ComponentBase):
             else:
                 if self.alert_xml is not None:
                     self.update_success_timestamp()
+                else:
+                    return False
         except Exception as e:
             self.log("Warn: AlertFeed: Exception in run loop: {}".format(e))
             return False

@@ -11,6 +11,7 @@
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from inverter import Inverter
+from datetime import timedelta, datetime
 
 
 def setup_predbat(my_predbat):
@@ -22,7 +23,6 @@ def setup_predbat(my_predbat):
     my_predbat.args["discharge_rate"] = ["number.discharge_rate"]
     my_predbat.args["battery_power"] = ["sensor.battery_power"]
     my_predbat.args["battery_power_invert"] = [False]
-    my_predbat.args["predbat_status"] = ["predbat.status"]
     my_predbat.battery_charge_power_curve_auto = True
     my_predbat.battery_rate_max_scaling = 1.0
     my_predbat.battery_rate_max_scaling_discharge = 1.0
@@ -43,7 +43,7 @@ def create_test_history_data(my_predbat, num_days=7, slow=False):
     History data is indexed by minutes in the past (0 = now, higher = older)
     """
     ha = my_predbat.ha_interface
-    base_time = my_predbat.midnight_utc
+    base_time = my_predbat.midnight_utc - timedelta(days=num_days)
 
     # Create history data structure for each sensor
     # We'll build this in reverse (most recent first)
@@ -60,7 +60,7 @@ def create_test_history_data(my_predbat, num_days=7, slow=False):
     debug_charging_count = 0
 
     # Generate data for each minute going backwards in time
-    for minutes in range(total_minutes):
+    for minutes in range(0, total_minutes, 5):
         timestamp = base_time + timedelta(minutes=minutes)
         timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
 
@@ -127,9 +127,7 @@ def create_test_history_data(my_predbat, num_days=7, slow=False):
         history_dict["sensor.soc_percent"].append({"state": str(soc) if isinstance(soc, int) else str(round(soc, 2)), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "%"}})  # Keep integers as integers
         history_dict["number.charge_rate"].append({"state": int(charge_rate), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
         history_dict["number.discharge_rate"].append({"state": int(discharge_rate), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
-
         history_dict["sensor.battery_power"].append({"state": round(battery_power, 1), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
-
         history_dict["predbat.status"].append({"state": status, "last_updated": timestamp_str, "attributes": {}})
 
     def mock_get_history(entity_id, now=None, days=30):
@@ -376,10 +374,11 @@ def test_find_charge_curve_inverted_battery_power(my_predbat):
     return failed
 
 
-def run_find_charge_curve_tests(my_predbat_dummy):
+def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
     """
+    
     my_predbat = PredBat()
     my_predbat.states = {}
     my_predbat.reset()
@@ -389,8 +388,9 @@ def run_find_charge_curve_tests(my_predbat_dummy):
     my_predbat.auto_config()
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
-    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.forecast_minutes = 48 * 60
     my_predbat.max_days_previous = 7  # Should be an integer, not a list
+    my_predbat.minutes_now = 1440
 
     failed = False
     print("**** Running find_charge_curve tests ****")
