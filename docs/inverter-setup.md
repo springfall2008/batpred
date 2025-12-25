@@ -987,7 +987,6 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         value: >-
           "{{ [(states('input_number.charge_rate') | float / 1000) | round(2),
           states('sensor.sigen_inverter_ess_rated_charging_power') | float] | min}}"
-        value: "{{ (states('input_number.charge_rate')| float / 1000) | round(2) }}"
   mode: single
 
 - id: "automation_sigen_ess_max_discharging_limit_input_number_action"
