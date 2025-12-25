@@ -84,10 +84,9 @@ class DatabaseManager(ComponentBase):
 
                 # Commit if the queue is empty
                 if not self.db_queue:
-                    if hasattr(self.db_engine, '_commit_db'):
+                    if hasattr(self.db_engine, "_commit_db"):
                         self.db_engine._commit_db()
                 self.last_success_timestamp = datetime.now(timezone.utc)
-                
 
             except Exception as e:
                 self.log(f"Error in database thread: {e}")
