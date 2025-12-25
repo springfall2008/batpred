@@ -10,11 +10,11 @@
 # fmt: on
 
 from carbon import CarbonAPI
-import requests
+import aiohttp
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone, timedelta
 from config import TIME_FORMAT_HA
-from tests.test_infra import run_async
+from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
 class MockCarbonAPI(CarbonAPI):
@@ -113,20 +113,15 @@ def test_fetch_carbon_data_success(my_predbat=None):
     api = MockCarbonAPI()
     api.postcode = "BS16"
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_CARBON_API_RESPONSE
+    mock_response = create_aiohttp_mock_response(status=200, json_data=MOCK_CARBON_API_RESPONSE)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response) as mock_get:
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result = run_async(api.fetch_carbon_data())
 
-        # Should make 2 API calls (date_now and date_plus_48)
-        if mock_get.call_count != 2:
-            print(f"ERROR: Expected 2 API calls, got {mock_get.call_count}")
-            return 1
-
-        # Check data was collected
-        if len(api.carbon_data_points) != 6:  # 3 points per call * 2 calls
+        # Check data was collected (3 points per call * 2 calls)
+        if len(api.carbon_data_points) != 6:
             print(f"ERROR: Expected 6 data points, got {len(api.carbon_data_points)}")
             return 1
 
@@ -158,10 +153,11 @@ def test_fetch_carbon_data_http_error(my_predbat=None):
     api.postcode = "BS16"
     initial_failures = api.failures_total
 
-    mock_response = MagicMock()
-    mock_response.status_code = 404
+    mock_response = create_aiohttp_mock_response(status=404)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
         # Should increment failures_total (2 times, one per API call)
@@ -186,7 +182,9 @@ def test_fetch_carbon_data_timeout(my_predbat=None):
     api.postcode = "BS16"
     initial_failures = api.failures_total
 
-    with patch("requests.get", side_effect=requests.exceptions.Timeout("Connection timeout")):
+    mock_session = create_aiohttp_mock_session(exception=aiohttp.ClientError("Connection timeout"))
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
         # Should increment failures_total (2 times)
@@ -210,11 +208,11 @@ def test_fetch_carbon_data_json_error(my_predbat=None):
     api = MockCarbonAPI()
     api.postcode = "BS16"
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.side_effect = ValueError("Invalid JSON")
+    mock_response = create_aiohttp_mock_response(status=200, json_exception=ValueError("Invalid JSON"))
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
         # Should log warning about JSON parsing
@@ -240,11 +238,11 @@ def test_fetch_carbon_data_empty(my_predbat=None):
     api.postcode = "BS16"
     initial_failures = api.failures_total
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_CARBON_API_RESPONSE_EMPTY
+    mock_response = create_aiohttp_mock_response(status=200, json_data=MOCK_CARBON_API_RESPONSE_EMPTY)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
         # Should increment failures_total for empty data (2 times)
@@ -272,12 +270,12 @@ def test_fetch_carbon_data_cache_skip(my_predbat=None):
     # Set last updated to 2 hours ago
     api.last_updated_timestamp = datetime.now(timezone.utc) - timedelta(hours=2)
 
-    with patch("requests.get") as mock_get:
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
         run_async(api.fetch_carbon_data())
 
         # Should NOT make any API calls
-        if mock_get.call_count != 0:
-            print(f"ERROR: Expected 0 API calls (cache), got {mock_get.call_count}")
+        if mock_session_class.call_count != 0:
+            print(f"ERROR: Expected 0 API calls (cache), got {mock_session_class.call_count}")
             return 1
 
     print("  ✓ Cache skip working correctly")
@@ -294,16 +292,16 @@ def test_fetch_carbon_data_cache_refresh(my_predbat=None):
     # Set last updated to 5 hours ago
     api.last_updated_timestamp = datetime.now(timezone.utc) - timedelta(hours=5)
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_CARBON_API_RESPONSE
+    mock_response = create_aiohttp_mock_response(status=200, json_data=MOCK_CARBON_API_RESPONSE)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response) as mock_get:
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
         # Should make API calls (cache expired)
-        if mock_get.call_count != 2:
-            print(f"ERROR: Expected 2 API calls (cache expired), got {mock_get.call_count}")
+        if mock_session.get.call_count != 2:
+            print(f"ERROR: Expected 2 API calls (cache expired), got {mock_session.get.call_count}")
             return 1
 
         # Should have collected data
@@ -462,15 +460,15 @@ def test_postcode_stripping(my_predbat=None):
     api = MockCarbonAPI()
     api.postcode = "BS16 1AB"  # Full postcode with space
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_CARBON_API_RESPONSE
+    mock_response = create_aiohttp_mock_response(status=200, json_data=MOCK_CARBON_API_RESPONSE)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response) as mock_get:
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
         # Check that API was called with stripped postcode
-        calls = mock_get.call_args_list
+        calls = mock_session.get.call_args_list
         if len(calls) > 0:
             first_call_url = calls[0][0][0]
             if "BS16 1AB" in first_call_url:
@@ -491,11 +489,11 @@ def test_multiple_date_fetches(my_predbat=None):
     api = MockCarbonAPI()
     api.postcode = "BS16"
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_CARBON_API_RESPONSE
+    mock_response = create_aiohttp_mock_response(status=200, json_data=MOCK_CARBON_API_RESPONSE)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response) as mock_get:
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         with patch("carbon.datetime") as mock_datetime:
             # Mock datetime.now() to return fixed time with timezone
             fixed_now = datetime(2025, 12, 20, 14, 0, 0, tzinfo=timezone.utc)
@@ -506,12 +504,12 @@ def test_multiple_date_fetches(my_predbat=None):
             run_async(api.fetch_carbon_data())
 
             # Should make exactly 2 API calls
-            if mock_get.call_count != 2:
-                print(f"ERROR: Expected 2 API calls, got {mock_get.call_count}")
+            if mock_session.get.call_count != 2:
+                print(f"ERROR: Expected 2 API calls, got {mock_session.get.call_count}")
                 return 1
 
             # Check URLs contain different dates
-            calls = mock_get.call_args_list
+            calls = mock_session.get.call_args_list
             url1 = calls[0][0][0]
             url2 = calls[1][0][0]
 
@@ -537,11 +535,11 @@ def test_time_format_conversion(my_predbat=None):
     # Response with specific time format
     mock_response_data = {"data": {"regionid": 11, "postcode": "BS16", "data": [{"from": "2025-12-20T14:00Z", "to": "2025-12-20T14:30Z", "intensity": {"forecast": 265}}]}}  # TIME_FORMAT_CARBON
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = mock_response_data
+    mock_response = create_aiohttp_mock_response(status=200, json_data=mock_response_data)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
         if len(api.carbon_data_points) == 0:
@@ -571,11 +569,11 @@ def test_timezone_handling(my_predbat=None):
 
     mock_response_data = {"data": {"regionid": 11, "postcode": "BS16", "data": [{"from": "2025-12-20T14:00Z", "to": "2025-12-20T14:30Z", "intensity": {"forecast": 265}}]}}
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = mock_response_data
+    mock_response = create_aiohttp_mock_response(status=200, json_data=mock_response_data)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
         # The internal parsing should preserve UTC timezone
@@ -616,15 +614,42 @@ def test_json_data_collection(my_predbat=None):
 
     response2 = {"data": {"regionid": 11, "postcode": "BS16", "data": [{"from": "2025-12-22T14:00Z", "to": "2025-12-22T14:30Z", "intensity": {"forecast": 300}}]}}
 
-    mock_response1 = MagicMock()
-    mock_response1.status_code = 200
-    mock_response1.json.return_value = response1
+    # Create mock responses
+    mock_response1 = create_aiohttp_mock_response(status=200, json_data=response1)
+    mock_response2 = create_aiohttp_mock_response(status=200, json_data=response2)
 
-    mock_response2 = MagicMock()
-    mock_response2.status_code = 200
-    mock_response2.json.return_value = response2
+    # Create mock session with side_effect for get() to return different responses
+    mock_session = MagicMock()
+    call_count = [0]
 
-    with patch("requests.get", side_effect=[mock_response1, mock_response2]):
+    def get_side_effect(*args, **kwargs):
+        mock_context = MagicMock()
+        response = mock_response1 if call_count[0] == 0 else mock_response2
+        call_count[0] += 1
+
+        async def aenter(*a, **kw):
+            return response
+
+        async def aexit(*a):
+            return None
+
+        mock_context.__aenter__ = aenter
+        mock_context.__aexit__ = aexit
+        return mock_context
+
+    mock_session.get = MagicMock(side_effect=get_side_effect)
+
+    async def session_aenter(*args):
+        return mock_session
+
+    async def session_aexit(*args):
+        return None
+
+    mock_session.__aenter__ = session_aenter
+    mock_session.__aexit__ = session_aexit
+
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
 
         # Should have collected data from both calls
@@ -651,10 +676,11 @@ def test_failure_counter(my_predbat=None):
     api.failures_total = 0
 
     # Simulate multiple failure scenarios
-    mock_response_404 = MagicMock()
-    mock_response_404.status_code = 404
+    mock_response_404 = create_aiohttp_mock_response(status=404)
+    mock_session = create_aiohttp_mock_session(mock_response_404)
 
-    with patch("requests.get", return_value=mock_response_404):
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
         failures_after_404 = api.failures_total
 
@@ -663,7 +689,9 @@ def test_failure_counter(my_predbat=None):
             return 1
 
     # Test with timeout
-    with patch("requests.get", side_effect=requests.exceptions.Timeout("Timeout")):
+    mock_session = create_aiohttp_mock_session(exception=aiohttp.ClientError("Timeout"))
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.fetch_carbon_data())
         failures_after_timeout = api.failures_total
 
@@ -687,11 +715,11 @@ def test_run_first_call(my_predbat=None):
     api = MockCarbonAPI()
     api.postcode = "BS16"
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_CARBON_API_RESPONSE
+    mock_response = create_aiohttp_mock_response(status=200, json_data=MOCK_CARBON_API_RESPONSE)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response) as mock_get:
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         # Call run with first=True
         result = run_async(api.run(seconds=0, first=True))
 
@@ -700,8 +728,8 @@ def test_run_first_call(my_predbat=None):
             return 1
 
         # Should have made API calls
-        if mock_get.call_count != 2:
-            print(f"ERROR: Expected 2 API calls on first run, got {mock_get.call_count}")
+        if mock_session.get.call_count != 2:
+            print(f"ERROR: Expected 2 API calls on first run, got {mock_session.get.call_count}")
             return 1
 
     print("  ✓ First run calling fetch correctly")
@@ -715,25 +743,25 @@ def test_run_15min_interval(my_predbat=None):
     api = MockCarbonAPI()
     api.postcode = "BS16"
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_CARBON_API_RESPONSE
+    mock_response = create_aiohttp_mock_response(status=200, json_data=MOCK_CARBON_API_RESPONSE)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response) as mock_get:
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         # Call at 15-minute interval (900 seconds)
         run_async(api.run(seconds=900, first=False))
 
-        if mock_get.call_count != 2:
-            print(f"ERROR: Expected 2 API calls at 15-min interval, got {mock_get.call_count}")
+        if mock_session.get.call_count != 2:
+            print(f"ERROR: Expected 2 API calls at 15-min interval, got {mock_session.get.call_count}")
             return 1
 
-        mock_get.reset_mock()
+        mock_session.get.reset_mock()
 
         # Call at non-15-minute interval (300 seconds = 5 minutes)
         run_async(api.run(seconds=300, first=False))
 
-        if mock_get.call_count != 0:
-            print(f"ERROR: Expected 0 API calls at non-15-min interval, got {mock_get.call_count}")
+        if mock_session.get.call_count != 0:
+            print(f"ERROR: Expected 0 API calls at non-15-min interval, got {mock_session.get.call_count}")
             return 1
 
     print("  ✓ 15-minute interval working correctly")
@@ -749,11 +777,11 @@ def test_automatic_config_flow(my_predbat=None):
     api.postcode = "BS16"
     api.automatic = True
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_CARBON_API_RESPONSE
+    mock_response = create_aiohttp_mock_response(status=200, json_data=MOCK_CARBON_API_RESPONSE)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api.run(seconds=0, first=True))
 
         # Should have set carbon_intensity config
@@ -771,7 +799,8 @@ def test_automatic_config_flow(my_predbat=None):
     api2.postcode = "BS16"
     api2.automatic = False
 
-    with patch("requests.get", return_value=mock_response):
+    with patch("carbon.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         run_async(api2.run(seconds=0, first=True))
 
         # Should NOT have set carbon_intensity config

@@ -1101,6 +1101,9 @@ class GECloudDirect(ComponentBase):
                         value = measurement.get("value", None)
                         unit = measurement.get("unit", None)
                         result[measurand] = value
+        else:
+            return previous
+
         self.log("EVC device point {}".format(result))
         return result
 
