@@ -109,6 +109,12 @@ from tests.test_axle import (
     test_axle_load_slot_export,
     test_axle_active_function,
 )
+from tests.test_db_manager import (
+    test_db_manager_set_get_state,
+    test_db_manager_entities_and_history,
+    test_db_manager_error_handling,
+    test_db_manager_persistence,
+)
 from tests.test_web_if import run_test_web_if
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_find_charge_rate import test_find_charge_rate
@@ -451,6 +457,11 @@ def main():
         ("axle_fetch_sessions", test_axle_fetch_sessions, "Axle Energy fetch sessions", False),
         ("axle_load_slot", test_axle_load_slot_export, "Axle Energy load slot export", False),
         ("axle_active", test_axle_active_function, "Axle Energy active check", False),
+        # Database Manager unit tests
+        ("db_manager_set_get", test_db_manager_set_get_state, "DatabaseManager set/get state operations", False),
+        ("db_manager_entities_history", test_db_manager_entities_and_history, "DatabaseManager entities and history", False),
+        ("db_manager_errors", test_db_manager_error_handling, "DatabaseManager error handling", False),
+        ("db_manager_persistence", test_db_manager_persistence, "DatabaseManager data persistence across restarts", False),
         # Carbon Intensity API unit tests
         ("carbon_init", test_carbon_initialization, "Carbon API initialization", False),
         ("carbon_fetch_success", test_fetch_carbon_data_success, "Carbon API fetch success", False),
