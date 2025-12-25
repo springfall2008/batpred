@@ -59,14 +59,28 @@ async def main():
     print("Watching {} for changes".format(py_files))
 
     # Runtime loop
-    count = 0
+    last_check = 0
+    check_interval = 30  # Check for file changes every 30 seconds
+
+    # Check for performance mode
+    perf_mode = p_han.get_arg("performance_mode", False)
+    default_interval = 5 if perf_mode else 1
+    run_every = p_han.get_arg("hass_loop_interval", default_interval)
+    print("Runtime loop interval set to {} seconds".format(run_every))
+
     while True:
-        time.sleep(1)
+        time.sleep(run_every)
         await p_han.timer_tick()
-        if (count % 5 == 0) and check_modified(py_files, start_time):
-            print("Stopping Predbat due to file changes....")
-            await p_han.stop_all()
-            break
+
+        # throttle check_modified
+        now_time = time.time()
+        if now_time - last_check > check_interval:
+            last_check = now_time
+            if check_modified(py_files, start_time):
+                print("Stopping Predbat due to file changes....")
+                await p_han.stop_all()
+                break
+
         if p_han.fatal_error:
             print("Stopping Predbat due to fatal error....")
             await p_han.stop_all()
@@ -75,7 +89,12 @@ async def main():
 
 
 if __name__ == "__main__":
-    set_start_method("fork")
+    try:
+        set_start_method("fork")
+    except (ValueError, RuntimeError):
+        # ValueError: fork not available on this platform (e.g., Windows)
+        # RuntimeError: context has already been set
+        pass
     asyncio.run(main())
     sys.exit(0)
 
@@ -85,10 +104,31 @@ class Hass:
         """
         Log a message to the logfile
         """
+        # Log level filtering: debug < info < warn < error
+        log_levels = {"debug": 0, "info": 1, "warn": 2, "error": 3}
+        configured_level = self.args.get("log_level", "debug").lower()
+        min_level = log_levels.get(configured_level, 1)
+
+        msg_lower = msg.lower()
+        # Determine message level
+        if msg_lower.startswith("error"):
+            msg_level = 3
+        elif msg_lower.startswith("warn"):
+            msg_level = 2
+        elif msg_lower.startswith("info"):
+            msg_level = 1
+        else:
+            msg_level = 0  # debug/other
+
+        # Skip messages below configured level
+        if msg_level < min_level:
+            return
+
         message = "{}: {}\n".format(datetime.now(), msg)
         self.logfile.write(message)
-        self.logfile.flush()
-        msg_lower = msg.lower()
+        # Always flush errors/warnings to prevent loss on crash; otherwise respect performance_mode
+        if msg_lower.startswith("error") or msg_lower.startswith("warn") or not self.args.get("performance_mode", False):
+            self.logfile.flush()
         if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
 
@@ -187,7 +227,12 @@ class Hass:
         for item in self.run_list:
             if now > item["next_time"]:
                 try:
+                    t0 = time.time()
                     item["callback"](None)
+                    t1 = time.time()
+                    duration = t1 - t0
+                    if duration > 0.1:
+                        self.log("Warn: Callback {} took {:.2f} seconds".format(item["callback"], duration), quiet=False)
                 except Exception as e:
                     self.log("Error: {}".format(e), quiet=False)
                     print(traceback.format_exc())

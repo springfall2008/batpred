@@ -17,7 +17,7 @@ from component_base import ComponentBase
 
 
 class DatabaseManager(ComponentBase):
-    def initialize(self, db_enable, db_days):
+    def initialize(self, db_enable, db_days, db_commit_interval=0):
         self.db_days = db_days
         self.db_queue = []
         self.queue_id = 0
@@ -27,6 +27,8 @@ class DatabaseManager(ComponentBase):
         self.return_event = threading.Event()
         self.api_started = False
         self.last_success_timestamp = None
+        self.commit_interval = db_commit_interval
+        self.log("db_manager: Commit interval set to {} seconds".format(self.commit_interval))
 
     def bridge_event(self, loop):
         """
@@ -54,9 +56,26 @@ class DatabaseManager(ComponentBase):
         self.log("db_manager: Started")
         self.api_started = True
 
+        last_commit_time = time.time()
+
         while not self.api_stop:
+            # Check commit timer
+            now = time.time()
+            if self.commit_interval > 0 and (now - last_commit_time >= self.commit_interval):
+                self.db_engine.commit()
+                last_commit_time = now
+
             if not self.db_queue:
-                await self.async_event.wait()
+                wait_time = 0.1
+                if self.commit_interval > 0:
+                    remaining = self.commit_interval - (time.time() - last_commit_time)
+                    # Cap wait to 1 second max to ensure commands are processed promptly
+                    wait_time = min(1.0, max(0.1, remaining)) if remaining > 0 else 0.1
+
+                try:
+                    await asyncio.wait_for(self.async_event.wait(), timeout=wait_time)
+                except asyncio.TimeoutError:
+                    pass
                 self.async_event.clear()
                 continue
             else:
@@ -70,6 +89,8 @@ class DatabaseManager(ComponentBase):
                     self.return_event.set()  # Notify that the result is ready
                 elif command == "set_state":
                     self.db_engine._set_state_db(info["entity_id"], info["state"], info["attributes"], timestamp=info["timestamp"])
+                    if self.commit_interval <= 0:
+                        self.db_engine.commit()
                 elif command == "get_all_entities":
                     entities = self.db_engine._get_all_entities_db()
                     self.queue_results[queue_id] = entities

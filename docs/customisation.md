@@ -79,6 +79,14 @@ It's recommended for new users to start without expert mode and then maybe turn 
 
 ## Performance related
 
+Predbat includes a dedicated **Performance Mode** designed for resource-constrained hardware like Raspberry Pi or older devices.
+When `performance_mode` is enabled (see [apps.yaml basics](apps-yaml.md#performance-tuning)), Predbat optimizes its operation by:
+
+- **Throttling the Main Loop:** Increasing the idle sleep time from 1s to 5s to reduce CPU usage.
+- **Batching Database Writes:** Using Write-Ahead Logging (WAL) and committing to disk based on the configurable `db_commit_interval` (default **0** for immediate commits).
+- Increasing this interval (for example to 30 seconds) can drastically reduce Disk I/O and SD card wear.
+- **Throttling File Checks:** Reducing the frequency of checking for file modifications.
+
 By default Predbat controls the inverter every 5 minutes and updates the plan every 10 minutes.
 This can however use a lot of CPU power especially on more complex tariffs like Agile when run on lower power machines such as Raspberry PIs and some thin clients.
 
