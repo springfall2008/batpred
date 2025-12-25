@@ -824,6 +824,10 @@ def test_download_forecast_solar_data_personal_api(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             result, max_kwh = run_async(test_api.solar.download_forecast_solar_data())
 
+        # Basic sanity check on returned data so variables are actually used
+        if result is None or max_kwh is None:
+            print("ERROR: download_forecast_solar_data returned None result or max_kwh")
+            failed = True
         # Verify personal API URL was used (contains api_key in path)
         forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
         if len(forecast_calls) > 0:
