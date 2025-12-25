@@ -118,6 +118,7 @@ def test_db_manager_set_get_state(my_predbat=None):
             print(f"✓ get_state_db retrieved correct state and attributes: {retrieved}")
 
             # Test 3: Set state with custom timestamp (test timezone conversion)
+            # GMT+2 10:00 should be stored as GMT+0 08:00 in the database
             custom_timestamp = datetime(2025, 12, 25, 10, 0, 0, tzinfo=mock_base.local_tz)
             entity_id2 = "sensor.test_solar"
             state2 = "15.3"
@@ -128,7 +129,17 @@ def test_db_manager_set_get_state(my_predbat=None):
             assert retrieved2 is not None, "get_state_db returned None for entity2"
             assert retrieved2["state"] == state2, f"Expected state {state2}, got {retrieved2['state']}"
             assert retrieved2["attributes"]["unit_of_measurement"] == "kW", "Attribute mismatch for entity2"
-            print(f"✓ Custom timestamp handled correctly: {retrieved2}")
+
+            # Verify timezone conversion: GMT+2 10:00 -> GMT+0 08:00
+            timestamp_field = "last_changed" if "last_changed" in retrieved2 else "last_updated"
+            assert timestamp_field in retrieved2, f"Retrieved state missing timestamp field"
+            timestamp_str = retrieved2[timestamp_field]
+            # Parse timestamp (format: "2025-12-25T08:00:00.000000Z" or similar)
+            parsed_ts = datetime.strptime(timestamp_str.rstrip("Z"), TIME_FORMAT_DB)
+            expected_gmt0_time = datetime(2025, 12, 25, 8, 0, 0)  # GMT+2 10:00 -> GMT+0 08:00
+            assert parsed_ts.hour == expected_gmt0_time.hour, f"Timezone conversion failed: expected hour {expected_gmt0_time.hour} (GMT+0), got {parsed_ts.hour}"
+            assert parsed_ts.day == expected_gmt0_time.day, f"Timezone conversion failed: expected day {expected_gmt0_time.day}, got {parsed_ts.day}"
+            print(f"✓ Timezone conversion verified: GMT+2 10:00 -> GMT+0 {parsed_ts.strftime('%H:%M:%S')}")
 
             # Test 4: Update existing entity with new state
             state3 = "50.0"

@@ -78,9 +78,6 @@ class DatabaseManager(ComponentBase):
                     state = self.db_engine._get_state_db(info["entity_id"])
                     self.queue_results[queue_id] = state
                     self.return_event.set()  # Notify that the result is ready
-                elif command == "stop":
-                    self.api_stop = True
-                    self.log("db_manager: stopping")
 
                 # Commit if the queue is empty
                 if not self.db_queue:
@@ -94,7 +91,7 @@ class DatabaseManager(ComponentBase):
 
         self.db_engine._commit_db()
         self.db_engine._close()
-        self.log("db_manager: Stopped")
+        self.log("db_manager: Stopped cleanly")
         self.api_started = False
 
     def send_via_ipc(self, command, info, expect_response=False):
@@ -127,10 +124,10 @@ class DatabaseManager(ComponentBase):
         """
         Close the database connection
         """
-        self.api_stop = True
-        self.send_via_ipc("stop", {}, expect_response=False)
-        await asyncio.sleep(0.1)
         self.api_started = False
+        self.api_stop = True
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.send_via_ipc, "stop", {}, False)
         self.log("db_manager: stop command sent")
 
     def get_state_db(self, entity_id):
