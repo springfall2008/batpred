@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import timedelta
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from inverter import Inverter
