@@ -100,7 +100,6 @@ def test_db_manager_set_get_state(my_predbat=None):
             # Run blocking IPC calls in thread executor to avoid blocking event loop
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, db_mgr.set_state_db, entity_id, state, attributes)
-            await asyncio.sleep(0.2)  # Allow queue processing
 
             # Verify returned item has correct structure
             assert "last_changed" in result, "set_state_db should return last_changed"
@@ -125,8 +124,6 @@ def test_db_manager_set_get_state(my_predbat=None):
             attributes2 = {"unit_of_measurement": "kW"}
 
             result2 = await loop.run_in_executor(None, db_mgr.set_state_db, entity_id2, state2, attributes2, custom_timestamp)
-            await asyncio.sleep(0.2)
-
             retrieved2 = await loop.run_in_executor(None, db_mgr.get_state_db, entity_id2)
             assert retrieved2 is not None, "get_state_db returned None for entity2"
             assert retrieved2["state"] == state2, f"Expected state {state2}, got {retrieved2['state']}"
@@ -136,8 +133,6 @@ def test_db_manager_set_get_state(my_predbat=None):
             # Test 4: Update existing entity with new state
             state3 = "50.0"
             await loop.run_in_executor(None, db_mgr.set_state_db, entity_id, state3, attributes)
-            await asyncio.sleep(0.2)
-
             retrieved3 = await loop.run_in_executor(None, db_mgr.get_state_db, entity_id)
             assert retrieved3["state"] == state3, f"Expected updated state {state3}, got {retrieved3['state']}"
             print(f"✓ State update works correctly: {retrieved3['state']}")
@@ -153,8 +148,6 @@ def test_db_manager_set_get_state(my_predbat=None):
 
             assert not db_mgr.api_started, "DatabaseManager thread did not exit after stop command"
             print("✓ DatabaseManager thread exited after stop command")
-
-            await asyncio.sleep(0.3)  # Allow thread termination
             await task
 
             print("✓ DatabaseManager stopped successfully")
@@ -207,8 +200,6 @@ def test_db_manager_entities_and_history(my_predbat=None):
             for entity_id, state, attributes in entities_to_create:
                 await loop.run_in_executor(None, db_mgr.set_state_db, entity_id, state, attributes)
 
-            await asyncio.sleep(0.3)  # Allow all to process
-
             # Test 2: Get all entities
             all_entities = await loop.run_in_executor(None, db_mgr.get_all_entities_db)
             assert all_entities is not None, "get_all_entities_db returned None"
@@ -232,8 +223,6 @@ def test_db_manager_entities_and_history(my_predbat=None):
                 attributes = {"unit_of_measurement": "%"}
                 await loop.run_in_executor(None, db_mgr.set_state_db, history_entity, state_value, attributes, timestamp)
                 historical_states.append({"timestamp": timestamp, "state": state_value, "attributes": attributes})
-
-            await asyncio.sleep(0.5)  # Allow all history to process
 
             # Test 4: Get history data
             now = datetime(2025, 12, 25, 12, 0, 0, tzinfo=mock_base.local_tz)
@@ -289,7 +278,6 @@ def test_db_manager_entities_and_history(my_predbat=None):
             assert not db_mgr.api_started, "DatabaseManager thread did not exit after stop command"
             print("✓ DatabaseManager thread exited after stop command")
 
-            await asyncio.sleep(0.3)
             await task
 
             print("✓ DatabaseManager stopped successfully")
@@ -351,7 +339,6 @@ def test_db_manager_error_handling(my_predbat=None):
             state = "123"
             attributes = {"test": "value"}
             await loop.run_in_executor(None, db_mgr.set_state_db, entity_id, state, attributes)
-            await asyncio.sleep(0.2)
 
             retrieved = await loop.run_in_executor(None, db_mgr.get_state_db, entity_id)
             assert retrieved is not None, "IPC queue broken after error handling"
@@ -378,7 +365,6 @@ def test_db_manager_error_handling(my_predbat=None):
             assert not db_mgr.api_started, "DatabaseManager thread did not exit after stop command"
             print("✓ DatabaseManager thread exited after stop command")
 
-            await asyncio.sleep(0.3)
             await task
 
             print("✓ DatabaseManager stopped successfully")
@@ -430,8 +416,6 @@ def test_db_manager_persistence(my_predbat=None):
             for entity_id, state, attributes in test_data:
                 await loop.run_in_executor(None, db_mgr1.set_state_db, entity_id, state, attributes)
 
-            await asyncio.sleep(0.3)  # Allow processing
-
             # Verify data is stored
             all_entities = await loop.run_in_executor(None, db_mgr1.get_all_entities_db)
             assert len(all_entities) >= 3, f"Expected at least 3 entities before restart, got {len(all_entities)}"
@@ -448,12 +432,11 @@ def test_db_manager_persistence(my_predbat=None):
 
             assert not db_mgr1.api_started, "DatabaseManager thread did not exit after stop command"
 
-            await asyncio.sleep(0.3)
             await task1
             print("✓ DatabaseManager stopped and thread exited (first instance)")
 
             # Wait a bit to ensure everything is closed
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)
 
             # Create second DatabaseManager instance with SAME config_root
             db_mgr2 = MockDatabaseManager()
@@ -506,8 +489,6 @@ def test_db_manager_persistence(my_predbat=None):
                 timeout += 1
 
             assert not db_mgr2.api_started, "DatabaseManager thread did not exit after stop command"
-
-            await asyncio.sleep(0.3)
             await task2
             print("✓ DatabaseManager stopped and thread exited (second instance)")
 

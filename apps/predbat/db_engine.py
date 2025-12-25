@@ -112,8 +112,11 @@ class DatabaseEngine:
         state = str(state)
 
         # Put the entity_id into entities table if its not in already
-        self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
         entity_index = self._get_entity_index_db(entity_id)
+        if entity_index is None:
+            self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
+            self.db.commit()  # Commit to get the lastrowid
+            entity_index = self._get_entity_index_db(entity_id)
 
         # Convert time to GMT+0
         now_utc = timestamp
