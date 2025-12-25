@@ -119,6 +119,8 @@ gridconsumptionpower
 growatt
 HACS
 hadashboard
+hahistory
+hainterface
 hanres
 HAOS
 hass
@@ -277,6 +279,7 @@ sigenergy
 sigenstor
 Slee
 socb
+socketloop
 socs
 sofar
 SolarEdge

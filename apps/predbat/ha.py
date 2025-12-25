@@ -734,17 +734,17 @@ class HAInterface(ComponentBase):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        if post:
-            if data_in:
-                response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
-            else:
-                response = requests.post(url, headers=headers, timeout=TIMEOUT)
-        else:
-            if data_in:
-                response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
-            else:
-                response = requests.get(url, headers=headers, timeout=TIMEOUT)
         try:
+            if post:
+                if data_in:
+                    response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
+                else:
+                    response = requests.post(url, headers=headers, timeout=TIMEOUT)
+            else:
+                if data_in:
+                    response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
+                else:
+                    response = requests.get(url, headers=headers, timeout=TIMEOUT)
             data = response.json()
             self.api_errors = 0
         except requests.exceptions.JSONDecodeError:

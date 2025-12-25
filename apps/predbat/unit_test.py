@@ -115,6 +115,12 @@ from tests.test_db_manager import (
     test_db_manager_error_handling,
     test_db_manager_persistence,
 )
+from tests.test_hahistory import run_hahistory_tests
+from tests.test_hainterface_state import run_hainterface_state_tests
+from tests.test_hainterface_api import run_hainterface_api_tests
+from tests.test_hainterface_service import run_hainterface_service_tests
+from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
+from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_find_charge_rate import test_find_charge_rate
@@ -462,6 +468,18 @@ def main():
         ("db_manager_entities_history", test_db_manager_entities_and_history, "DatabaseManager entities and history", False),
         ("db_manager_errors", test_db_manager_error_handling, "DatabaseManager error handling", False),
         ("db_manager_persistence", test_db_manager_persistence, "DatabaseManager data persistence across restarts", False),
+        # HAHistory component tests
+        ("hahistory", run_hahistory_tests, "HAHistory component tests", False),
+        # HAInterface state management tests
+        ("hainterface_state", run_hainterface_state_tests, "HAInterface state management tests", False),
+        # HAInterface API tests
+        ("hainterface_api", run_hainterface_api_tests, "HAInterface API tests", False),
+        # HAInterface service tests
+        ("hainterface_service", run_hainterface_service_tests, "HAInterface service tests", False),
+        # HAInterface lifecycle tests
+        ("hainterface_lifecycle", run_hainterface_lifecycle_tests, "HAInterface lifecycle tests", False),
+        # HAInterface websocket tests
+        ("hainterface_websocket", run_hainterface_websocket_tests, "HAInterface websocket tests", False),
         # Carbon Intensity API unit tests
         ("carbon_init", test_carbon_initialization, "Carbon API initialization", False),
         ("carbon_fetch_success", test_fetch_carbon_data_success, "Carbon API fetch success", False),
