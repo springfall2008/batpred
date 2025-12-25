@@ -82,7 +82,12 @@ class DatabaseManager(ComponentBase):
                     self.api_stop = True
                     self.log("db_manager: stopping")
 
+                # Commit if the queue is empty
+                if not self.db_queue:
+                    if hasattr(self.db_engine, '_commit_db'):
+                        self.db_engine._commit_db()
                 self.last_success_timestamp = datetime.now(timezone.utc)
+                
 
             except Exception as e:
                 self.log(f"Error in database thread: {e}")
@@ -124,6 +129,7 @@ class DatabaseManager(ComponentBase):
         """
         self.api_stop = True
         self.send_via_ipc("stop", {}, expect_response=False)
+        await asyncio.sleep(0.1)
         self.api_started = False
         self.log("db_manager: stop command sent")
 

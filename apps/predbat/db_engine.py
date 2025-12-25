@@ -32,6 +32,7 @@ class DatabaseEngine:
         Close the database connection
         """
         if self.db:
+            self._commit_db()
             self.db.close()
             self.log("db_engine: Closed")
             self.db = None
@@ -50,7 +51,7 @@ class DatabaseEngine:
                 "D",
             ),
         )
-        self.db.commit()
+        self._commit_db()
 
     def _get_state_db(self, entity_id):
         """
@@ -97,6 +98,12 @@ class DatabaseEngine:
         rows = self.db_cursor.fetchall()
         return [row[0] for row in rows]
 
+    def _commit_db(self):
+        """
+        Commit changes to the database
+        """
+        self.db.commit()
+
     def _set_state_db(self, entity_id, state, attributes, timestamp):
         """
         Records the state of a predbat entity into the SQLLite database
@@ -106,7 +113,6 @@ class DatabaseEngine:
 
         # Put the entity_id into entities table if its not in already
         self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
-        self.db.commit()
         entity_index = self._get_entity_index_db(entity_id)
 
         # Convert time to GMT+0
@@ -185,7 +191,6 @@ class DatabaseEngine:
                     keep,
                 ),
             )
-            self.db.commit()
         except sqlite3.IntegrityError:
             self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
 
