@@ -11,7 +11,7 @@
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from inverter import Inverter
-from datetime import timedelta, datetime
+from datetime import timedelta
 
 
 def setup_predbat(my_predbat):
@@ -378,7 +378,7 @@ def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
     """
-    
+
     my_predbat = PredBat()
     my_predbat.states = {}
     my_predbat.reset()
