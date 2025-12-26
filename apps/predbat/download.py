@@ -58,9 +58,9 @@ def compute_file_sha1(filepath):
         sha1 = hashlib.sha1()
         with open(filepath, "rb") as f:
             data = f.read()
-        
+
         # Compute Git blob SHA: sha1("blob " + size + "\0" + contents)
-        header = "blob {}\0".format(len(data)).encode('utf-8')
+        header = "blob {}\0".format(len(data)).encode("utf-8")
         sha1.update(header + data)
         return sha1.hexdigest()
     except Exception as e:
