@@ -141,12 +141,12 @@ def check_install(version):
                     print("Downloaded and created manifest file")
                 except Exception as e:
                     print("Error: Failed to write manifest: {}".format(e))
-                    return True  # Continue without manifest
+                    return True, False  # Continue without manifest
             else:
                 print("Warn: Failed to download manifest from GitHub")
-                return True  # Continue without manifest
+                return True, False  # Continue without manifest
         else:
-            return True  # Continue without manifest
+            return True, False  # Continue without manifest
 
     # Load and validate against manifest
     try:
