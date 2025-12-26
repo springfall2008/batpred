@@ -33,7 +33,7 @@ from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
-from tests.test_optimise_levels import run_optimise_levels_tests
+from tests.test_optimise_levels import run_optimise_levels
 from tests.test_energydataservice import test_energydataservice
 from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
@@ -115,6 +115,12 @@ from tests.test_db_manager import (
     test_db_manager_error_handling,
     test_db_manager_persistence,
 )
+from tests.test_hahistory import run_hahistory_tests
+from tests.test_hainterface_state import run_hainterface_state_tests
+from tests.test_hainterface_api import run_hainterface_api_tests
+from tests.test_hainterface_service import run_hainterface_service_tests
+from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
+from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_find_charge_rate import test_find_charge_rate
@@ -142,6 +148,7 @@ from tests.test_octopus_url import (
 from tests.test_octopus_cache import test_octopus_cache_wrapper
 from tests.test_octopus_events import test_octopus_events_wrapper
 from tests.test_octopus_refresh_token import test_octopus_refresh_token_wrapper
+from tests.test_octopus_misc import test_octopus_misc_wrapper
 from tests.test_octopus_read_response import test_octopus_read_response_wrapper
 from tests.test_octopus_rate_limit import test_octopus_rate_limit_wrapper
 from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previous_dispatch_wrapper
@@ -179,6 +186,29 @@ from tests.test_carbon import (
     test_run_first_call,
     test_run_15min_interval,
     test_automatic_config_flow,
+)
+from tests.test_download import (
+    test_get_github_directory_listing_success,
+    test_get_github_directory_listing_failure,
+    test_get_github_directory_listing_exception,
+    test_compute_file_sha1,
+    test_compute_file_sha1_missing_file,
+    test_check_install_with_valid_manifest,
+    test_check_install_missing_file,
+    test_check_install_zero_byte_file,
+    test_check_install_size_mismatch,
+    test_check_install_sha_mismatch,
+    test_check_install_no_manifest_downloads,
+    test_predbat_update_download_success,
+    test_predbat_update_download_api_failure,
+    test_predbat_update_download_file_failure,
+    test_download_predbat_file_success,
+    test_download_predbat_file_failure,
+    test_download_predbat_file_no_filename,
+    test_predbat_update_move_success,
+    test_predbat_update_move_empty_files,
+    test_predbat_update_move_none_files,
+    test_predbat_update_move_invalid_version,
 )
 from tests.test_ohme import (
     test_ohme_time_next_occurs_today,
@@ -353,6 +383,7 @@ def main():
         ("octopus_cache", test_octopus_cache_wrapper, "Octopus cache save/load tests", False),
         ("octopus_events", test_octopus_events_wrapper, "Octopus event handler tests", False),
         ("octopus_refresh_token", test_octopus_refresh_token_wrapper, "Octopus refresh token tests", False),
+        ("octopus_misc", test_octopus_misc_wrapper, "Octopus misc API tests (set intelligent schedule, join saving sessions)", False),
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
@@ -440,6 +471,28 @@ def main():
         ("ge_get_data", test_get_data, "GE Cloud get data", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
+        # Download tests
+        ("download_github_listing_success", test_get_github_directory_listing_success, "GitHub directory listing success", False),
+        ("download_github_listing_failure", test_get_github_directory_listing_failure, "GitHub directory listing failure", False),
+        ("download_github_listing_exception", test_get_github_directory_listing_exception, "GitHub directory listing exception", False),
+        ("download_compute_sha1", test_compute_file_sha1, "Compute file SHA1", False),
+        ("download_compute_sha1_missing", test_compute_file_sha1_missing_file, "Compute SHA1 missing file", False),
+        ("download_check_install_valid", test_check_install_with_valid_manifest, "Check install with valid manifest", False),
+        ("download_check_install_missing", test_check_install_missing_file, "Check install missing file", False),
+        ("download_check_install_zero", test_check_install_zero_byte_file, "Check install zero byte file", False),
+        ("download_check_install_size_mismatch", test_check_install_size_mismatch, "Check install size mismatch", False),
+        ("download_check_install_sha_mismatch", test_check_install_sha_mismatch, "Check install SHA mismatch", False),
+        ("download_check_install_no_manifest", test_check_install_no_manifest_downloads, "Check install downloads manifest", False),
+        ("download_update_success", test_predbat_update_download_success, "Update download success", False),
+        ("download_update_api_failure", test_predbat_update_download_api_failure, "Update download API failure", False),
+        ("download_update_file_failure", test_predbat_update_download_file_failure, "Update download file failure", False),
+        ("download_file_success", test_download_predbat_file_success, "Download file success", False),
+        ("download_file_failure", test_download_predbat_file_failure, "Download file failure", False),
+        ("download_file_no_filename", test_download_predbat_file_no_filename, "Download file no filename", False),
+        ("download_move_success", test_predbat_update_move_success, "Move files success", False),
+        ("download_move_empty", test_predbat_update_move_empty_files, "Move files empty list", False),
+        ("download_move_none", test_predbat_update_move_none_files, "Move files none list", False),
+        ("download_move_invalid_version", test_predbat_update_move_invalid_version, "Move files invalid version", False),
         # Axle Energy VPP unit tests
         ("axle_init", test_axle_initialization, "Axle Energy initialization", False),
         ("axle_active_event", test_axle_fetch_with_active_event, "Axle Energy active event", False),
@@ -462,6 +515,18 @@ def main():
         ("db_manager_entities_history", test_db_manager_entities_and_history, "DatabaseManager entities and history", False),
         ("db_manager_errors", test_db_manager_error_handling, "DatabaseManager error handling", False),
         ("db_manager_persistence", test_db_manager_persistence, "DatabaseManager data persistence across restarts", False),
+        # HAHistory component tests
+        ("hahistory", run_hahistory_tests, "HAHistory component tests", False),
+        # HAInterface state management tests
+        ("hainterface_state", run_hainterface_state_tests, "HAInterface state management tests", False),
+        # HAInterface API tests
+        ("hainterface_api", run_hainterface_api_tests, "HAInterface API tests", False),
+        # HAInterface service tests
+        ("hainterface_service", run_hainterface_service_tests, "HAInterface service tests", False),
+        # HAInterface lifecycle tests
+        ("hainterface_lifecycle", run_hainterface_lifecycle_tests, "HAInterface lifecycle tests", False),
+        # HAInterface websocket tests
+        ("hainterface_websocket", run_hainterface_websocket_tests, "HAInterface websocket tests", False),
         # Carbon Intensity API unit tests
         ("carbon_init", test_carbon_initialization, "Carbon API initialization", False),
         ("carbon_fetch_success", test_fetch_carbon_data_success, "Carbon API fetch success", False),
@@ -552,7 +617,7 @@ def main():
         ("ohme_switch_max_charge_off", test_ohme_switch_event_handler_max_charge_off, "Ohme switch_event_handler max_charge off", False),
         ("ohme_switch_approve_charge", test_ohme_switch_event_handler_approve_charge, "Ohme switch_event_handler approve_charge", False),
         ("ohme_switch_approve_wrong_status", test_ohme_switch_event_handler_approve_charge_wrong_status, "Ohme switch_event_handler approve wrong status", False),
-        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
+        ("optimise_levels", run_optimise_levels, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
         ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
