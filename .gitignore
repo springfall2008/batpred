@@ -94,3 +94,6 @@ apps.mod.yaml
 apps.yaml.mark
 comparisons.yaml
 it
+
+# Runtime-generated manifest
+apps/predbat/manifest.yaml

@@ -38,10 +38,11 @@ from download import predbat_update_move, predbat_update_download, check_install
 # Only do the self-install/self-update logic if we are NOT compiled.
 if not IS_COMPILED:
     # Sanity check the install and re-download if corrupted
-    if not check_install():
+    if not check_install(THIS_VERSION):
         print("Warn: Predbat files are not installed correctly, trying to download them")
         files = predbat_update_download(THIS_VERSION)
-        ...
+        if files:
+            predbat_update_move(THIS_VERSION, files)
         sys.exit(1)
     else:
         print("Predbat files are installed correctly for version {}".format(THIS_VERSION))

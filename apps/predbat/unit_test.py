@@ -33,7 +33,7 @@ from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
-from tests.test_optimise_levels import run_optimise_levels_tests
+from tests.test_optimise_levels import run_optimise_levels
 from tests.test_energydataservice import test_energydataservice
 from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
@@ -186,6 +186,22 @@ from tests.test_carbon import (
     test_run_first_call,
     test_run_15min_interval,
     test_automatic_config_flow,
+)
+from tests.test_download import (
+    test_get_github_directory_listing_success,
+    test_get_github_directory_listing_failure,
+    test_get_github_directory_listing_exception,
+    test_compute_file_sha1,
+    test_compute_file_sha1_missing_file,
+    test_check_install_with_valid_manifest,
+    test_check_install_missing_file,
+    test_check_install_zero_byte_file,
+    test_check_install_size_mismatch,
+    test_check_install_sha_mismatch,
+    test_check_install_no_manifest_downloads,
+    test_predbat_update_download_success,
+    test_predbat_update_download_api_failure,
+    test_predbat_update_download_file_failure,
 )
 from tests.test_ohme import (
     test_ohme_time_next_occurs_today,
@@ -448,6 +464,21 @@ def main():
         ("ge_get_data", test_get_data, "GE Cloud get data", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
+        # Download tests
+        ("download_github_listing_success", test_get_github_directory_listing_success, "GitHub directory listing success", False),
+        ("download_github_listing_failure", test_get_github_directory_listing_failure, "GitHub directory listing failure", False),
+        ("download_github_listing_exception", test_get_github_directory_listing_exception, "GitHub directory listing exception", False),
+        ("download_compute_sha1", test_compute_file_sha1, "Compute file SHA1", False),
+        ("download_compute_sha1_missing", test_compute_file_sha1_missing_file, "Compute SHA1 missing file", False),
+        ("download_check_install_valid", test_check_install_with_valid_manifest, "Check install with valid manifest", False),
+        ("download_check_install_missing", test_check_install_missing_file, "Check install missing file", False),
+        ("download_check_install_zero", test_check_install_zero_byte_file, "Check install zero byte file", False),
+        ("download_check_install_size_mismatch", test_check_install_size_mismatch, "Check install size mismatch", False),
+        ("download_check_install_sha_mismatch", test_check_install_sha_mismatch, "Check install SHA mismatch", False),
+        ("download_check_install_no_manifest", test_check_install_no_manifest_downloads, "Check install downloads manifest", False),
+        ("download_update_success", test_predbat_update_download_success, "Update download success", False),
+        ("download_update_api_failure", test_predbat_update_download_api_failure, "Update download API failure", False),
+        ("download_update_file_failure", test_predbat_update_download_file_failure, "Update download file failure", False),
         # Axle Energy VPP unit tests
         ("axle_init", test_axle_initialization, "Axle Energy initialization", False),
         ("axle_active_event", test_axle_fetch_with_active_event, "Axle Energy active event", False),
@@ -572,7 +603,7 @@ def main():
         ("ohme_switch_max_charge_off", test_ohme_switch_event_handler_max_charge_off, "Ohme switch_event_handler max_charge off", False),
         ("ohme_switch_approve_charge", test_ohme_switch_event_handler_approve_charge, "Ohme switch_event_handler approve_charge", False),
         ("ohme_switch_approve_wrong_status", test_ohme_switch_event_handler_approve_charge_wrong_status, "Ohme switch_event_handler approve wrong status", False),
-        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
+        ("optimise_levels", run_optimise_levels, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
         ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
