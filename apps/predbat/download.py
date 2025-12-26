@@ -121,7 +121,7 @@ def check_install(version):
     """
     this_path = os.path.dirname(__file__)
     manifest_file = os.path.join(this_path, "manifest.yaml")
-    
+
     # Check if manifest exists
     if not os.path.exists(manifest_file):
         print("Warn: Manifest file {} is missing, bypassing checks...".format(manifest_file))
@@ -146,49 +146,49 @@ def check_install(version):
                 return True  # Continue without manifest
         else:
             return True  # Continue without manifest
-    
+
     # Load and validate against manifest
     try:
         with open(manifest_file, "r") as f:
             files = yaml.safe_load(f)
-        
+
         if not files:
             print("Error: Manifest is empty")
             return False
-        
+
         validation_passed = True
-        
+
         for file_info in files:
             filename = file_info.get("name")
             expected_size = file_info.get("size", 0)
             expected_sha = file_info.get("sha")
             filepath = os.path.join(this_path, filename)
-            
+
             # Check file exists
             if not os.path.exists(filepath):
                 print("Error: File {} is missing".format(filepath))
                 validation_passed = False
                 continue
-            
+
             # Check file is not zero bytes
             actual_size = os.path.getsize(filepath)
             if actual_size == 0:
                 print("Error: File {} is zero bytes".format(filepath))
                 validation_passed = False
                 continue
-            
+
             # Warn on size mismatch but don't fail
             if actual_size != expected_size:
                 print("Warn: File {} size mismatch: expected {}, got {}".format(filepath, expected_size, actual_size))
-            
+
             # Warn on SHA mismatch but don't fail
             if expected_sha:
                 actual_sha = compute_file_sha1(filepath)
                 if actual_sha and actual_sha != expected_sha:
                     print("Warn: File {} SHA mismatch: expected {}, got {}".format(filepath, expected_sha, actual_sha))
-        
+
         return validation_passed
-        
+
     except Exception as e:
         print("Error: Failed to load manifest: {}".format(e))
         return False
@@ -236,24 +236,25 @@ def predbat_update_download(version):
         return downloaded_files
     return None
 
+
 def main():
     """
     Main function for standalone testing of download functionality
     """
     import argparse
     import sys
-    
+
     # Add parent directory to path so we can import download module
     parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if parent_dir not in sys.path:
         sys.path.insert(0, parent_dir)
-        
-    parser = argparse.ArgumentParser(description='Test Predbat download functionality')
-    parser.add_argument('--check', metavar='VERSION', help='Check if Predbat is installed correctly for given version (e.g. v8.30.8)')
-    parser.add_argument('--download', metavar='VERSION', help='Download Predbat version from GitHub (e.g. v8.30.8)')
-    
+
+    parser = argparse.ArgumentParser(description="Test Predbat download functionality")
+    parser.add_argument("--check", metavar="VERSION", help="Check if Predbat is installed correctly for given version (e.g. v8.30.8)")
+    parser.add_argument("--download", metavar="VERSION", help="Download Predbat version from GitHub (e.g. v8.30.8)")
+
     args = parser.parse_args()
-    
+
     if args.check:
         print("=" * 60)
         print("Checking Predbat installation for version: {}".format(args.check))
@@ -265,7 +266,7 @@ def main():
         else:
             print("\n✗ Installation check FAILED")
             sys.exit(1)
-    
+
     elif args.download:
         print("=" * 60)
         print("Downloading Predbat version: {}".format(args.download))
@@ -280,7 +281,7 @@ def main():
         else:
             print("\n✗ Download FAILED")
             sys.exit(1)
-    
+
     else:
         parser.print_help()
         sys.exit(1)
