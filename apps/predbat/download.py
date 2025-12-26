@@ -274,7 +274,8 @@ def main():
         if files:
             print("\n✓ Download successful!")
             print("Files downloaded: {}".format(", ".join(files)))
-            print("\nTo install, run: predbat_update_move('{}', {})".format(args.download, files))
+            predbat_update_move(args.download, files)
+            print("Files moved into place.")
             sys.exit(0)
         else:
             print("\n✗ Download FAILED")
