@@ -123,8 +123,9 @@ def test_check_install_with_valid_manifest(my_predbat):
 
         # Patch __file__ to point to temp_dir
         with patch("download.os.path.dirname", return_value=temp_dir):
-            result = check_install("v8.30.8")
+            result, modified = check_install("v8.30.8")
             assert result is True
+            assert modified is False
 
     finally:
         shutil.rmtree(temp_dir)
@@ -145,8 +146,9 @@ def test_check_install_missing_file(my_predbat):
             yaml.dump(manifest, f)
 
         with patch("download.os.path.dirname", return_value=temp_dir):
-            result = check_install("v8.30.8")
+            result, modified = check_install("v8.30.8")
             assert result is False
+            assert modified is False
 
     finally:
         shutil.rmtree(temp_dir)
@@ -171,8 +173,9 @@ def test_check_install_zero_byte_file(my_predbat):
             yaml.dump(manifest, f)
 
         with patch("download.os.path.dirname", return_value=temp_dir):
-            result = check_install("v8.30.8")
+            result, modified = check_install("v8.30.8")
             assert result is False
+            assert modified is False
 
     finally:
         shutil.rmtree(temp_dir)
@@ -198,8 +201,9 @@ def test_check_install_size_mismatch(my_predbat):
             yaml.dump(manifest, f)
 
         with patch("download.os.path.dirname", return_value=temp_dir):
-            result = check_install("v8.30.8")
+            result, modified = check_install("v8.30.8")
             assert result is True  # Should pass with warning
+            assert modified is True
 
     finally:
         shutil.rmtree(temp_dir)
@@ -225,8 +229,9 @@ def test_check_install_sha_mismatch(my_predbat):
             yaml.dump(manifest, f)
 
         with patch("download.os.path.dirname", return_value=temp_dir):
-            result = check_install("v8.30.8")
+            result, modified = check_install("v8.30.8")
             assert result is True  # Should pass with warning
+            assert modified is True
 
     finally:
         shutil.rmtree(temp_dir)
@@ -249,8 +254,9 @@ def test_check_install_no_manifest_downloads(my_predbat):
 
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.get_github_directory_listing", return_value=mock_files):
-                result = check_install("v8.30.8")
+                result, modified = check_install("v8.30.8")
                 assert result is True
+                assert modified is False
                 # Check manifest was created
                 assert os.path.exists(os.path.join(temp_dir, "manifest.yaml"))
 

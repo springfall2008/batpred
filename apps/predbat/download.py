@@ -158,6 +158,7 @@ def check_install(version):
             return False
 
         validation_passed = True
+        validation_modified = False
 
         for file_info in files:
             filename = file_info.get("name")
@@ -181,14 +182,15 @@ def check_install(version):
             # Warn on size mismatch but don't fail
             if actual_size != expected_size:
                 print("Warn: File {} size mismatch: expected {}, got {}".format(filepath, expected_size, actual_size))
-
-            # Warn on SHA mismatch but don't fail
-            if expected_sha:
+                validation_modified = True
+            elif expected_sha:
+                # Warn on SHA mismatch but don't fail
                 actual_sha = compute_file_sha1(filepath)
                 if actual_sha and actual_sha != expected_sha:
                     print("Warn: File {} SHA mismatch: expected {}, got {}".format(filepath, expected_sha, actual_sha))
+                    validation_modified = True
 
-        return validation_passed
+        return validation_passed, validation_modified
 
     except Exception as e:
         print("Error: Failed to load manifest: {}".format(e))
@@ -260,9 +262,12 @@ def main():
         print("=" * 60)
         print("Checking Predbat installation for version: {}".format(args.check))
         print("=" * 60)
-        result = check_install(args.check)
+        result, modified = check_install(args.check)
         if result:
-            print("\n✓ Installation check PASSED")
+            if modified:
+                print("Warn: Installation check PASSED with modifications")
+            else:
+                print("\n✓ Installation check PASSED")
             sys.exit(0)
         else:
             print("\n✗ Installation check FAILED")
