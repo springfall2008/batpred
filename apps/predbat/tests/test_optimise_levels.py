@@ -36,6 +36,17 @@ def run_optimise_levels(
     reset_inverter(my_predbat)
     my_predbat.forecast_minutes = 24 * 60
 
+    pv_step = {}
+    load_step = {}
+    for minute in range(0, my_predbat.forecast_minutes, 5):
+        pv_step[minute] = pv_amount / (60 / 5)
+        load_step[minute] = load_amount / (60 / 5)
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv_step
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+
     # Reset state that may have been set by previous tests
     my_predbat.best_soc_max = 0  # Reset SOC max cap - 0 means no cap
     my_predbat.best_soc_keep_weight = 0.5  # Reset to default

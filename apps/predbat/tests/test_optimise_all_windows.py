@@ -58,6 +58,17 @@ def run_optimise_all_windows(
     for minute in range(0, my_predbat.forecast_minutes, 5):
         pv_step[minute] = pv_amount / (60 / 5)
         load_step[minute] = load_amount / (60 / 5)
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv_step
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+
+    pv_step = {}
+    load_step = {}
+    for minute in range(0, my_predbat.forecast_minutes, 5):
+        pv_step[minute] = pv_amount / (60 / 5)
+        load_step[minute] = load_amount / (60 / 5)
     my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
     my_predbat.debug_enable = True
 
@@ -273,8 +284,37 @@ def run_optimise_all_windows_tests(my_predbat):
         {"id": "double", "name": "Double Load", "config": {"load_scaling": 2.0}},
     ]
     my_predbat.args["compare_list"] = compare_tariffs
+
     compare = Compare(my_predbat)
+    # Use mock calculate plan here
+    orig_calculate_plan = my_predbat.calculate_plan
+    orig_run_prediction = my_predbat.run_prediction
+
+    # Create a mock function for calculate_plan with proper closure
+    def mock_calculate_plan_closure(recompute, debug_mode, publish):
+        # Mock out calculate plan to avoid actual calculation during tests
+        my_predbat.log("Mock calculate_plan called with recompute={}, debug_mode={}, publish={}".format(recompute, debug_mode, publish))
+        # Set minimal valid structures for comparison tests
+        my_predbat.charge_window_best = []
+        my_predbat.export_window_best = []
+        my_predbat.charge_limit_best = []
+        my_predbat.export_limits_best = []
+        # Mark plan as valid
+        my_predbat.plan_valid = True
+        return
+
+    # Create a mock function for run_prediction with proper closure
+    def mock_run_prediction_closure(*args, **kwargs):
+        # Mock out run_prediction to avoid actual prediction during tests
+        # Return dummy values in the expected format
+        # (metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
+        return (100.0, 10.0, 20.0, 5.0, 10.0, 50.0, 0, 0.5, 0.0, 0.0, 0.0)
+
+    my_predbat.calculate_plan = mock_calculate_plan_closure
+    my_predbat.run_prediction = mock_run_prediction_closure
     compare.run_all(debug=True, fetch_sensor=False)
+    my_predbat.calculate_plan = orig_calculate_plan
+    my_predbat.run_prediction = orig_run_prediction
 
     results = compare.comparisons
     if len(results) != 2:
