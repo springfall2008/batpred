@@ -1520,6 +1520,7 @@ class FoxAPI(ComponentBase):
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.predbat_fox_{batteries[0]}_battemperature")
 
+
 class MockBase:  # pragma: no cover
     """Mock base class for testing"""
 
