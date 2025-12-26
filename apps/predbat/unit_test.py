@@ -202,6 +202,13 @@ from tests.test_download import (
     test_predbat_update_download_success,
     test_predbat_update_download_api_failure,
     test_predbat_update_download_file_failure,
+    test_download_predbat_file_success,
+    test_download_predbat_file_failure,
+    test_download_predbat_file_no_filename,
+    test_predbat_update_move_success,
+    test_predbat_update_move_empty_files,
+    test_predbat_update_move_none_files,
+    test_predbat_update_move_invalid_version,
 )
 from tests.test_ohme import (
     test_ohme_time_next_occurs_today,
@@ -479,6 +486,13 @@ def main():
         ("download_update_success", test_predbat_update_download_success, "Update download success", False),
         ("download_update_api_failure", test_predbat_update_download_api_failure, "Update download API failure", False),
         ("download_update_file_failure", test_predbat_update_download_file_failure, "Update download file failure", False),
+        ("download_file_success", test_download_predbat_file_success, "Download file success", False),
+        ("download_file_failure", test_download_predbat_file_failure, "Download file failure", False),
+        ("download_file_no_filename", test_download_predbat_file_no_filename, "Download file no filename", False),
+        ("download_move_success", test_predbat_update_move_success, "Move files success", False),
+        ("download_move_empty", test_predbat_update_move_empty_files, "Move files empty list", False),
+        ("download_move_none", test_predbat_update_move_none_files, "Move files none list", False),
+        ("download_move_invalid_version", test_predbat_update_move_invalid_version, "Move files invalid version", False),
         # Axle Energy VPP unit tests
         ("axle_init", test_axle_initialization, "Axle Energy initialization", False),
         ("axle_active_event", test_axle_fetch_with_active_event, "Axle Energy active event", False),

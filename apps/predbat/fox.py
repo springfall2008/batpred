@@ -1518,7 +1518,7 @@ class FoxAPI(ComponentBase):
         self.set_arg("schedule_write_button", [f"switch.predbat_fox_{device}_battery_schedule_charge_write" for device in batteries])
 
 
-class MockBase:
+class MockBase: # pragma: no cover
     """Mock base class for testing"""
 
     def __init__(self):
@@ -1533,7 +1533,7 @@ class MockBase:
         print(f"DASHBOARD: {args}, {kwargs}")
 
 
-async def test_fox_api(sn, api_key):
+async def test_fox_api(sn, api_key): # pragma: no cover
     """
     Run a test
     """
@@ -1625,7 +1625,7 @@ async def test_fox_api(sn, api_key):
     # print(res)
 
 
-def main():
+def main(): # pragma: no cover
     """
     Main function for command line execution
     """
