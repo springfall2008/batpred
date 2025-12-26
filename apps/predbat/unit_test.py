@@ -123,7 +123,7 @@ from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
-from tests.test_find_charge_rate import test_find_charge_rate
+from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
@@ -405,6 +405,8 @@ def main():
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
+        ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
+        ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
         ("energydataservice", test_energydataservice, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),

@@ -830,37 +830,6 @@ def str2time(str):
         tdata = datetime.strptime(str, TIME_FORMAT_OCTOPUS)
     return tdata
 
-
-def get_curve_value(curve, key, default=1.0):
-    """
-    Get a value from a battery power curve dictionary.
-    Supports both integer and string keys for compatibility with YAML configurations.
-
-    Args:
-        curve: Dictionary containing the power curve (e.g., battery_charge_power_curve)
-        key: Integer SOC percentage to look up
-        default: Default value if key not found (default: 1.0)
-
-    Returns:
-        The curve value at the given SOC percentage, or default if not found
-
-    Note:
-        This function handles both integer keys (100, 99, 98) and string keys ("100", "99", "98")
-        to support YAML configurations that require string keys for encryption (e.g., SOPS).
-    """
-    # Try integer key first (most common case)
-    if key in curve:
-        return curve[key]
-
-    # Try string key for YAML configs with string-based keys
-    str_key = str(key)
-    if str_key in curve:
-        return curve[str_key]
-
-    # Return default if neither found
-    return default
-
-
 def calc_percent_limit(charge_limit, soc_max):
     """
     Calculate a charge limit in percent
@@ -973,6 +942,16 @@ def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_
 
     return max(min(discharge_rate_setting, max_discharge_rate), battery_rate_min)
 
+"""
+Get value from curve with integer or string index
+"""
+def get_curve_value(curve, index, default=1.0):
+    if index in curve:
+        return curve[index]
+    elif str(index) in curve:
+        return curve[str(index)]
+    else:
+        return default
 
 def find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, max_rate):
     """
@@ -980,12 +959,15 @@ def find_battery_temperature_cap(battery_temperature, battery_temperature_curve,
     """
     battery_temperature_idx = min(battery_temperature, 20)
     battery_temperature_idx = max(battery_temperature_idx, -20)
-    if battery_temperature_idx in battery_temperature_curve:
-        battery_temperature_adjust = battery_temperature_curve[battery_temperature_idx]
-    elif battery_temperature_idx > 0:
-        battery_temperature_adjust = battery_temperature_curve.get(20, 1.0)
-    else:
-        battery_temperature_adjust = battery_temperature_curve.get(0, 1.0)
+    battery_temperature_idx = int(battery_temperature_idx)  # Convert to int for proper key matching
+    # Try to get the temperature adjustment from the curve (handles both int and string keys)
+    battery_temperature_adjust = get_curve_value(battery_temperature_curve, battery_temperature_idx, None)
+    if battery_temperature_adjust is None:
+        # If not found, try fallback values
+        if battery_temperature_idx > 0:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 20, 1.0)
+        else:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 0, 1.0)
     battery_temperature_rate_cap = soc_max * battery_temperature_adjust / 60.0
 
     return min(battery_temperature_rate_cap, max_rate)
