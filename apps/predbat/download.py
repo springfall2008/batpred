@@ -239,7 +239,8 @@ def predbat_update_download(version):
         return downloaded_files
     return None
 
-def main(): # pragma: no cover
+
+def main():  # pragma: no cover
     """
     Main function for standalone testing of download functionality
     """

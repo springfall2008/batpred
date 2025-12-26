@@ -330,26 +330,23 @@ def test_download_predbat_file_success(my_predbat):
     Test successful download of a file from GitHub
     """
     temp_dir = tempfile.mkdtemp()
-    
+
     try:
         output_file = os.path.join(temp_dir, "test.py.v8.30.8")
-        
+
         # Mock successful HTTP response
-        mock_response = type('MockResponse', (), {
-            'ok': True,
-            'text': 'print("test file content")\n'
-        })()
-        
-        with patch('download.requests.get', return_value=mock_response):
+        mock_response = type("MockResponse", (), {"ok": True, "text": 'print("test file content")\n'})()
+
+        with patch("download.requests.get", return_value=mock_response):
             result = download_predbat_file_from_github("v8.30.8", "test.py", output_file)
-            
+
             # Verify file was written
             assert os.path.exists(output_file)
-            with open(output_file, 'r') as f:
+            with open(output_file, "r") as f:
                 content = f.read()
             assert content == 'print("test file content")\n'
             assert result == 'print("test file content")\n'
-    
+
     finally:
         shutil.rmtree(temp_dir)
 
@@ -359,23 +356,20 @@ def test_download_predbat_file_failure(my_predbat):
     Test failed download of a file from GitHub
     """
     temp_dir = tempfile.mkdtemp()
-    
+
     try:
         output_file = os.path.join(temp_dir, "test.py.v8.30.8")
-        
+
         # Mock failed HTTP response
-        mock_response = type('MockResponse', (), {
-            'ok': False,
-            'status_code': 404
-        })()
-        
-        with patch('download.requests.get', return_value=mock_response):
+        mock_response = type("MockResponse", (), {"ok": False, "status_code": 404})()
+
+        with patch("download.requests.get", return_value=mock_response):
             result = download_predbat_file_from_github("v8.30.8", "test.py", output_file)
-            
+
             # Verify file was not created
             assert not os.path.exists(output_file)
             assert result is None
-    
+
     finally:
         shutil.rmtree(temp_dir)
 
@@ -385,12 +379,9 @@ def test_download_predbat_file_no_filename(my_predbat):
     Test download without saving to file (returns content only)
     """
     # Mock successful HTTP response
-    mock_response = type('MockResponse', (), {
-        'ok': True,
-        'text': 'print("test file content")\n'
-    })()
-    
-    with patch('download.requests.get', return_value=mock_response):
+    mock_response = type("MockResponse", (), {"ok": True, "text": 'print("test file content")\n'})()
+
+    with patch("download.requests.get", return_value=mock_response):
         result = download_predbat_file_from_github("v8.30.8", "test.py", None)
         assert result == 'print("test file content")\n'
 
@@ -400,22 +391,22 @@ def test_predbat_update_move_success(my_predbat):
     Test successful move of downloaded files into place
     """
     temp_dir = tempfile.mkdtemp()
-    
+
     try:
         # Create test files with version tags
         test_files = ["predbat.py", "config.py", "manifest.yaml"]
         tag = "v8.30.8"
-        
+
         for filename in test_files:
             tagged_file = os.path.join(temp_dir, filename + "." + tag)
             with open(tagged_file, "w") as f:
                 f.write("content of {}\n".format(filename))
-        
+
         # Mock os.system and os.path.dirname
-        with patch('download.os.path.dirname', return_value=temp_dir):
-            with patch('download.os.system') as mock_system:
+        with patch("download.os.path.dirname", return_value=temp_dir):
+            with patch("download.os.system") as mock_system:
                 result = predbat_update_move(tag, test_files)
-                
+
                 assert result is True
                 # Verify os.system was called with mv commands
                 assert mock_system.called
@@ -425,7 +416,7 @@ def test_predbat_update_move_success(my_predbat):
                 assert "config.py" in call_args
                 assert "manifest.yaml" in call_args
                 assert "echo 'Update complete'" in call_args
-    
+
     finally:
         shutil.rmtree(temp_dir)
 
@@ -451,16 +442,16 @@ def test_predbat_update_move_invalid_version(my_predbat):
     Test predbat_update_move with empty version string still executes
     """
     temp_dir = tempfile.mkdtemp()
-    
+
     try:
         # Even with empty version, the function should still run (just with empty tag)
-        with patch('download.os.path.dirname', return_value=temp_dir):
-            with patch('download.os.system') as mock_system:
+        with patch("download.os.path.dirname", return_value=temp_dir):
+            with patch("download.os.system") as mock_system:
                 result = predbat_update_move("", ["test.py"])
                 # Should still return True and call os.system
                 assert result is True
                 assert mock_system.called
-    
+
     finally:
         shutil.rmtree(temp_dir)
 
