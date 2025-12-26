@@ -289,7 +289,7 @@ def run_optimise_all_windows_tests(my_predbat):
     # Use mock calculate plan here
     orig_calculate_plan = my_predbat.calculate_plan
     orig_run_prediction = my_predbat.run_prediction
-    
+
     # Create a mock function for calculate_plan with proper closure
     def mock_calculate_plan_closure(recompute, debug_mode, publish):
         # Mock out calculate plan to avoid actual calculation during tests
@@ -302,14 +302,14 @@ def run_optimise_all_windows_tests(my_predbat):
         # Mark plan as valid
         my_predbat.plan_valid = True
         return
-    
+
     # Create a mock function for run_prediction with proper closure
     def mock_run_prediction_closure(*args, **kwargs):
         # Mock out run_prediction to avoid actual prediction during tests
         # Return dummy values in the expected format
         # (metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
         return (100.0, 10.0, 20.0, 5.0, 10.0, 50.0, 0, 0.5, 0.0, 0.0, 0.0)
-    
+
     my_predbat.calculate_plan = mock_calculate_plan_closure
     my_predbat.run_prediction = mock_run_prediction_closure
     compare.run_all(debug=True, fetch_sensor=False)
