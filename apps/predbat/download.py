@@ -46,21 +46,22 @@ def get_github_directory_listing(tag):
 
 def compute_file_sha1(filepath):
     """
-    Compute SHA1 hash of a file
+    Compute Git blob SHA1 hash of a file (matches GitHub's SHA)
+    Git computes SHA as: sha1("blob " + filesize + "\0" + contents)
 
     Args:
         filepath (str): Path to the file
     Returns:
-        str: SHA1 hash as hex string, or None on error
+        str: Git blob SHA1 hash as hex string, or None on error
     """
     try:
         sha1 = hashlib.sha1()
         with open(filepath, "rb") as f:
-            while True:
-                data = f.read(65536)  # Read in 64kb chunks
-                if not data:
-                    break
-                sha1.update(data)
+            data = f.read()
+        
+        # Compute Git blob SHA: sha1("blob " + size + "\0" + contents)
+        header = "blob {}\0".format(len(data)).encode('utf-8')
+        sha1.update(header + data)
         return sha1.hexdigest()
     except Exception as e:
         print("Error: Failed to compute SHA1 for {}: {}".format(filepath, e))

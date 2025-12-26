@@ -75,7 +75,7 @@ def test_get_github_directory_listing_exception(my_predbat):
 
 def test_compute_file_sha1(my_predbat):
     """
-    Test SHA1 hash computation
+    Test Git blob SHA1 hash computation (matches GitHub's SHA)
     """
     # Create a temporary file with known content
     with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
@@ -84,8 +84,8 @@ def test_compute_file_sha1(my_predbat):
 
     try:
         sha1 = compute_file_sha1(temp_path)
-        # SHA1 of "test content\n" is known
-        assert sha1 == "4fe2b8dd12cd9cd6a413ea960cd8c09c25f19527"
+        # Git blob SHA of "test content\n" (computed as: sha1("blob 13\0test content\n"))
+        assert sha1 == "d670460b4b4aece5915caf5c68d12f560a9fe3e4"
     finally:
         os.unlink(temp_path)
 
