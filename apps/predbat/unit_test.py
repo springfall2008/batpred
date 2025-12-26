@@ -33,7 +33,7 @@ from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
-from tests.test_optimise_levels import run_optimise_levels
+from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_energydataservice import test_energydataservice
 from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
@@ -617,7 +617,7 @@ def main():
         ("ohme_switch_max_charge_off", test_ohme_switch_event_handler_max_charge_off, "Ohme switch_event_handler max_charge off", False),
         ("ohme_switch_approve_charge", test_ohme_switch_event_handler_approve_charge, "Ohme switch_event_handler approve_charge", False),
         ("ohme_switch_approve_wrong_status", test_ohme_switch_event_handler_approve_charge_wrong_status, "Ohme switch_event_handler approve wrong status", False),
-        ("optimise_levels", run_optimise_levels, "Optimise levels tests", True),
+        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
         ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
