@@ -544,10 +544,10 @@ def test_db_manager_commit_throttling(my_predbat=None):
             # Test 1: Verify initial commit happens (last_commit_time is None)
             entity_id1 = "sensor.test1"
             await loop.run_in_executor(None, db_mgr.set_state_db, entity_id1, "10", {})
-            
+
             # Give time for queue to be processed
             await asyncio.sleep(0.2)
-            
+
             first_commit_time = db_mgr.last_commit_time
             assert first_commit_time is not None, "First commit should have happened (last_commit_time should be set)"
             print(f"✓ First commit happened at {first_commit_time}")
@@ -569,10 +569,10 @@ def test_db_manager_commit_throttling(my_predbat=None):
             print("  Pushing last_commit_time back to 6 seconds ago to test throttle expiry...")
             db_mgr.last_commit_time = datetime.now(timezone.utc) - timedelta(seconds=6)
             pushed_back_time = db_mgr.last_commit_time
-            
+
             await loop.run_in_executor(None, db_mgr.set_state_db, "sensor.test5", "50", {})
             await asyncio.sleep(0.1)  # Give time for processing
-            
+
             third_commit_time = db_mgr.last_commit_time
             assert third_commit_time is not None, "Commit time should still be set"
             assert third_commit_time > pushed_back_time, "New commit should have happened after throttle expired"
@@ -587,7 +587,7 @@ def test_db_manager_commit_throttling(my_predbat=None):
             retrieved3 = await loop.run_in_executor(None, db_mgr.get_state_db, "sensor.test3")
             retrieved4 = await loop.run_in_executor(None, db_mgr.get_state_db, "sensor.test4")
             retrieved5 = await loop.run_in_executor(None, db_mgr.get_state_db, "sensor.test5")
-            
+
             assert retrieved1 is not None and retrieved1["state"] == "10", "sensor.test1 data should be persisted"
             assert retrieved2 is not None and retrieved2["state"] == "20", "sensor.test2 data should be persisted"
             assert retrieved3 is not None and retrieved3["state"] == "30", "sensor.test3 data should be persisted"
