@@ -39,6 +39,7 @@ from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
 from tests.test_single_debug import run_single_debug
 from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints
+from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import (
     run_test_ge_cloud,
     test_async_get_inverter_data_success,
@@ -359,6 +360,7 @@ def main():
     # Test registry - table of all available tests
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
+        ("secrets", run_secrets_tests, "Secrets loading tests", False),
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),

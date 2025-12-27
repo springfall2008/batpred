@@ -149,6 +149,54 @@ class Hass:
             t.join(5 * 60)
         self.logfile.close()
 
+    def load_secrets(self):
+        """
+        Load secrets from secrets.yaml file
+        Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
+        """
+        secrets = {}
+        secrets_file = None
+
+        # Try loading from different locations in priority order
+        possible_locations = [
+            os.getenv("PREDBAT_SECRETS_FILE"),
+            "secrets.yaml",
+            "/config/secrets.yaml",
+        ]
+
+        for location in possible_locations:
+            if location and os.path.exists(location):
+                secrets_file = location
+                break
+
+        if secrets_file:
+            self.log(f"Loading secrets from {secrets_file}", quiet=False)
+            try:
+                with io.open(secrets_file, "r") as stream:
+                    secrets = yaml.safe_load(stream) or {}
+                    # Check for debug logging option
+                    if secrets.get("logger") == "debug":
+                        self.log(f"Info: Secrets loaded from {secrets_file}", quiet=False)
+            except yaml.YAMLError as exc:
+                self.log(f"Error: Failed to load secrets from {secrets_file}: {exc}", quiet=False)
+            except Exception as exc:
+                self.log(f"Error: Failed to open secrets file {secrets_file}: {exc}", quiet=False)
+        else:
+            self.log("Info: No secrets.yaml file found", quiet=False)
+
+        return secrets
+
+    def secret_constructor(self, loader, node):
+        """
+        YAML constructor for !secret tag
+        """
+        secret_key = loader.construct_scalar(node)
+        if secret_key in self.secrets:
+            return self.secrets[secret_key]
+        else:
+            self.log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
+            return None
+
     def __init__(self):
         """
         Start Predbat
@@ -160,6 +208,12 @@ class Hass:
         self.hass_api_version = 2
 
         self.logfile = open("predbat.log", "a")
+
+        # Load secrets first
+        self.secrets = self.load_secrets()
+
+        # Register custom YAML constructor for !secret tag
+        yaml.add_constructor("!secret", self.secret_constructor, Loader=yaml.SafeLoader)
 
         # Open YAML file apps.yaml and read it
         apps_file = os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
