@@ -325,6 +325,8 @@ treforsiphone
 unsmoothed
 unstaged
 useid
+snakeviz
+ncalls
 userinterface
 varh
 venv
