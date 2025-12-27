@@ -1107,7 +1107,7 @@ SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for
 
 An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
 
-## Ohme car charger - direct integration
+## Ohme car charger direct integration
 
 Predbat can talk directly to the Ohme charger by setting your login details. When **ohme_automatic_octopus_intelligent** is set then Predbat is automatically
 configured to take Octopus Intelligent car charging slots from Ohme (rather than from Octopus Intelligent directly).
