@@ -152,7 +152,7 @@ class Hass:
     def load_secrets(self):
         """
         Load secrets from secrets.yaml file
-        Priority: /config/secrets.yaml, PREDBAT_SECRETS_FILE env var, ./secrets.yaml
+        Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
         """
         secrets = {}
         secrets_file = None
