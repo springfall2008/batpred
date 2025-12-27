@@ -1,0 +1,31 @@
+#!/bin/bash
+# Quick profiling script for common debug cases
+
+set -e
+
+cd "$(dirname "$0")"
+
+echo "Predbat Debug Case Profiler"
+echo "============================"
+echo ""
+
+if [ $# -eq 0 ]; then
+    echo "Available debug cases:"
+    echo ""
+    ls -1 cases/predbat_debug_*.yaml 2>/dev/null | sed 's/^/  /' || echo "  No debug cases found"
+    echo ""
+    echo "Usage: ./run_profile <debug_file.yaml> [options]"
+    echo ""
+    echo "Options:"
+    echo "  --view    Open results in snakeviz automatically"
+    echo "  --time    Sort by total time instead of cumulative"
+    echo "  --top N   Show top N functions (default: 30)"
+    echo ""
+    echo "Examples:"
+    echo "  ./run_profile cases/predbat_debug_agile1.yaml"
+    echo "  ./run_profile cases/predbat_debug_agile1.yaml --view"
+    echo "  ./run_profile cases/predbat_debug_pre_saving1.yaml --time --top 50"
+    exit 1
+fi
+
+python3 profile_debug.py "$@"

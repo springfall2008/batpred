@@ -10,7 +10,7 @@
 
 from datetime import timedelta
 from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
-from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot
+from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple
 
 
 # Only assign globals once to avoid re-creating them with processes are forked
@@ -517,10 +517,13 @@ class Prediction:
         set_export_window = self.set_export_window
         battery_rate_max_charge = self.battery_rate_max_charge
         battery_rate_max_discharge = self.battery_rate_max_discharge
-        battery_temperature_charge_curve = self.battery_temperature_charge_curve
         battery_rate_min = self.battery_rate_min
         carbon_intensity = self.carbon_intensity
         set_discharge_during_charge = self.set_discharge_during_charge
+        battery_charge_power_curve_tuple = charge_curve_to_tuple(self.battery_charge_power_curve)
+        battery_discharge_power_curve_tuple = charge_curve_to_tuple(self.battery_discharge_power_curve)
+        battery_temperature_charge_curve_tuple = charge_curve_to_tuple(self.battery_temperature_charge_curve)
+        battery_temperature_discharge_curve_tuple = charge_curve_to_tuple(self.battery_temperature_discharge_curve)
 
         # For the PV10 case we apply some de-rating to the battery charge rate to be more pessimistic
         if pv10:
@@ -734,10 +737,10 @@ class Prediction:
                     discharge_rate_now = battery_rate_min
 
             # Current real charge rate
-            charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, soc_max, battery_rate_max_charge, self.battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_charge_curve) * battery_rate_max_scaling
+            charge_rate_now_curve = get_charge_rate_curve_cached(soc, charge_rate_now, soc_max, battery_rate_max_charge, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple) * battery_rate_max_scaling
             charge_rate_now_curve_step = charge_rate_now_curve * step
             discharge_rate_now_curve = (
-                get_discharge_rate_curve(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, self.battery_discharge_power_curve, battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
+                get_discharge_rate_curve_cached(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
                 * self.battery_rate_max_scaling_discharge
             )
             discharge_rate_now_curve_step = discharge_rate_now_curve * step
@@ -758,7 +761,7 @@ class Prediction:
                     export_rate_adjust = 1.0
                 discharge_rate_now = battery_rate_max_discharge * export_rate_adjust
                 discharge_rate_now_curve = (
-                    get_discharge_rate_curve(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, self.battery_discharge_power_curve, battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
+                    get_discharge_rate_curve_cached(soc, discharge_rate_now, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
                     * self.battery_rate_max_scaling_discharge
                 )
                 discharge_rate_now_curve_step = discharge_rate_now_curve * step
@@ -834,7 +837,7 @@ class Prediction:
                     battery_loss,
                     None,
                     battery_temperature,
-                    battery_temperature_charge_curve,
+                    self.battery_temperature_charge_curve,
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 
