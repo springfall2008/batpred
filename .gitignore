@@ -40,6 +40,7 @@ coverage/*.json
 coverage/*.txt
 coverage/*.db
 coverage/*.html
+coverage/*.prof
 coverage/cache/
 coverage/debug/
 coverage/predbat_standalone/
