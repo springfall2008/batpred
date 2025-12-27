@@ -114,6 +114,7 @@ from tests.test_db_manager import (
     test_db_manager_entities_and_history,
     test_db_manager_error_handling,
     test_db_manager_persistence,
+    test_db_manager_commit_throttling,
 )
 from tests.test_hahistory import run_hahistory_tests
 from tests.test_hainterface_state import run_hainterface_state_tests
@@ -515,6 +516,7 @@ def main():
         ("db_manager_entities_history", test_db_manager_entities_and_history, "DatabaseManager entities and history", False),
         ("db_manager_errors", test_db_manager_error_handling, "DatabaseManager error handling", False),
         ("db_manager_persistence", test_db_manager_persistence, "DatabaseManager data persistence across restarts", False),
+        ("db_manager_commit_throttle", test_db_manager_commit_throttling, "DatabaseManager commit throttling (5 second interval)", False),
         # HAHistory component tests
         ("hahistory", run_hahistory_tests, "HAHistory component tests", False),
         # HAInterface state management tests
