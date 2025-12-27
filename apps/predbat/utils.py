@@ -14,6 +14,7 @@ from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, 
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
+
 # Helper to make dict hashable for caching
 def charge_curve_to_tuple(d):
     """Convert dict to tuple for use as cache key"""
@@ -927,7 +928,7 @@ def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate
     """
     battery_charge_power_curve = dict(battery_charge_power_curve_tuple) if battery_charge_power_curve_tuple else {}
     battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
-    
+
     soc_percent = calc_percent_limit(soc, soc_max)
     max_charge_rate = battery_rate_max_charge * get_curve_value(battery_charge_power_curve, soc_percent, 1.0)
 
@@ -944,6 +945,7 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
     """
     return get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_curve_to_tuple(battery_charge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
 
+
 @lru_cache(maxsize=8192)
 def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple):
     """
@@ -951,7 +953,7 @@ def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, batter
     """
     battery_discharge_power_curve = dict(battery_discharge_power_curve_tuple) if battery_discharge_power_curve_tuple else {}
     battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
-    
+
     soc_percent = calc_percent_limit(soc, soc_max)
     max_discharge_rate = battery_rate_max_discharge * get_curve_value(battery_discharge_power_curve, soc_percent, 1.0)
     max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_discharge)
@@ -965,6 +967,7 @@ def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_
     Compute true discharging rate from SoC and charge rate setting
     """
     return get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+
 
 """
 Get value from curve with integer or string index
