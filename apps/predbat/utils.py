@@ -830,6 +830,7 @@ def str2time(str):
         tdata = datetime.strptime(str, TIME_FORMAT_OCTOPUS)
     return tdata
 
+
 def calc_percent_limit(charge_limit, soc_max):
     """
     Calculate a charge limit in percent
@@ -942,9 +943,12 @@ def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_
 
     return max(min(discharge_rate_setting, max_discharge_rate), battery_rate_min)
 
+
 """
 Get value from curve with integer or string index
 """
+
+
 def get_curve_value(curve, index, default=1.0):
     if index in curve:
         return curve[index]
@@ -952,6 +956,7 @@ def get_curve_value(curve, index, default=1.0):
         return curve[str(index)]
     else:
         return default
+
 
 def find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, max_rate):
     """
