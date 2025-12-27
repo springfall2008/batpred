@@ -541,7 +541,7 @@ def test_db_manager_commit_throttling(my_predbat=None):
 
             loop = asyncio.get_event_loop()
 
-            # Test 1: Verify initial commit happens (last_commit_time is None)
+            # Test 1: Verify first commit happens and updates last_commit_time
             entity_id1 = "sensor.test1"
             await loop.run_in_executor(None, db_mgr.set_state_db, entity_id1, "10", {})
 
