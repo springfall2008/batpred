@@ -1349,6 +1349,7 @@ If the battery has not recently been fully charged or fully discharged then Pred
 - **battery_charge_power_curve** - This optional configuration item enables you to model in Predbat a tail-off in charging at high SoC%.
 
 Enter the charging curve as a series of steps of % of max charge rate for each SoC percentage.
+The percentage steps can either be expressed as an integer number (e.g. 97) or as a string (e.g. "97"); the Percent symbol is not required (see example curve below).
 
 The default is 1.0 (full power) charge to 100%.
 
