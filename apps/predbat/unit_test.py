@@ -33,12 +33,13 @@ from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
-from tests.test_optimise_levels import run_optimise_levels
+from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_energydataservice import test_energydataservice
 from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
 from tests.test_single_debug import run_single_debug
 from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints
+from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import (
     run_test_ge_cloud,
     test_async_get_inverter_data_success,
@@ -114,6 +115,7 @@ from tests.test_db_manager import (
     test_db_manager_entities_and_history,
     test_db_manager_error_handling,
     test_db_manager_persistence,
+    test_db_manager_commit_throttling,
 )
 from tests.test_hahistory import run_hahistory_tests
 from tests.test_hainterface_state import run_hainterface_state_tests
@@ -123,7 +125,7 @@ from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
-from tests.test_find_charge_rate import test_find_charge_rate
+from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
@@ -358,6 +360,7 @@ def main():
     # Test registry - table of all available tests
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
+        ("secrets", run_secrets_tests, "Secrets loading tests", False),
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
@@ -387,6 +390,7 @@ def main():
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
+        ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
         ("fetch_url_cached", test_fetch_url_cached, "Fetch URL cached tests", False),
@@ -405,6 +409,8 @@ def main():
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
+        ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
+        ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
         ("energydataservice", test_energydataservice, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
@@ -515,6 +521,7 @@ def main():
         ("db_manager_entities_history", test_db_manager_entities_and_history, "DatabaseManager entities and history", False),
         ("db_manager_errors", test_db_manager_error_handling, "DatabaseManager error handling", False),
         ("db_manager_persistence", test_db_manager_persistence, "DatabaseManager data persistence across restarts", False),
+        ("db_manager_commit_throttle", test_db_manager_commit_throttling, "DatabaseManager commit throttling (5 second interval)", False),
         # HAHistory component tests
         ("hahistory", run_hahistory_tests, "HAHistory component tests", False),
         # HAInterface state management tests
@@ -617,10 +624,9 @@ def main():
         ("ohme_switch_max_charge_off", test_ohme_switch_event_handler_max_charge_off, "Ohme switch_event_handler max_charge off", False),
         ("ohme_switch_approve_charge", test_ohme_switch_event_handler_approve_charge, "Ohme switch_event_handler approve_charge", False),
         ("ohme_switch_approve_wrong_status", test_ohme_switch_event_handler_approve_charge_wrong_status, "Ohme switch_event_handler approve wrong status", False),
-        ("optimise_levels", run_optimise_levels, "Optimise levels tests", True),
+        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
-        ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
     ]
 
     # Parse command line arguments

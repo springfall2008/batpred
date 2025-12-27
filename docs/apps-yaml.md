@@ -87,6 +87,49 @@ the Predbat internal Solcast rather than the external integration:
 
 ![image](https://github.com/user-attachments/assets/0eda352c-c6fc-459c-abda-5c0de0b2372b)
 
+## Storing secrets
+
+Predbat supports the Home Assistant [secrets mechanism](https://www.home-assistant.io/docs/configuration/secrets/) for storing sensitive information like API keys, passwords, and tokens.
+
+### Using secrets.yaml
+
+Create a `secrets.yaml` file in one of these locations (checked in order, only the first one is read):
+
+1. Path specified in `PREDBAT_SECRETS_FILE` environment variable
+2. `secrets.yaml` in the same directory as your `apps.yaml`
+3. `/config/secrets.yaml` (standard Home Assistant location)
+
+The `secrets.yaml` file contains key-value pairs of your secrets:
+
+```yaml
+octopus_api_key: "sk_live_abc123xyz..."
+solcast_api_key: "def456uvw..."
+```
+
+### Referencing secrets in apps.yaml
+
+Use the `!secret` tag followed by the secret key name in your `apps.yaml`:
+
+```yaml
+pred_bat:
+  module: predbat
+  class: PredBat
+
+  octopus_api_key: !secret octopus_api_key
+  solcast_api_key: !secret solcast_api_key
+```
+
+When Predbat loads, it will automatically replace `!secret octopus_api_key` with the actual value from `secrets.yaml`.
+
+If a secret is referenced in `apps.yaml` but not found in `secrets.yaml`, Predbat will log a warning and the configuration item will be set to `None`.
+
+### Benefits of using secrets
+
+- Keeps sensitive information separate from configuration files
+- Makes it safer to share your `apps.yaml` for troubleshooting
+- All secrets stored in one centralized location
+- Compatible with Home Assistant's secrets system
+
 ## Basics
 
 Basic configuration items
@@ -152,6 +195,8 @@ In future versions of Predbat, AppDaemon will be removed.
   ha_url: 'http://homeassistant.local:8123'
   ha_key: 'xxxxxxxxxxx'
 ```
+
+**NOTE:** It's recommended to store `ha_key` in `secrets.yaml` and reference it as `ha_key: !secret ha_key` - see [Storing secrets](#storing-secrets).
 
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
 This will remove the need for a DNS lookup of the IP address every time Predbat talks to Home Assistant and may improve reliability as a result.
@@ -279,6 +324,8 @@ you will need to wait until you have a few days of history established (at least
   ge_cloud_key: 'xxxxx'
   ge_cloud_data: True
 ```
+
+**NOTE:** It's recommended to store `ge_cloud_key` in `secrets.yaml` and reference it as `ge_cloud_key: !secret givenergy_api_key` - see [Storing secrets](#storing-secrets).
 
 ### num_inverters
 
@@ -775,6 +822,8 @@ Uncomment the following Solcast cloud interface settings in `apps.yaml` and set 
   solcast_poll_hours: 8
 ```
 
+**NOTE:** It's recommended to store `solcast_api_key` in `secrets.yaml` and reference it as `solcast_api_key: !secret solcast_api_key` - see [Storing secrets](#storing-secrets).
+
 Note that by default the Solcast API will be used to download all sites (up to 2 for hobby accounts), if you want to override this set your sites manually using
 **solcast_sites** as an array of site IDs:
 
@@ -888,9 +937,9 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
-- **octopus_api_key** - Sets API key to communicate directly with octopus
+- **octopus_api_key** - Sets API key to communicate directly with octopus. *Recommended: store in `secrets.yaml` and use `!secret octopus_api_key`*
 - **octopus_account** - Sets Octopus account number
-- **axle_api_key** - API key to communicate with Axle Energy VPP (Virtual Power Plant) service
+- **axle_api_key** - API key to communicate with Axle Energy VPP (Virtual Power Plant) service. *Recommended: store in `secrets.yaml` and use `!secret axle_api_key`*
 - **axle_pence_per_kwh** - Payment rate in pence per kWh for Axle Energy VPP events (default: 100)
 - **axle_automatic** - Optional, whether to use the default entity name **binary_sensor.predbat_axle_event** for axle event details (default True, use the default entity name)
 - **axle_session** - Optional, enables manual override of the Axle event entity name
@@ -1068,6 +1117,8 @@ configured to take Octopus Intelligent car charging slots from Ohme (rather than
   ohme_password: "xxxxxxxxx"
   ohme_automatic_octopus_intelligent: true
 ```
+
+**NOTE:** It's recommended to store `ohme_password` in `secrets.yaml` and reference it as `ohme_password: !secret ohme_password` - see [Storing secrets](#storing-secrets).
 
 ## Watch List - automatically start Predbat execution
 

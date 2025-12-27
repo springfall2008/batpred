@@ -510,3 +510,105 @@ def test_db_manager_persistence(my_predbat=None):
 
     run_async(run_test())
     print("=== test_db_manager_persistence PASSED ===\n")
+
+
+def test_db_manager_commit_throttling(my_predbat=None):
+    """Test DatabaseManager commit throttling - commits should only happen every 5 seconds when queue is empty"""
+    print("\n=== Testing DatabaseManager commit throttling ===")
+
+    async def run_test():
+        mock_base = MockBase()
+
+        # Create DatabaseManager using our mock class
+        db_mgr = MockDatabaseManager()
+        db_mgr.api_stop = False
+        db_mgr.base = mock_base
+        db_mgr.log = mock_base.log
+        db_mgr.initialize(db_enable=True, db_days=30)
+
+        try:
+            # Start the component
+            task = asyncio.create_task(db_mgr.start())
+
+            # Wait for startup
+            timeout = 0
+            while not db_mgr.api_started and timeout < 50:
+                await asyncio.sleep(0.1)
+                timeout += 1
+
+            assert db_mgr.api_started, "DatabaseManager failed to start"
+            print("✓ DatabaseManager started successfully")
+
+            loop = asyncio.get_event_loop()
+
+            # Test 1: Verify first commit happens and updates last_commit_time
+            entity_id1 = "sensor.test1"
+            await loop.run_in_executor(None, db_mgr.set_state_db, entity_id1, "10", {})
+
+            # Give time for queue to be processed
+            await asyncio.sleep(0.2)
+
+            first_commit_time = db_mgr.last_commit_time
+            assert first_commit_time is not None, "First commit should have happened (last_commit_time should be set)"
+            print(f"✓ First commit happened at {first_commit_time}")
+
+            # Test 2: Rapid writes within 5 seconds should NOT trigger additional commits
+            await asyncio.sleep(0.1)
+            await loop.run_in_executor(None, db_mgr.set_state_db, "sensor.test2", "20", {})
+            await asyncio.sleep(0.1)
+            await loop.run_in_executor(None, db_mgr.set_state_db, "sensor.test3", "30", {})
+            await asyncio.sleep(0.1)
+            await loop.run_in_executor(None, db_mgr.set_state_db, "sensor.test4", "40", {})
+            await asyncio.sleep(0.1)
+
+            second_check_time = db_mgr.last_commit_time
+            assert second_check_time == first_commit_time, "No commit should happen within 5 seconds of last commit"
+            print(f"✓ Rapid writes within 5 seconds did not trigger new commits (last_commit_time unchanged)")
+
+            # Test 3: Push back commit time to 6 seconds ago, then write - should trigger a new commit
+            print("  Pushing last_commit_time back to 6 seconds ago to test throttle expiry...")
+            db_mgr.last_commit_time = datetime.now(timezone.utc) - timedelta(seconds=6)
+            pushed_back_time = db_mgr.last_commit_time
+
+            await loop.run_in_executor(None, db_mgr.set_state_db, "sensor.test5", "50", {})
+            await asyncio.sleep(0.1)  # Give time for processing
+
+            third_commit_time = db_mgr.last_commit_time
+            assert third_commit_time is not None, "Commit time should still be set"
+            assert third_commit_time > pushed_back_time, "New commit should have happened after throttle expired"
+            assert third_commit_time > first_commit_time, "New commit time should be later than first commit"
+            time_diff = (third_commit_time - pushed_back_time).total_seconds()
+            assert time_diff >= 5.0, f"Time difference should show commit happened after 5+ second gap, got {time_diff}"
+            print(f"✓ After pushing time back 6s, new commit triggered at {third_commit_time}")
+
+            # Test 4: Verify all data was persisted despite throttling
+            retrieved1 = await loop.run_in_executor(None, db_mgr.get_state_db, "sensor.test1")
+            retrieved2 = await loop.run_in_executor(None, db_mgr.get_state_db, "sensor.test2")
+            retrieved3 = await loop.run_in_executor(None, db_mgr.get_state_db, "sensor.test3")
+            retrieved4 = await loop.run_in_executor(None, db_mgr.get_state_db, "sensor.test4")
+            retrieved5 = await loop.run_in_executor(None, db_mgr.get_state_db, "sensor.test5")
+
+            assert retrieved1 is not None and retrieved1["state"] == "10", "sensor.test1 data should be persisted"
+            assert retrieved2 is not None and retrieved2["state"] == "20", "sensor.test2 data should be persisted"
+            assert retrieved3 is not None and retrieved3["state"] == "30", "sensor.test3 data should be persisted"
+            assert retrieved4 is not None and retrieved4["state"] == "40", "sensor.test4 data should be persisted"
+            assert retrieved5 is not None and retrieved5["state"] == "50", "sensor.test5 data should be persisted"
+            print("✓ All data persisted correctly despite commit throttling")
+
+            # Stop and cleanup
+            await db_mgr.stop()
+            timeout = 0
+            while db_mgr.api_started and timeout < 50:
+                await asyncio.sleep(0.1)
+                timeout += 1
+            await task
+
+            print("✓ DatabaseManager stopped successfully")
+
+        finally:
+            # Cleanup temp directory
+            shutil.rmtree(mock_base.config_root)
+            print(f"✓ Cleaned up temp directory: {mock_base.config_root}")
+
+    run_async(run_test())
+    print("=== test_db_manager_commit_throttling PASSED ===\n")
