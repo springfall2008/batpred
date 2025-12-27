@@ -33,7 +33,7 @@ from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_plugin_startup import test_plugin_startup_order
-from tests.test_optimise_levels import run_optimise_levels
+from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_energydataservice import test_energydataservice
 from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
@@ -123,7 +123,7 @@ from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
-from tests.test_find_charge_rate import test_find_charge_rate
+from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
@@ -405,6 +405,8 @@ def main():
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
+        ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
+        ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
         ("energydataservice", test_energydataservice, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
@@ -617,7 +619,7 @@ def main():
         ("ohme_switch_max_charge_off", test_ohme_switch_event_handler_max_charge_off, "Ohme switch_event_handler max_charge off", False),
         ("ohme_switch_approve_charge", test_ohme_switch_event_handler_approve_charge, "Ohme switch_event_handler approve_charge", False),
         ("ohme_switch_approve_wrong_status", test_ohme_switch_event_handler_approve_charge_wrong_status, "Ohme switch_event_handler approve wrong status", False),
-        ("optimise_levels", run_optimise_levels, "Optimise levels tests", True),
+        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
         ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
