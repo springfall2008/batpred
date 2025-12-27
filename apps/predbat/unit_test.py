@@ -114,6 +114,7 @@ from tests.test_db_manager import (
     test_db_manager_entities_and_history,
     test_db_manager_error_handling,
     test_db_manager_persistence,
+    test_db_manager_commit_throttling,
 )
 from tests.test_hahistory import run_hahistory_tests
 from tests.test_hainterface_state import run_hainterface_state_tests
@@ -387,6 +388,7 @@ def main():
         ("octopus_read_response", test_octopus_read_response_wrapper, "Octopus read response tests", False),
         ("octopus_rate_limit", test_octopus_rate_limit_wrapper, "Octopus API rate limit tests", False),
         ("octopus_fetch_previous_dispatch", test_octopus_fetch_previous_dispatch_wrapper, "Octopus fetch previous dispatch tests", False),
+        ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
         ("fetch_url_cached", test_fetch_url_cached, "Fetch URL cached tests", False),
@@ -517,6 +519,7 @@ def main():
         ("db_manager_entities_history", test_db_manager_entities_and_history, "DatabaseManager entities and history", False),
         ("db_manager_errors", test_db_manager_error_handling, "DatabaseManager error handling", False),
         ("db_manager_persistence", test_db_manager_persistence, "DatabaseManager data persistence across restarts", False),
+        ("db_manager_commit_throttle", test_db_manager_commit_throttling, "DatabaseManager commit throttling (5 second interval)", False),
         # HAHistory component tests
         ("hahistory", run_hahistory_tests, "HAHistory component tests", False),
         # HAInterface state management tests
@@ -619,10 +622,9 @@ def main():
         ("ohme_switch_max_charge_off", test_ohme_switch_event_handler_max_charge_off, "Ohme switch_event_handler max_charge off", False),
         ("ohme_switch_approve_charge", test_ohme_switch_event_handler_approve_charge, "Ohme switch_event_handler approve_charge", False),
         ("ohme_switch_approve_wrong_status", test_ohme_switch_event_handler_approve_charge_wrong_status, "Ohme switch_event_handler approve wrong status", False),
-        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", True),
+        ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
-        ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
     ]
 
     # Parse command line arguments

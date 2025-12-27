@@ -27,6 +27,7 @@ class DatabaseManager(ComponentBase):
         self.return_event = threading.Event()
         self.api_started = False
         self.last_success_timestamp = None
+        self.last_commit_time = datetime.now(timezone.utc)
 
     def bridge_event(self, loop):
         """
@@ -79,10 +80,13 @@ class DatabaseManager(ComponentBase):
                     self.queue_results[queue_id] = state
                     self.return_event.set()  # Notify that the result is ready
 
-                # Commit if the queue is empty
+                # Commit if the queue is empty and at least 5 seconds have passed since last commit
                 if not self.db_queue:
-                    if hasattr(self.db_engine, "_commit_db"):
-                        self.db_engine._commit_db()
+                    now = datetime.now(timezone.utc)
+                    if self.last_commit_time is None or (now - self.last_commit_time).total_seconds() >= 5.0:
+                        if hasattr(self.db_engine, "_commit_db"):
+                            self.db_engine._commit_db()
+                            self.last_commit_time = now
                 self.last_success_timestamp = datetime.now(timezone.utc)
 
             except Exception as e:
