@@ -353,6 +353,7 @@ class SolaxAPI(ComponentBase):
                         has_battery = True
                         break
 
+
                 if has_battery:
                     plants.append(plant_id)
                     self.log(f"SolaX API: Found plant {plant_id} with {len(inverter_sns)} inverter(s) and battery")
