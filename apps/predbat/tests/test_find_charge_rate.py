@@ -29,6 +29,7 @@ def test_find_charge_rate(my_predbat):
     window = {"start": minutes_now - 60, "end": minutes_now + 50}
     target_soc = soc_max
     battery_charge_power_curve = {100: 0.15, 99: 0.15, 98: 0.23, 97: 0.3, 96: 0.42, 95: 0.49, 94: 0.55, 93: 0.69, 92: 0.79, 91: 0.89, 90: 0.96}
+    battery_charge_power_curve = my_predbat.validate_curve(battery_charge_power_curve, "test_charge_power_curve")
     set_charge_low_power = True
     charge_low_power_margin = my_predbat.charge_low_power_margin
     battery_rate_min = 0
@@ -36,6 +37,7 @@ def test_find_charge_rate(my_predbat):
     battery_loss = 0.96
     battery_temperature = 17.0
     battery_temperature_curve = {19: 0.33, 18: 0.33, 17: 0.33, 16: 0.33, 15: 0.33, 14: 0.33, 13: 0.33, 12: 0.33, 11: 0.33, 10: 0.25, 9: 0.25, 8: 0.25, 7: 0.25, 6: 0.25, 5: 0.25, 4: 0.25, 3: 0.25, 2: 0.25, 1: 0.15, 0: 0.00}
+    battery_temperature_curve = my_predbat.validate_curve(battery_temperature_curve, "test_temperature_curve")
     max_rate = 2500
 
     best_rate, best_rate_real = find_charge_rate(
@@ -83,6 +85,7 @@ def test_find_charge_rate_string_temperature(my_predbat):
     target_soc = soc_max
     # Use a flat charge curve so temperature becomes the only limiting factor
     battery_charge_power_curve = {100: 1.0, 99: 1.0, 98: 1.0, 97: 1.0, 96: 1.0, 95: 1.0, 94: 1.0, 93: 1.0, 92: 1.0, 91: 1.0, 90: 1.0}
+    battery_charge_power_curve = my_predbat.validate_curve(battery_charge_power_curve, "test_flat_charge_curve")
     set_charge_low_power = True
     charge_low_power_margin = my_predbat.charge_low_power_margin
     battery_rate_min = 0
@@ -92,6 +95,7 @@ def test_find_charge_rate_string_temperature(my_predbat):
     # Temperature curve with STRING keys - these are scale factors that reduce charging rate
     # Using 1.0 (no reduction) for most temps, and 0.5 (50% reduction) at 17 degrees
     battery_temperature_curve = {"19": 1.0, "18": 1.0, "17": 0.5, "16": 1.0, "15": 1.0, "14": 1.0, "13": 1.0, "12": 1.0, "11": 1.0, "10": 1.0, "9": 1.0, "8": 1.0, "7": 1.0, "6": 1.0, "5": 1.0, "4": 1.0, "3": 1.0, "2": 1.0, "1": 1.0, "0": 1.0}
+    battery_temperature_curve = my_predbat.validate_curve(battery_temperature_curve, "test_string_temperature_curve")
     max_rate = 6000  # High enough that temperature becomes the limiting factor
 
     best_rate, best_rate_real = find_charge_rate(
@@ -143,6 +147,7 @@ def test_find_charge_rate_string_charge_curve(my_predbat):
     target_soc = soc_max
     # Battery charge power curve with STRING keys instead of integers
     battery_charge_power_curve = {"100": 0.15, "99": 0.15, "98": 0.23, "97": 0.3, "96": 0.42, "95": 0.49, "94": 0.55, "93": 0.69, "92": 0.79, "91": 0.89, "90": 0.96}
+    battery_charge_power_curve = my_predbat.validate_curve(battery_charge_power_curve, "test_string_charge_curve")
     set_charge_low_power = True
     charge_low_power_margin = my_predbat.charge_low_power_margin
     battery_rate_min = 0
@@ -150,6 +155,7 @@ def test_find_charge_rate_string_charge_curve(my_predbat):
     battery_loss = 0.96
     battery_temperature = 17.0
     battery_temperature_curve = {19: 0.33, 18: 0.33, 17: 0.33, 16: 0.33, 15: 0.33, 14: 0.33, 13: 0.33, 12: 0.33, 11: 0.33, 10: 0.25, 9: 0.25, 8: 0.25, 7: 0.25, 6: 0.25, 5: 0.25, 4: 0.25, 3: 0.25, 2: 0.25, 1: 0.15, 0: 0.00}
+    battery_temperature_curve = my_predbat.validate_curve(battery_temperature_curve, "test_int_temperature_curve")
     max_rate = 2500
 
     best_rate, best_rate_real = find_charge_rate(
