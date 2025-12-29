@@ -251,6 +251,10 @@ SOLAX_FLAG_COMMERCIAL = {
     1: "Slave",
 }
 
+BASE_TIME = datetime.strptime("00:00", "%H:%M")
+OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(0, 24 * 60, 1)]
+OPTIONS_TIME_FULL = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M") + ":00") for minute in range(0, 24 * 60, 1)]
+
 """
 SolaX management strategy
 
@@ -372,41 +376,41 @@ class SolaxAPI(ComponentBase):
         # Load/import/export from plant realtime data
         inverter_list = [self.plant_inverters[plant][0] for plant in plants]
 
-        self.set_arg("load_today", [f"sensor.{self.base.prefix}_solax_{plant}_total_load" for plant in plants])
-        self.set_arg("import_today", [f"sensor.{self.base.prefix}_solax_{plant}_total_imported" for plant in plants])
-        self.set_arg("export_today", [f"sensor.{self.base.prefix}_solax_{plant}_total_exported" for plant in plants])
-        self.set_arg("pv_today", [f"sensor.{self.base.prefix}_solax_{plant}_total_yield" for plant in plants])
+        self.set_arg("load_today", [f"sensor.{self.prefix}_solax_{plant}_total_load" for plant in plants])
+        self.set_arg("import_today", [f"sensor.{self.prefix}_solax_{plant}_total_imported" for plant in plants])
+        self.set_arg("export_today", [f"sensor.{self.prefix}_solax_{plant}_total_exported" for plant in plants])
+        self.set_arg("pv_today", [f"sensor.{self.prefix}_solax_{plant}_total_yield" for plant in plants])
 
         # Power and SOC from device realtime data (using first inverter)
         inverter_list = [self.plant_inverters[plant][0] for plant in plants]
-        self.set_arg("battery_power", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_charge_discharge_power" for plant, inv in zip(plants, inverter_list)])
-        self.set_arg("grid_power", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_grid_power" for plant, inv in zip(plants, inverter_list)])
-        self.set_arg("pv_power", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
-        self.set_arg("load_power", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_ac_power" for plant, inv in zip(plants, inverter_list)])
+        self.set_arg("battery_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_charge_discharge_power" for plant, inv in zip(plants, inverter_list)])
+        self.set_arg("grid_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_grid_power" for plant, inv in zip(plants, inverter_list)])
+        self.set_arg("pv_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
+        self.set_arg("load_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_ac_power" for plant, inv in zip(plants, inverter_list)])
 
         # Sensors
-        self.set_arg("battery_temperature", [f"sensor.{self.base.prefix}_solax_{plant}_battery_temperature" for plant in plants])
-        self.set_arg("soc_max", [f"sensor.{self.base.prefix}_solax_{plant}_battery_capacity" for plant in plants])
-        self.set_arg("soc_kw", [f"sensor.{self.base.prefix}_solax_{plant}_battery_soc" for plant in plants])
-        self.set_arg("battery_rate_max_charge", [f"sensor.{self.base.prefix}_solax_{plant}_battery_max_power" for plant in plants])
-        self.set_arg("inverter_limit", [f"sensor.{self.base.prefix}_solax_{plant}_inverter_max_power" for plant in plants])
+        self.set_arg("battery_temperature", [f"sensor.{self.prefix}_solax_{plant}_battery_temperature" for plant in plants])
+        self.set_arg("soc_max", [f"sensor.{self.prefix}_solax_{plant}_battery_capacity" for plant in plants])
+        self.set_arg("soc_kw", [f"sensor.{self.prefix}_solax_{plant}_battery_soc" for plant in plants])
+        self.set_arg("battery_rate_max_charge", [f"sensor.{self.prefix}_solax_{plant}_battery_max_power" for plant in plants])
+        self.set_arg("inverter_limit", [f"sensor.{self.prefix}_solax_{plant}_inverter_max_power" for plant in plants])
 
         # Control entities using the controls system
-        self.set_arg("reserve", [f"number.{self.base.prefix}_solax_{plant}_setting_reserve" for plant in plants])
-        self.set_arg("charge_start_time", [f"select.{self.base.prefix}_solax_{plant}_battery_schedule_charge_start_time" for plant in plants])
-        self.set_arg("charge_end_time", [f"select.{self.base.prefix}_solax_{plant}_battery_schedule_charge_end_time" for plant in plants])
-        self.set_arg("charge_limit", [f"number.{self.base.prefix}_solax_{plant}_battery_schedule_charge_target_soc" for plant in plants])
-        self.set_arg("scheduled_charge_enable", [f"switch.{self.base.prefix}_solax_{plant}_battery_schedule_charge_enable" for plant in plants])
-        self.set_arg("charge_rate", [f"number.{self.base.prefix}_solax_{plant}_battery_schedule_charge_rate" for plant in plants])
-        self.set_arg("scheduled_discharge_enable", [f"switch.{self.base.prefix}_solax_{plant}_battery_schedule_export_enable" for plant in plants])
-        self.set_arg("discharge_target_soc", [f"number.{self.base.prefix}_solax_{plant}_battery_schedule_export_target_soc" for plant in plants])
-        self.set_arg("discharge_start_time", [f"select.{self.base.prefix}_solax_{plant}_battery_schedule_export_start_time" for plant in plants])
-        self.set_arg("discharge_end_time", [f"select.{self.base.prefix}_solax_{plant}_battery_schedule_export_end_time" for plant in plants])
-        self.set_arg("discharge_rate", [f"number.{self.base.prefix}_solax_{plant}_battery_schedule_export_rate" for plant in plants])
+        self.set_arg("reserve", [f"number.{self.prefix}_solax_{plant}_setting_reserve" for plant in plants])
+        self.set_arg("charge_start_time", [f"select.{self.prefix}_solax_{plant}_battery_schedule_charge_start_time" for plant in plants])
+        self.set_arg("charge_end_time", [f"select.{self.prefix}_solax_{plant}_battery_schedule_charge_end_time" for plant in plants])
+        self.set_arg("charge_limit", [f"number.{self.prefix}_solax_{plant}_battery_schedule_charge_target_soc" for plant in plants])
+        self.set_arg("scheduled_charge_enable", [f"switch.{self.prefix}_solax_{plant}_battery_schedule_charge_enable" for plant in plants])
+        self.set_arg("charge_rate", [f"number.{self.prefix}_solax_{plant}_battery_schedule_charge_rate" for plant in plants])
+        self.set_arg("scheduled_discharge_enable", [f"switch.{self.prefix}_solax_{plant}_battery_schedule_export_enable" for plant in plants])
+        self.set_arg("discharge_target_soc", [f"number.{self.prefix}_solax_{plant}_battery_schedule_export_target_soc" for plant in plants])
+        self.set_arg("discharge_start_time", [f"select.{self.prefix}_solax_{plant}_battery_schedule_export_start_time" for plant in plants])
+        self.set_arg("discharge_end_time", [f"select.{self.prefix}_solax_{plant}_battery_schedule_export_end_time" for plant in plants])
+        self.set_arg("discharge_rate", [f"number.{self.prefix}_solax_{plant}_battery_schedule_export_rate" for plant in plants])
 
         # Historical data (use first battery)
         if plants:
-            self.set_arg("battery_temperature_history", f"sensor.{self.base.prefix}_solax_{plants[0]}_battery_temperature")
+            self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_solax_{plants[0]}_battery_temperature")
 
         self.log(f"SolaX API: Automatic configuration complete for {num_inverters} plant(s)")
 
@@ -438,18 +442,24 @@ class SolaxAPI(ComponentBase):
             value: New value
         """
         # Extract plant ID, direction, and field from entity_id
+        # Entity format: {domain}.{prefix}_solax_{plant_id}_battery_schedule_{direction}_{field}
         parts = entity_id.split("_")
         try:
-            plant_id_index = parts.index(self.prefix) + 1
-            plant_id = parts[plant_id_index]
+            solax_index = parts.index("solax")
+            plant_id = parts[solax_index + 1]
+
+            # Find direction and field
             if "charge" in parts:
                 direction = "charge"
+                charge_index = parts.index("charge")
+                field = "_".join(parts[charge_index + 1:])
             elif "export" in parts:
                 direction = "export"
+                export_index = parts.index("export")
+                field = "_".join(parts[export_index + 1:])
             else:
                 self.log(f"SolaX API: Unable to parse direction from entity_id {entity_id}")
                 return
-            field = "_".join(parts[plant_id_index + 2:])
         except (ValueError, IndexError):
             self.log(f"SolaX API: Unable to parse entity_id {entity_id}")
             return
@@ -462,25 +472,47 @@ class SolaxAPI(ComponentBase):
             self.log(f"Warn: SolaX API: No controls found for plant {plant_id} direction {direction}")
             return False
 
-        item_name, ha_name, friendly_name, field_type, default = self.control_info(plant_id, direction, field)
+        if field == "enable":
+            value = self.apply_service_to_toggle(self.controls[plant_id][direction].get(field, False), value)
+        elif '_time' in field:
+            # Ensure time is in HH:MM:SS format
+            if len(value) == 5:
+                value = value + ":00"
+            if value not in OPTIONS_TIME_FULL:
+                self.log(f"SolaX API: Invalid time value {value} for {entity_id}")
+                return
+        elif field in ['rate', 'target_soc']:
+            try:
+                value = int(value)
+            except ValueError:
+                self.log(f"SolaX API: Invalid number value {value} for {entity_id}")
+                return
+            item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self.control_info(plant_id, direction, field)
+            value = max(min_value, min(max_value, value))
+
         self.controls[plant_id][direction][field] = value
         self.log(f"SolaX API: Updated battery schedule for plant {plant_id}, direction {direction}, field {field} to {value}")
-        await self.publish_controls(plant_id)
+        await self.publish_controls()
 
     async def write_setting_from_event(self, entity_id, value):
         """
         Write a control setting based on an event
 
+        Example: number.predbat_solax_1618699116555534337_battery_schedule_charge_rate
+
         Args:
             entity_id: Home Assistant entity ID
             value: New value
+
+
         """
         # Extract plant ID, direction, and field from entity_id
+        # Entity format: {domain}.{prefix}_solax_{plant_id}_setting_{field}
         parts = entity_id.split("_")
         try:
-            plant_id_index = parts.index(self.prefix) + 1
-            plant_id = parts[plant_id_index]
-            field = "_".join(parts[plant_id_index + 1:])
+            solax_index = parts.index("solax")
+            plant_id = parts[solax_index + 1]
+            field = "_".join(parts[solax_index + 3:])
         except (ValueError, IndexError):
             self.log(f"SolaX API: Unable to parse entity_id {entity_id}")
             return
@@ -490,7 +522,7 @@ class SolaxAPI(ComponentBase):
             self.log(f"Warn: SolaX API: No controls found for plant {plant_id}")
             return False
 
-        item_name, ha_name, friendly_name, field_type, default = self.control_info(plant_id, None, field)
+        item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self.control_info(plant_id, None, field)
 
         if field_type == 'number':
             try:
@@ -499,8 +531,9 @@ class SolaxAPI(ComponentBase):
                 self.log(f"SolaX API: Invalid number value {value} for {entity_id}")
                 return
         self.controls[plant_id][field] = value
-        self.log(f"SolaX API: Updated control for plant {plant_id}, direction {direction}, field {field} to {value}")
-        await self.publish_controls(plant_id)
+        self.log(f"SolaX API: Updated control for plant {plant_id}, field {field} to {value}")
+        await self.publish_controls()
+        return True
 
     def get_max_power_inverter(self, plant_id):
         rated_power = 0
@@ -543,6 +576,18 @@ class SolaxAPI(ComponentBase):
             temperature = None
         return temperature
 
+    def apply_service_to_toggle(self, current_value, service):
+        """
+        Apply a toggle service to the current value.
+        """
+        if service == "turn_on":
+            current_value = True
+        elif service == "turn_off":
+            current_value = False
+        elif service == "toggle":
+            current_value = not current_value
+        return current_value
+
     async def apply_controls(self, plant_id):
         """
         Apply control settings to the plant
@@ -567,14 +612,14 @@ class SolaxAPI(ComponentBase):
 
         reserve_soc = self.controls.get(plant_id, {}).get("reserve", 10)
 
-        charge_start_str = self.controls.get(plant_id, {}).get("charge", {}).get("start_time", "00:00")
-        charge_end_str = self.controls.get(plant_id, {}).get("charge", {}).get("end_time", "00:00")
+        charge_start_str = self.controls.get(plant_id, {}).get("charge", {}).get("start_time", "00:00:00")
+        charge_end_str = self.controls.get(plant_id, {}).get("charge", {}).get("end_time", "00:00:00")
         charge_enable = self.controls.get(plant_id, {}).get("charge", {}).get("enable", False)
         charge_target_soc = self.controls.get(plant_id, {}).get("charge", {}).get("target_soc", 100)
         charge_power = self.controls.get(plant_id, {}).get("charge", {}).get("rate", rated_power)
 
-        export_start_str = self.controls.get(plant_id, {}).get("export", {}).get("start_time", "00:00")
-        export_end_str = self.controls.get(plant_id, {}).get("export", {}).get("end_time", "00:00")
+        export_start_str = self.controls.get(plant_id, {}).get("export", {}).get("start_time", "00:00:00")
+        export_end_str = self.controls.get(plant_id, {}).get("export", {}).get("end_time", "00:00:00")
         export_enable = self.controls.get(plant_id, {}).get("export", {}).get("enable", False)
         export_target_soc = self.controls.get(plant_id, {}).get("export", {}).get("target_soc", 10)
         export_power = self.controls.get(plant_id, {}).get("export", {}).get("rate", rated_power)
@@ -683,7 +728,6 @@ class SolaxAPI(ComponentBase):
                 default = min_value
         elif field == "rate":
             max_value = self.get_max_power_inverter(plant_id)
-            print("Max rate for plant", plant_id, "is", max_value)
             min_value = 0
             default = max_value
             field_type = 'number'
@@ -695,7 +739,7 @@ class SolaxAPI(ComponentBase):
             field_type = 'number'
             field_units = "%"
         ha_name = field_type + '.' + self.prefix + "_" + item_name
-        return item_name, ha_name, friendly_name, field_type, field_units, default
+        return item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value
 
     async def fetch_controls(self, plant_id):
         """
@@ -703,7 +747,7 @@ class SolaxAPI(ComponentBase):
         """
         for direction in ["charge", "export"]:
             for field in ["start_time", "end_time", "enable", "target_soc", "rate"]:
-                item_name, ha_name, friendly_name, field_type, field_units, default = self.control_info(plant_id, direction, field)
+                item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self.control_info(plant_id, direction, field)
                 state = self.get_state_wrapper(ha_name, default=default)
                 if plant_id not in self.controls:
                     self.controls[plant_id] = {}
@@ -711,7 +755,7 @@ class SolaxAPI(ComponentBase):
                     self.controls[plant_id][direction] = {}
                 self.controls[plant_id][direction][field] = state
         for field in ["reserve"]:
-            item_name, ha_name, friendly_name, field_type, field_units, default = self.control_info(plant_id, None, field)
+            item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self.control_info(plant_id, None, field)
             state = self.get_state_wrapper(ha_name, default=default)
             if plant_id not in self.controls:
                 self.controls[plant_id] = {}
@@ -727,20 +771,29 @@ class SolaxAPI(ComponentBase):
         for plant_id in self.controls:
             for direction in ["charge", "export"]:
                 for field in ["start_time", "end_time", "enable", "target_soc", "rate"]:
-                    item_name, ha_name, friendly_name, field_type, field_units, default = self.control_info(plant_id, direction, field)
+                    item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self.control_info(plant_id, direction, field)
                     value = self.controls.get(plant_id, {}).get(direction, {}).get(field, default)
                     ha_name = field_type + '.' + self.prefix + "_" + item_name
+                    attributes = {
+                        "friendly_name": friendly_name
+                    }
+                    if field_units is not None:
+                        attributes["unit_of_measurement"] = field_units
+                    if min_value is not None:
+                        attributes["min"] = min_value
+                    if max_value is not None:
+                        attributes["max"] = max_value
+                        attributes["step"] = 1
+                    if '_time' in field:
+                        attributes["options"] = OPTIONS_TIME_FULL
                     self.dashboard_item(
                         ha_name,
                         state=value,
-                        attributes={
-                            "friendly_name": friendly_name,
-                            "unit_of_measurement": field_units,
-                        },
+                        attributes=attributes,
                         app="solax",
                     )
             for field in ["reserve"]:
-                    item_name, ha_name, friendly_name, field_type, field_units, default = self.control_info(plant_id, None, field)
+                    item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self.control_info(plant_id, None, field)
                     value = self.controls.get(plant_id, {}).get(field, default)
                     ha_name = field_type + '.' + self.prefix + "_" + item_name
                     self.dashboard_item(
@@ -749,6 +802,9 @@ class SolaxAPI(ComponentBase):
                         attributes={
                             "friendly_name": friendly_name,
                             "unit_of_measurement": field_units,
+                            "min": min_value,
+                            "max": max_value,
+                            "step": 1,
                         },
                         app="solax",
                     )
@@ -799,7 +855,14 @@ class SolaxAPI(ComponentBase):
                         self.error_count += 1
                         return None
 
-                    if data.get("code") != 0:
+                    code = data.get("code")
+                    if code == 10402:
+                        self.log("Warn: SolaX API: Auth failed - Invalid client ID or secret")
+                        self.token_expiry = None
+                        self.access_token = None
+                        self.error_count += 1
+                        return None
+                    elif code != 0:
                         error_msg = data.get("message", "Unknown error")
                         self.log(f"Warn: SolaX API: Auth failed with code {data.get('code')}: {error_msg}")
                         self.error_count += 1
@@ -904,6 +967,16 @@ class SolaxAPI(ComponentBase):
 
             if status != 200:
                 self.log(f"Warn: SolaX API: Request to {path} failed with status {status}")
+                self.error_count += 1
+                return None
+
+            # Check for authentication errors in response
+            code = data.get("code")
+            if code in [10400, 10401, 10402]:  # Auth-related error codes
+                error_desc = SOLAX_API_CODES.get(code, f"Unknown error code: {code}")
+                self.log(f"Warn: SolaX API: Authentication error {code} ({error_desc}), marking token as expired")
+                self.access_token = None
+                self.token_expiry = None
                 self.error_count += 1
                 return None
 
@@ -1779,7 +1852,7 @@ class SolaxAPI(ComponentBase):
 
             # Online status sensor
             self.dashboard_item(
-                f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_online_status",
+                f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_online_status",
                 state=online_status,
                 attributes={
                     "friendly_name": f"{friendly_name} Online Status",
@@ -1838,7 +1911,7 @@ class SolaxAPI(ComponentBase):
                             pvPower += mpptMap.get(key, 0) # cSpell:disable-line
 
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_device_status",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_device_status",
                     state=deviceStatusText,
                     attributes={
                         "friendly_name": f"{friendly_name} Device Status",
@@ -1849,7 +1922,7 @@ class SolaxAPI(ComponentBase):
                     app="solax",
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_ac_power",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_ac_power",
                     state=ac_power,
                     attributes={
                         "friendly_name": f"{friendly_name} AC Power",
@@ -1860,7 +1933,7 @@ class SolaxAPI(ComponentBase):
                     app="solax",
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_grid_power",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_grid_power",
                     state=gridPower,
                     attributes={
                         "friendly_name": f"{friendly_name} Grid Power",
@@ -1872,7 +1945,7 @@ class SolaxAPI(ComponentBase):
                 )
 
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_pv_power",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_pv_power",
                     state=pvPower,
                     attributes={
                         "friendly_name": f"{friendly_name} PV Power",
@@ -1885,7 +1958,7 @@ class SolaxAPI(ComponentBase):
 
                 # This is inverter power, positive indicates export to grid, negative indicates import from grid.
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_total_active_power",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_total_active_power",
                     state=totalActivePower,
                     attributes={
                         "friendly_name": f"{friendly_name} Total Active Power",
@@ -1896,7 +1969,7 @@ class SolaxAPI(ComponentBase):
                     app="solax",
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_total_reactive_power",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_total_reactive_power",
                     state=totalReactivePower,
                     attributes={
                         "friendly_name": f"{friendly_name} Total Reactive Power",
@@ -1907,7 +1980,7 @@ class SolaxAPI(ComponentBase):
                     app="solax",
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_total_yield",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_total_yield",
                     state=totalYield,
                     attributes={
                         "friendly_name": f"{friendly_name} Total Yield",
@@ -1927,7 +2000,7 @@ class SolaxAPI(ComponentBase):
                 deviceStatusText = SOLAX_BATTERY_STATUS_RESIDENTIAL.get(deviceStatus, "Unknown Status")
 
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_device_status",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_device_status",
                     state=deviceStatusText,
                     attributes={
                         "friendly_name": f"{friendly_name} Device Status",
@@ -1938,7 +2011,7 @@ class SolaxAPI(ComponentBase):
                     app="solax",
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_battery_soc",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_soc",
                     state=battery_soc,
                     attributes={
                         "friendly_name": f"{friendly_name} Battery SOC",
@@ -1949,7 +2022,7 @@ class SolaxAPI(ComponentBase):
                     app="solax",
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_battery_voltage",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_voltage",
                     state=battery_voltage,
                     attributes={
                         "friendly_name": f"{friendly_name} Battery Voltage",
@@ -1960,7 +2033,7 @@ class SolaxAPI(ComponentBase):
                     app="solax",
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_charge_discharge_power",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_charge_discharge_power",
                     state=charge_discharge_power,
                     attributes={
                         "friendly_name": f"{friendly_name} Charge/Discharge Power",
@@ -1971,7 +2044,7 @@ class SolaxAPI(ComponentBase):
                     app="solax",
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_battery_current",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_current",
                     state=battery_current,
                     attributes={
                         "friendly_name": f"{friendly_name} Battery Current",
@@ -1982,7 +2055,7 @@ class SolaxAPI(ComponentBase):
                     app="solax",
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_battery_temperature",
+                    f"sensor.{self.prefix}_solax_{plant_id}_{device_sn}_battery_temperature",
                     state=battery_temperature,
                     attributes={
                         "friendly_name": f"{friendly_name} Battery Temperature",
@@ -2007,7 +2080,7 @@ class SolaxAPI(ComponentBase):
 
             # Battery SOC
             self.dashboard_item(
-                f"sensor.{self.base.prefix}_solax_{plant_id}_battery_soc",
+                f"sensor.{self.prefix}_solax_{plant_id}_battery_soc",
                 state=battery_soc,
                 attributes={
                     "friendly_name": f"SolaX {plant_name} Battery SOC",
@@ -2020,7 +2093,7 @@ class SolaxAPI(ComponentBase):
             )
             # Battery SOC max sensor
             self.dashboard_item(
-                f"sensor.{self.base.prefix}_solax_{plant_id}_battery_capacity",
+                f"sensor.{self.prefix}_solax_{plant_id}_battery_capacity",
                 state=battery_soc_max,
                 attributes={
                     "friendly_name": f"SolaX {plant_name} Battery Capacity",
@@ -2033,7 +2106,7 @@ class SolaxAPI(ComponentBase):
 
             # Battery temperature sensor
             self.dashboard_item(
-                f"sensor.{self.base.prefix}_solax_{plant_id}_battery_temperature",
+                f"sensor.{self.prefix}_solax_{plant_id}_battery_temperature",
                 state=battery_temp,
                 attributes={
                     "friendly_name": f"SolaX {plant_name} Battery Temperature",
@@ -2046,7 +2119,7 @@ class SolaxAPI(ComponentBase):
 
             # Battery max power sensor
             self.dashboard_item(
-                f"sensor.{self.base.prefix}_solax_{plant_id}_battery_max_power",
+                f"sensor.{self.prefix}_solax_{plant_id}_battery_max_power",
                 state=battery_max_power,
                 attributes={
                     "friendly_name": f"SolaX {plant_name} Battery Max Power",
@@ -2058,7 +2131,7 @@ class SolaxAPI(ComponentBase):
             )
             # Inverter max power sensor
             self.dashboard_item(
-                f"sensor.{self.base.prefix}_solax_{plant_id}_inverter_max_power",
+                f"sensor.{self.prefix}_solax_{plant_id}_inverter_max_power",
                 state=inverter_max_power,
                 attributes={
                     "friendly_name": f"SolaX {plant_name} Inverter Max Power",
@@ -2072,7 +2145,7 @@ class SolaxAPI(ComponentBase):
             # PV capacity sensor
             pv_capacity = plant.get("pvCapacity", 0.0)
             self.dashboard_item(
-                f"sensor.{self.base.prefix}_solax_{plant_id}_pv_capacity",
+                f"sensor.{self.prefix}_solax_{plant_id}_pv_capacity",
                 state=pv_capacity,
                 attributes={
                     "friendly_name": f"SolaX {plant_name} PV Capacity",
@@ -2090,7 +2163,7 @@ class SolaxAPI(ComponentBase):
 
                 # Total Yield sensor
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_total_yield",
+                    f"sensor.{self.prefix}_solax_{plant_id}_total_yield",
                     state=realtime.get("totalYield", 0.0),
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Yield",
@@ -2103,7 +2176,7 @@ class SolaxAPI(ComponentBase):
 
                 # Total Charged sensor
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_total_charged",
+                    f"sensor.{self.prefix}_solax_{plant_id}_total_charged",
                     state=realtime.get("totalCharged", 0.0),
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Charged",
@@ -2116,7 +2189,7 @@ class SolaxAPI(ComponentBase):
 
                 # Total Discharged sensor
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_total_discharged",
+                    f"sensor.{self.prefix}_solax_{plant_id}_total_discharged",
                     state=realtime.get("totalDischarged", 0.0),
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Discharged",
@@ -2129,7 +2202,7 @@ class SolaxAPI(ComponentBase):
 
                 # Total Imported sensor
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_total_imported",
+                    f"sensor.{self.prefix}_solax_{plant_id}_total_imported",
                     state=realtime.get("totalImported", 0.0),
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Imported",
@@ -2142,7 +2215,7 @@ class SolaxAPI(ComponentBase):
 
                 # Total Exported sensor
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_total_exported",
+                    f"sensor.{self.prefix}_solax_{plant_id}_total_exported",
                     state=realtime.get("totalExported", 0.0),
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Exported",
@@ -2162,7 +2235,7 @@ class SolaxAPI(ComponentBase):
                     realtime.get("totalYield", 0.0)
                 )
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_total_load",
+                    f"sensor.{self.prefix}_solax_{plant_id}_total_load",
                     state=total_load,
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Load",
@@ -2175,7 +2248,7 @@ class SolaxAPI(ComponentBase):
 
                 # Total Earnings sensor
                 self.dashboard_item(
-                    f"sensor.{self.base.prefix}_solax_{plant_id}_total_earnings",
+                    f"sensor.{self.prefix}_solax_{plant_id}_total_earnings",
                     state=realtime.get("totalEarnings", 0.0),
                     attributes={
                         "friendly_name": f"SolaX {plant_name} Total Earnings",
@@ -2208,6 +2281,9 @@ class SolaxAPI(ComponentBase):
             self.plant_list = [plant.get('plantId') for plant in self.plant_info]
             self.log(f"SolaX API: Found {len(self.plant_list)} plants IDs: {self.plant_list}")
 
+        # Check readonly mode
+        is_readonly = self.get_state_wrapper(f'switch.{self.prefix}_set_read_only', default='off') == 'on'
+
         if first or seconds % (30*60) == 0:
             # Periodic plant info refresh every 30 minutes
             for plantID in self.plant_list:
@@ -2239,7 +2315,7 @@ class SolaxAPI(ComponentBase):
             await self.automatic_config()
 
         # Apply controls
-        if self.enable_controls:
+        if not is_readonly and self.enable_controls:
             if first:
                 # Ensure default work modes are set on first run
                 for plantID in self.plant_list:
@@ -2249,6 +2325,8 @@ class SolaxAPI(ComponentBase):
             if first or seconds % 60 == 0:
                 for plantID in self.plant_list:
                     await self.apply_controls(plantID)
+        else:
+            self.log("SolaX API: Read-only mode enabled, skipping control application")
 
         # Update success timestamp
         self.update_success_timestamp()
