@@ -22,9 +22,9 @@ SOLAX_RETRIES = 5
 SOLAX_COMMAND_RETRY_DELAY = 2.0
 SOLAX_COMMAND_MAX_RETRIES = 8
 SOLAX_REGIONS = {
-    "eu": "openapi-eu.solaxcloud.com",
-    "us": "openapi-us.solaxcloud.com",
-    "cn": "openapi.solaxcloud.com",
+    "eu": "openapi-eu.solaxcloud.com", # cspell:disable-line
+    "us": "openapi-us.solaxcloud.com", # cspell:disable-line
+    "cn": "openapi.solaxcloud.com", # cspell:disable-line
 }
 
 # Business type constants
@@ -155,8 +155,8 @@ SOLAX_EV_CHARGER_STATUS = {
     9: "Update",
     10: "CardActivation",
     11: "StartDelay",
-    12: "ChargPause",
-    13: "Stoping",
+    12: "ChargPause",  # cspell:disable-line
+    13: "Stopping",
 }
 
 # EV Charger working mode mapping (deviceType=4, deviceWorkingMode field)
@@ -203,43 +203,44 @@ SOLAX_API_CODES = {
 # Device model mapping for Residential (businessType=1)
 SOLAX_DEVICE_MODEL_RESIDENTIAL = {
     1: {  # Inverter
-        1: "X1-LX", 2: "X-Hybrid", 3: "X1-Hybrid-G3", 4: "X1-Boost/Air/Mini", 5: "X3-Hybrid-G1/G2",
-        6: "X3-20K/30K", 7: "X3-MIC/PRO", 8: "X1-Smart", 9: "X1-AC", 10: "A1-Hybrid",
-        11: "A1-FIT", 12: "A1", 13: "J1-ESS", 14: "X3-Hybrid-G4", 15: "X1-Hybrid-G4",
-        16: "X3-MIC/PRO-G2", 17: "X1-SPT", 18: "X1-Boost-G4", 19: "A1-HYB-G2", 20: "A1-AC-G2",
-        21: "A1-SMT-G2", 22: "X1-Mini-G4", 23: "X1-IES", 24: "X3-IES", 25: "X3-ULT",
-        26: "X1-SMART-G2", 27: "A1-Micro 1 in 1", 28: "X1-Micro 2 in 1", 29: "X1-Micro 4 in 1",
-        31: "X3-AELIO", 32: "X3-HYB-G4 PRO", 33: "X3-NEO-LV", 34: "X1-VAST", 35: "X3-IES-P",
-        36: "J3-ULT-LV-16.5K", 37: "J3-ULT-30K", 38: "J1-ESS-HB-2", 39: "C3-IES", 40: "X3-IES-A",
-        41: "X1-IES-A", 43: "X3-ULT-GLV", 44: "X1-MINI-G4 PLUS", 46: "X1-Reno-LV", 47: "A1-HYB-G3",
-        100: "X3-FTH", 101: "X3-MGA-G2", 102: "X1-Hybrid-LV", 103: "X1-Lite-LV", 104: "X3-GRAND-HV",
-        105: "X3-FORTH-PLUS",
+        1: "X1-LX", 2: "X-Hybrid", 3: "X1-Hybrid-G3", 4: "X1-Boost/Air/Mini", 5: "X3-Hybrid-G1/G2", # cspell:disable-line
+        6: "X3-20K/30K", 7: "X3-MIC/PRO", 8: "X1-Smart", 9: "X1-AC", 10: "A1-Hybrid", # cspell:disable-line
+        11: "A1-FIT", 12: "A1", 13: "J1-ESS", 14: "X3-Hybrid-G4", 15: "X1-Hybrid-G4", # cspell:disable-line
+        16: "X3-MIC/PRO-G2", 17: "X1-SPT", 18: "X1-Boost-G4", 19: "A1-HYB-G2", 20: "A1-AC-G2", # cspell:disable-line
+        21: "A1-SMT-G2", 22: "X1-Mini-G4", 23: "X1-IES", 24: "X3-IES", 25: "X3-ULT", # cspell:disable-line
+        26: "X1-SMART-G2", 27: "A1-Micro 1 in 1", 28: "X1-Micro 2 in 1", 29: "X1-Micro 4 in 1", # cspell:disable-line
+        31: "X3-AELIO", 32: "X3-HYB-G4 PRO", 33: "X3-NEO-LV", 34: "X1-VAST", 35: "X3-IES-P", # cspell:disable-line
+        36: "J3-ULT-LV-16.5K", 37: "J3-ULT-30K", 38: "J1-ESS-HB-2", 39: "C3-IES", 40: "X3-IES-A", # cspell:disable-line
+        41: "X1-IES-A", 43: "X3-ULT-GLV", 44: "X1-MINI-G4 PLUS", 46: "X1-Reno-LV", 47: "A1-HYB-G3", # cspell:disable-line
+        100: "X3-FTH", 101: "X3-MGA-G2", 102: "X1-Hybrid-LV", 103: "X1-Lite-LV", 104: "X3-GRAND-HV", # cspell:disable-line
+        105: "X3-FORTH-PLUS", # cspell:disable-line
     },
     3: {  # Meter
-        50: "Meter X", 176: "M1-40", 178: "M3-40", 179: "M3-40-Dual", 181: "M3-40-Wide",
+        50: "Meter X", 176: "M1-40", 178: "M3-40", 179: "M3-40-Dual", 181: "M3-40-Wide", # cspell:disable-line
     },
     4: {  # EV Charger
-        1: "X1/X3-EVC", 2: "X1/X3-EVC G1.1", 3: "X1/X3-HAC", 4: "J1-EVC", 5: "A1-HAC", 6: "C1/C3-HAC",
+        1: "X1/X3-EVC", 2: "X1/X3-EVC G1.1", 3: "X1/X3-HAC", 4: "J1-EVC", 5: "A1-HAC", 6: "C1/C3-HAC", # cspell:disable-line
     },
 }
 
 # Device model mapping for Commercial & Industrial (businessType=4)
 SOLAX_DEVICE_MODEL_COMMERCIAL = {
     1: {  # Inverter
-        1: "X3-AELIO", 2: "X3-TRENE-100KI", 3: "X3-TRENE-100K", 4: "X3-TRENE", 16: "X3-PRO G2",
-        31: "X3-AELIO", 42: "X3-AELIO", 100: "X3-FORTH", 101: "X3-MEGA G2", 104: "X3-GRAND",
-        105: "X3-FORTH PLUS",
+        1: "X3-AELIO", 2: "X3-TRENE-100KI", 3: "X3-TRENE-100K", 4: "X3-TRENE", 16: "X3-PRO G2", # cspell:disable-line
+        31: "X3-AELIO", 42: "X3-AELIO", 100: "X3-FORTH", 101: "X3-MEGA G2", 104: "X3-GRAND", # cspell:disable-line
+        105: "X3-FORTH PLUS", # cspell:disable-line
     },
     2: {  # Battery
-        1: "TB-HR140", 2: "TB-HR522", 145: "TSYS-HS51", 163: "TR-HR140",
+        1: "TB-HR140", 2: "TB-HR522", 145: "TSYS-HS51", 163: "TR-HR140", # cspell:disable-line
     },
     3: {  # Meter
-        0: "DTSU666-CT", 1: "DTSU666-CT", 2: "DTSU666-CT", 3: "DTSU666-CT",
-        4: "Wi-BR DTSU666-CT", 5: "Wi-BR DTSU666-CT", 6: "CT", 7: "DTSU666-CT",
-        8: "UMG 103-CBM", 9: "M3-40-Dual", 10: "M3-40", 11: "PRISMA-310A",
+        0: "DTSU666-CT", 1: "DTSU666-CT", 2: "DTSU666-CT", 3: "DTSU666-CT", # cspell:disable-line
+        4: "Wi-BR DTSU666-CT", 5: "Wi-BR DTSU666-CT", 6: "CT", 7: "DTSU666-CT", # cspell:disable-line
+        8: "UMG 103-CBM", 9: "M3-40-Dual", 10: "M3-40", 11: "PRISMA-310A", # cspell:disable-line
     },
     4: {  # EV Charger
-        1: "X1/X3-EVC", 2: "X1/X3-EVC G1.1", 3: "X1/X3-HAC", 4: "J1-EVC", 5: "A1-HAC", 6: "C1/C3-HAC",
+        8: "UMG 103-CBM", 9: "M3-40-Dual", 10: "M3-40", 11: "PRISMA-310A", # cspell:disable-line
+        1: "X1/X3-EVC", 2: "X1/X3-EVC G1.1", 3: "X1/X3-HAC", 4: "J1-EVC", 5: "A1-HAC", 6: "C1/C3-HAC", # cspell:disable-line
     },
 }
 
@@ -351,7 +352,7 @@ class SolaxAPI(ComponentBase):
                     if device.get("plantId") == plant_id and device.get("deviceType") == 2:  # Battery
                         has_battery = True
                         break
-                
+
                 if has_battery:
                     plants.append(plant_id)
                     self.log(f"SolaX API: Found plant {plant_id} with {len(inverter_sns)} inverter(s) and battery")
@@ -382,7 +383,7 @@ class SolaxAPI(ComponentBase):
         self.set_arg("pv_power", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("load_power", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_ac_power" for plant, inv in zip(plants, inverter_list)])
 
-        # Sensors        
+        # Sensors
         self.set_arg("battery_temperature", [f"sensor.{self.base.prefix}_solax_{plant}_battery_temperature" for plant in plants])
         self.set_arg("soc_max", [f"sensor.{self.base.prefix}_solax_{plant}_battery_capacity" for plant in plants])
         self.set_arg("soc_kw", [f"sensor.{self.base.prefix}_solax_{plant}_battery_soc" for plant in plants])
@@ -459,7 +460,7 @@ class SolaxAPI(ComponentBase):
         if direction not in self.controls[plant_id]:
             self.log(f"Warn: SolaX API: No controls found for plant {plant_id} direction {direction}")
             return False
-        
+
         item_name, ha_name, friendly_name, field_type, default = self.control_info(plant_id, direction, field)
         self.controls[plant_id][direction][field] = value
         self.log(f"SolaX API: Updated battery schedule for plant {plant_id}, direction {direction}, field {field} to {value}")
@@ -487,7 +488,7 @@ class SolaxAPI(ComponentBase):
         if plant_id not in self.controls:
             self.log(f"Warn: SolaX API: No controls found for plant {plant_id}")
             return False
-        
+
         item_name, ha_name, friendly_name, field_type, default = self.control_info(plant_id, None, field)
 
         if field_type == 'number':
@@ -514,7 +515,7 @@ class SolaxAPI(ComponentBase):
             # Fallback to inverter power if no battery power found
             rated_power = self.get_max_power_inverter(plant_id) / 1000  # Convert back to kW
         return rated_power * 1000  # Convert to Watts
-    
+
     def get_max_soc_battery(self, plant_id):
         max_soc = 0
         for plant_info in self.plant_info:
@@ -532,7 +533,7 @@ class SolaxAPI(ComponentBase):
             current_soc = current_soc / count_devices
             current_soc = current_soc * self.get_max_soc_battery(plant_id) / 100.0  # Convert % to kWh
         return current_soc  # in kWh
-    
+
     def get_battery_temperature(self, plant_id):
         temperature = 100.0
         for device_id in self.plant_batteries.get(plant_id, []):
@@ -559,7 +560,7 @@ class SolaxAPI(ComponentBase):
         if not sn_list:
             self.log(f"Warn: SolaX API: No inverters found for plant {plant_id}")
             return False
-        
+
         charge_window = False
         export_window = False
 
@@ -608,7 +609,7 @@ class SolaxAPI(ComponentBase):
             duration = (charge_end - now).total_seconds()
             new_end = charge_end_minutes
         else:
-            new_mode = "eco"        
+            new_mode = "eco"
             new_target_soc = reserve_soc
             new_power = 0
             duration = 12 * 60 * 60  # Default to 12 hours
@@ -637,7 +638,7 @@ class SolaxAPI(ComponentBase):
                 self.current_mode_hash = new_mode_hash
                 self.current_mode_hash_timestamp = now
                 self.log(f"SolaX API: Applied new mode {new_mode} target_soc {new_target_soc} new_power {new_power} for plant {plant_id}")
- 
+
         self.log(f"SolaX API: Applied controls for plant {plant_id}")
         return True
 
@@ -697,7 +698,7 @@ class SolaxAPI(ComponentBase):
 
     async def fetch_controls(self, plant_id):
         """
-        Fetch control settings using get_state_wrapper 
+        Fetch control settings using get_state_wrapper
         """
         for direction in ["charge", "export"]:
             for field in ["start_time", "end_time", "enable", "target_soc", "rate"]:
@@ -777,7 +778,7 @@ class SolaxAPI(ComponentBase):
         payload = {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
-            "grant_type": "CICS",
+            "grant_type": "CICS", # cspell:disable-line
         }
 
         try:
@@ -1061,28 +1062,28 @@ class SolaxAPI(ComponentBase):
 
         INVERTER:
         {
-            'deviceModel': 14, 
-            'armVersion': '1.51', 
-            'dspVersion': '1.55', 
-            'ratedPower': 10.0, 
-            'registerNo': 'SY1231321312', 
-            'deviceSn': 'H1231231932123', 
-            'plantId': '1618699116555534337', 
-            'onlineStatus': 1, 
+            'deviceModel': 14,
+            'armVersion': '1.51',
+            'dspVersion': '1.55',
+            'ratedPower': 10.0,
+            'registerNo': 'SY1231321312',
+            'deviceSn': 'H1231231932123',
+            'plantId': '1618699116555534337',
+            'onlineStatus': 1,
             'flag': 0
         }
 
-        BATTERY: 
+        BATTERY:
         {
-            'deviceModel': 1, 
-            'hardwareVersion': None, 
-            'registerNo': 'SY1231321312', 
-            'deviceSn': 'TP123456123123', 
-            'plantId': '1618699116555534337', 
-            'softwareVersion': '3.16', 
-            'ratedCapacity': 0.0, 
+            'deviceModel': 1,
+            'hardwareVersion': None,
+            'registerNo': 'SY1231321312',
+            'deviceSn': 'TP123456123123',
+            'plantId': '1618699116555534337',
+            'softwareVersion': '3.16',
+            'ratedCapacity': 0.0,
             'onlineStatus': 1
-        }        
+        }
 
         """
         # Build base parameters
@@ -1129,19 +1130,19 @@ class SolaxAPI(ComponentBase):
 
         Example:
             {
-                'plantLocalTime': '2025-12-28 18:38:24', 
-                'plantId': '1618699116555534337', 
-                'dailyYield': 0.0, 
-                'totalYield': 31927.82, 
-                'dailyCharged': 0.0, 
-                'totalCharged': 7498.5, 
-                'dailyDischarged': 0.0, 
-                'totalDischarged': 6504.7, 
-                'dailyImported': 0.0, 
-                'totalImported': 17567.67, 
-                'dailyExported': 0.0, 
-                'totalExported': 15014.4, 
-                'dailyEarnings': 0.0, 
+                'plantLocalTime': '2025-12-28 18:38:24',
+                'plantId': '1618699116555534337',
+                'dailyYield': 0.0,
+                'totalYield': 31927.82,
+                'dailyCharged': 0.0,
+                'totalCharged': 7498.5,
+                'dailyDischarged': 0.0,
+                'totalDischarged': 6504.7,
+                'dailyImported': 0.0,
+                'totalImported': 17567.67,
+                'dailyExported': 0.0,
+                'totalExported': 15014.4,
+                'dailyEarnings': 0.0,
                 'totalEarnings': 2797.23
             }
         """
@@ -1166,7 +1167,7 @@ class SolaxAPI(ComponentBase):
             if result is not None:
                 results.extend(result)
         return results
-    
+
     async def query_plant_statistics_daily(self, plant_id, business_type=None):
 
         """
@@ -1192,7 +1193,7 @@ class SolaxAPI(ComponentBase):
         if result:
             self.log(f"SolaX API: Retrieved daily statistics for plant ID {plant_id} for {year_month}")
         return result
-            
+
 
     async def query_plant_statistics(self, plant_id, date_type, date, business_type=None):
         """
@@ -1252,13 +1253,14 @@ class SolaxAPI(ComponentBase):
             post=True,
             json_data=payload
         )
-        
+
         if result is not None:
             self.log(f"SolaX API: Retrieved statistics for plant ID {plant_id}, date {date}, type {date_type}")
-        
+
         return result
 
     async def query_device_realtime_data(self, sn, device_type, business_type=None):
+        # cSpell:disable
         """
         Query real-time data for specific devices
 
@@ -1332,30 +1334,31 @@ class SolaxAPI(ComponentBase):
                 'totalActivePower': 0,
                 'MPPTTotalInputPower': None
             }
-        ] 
+        ]
 
         Example Battery response:
         [
             {
-                'dataTime': 
-                '2025-12-28T18:45:54.000+00:00', 
-                'plantLocalTime': '2025-12-28 19:45:54', 
-                'deviceSn': 'TP123456123123', 
-                'registerNo': 'SY1231321312', 
-                'deviceStatus': 1, 
-                'batterySOC': 99, 
-                'batterySOH': 0, 
-                'chargeDischargePower': 0, 
-                'batteryVoltage': 426.9, 
-                'batteryCurrent': 0.0, 
-                'batteryTemperature': 22.0, 
-                'batteryCycleTimes': 652, 
-                'totalDeviceDischarge': 6537.8, 
-                'totalDeviceCharge': 7534.0, 
+                'dataTime':
+                '2025-12-28T18:45:54.000+00:00',
+                'plantLocalTime': '2025-12-28 19:45:54',
+                'deviceSn': 'TP123456123123',
+                'registerNo': 'SY1231321312',
+                'deviceStatus': 1,
+                'batterySOC': 99,
+                'batterySOH': 0,
+                'chargeDischargePower': 0,
+                'batteryVoltage': 426.9,
+                'batteryCurrent': 0.0,
+                'batteryTemperature': 22.0,
+                'batteryCycleTimes': 652,
+                'totalDeviceDischarge': 6537.8,
+                'totalDeviceCharge': 7534.0,
                 'batteryRemainings': 12.2
             }
         ]
         """
+        # cSpell:enable
         # Build POST body
         params = {
             "snList": [sn],
@@ -1433,7 +1436,7 @@ class SolaxAPI(ComponentBase):
                 self.log(f"  {sn}: {status}")
                 status = this_status
                 break
-        
+
         return status
 
     async def send_command_and_wait(self, endpoint, payload, command_name, sn_list):
@@ -1469,16 +1472,16 @@ class SolaxAPI(ComponentBase):
                 break
         status_desc = SOLAX_COMMAND_STATUS.get(status, f"Unknown status {status}")
         self.log(f"SolaX API: Set {command_name} mode for {sn_list}: {status_desc} (requestId: {request_id})")
-        
+
         # If command was issued successfully, wait for execution result
         if request_id and status == SOLAX_COMMAND_STATUS_ISSUE_SUCCESS:
             self.log(f"SolaX API: Waiting for execution result (requestId: {request_id})...")
-            
+
             # Retry logic to wait for result
             for attempt in range(SOLAX_COMMAND_MAX_RETRIES):
                 await asyncio.sleep(SOLAX_COMMAND_RETRY_DELAY + attempt)
                 status = await self.query_request_result(request_id)
-                
+
                 if status > SOLAX_COMMAND_STATUS_ISSUE_SUCCESS:
                     if status == SOLAX_COMMAND_STATUS_EXECUTION_SUCCESS:
                         self.log(f"SolaX API: Command execution succeeded for requestId {request_id}")
@@ -1486,7 +1489,7 @@ class SolaxAPI(ComponentBase):
                     else:
                         self.log(f"SolaX API: Command execution failed with status {status} : {status_desc} for requestId {request_id}")
                         return False
-                
+
                 if attempt < SOLAX_COMMAND_MAX_RETRIES - 1:
                     self.log(f"SolaX API: Result not available yet, retrying ({attempt + 1}/{SOLAX_COMMAND_MAX_RETRIES})...")
                 else:
@@ -1496,12 +1499,12 @@ class SolaxAPI(ComponentBase):
         if status == SOLAX_COMMAND_STATUS_EXECUTION_SUCCESS:
             self.log(f"SolaX API: Command execution succeeded for {sn}")
             return True
-        
+
         # Command issuance failed or device offline
         self.log(f"Warn: SolaX API: Command issuance failed or device offline {sn} status {status} : {status_desc}")
         return False
 
-    async def positive_or_negative_mode(self, sn, battery_power, time_of_duration, next_motion=161, 
+    async def positive_or_negative_mode(self, sn, battery_power, time_of_duration, next_motion=161,
                                         business_type=None):
         """
         Set inverter working mode to Positive or Negative mode
@@ -1742,7 +1745,7 @@ class SolaxAPI(ComponentBase):
         payload = {
             "snList": sn_list,
             "targetSoc": target_soc,
-            "chargeDischargPower": charge_discharge_power,
+            "chargeDischargPower": charge_discharge_power, # cSpell:disable-line
             "businessType": business_type if business_type is not None else BUSINESS_TYPE_RESIDENTIAL,
         }
 
@@ -1815,7 +1818,7 @@ class SolaxAPI(ComponentBase):
                 ac_power = realtime.get("acPower1", 0) + realtime.get("acPower2", 0) + realtime.get("acPower3", 0)
                 gridPower = realtime.get("gridPower", 0)
                 pvMap = realtime.get("pvMap", {})
-                mpptMap = realtime.get("mpptMap", {})
+                mpptMap = realtime.get("mpptMap", {}) # cSpell:disable-line
                 totalActivePower = realtime.get("totalActivePower", 0)
                 totalReactivePower = realtime.get("totalReactivePower", 0)
                 totalYield = realtime.get("totalYield", 0)
@@ -1828,10 +1831,10 @@ class SolaxAPI(ComponentBase):
                     for key in pvMap:
                         if "Power" in key:
                             pvPower += pvMap.get(key, 0)
-                elif mpptMap:
-                    for key in mpptMap:
+                elif mpptMap: # cSpell:disable-line
+                    for key in mpptMap: # cSpell:disable-line
                         if "Power" in key:
-                            pvPower += mpptMap.get(key, 0)
+                            pvPower += mpptMap.get(key, 0) # cSpell:disable-line
 
                 self.dashboard_item(
                     f"sensor.{self.base.prefix}_solax_{plant_id}_{device_sn}_device_status",
@@ -2179,7 +2182,7 @@ class SolaxAPI(ComponentBase):
                         "state_class": "measurement",
                     },
                     app="solax",
-                )        
+                )
 
     async def run(self, seconds, first):
         """
@@ -2224,7 +2227,7 @@ class SolaxAPI(ComponentBase):
                 await self.fetch_controls(plant_id=plantID)
 
         # Publish
-        if first or seconds % 60 == 0:        
+        if first or seconds % 60 == 0:
             await self.publish_plant_info()
             await self.publish_device_info()
             await self.publish_device_realtime_data()
@@ -2242,7 +2245,7 @@ class SolaxAPI(ComponentBase):
                     await self.set_default_work_modes(plantID)
 
             # Control
-            if first or seconds % 60 == 0:        
+            if first or seconds % 60 == 0:
                 for plantID in self.plant_list:
                     await self.apply_controls(plantID)
 
@@ -2266,7 +2269,7 @@ class MockBase:
             return self.entities.get(entity_id, {})
         else:
             return self.entities.get(entity_id, {}).get('state', default)
-    
+
     def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
         self.entities[entity_id] = {
             'state': state,
@@ -2284,7 +2287,7 @@ class MockBase:
 
     def get_arg(self, key, default=None):
         return default
-    
+
     def set_arg(self, key, value):
         state = None
         if isinstance(value, str) and '.' in value:
