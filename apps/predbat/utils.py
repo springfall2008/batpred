@@ -977,6 +977,7 @@ Get value from curve with integer or string index
 def get_curve_value(curve, index, default=1.0):
     return curve.get(index, default)
 
+
 def find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, max_rate):
     """
     Find the battery temperature cap

@@ -1657,11 +1657,11 @@ class Fetch:
         """
         Validate a power or temperature curve dictionary
         Ensures all keys are integers and all values are floats
-        
+
         Args:
             curve: Dictionary to validate
             curve_name: Name of the curve for logging
-            
+
         Returns:
             Validated dictionary with integer keys and float values
         """
@@ -1669,7 +1669,7 @@ class Fetch:
             self.log("Warn: {} is incorrectly configured - ignoring".format(curve_name))
             self.record_status("{} is incorrectly configured - ignoring".format(curve_name), had_errors=True)
             return {}
-        
+
         validated_curve = {}
         for key in curve:
             try:
@@ -1679,7 +1679,7 @@ class Fetch:
             except (ValueError, TypeError):
                 self.log("Warn: {} has bad key/value for key {} - ignoring".format(curve_name, key))
                 self.record_status("{} has bad key/value for key {} - ignoring".format(curve_name, key), had_errors=True)
-        
+
         return validated_curve
 
     def fetch_config_options(self):
