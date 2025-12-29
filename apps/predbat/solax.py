@@ -323,6 +323,7 @@ class SolaxAPI(ComponentBase):
         self.plant_list = []
         self.plant_info = []
         self.plant_inverters = {}
+        self.plant_batteries = {}
         self.device_info = {}
         self.realtime_data = {}
         self.realtime_device_data = {}
@@ -380,26 +381,13 @@ class SolaxAPI(ComponentBase):
         self.set_arg("grid_power", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_grid_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("pv_power", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("load_power", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_ac_power" for plant, inv in zip(plants, inverter_list)])
-        
-        # SOC and capacity from first battery device
-        battery_list = []
-        for plant in plants:
-            battery_sn = None
-            for device_sn in self.device_info:
-                device = self.device_info[device_sn]
-                if device.get("plantId") == plant and device.get("deviceType") == 2:  # Battery
-                    battery_sn = device_sn
-                    break
-            battery_list.append(battery_sn if battery_sn else inverter_list[plants.index(plant)])
-        
-        self.set_arg("soc_percent", [f"sensor.{self.base.prefix}_solax_{plant}_{bat}_battery_soc" for plant, bat in zip(plants, battery_list)])
-        self.set_arg("battery_temperature", [f"sensor.{self.base.prefix}_solax_{plant}_{bat}_battery_temperature" for plant, bat in zip(plants, battery_list)])
-        
-        # Inverter capacity from device info
-        self.set_arg("inverter_limit", [f"sensor.{self.base.prefix}_solax_{plant}_{inv}_rated_power" for plant, inv in zip(plants, inverter_list)])
-        
-        # Battery capacity (will be published from device info)
-        self.set_arg("soc_max", [f"sensor.{self.base.prefix}_solax_{plant}_{bat}_rated_capacity" for plant, bat in zip(plants, battery_list)])
+
+        # Sensors        
+        self.set_arg("battery_temperature", [f"sensor.{self.base.prefix}_solax_{plant}_battery_temperature" for plant in plants])
+        self.set_arg("soc_max", [f"sensor.{self.base.prefix}_solax_{plant}_battery_capacity" for plant in plants])
+        self.set_arg("soc_kw", [f"sensor.{self.base.prefix}_solax_{plant}_battery_soc" for plant in plants])
+        self.set_arg("battery_rate_max_charge", [f"sensor.{self.base.prefix}_solax_{plant}_battery_max_power" for plant in plants])
+        self.set_arg("inverter_limit", [f"sensor.{self.base.prefix}_solax_{plant}_inverter_max_power" for plant in plants])
 
         # Control entities using the controls system
         self.set_arg("reserve", [f"number.{self.base.prefix}_solax_{plant}_setting_reserve" for plant in plants])
@@ -416,7 +404,7 @@ class SolaxAPI(ComponentBase):
 
         # Historical data (use first battery)
         if plants:
-            self.set_arg("battery_temperature_history", f"sensor.{self.base.prefix}_solax_{plants[0]}_{battery_list[0]}_battery_temperature")
+            self.set_arg("battery_temperature_history", f"sensor.{self.base.prefix}_solax_{plants[0]}_battery_temperature")
 
         self.log(f"SolaX API: Automatic configuration complete for {num_inverters} plant(s)")
 
@@ -512,11 +500,46 @@ class SolaxAPI(ComponentBase):
         self.log(f"SolaX API: Updated control for plant {plant_id}, direction {direction}, field {field} to {value}")
         await self.publish_controls(plant_id)
 
-    def get_max_power(self, plant_id):
+    def get_max_power_inverter(self, plant_id):
         rated_power = 0
         for device_id in self.plant_inverters.get(plant_id, []):
-            rated_power += self.device_info.get(device_id, {}).get("ratedPower", 5000)  # in Watts
-        return rated_power
+            rated_power += self.device_info.get(device_id, {}).get("ratedPower", 0)  # in kW
+        return rated_power * 1000  # Convert to Watts
+
+    def get_max_power_battery(self, plant_id):
+        rated_power = 0
+        for device_id in self.plant_batteries.get(plant_id, []):
+            rated_power += self.device_info.get(device_id, {}).get("ratedPower", 0)  # in kW
+        if rated_power == 0:
+            # Fallback to inverter power if no battery power found
+            rated_power = self.get_max_power_inverter(plant_id) / 1000  # Convert back to kW
+        return rated_power * 1000  # Convert to Watts
+    
+    def get_max_soc_battery(self, plant_id):
+        max_soc = 0
+        for plant_info in self.plant_info:
+            if plant_info.get("plantId") == plant_id:
+                max_soc = plant_info.get("batteryCapacity", 0)
+        return max_soc  # in kWh
+
+    def get_current_soc_battery_kwh(self, plant_id):
+        current_soc = 0
+        count_devices = 0
+        for device_id in self.plant_batteries.get(plant_id, []):
+            current_soc += self.realtime_device_data.get(device_id, {}).get("batterySOC", 0)
+            count_devices += 1
+        if count_devices > 0:
+            current_soc = current_soc / count_devices
+            current_soc = current_soc * self.get_max_soc_battery(plant_id) / 100.0  # Convert % to kWh
+        return current_soc  # in kWh
+    
+    def get_battery_temperature(self, plant_id):
+        temperature = 100.0
+        for device_id in self.plant_batteries.get(plant_id, []):
+            temperature = min(self.realtime_device_data.get(device_id, {}).get("batteryTemperature", temperature), temperature)
+        if temperature == 100.0:
+            temperature = None
+        return temperature
 
     async def apply_controls(self, plant_id):
         """
@@ -531,7 +554,7 @@ class SolaxAPI(ComponentBase):
 
         # 1. Work out if the current time is inside a charge or export window
         now = datetime.now(self.local_tz)
-        rated_power = self.get_max_power(plant_id)
+        rated_power = self.get_max_power_battery(plant_id)
         sn_list = self.plant_inverters.get(plant_id, [])
         if not sn_list:
             self.log(f"Warn: SolaX API: No inverters found for plant {plant_id}")
@@ -657,7 +680,8 @@ class SolaxAPI(ComponentBase):
             else:
                 default = min_value
         elif field == "rate":
-            max_value = self.get_max_power(plant_id)
+            max_value = self.get_max_power_inverter(plant_id)
+            print("Max rate for plant", plant_id, "is", max_value)
             min_value = 0
             default = max_value
             field_type = 'number'
@@ -1083,8 +1107,12 @@ class SolaxAPI(ComponentBase):
                     # Store inverter SNs by plant
                     if plant_id not in self.plant_inverters:
                         self.plant_inverters[plant_id] = []
+                    if plant_id not in self.plant_batteries:
+                        self.plant_batteries[plant_id] = []
                     if device_type == 1 and deviceSn not in self.plant_inverters[plant_id]:
                         self.plant_inverters[plant_id].append(deviceSn)
+                    elif device_type == 2 and deviceSn not in self.plant_batteries[plant_id]:
+                        self.plant_batteries[plant_id].append(deviceSn)
                     self.log(f"Solax: Stored device info for SN: {deviceSn} info {device}")
         return result
 
@@ -1730,7 +1758,7 @@ class SolaxAPI(ComponentBase):
             plant_id = device.get("plantId", "unknown").lower().replace(" ", "_")
             device_model_code = device.get("deviceModel", 0)
             online_status = device.get("onlineStatus", 0)
-            ratedPower = device.get("ratedPower", 5)
+            ratedPower = device.get("ratedPower", 0)
 
             if device_type == 1:  # Inverter
                 device_model = SOLAX_DEVICE_MODEL_RESIDENTIAL.get(1, {}).get(device_model_code, "Inverter")
@@ -1967,15 +1995,71 @@ class SolaxAPI(ComponentBase):
             plant_id = plant.get("plantId", "unknown").lower().replace(" ", "_")
             plant_name = plant.get("plantName", "Unknown")
 
-            # Battery capacity sensor
-            battery_capacity = plant.get("batteryCapacity", 0.0)
+            inverter_max_power = self.get_max_power_inverter(plant_id)
+            battery_max_power = self.get_max_power_battery(plant_id)
+            battery_soc_max = self.get_max_soc_battery(plant_id)
+            battery_soc = self.get_current_soc_battery_kwh(plant_id)
+            battery_temp = self.get_battery_temperature(plant_id)
+
+            # Battery SOC
+            self.dashboard_item(
+                f"sensor.{self.base.prefix}_solax_{plant_id}_battery_soc",
+                state=battery_soc,
+                attributes={
+                    "friendly_name": f"SolaX {plant_name} Battery SOC",
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "measurement",
+                    "soc_max": battery_soc_max,
+                },
+                app="solax",
+            )
+            # Battery SOC max sensor
             self.dashboard_item(
                 f"sensor.{self.base.prefix}_solax_{plant_id}_battery_capacity",
-                state=battery_capacity,
+                state=battery_soc_max,
                 attributes={
                     "friendly_name": f"SolaX {plant_name} Battery Capacity",
                     "unit_of_measurement": "kWh",
                     "device_class": "energy",
+                    "state_class": "measurement",
+                },
+                app="solax",
+            )
+
+            # Battery temperature sensor
+            self.dashboard_item(
+                f"sensor.{self.base.prefix}_solax_{plant_id}_battery_temperature",
+                state=battery_temp,
+                attributes={
+                    "friendly_name": f"SolaX {plant_name} Battery Temperature",
+                    "unit_of_measurement": "°C",
+                    "device_class": "temperature",
+                    "state_class": "measurement",
+                },
+                app="solax",
+            )
+
+            # Battery max power sensor
+            self.dashboard_item(
+                f"sensor.{self.base.prefix}_solax_{plant_id}_battery_max_power",
+                state=battery_max_power,
+                attributes={
+                    "friendly_name": f"SolaX {plant_name} Battery Max Power",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                    "state_class": "measurement",
+                },
+                app="solax",
+            )
+            # Inverter max power sensor
+            self.dashboard_item(
+                f"sensor.{self.base.prefix}_solax_{plant_id}_inverter_max_power",
+                state=inverter_max_power,
+                attributes={
+                    "friendly_name": f"SolaX {plant_name} Inverter Max Power",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
                     "state_class": "measurement",
                 },
                 app="solax",
@@ -2119,8 +2203,6 @@ class SolaxAPI(ComponentBase):
 
             self.plant_list = [plant.get('plantId') for plant in self.plant_info]
             self.log(f"SolaX API: Found {len(self.plant_list)} plants IDs: {self.plant_list}")
-            for plantID in self.plant_list:
-                await self.fetch_controls(plant_id=plantID)
 
         if first or seconds % (30*60) == 0:
             # Periodic plant info refresh every 30 minutes
@@ -2136,6 +2218,11 @@ class SolaxAPI(ComponentBase):
                 await self.query_plant_realtime_data(plantID)
                 await self.query_device_realtime_data_all(plantID)
 
+        # Fetch controls first time only
+        if first:
+            for plantID in self.plant_list:
+                await self.fetch_controls(plant_id=plantID)
+
         # Publish
         if first or seconds % 60 == 0:        
             await self.publish_plant_info()
@@ -2143,9 +2230,11 @@ class SolaxAPI(ComponentBase):
             await self.publish_device_realtime_data()
             await self.publish_controls()
 
-        if self.automatic and first:
+        # Automatic configuration
+        if first and self.automatic:
             await self.automatic_config()
-        
+
+        # Apply controls
         if self.enable_controls:
             if first:
                 # Ensure default work modes are set on first run
@@ -2191,9 +2280,24 @@ class MockBase:
         print(f"ENTITY: {entity_id} = {state}")
         if attributes:
             print(f"  Attributes: {json.dumps(attributes, indent=2)}")
+        self.set_state_wrapper(entity_id, state, attributes)
 
     def get_arg(self, key, default=None):
         return default
+    
+    def set_arg(self, key, value):
+        state = None
+        if isinstance(value, str) and '.' in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and '.' in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_solax_api(client_id, client_secret, region, plant_id):
@@ -2224,7 +2328,7 @@ async def test_solax_api(client_id, client_secret, region, plant_id):
         client_secret=client_secret,
         region=region,
         plant_id=plant_id,
-        automatic=False,
+        automatic=True,
     )
     result = await solax.run(first=True, seconds=0)
     if not result:
