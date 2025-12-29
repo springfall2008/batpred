@@ -24,6 +24,8 @@ class MockSolaxAPI(SolaxAPI):
         self.plant_batteries = {}
         self.plant_info = []
         self.device_info = {}
+        self.realtime_data = {}
+        self.realtime_device_data = {}
         self.log_messages = []
         self.dashboard_items = {}
         self.current_mode_hash = None
@@ -78,6 +80,7 @@ def run_solax_tests(my_predbat):
         failed |= asyncio.run(test_write_setting_from_event(my_predbat))
         failed |= asyncio.run(test_fetch_controls_main(my_predbat))
         failed |= asyncio.run(test_apply_controls_main(my_predbat))
+        failed |= asyncio.run(test_publish_plant_info_main(my_predbat))
 
         if not failed:
             print("**** SolaX API tests: All tests passed ****")
@@ -330,7 +333,7 @@ async def test_apply_controls(solax_api, test_plant_id):
 
 async def test_write_setting_from_event(my_predbat):
     """
-    Test write_setting_from_event method
+    Test event wrapper methods (switch_event, number_event, select_event)
     Tests parsing entity IDs and updating control settings
     """
     failed = False
@@ -356,7 +359,7 @@ async def test_write_setting_from_event(my_predbat):
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_setting_reserve"
     new_value = 20
 
-    await solax_api.write_setting_from_event(entity_id, new_value)
+    await solax_api.number_event(entity_id, new_value)
 
     if solax_api.controls[test_plant_id]["reserve"] != new_value:
         print(f"**** ERROR: Reserve not updated. Expected {new_value}, got {solax_api.controls[test_plant_id]['reserve']} ****")
@@ -366,7 +369,7 @@ async def test_write_setting_from_event(my_predbat):
 
     # Test 2: Invalid entity ID format
     invalid_entity_id = "number.invalid_format"
-    await solax_api.write_setting_from_event(invalid_entity_id, 30)
+    await solax_api.number_event(invalid_entity_id, 30)
 
     # Should not crash and reserve should remain unchanged
     if solax_api.controls[test_plant_id]["reserve"] != new_value:
@@ -378,17 +381,18 @@ async def test_write_setting_from_event(my_predbat):
     # Test 3: Plant not in controls
     missing_plant_id = "9999999999999999999"
     entity_id = f"number.{solax_api.prefix}_solax_{missing_plant_id}_setting_reserve"
-    result = await solax_api.write_setting_from_event(entity_id, 40)
+    await solax_api.number_event(entity_id, 40)
 
-    if result is not False:
-        print(f"**** ERROR: Should return False for missing plant ****")
+    # Should not crash, just log a warning
+    if missing_plant_id in solax_api.controls:
+        print(f"**** ERROR: Missing plant incorrectly added to controls ****")
         failed = True
     else:
         print(f"✓ Missing plant handled correctly")
 
     # Test 4: Invalid number value
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_setting_reserve"
-    await solax_api.write_setting_from_event(entity_id, "invalid")
+    await solax_api.number_event(entity_id, "invalid")
 
     # Should not crash and reserve should remain unchanged
     if solax_api.controls[test_plant_id]["reserve"] != new_value:
@@ -400,7 +404,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 5: Update charge start_time (battery schedule)
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_start_time"
     new_time = "01:30:00"
-    await solax_api.write_battery_schedule_event(entity_id, new_time)
+    await solax_api.select_event(entity_id, new_time)
 
     if solax_api.controls[test_plant_id]["charge"]["start_time"] != new_time:
         print(f"**** ERROR: Charge start_time not updated. Expected {new_time}, got {solax_api.controls[test_plant_id]['charge']['start_time']} ****")
@@ -411,7 +415,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 6: Update charge end_time
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_end_time"
     new_time = "05:30:00"
-    await solax_api.write_battery_schedule_event(entity_id, new_time)
+    await solax_api.select_event(entity_id, new_time)
 
     if solax_api.controls[test_plant_id]["charge"]["end_time"] != new_time:
         print(f"**** ERROR: Charge end_time not updated. Expected {new_time}, got {solax_api.controls[test_plant_id]['charge']['end_time']} ****")
@@ -421,7 +425,7 @@ async def test_write_setting_from_event(my_predbat):
 
     # Test 7: Update charge enable (switch - turn_on service)
     entity_id = f"switch.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_enable"
-    await solax_api.write_battery_schedule_event(entity_id, "turn_on")
+    await solax_api.switch_event(entity_id, "turn_on")
 
     if solax_api.controls[test_plant_id]["charge"]["enable"] != True:
         print(f"**** ERROR: Charge enable not set to True ****")
@@ -430,7 +434,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"✓ Charge enable turned on")
 
     # Test 8: Update charge enable (switch - turn_off service)
-    await solax_api.write_battery_schedule_event(entity_id, "turn_off")
+    await solax_api.switch_event(entity_id, "turn_off")
 
     if solax_api.controls[test_plant_id]["charge"]["enable"] != False:
         print(f"**** ERROR: Charge enable not set to False ****")
@@ -441,7 +445,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 9: Update export start_time
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_start_time"
     new_time = "16:00:00"
-    await solax_api.write_battery_schedule_event(entity_id, new_time)
+    await solax_api.select_event(entity_id, new_time)
 
     if solax_api.controls[test_plant_id]["export"]["start_time"] != new_time:
         print(f"**** ERROR: Export start_time not updated. Expected {new_time}, got {solax_api.controls[test_plant_id]['export']['start_time']} ****")
@@ -452,7 +456,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 10: Update charge target_soc
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_target_soc"
     new_soc = 95
-    await solax_api.write_battery_schedule_event(entity_id, new_soc)
+    await solax_api.number_event(entity_id, new_soc)
 
     if solax_api.controls[test_plant_id]["charge"]["target_soc"] != new_soc:
         print(f"**** ERROR: Charge target_soc not updated. Expected {new_soc}, got {solax_api.controls[test_plant_id]['charge']['target_soc']} ****")
@@ -463,7 +467,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 11: Update charge rate
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_rate"
     new_rate = 3000
-    await solax_api.write_battery_schedule_event(entity_id, new_rate)
+    await solax_api.number_event(entity_id, new_rate)
 
     if solax_api.controls[test_plant_id]["charge"]["rate"] != new_rate:
         print(f"**** ERROR: Charge rate not updated. Expected {new_rate}, got {solax_api.controls[test_plant_id]['charge']['rate']} ****")
@@ -475,7 +479,7 @@ async def test_write_setting_from_event(my_predbat):
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_start_time"
     new_time_short = "02:00"
     expected_time = "02:00:00"
-    await solax_api.write_battery_schedule_event(entity_id, new_time_short)
+    await solax_api.select_event(entity_id, new_time_short)
 
     if solax_api.controls[test_plant_id]["charge"]["start_time"] != expected_time:
         print(f"**** ERROR: Time format conversion failed. Expected {expected_time}, got {solax_api.controls[test_plant_id]['charge']['start_time']} ****")
@@ -486,7 +490,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 13: Update export target_soc
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_target_soc"
     new_export_soc = 15
-    await solax_api.write_battery_schedule_event(entity_id, new_export_soc)
+    await solax_api.number_event(entity_id, new_export_soc)
 
     if solax_api.controls[test_plant_id]["export"]["target_soc"] != new_export_soc:
         print(f"**** ERROR: Export target_soc not updated. Expected {new_export_soc}, got {solax_api.controls[test_plant_id]['export']['target_soc']} ****")
@@ -497,7 +501,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 14: Update export rate
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_rate"
     new_export_rate = 4000
-    await solax_api.write_battery_schedule_event(entity_id, new_export_rate)
+    await solax_api.number_event(entity_id, new_export_rate)
 
     if solax_api.controls[test_plant_id]["export"]["rate"] != new_export_rate:
         print(f"**** ERROR: Export rate not updated. Expected {new_export_rate}, got {solax_api.controls[test_plant_id]['export']['rate']} ****")
@@ -508,7 +512,7 @@ async def test_write_setting_from_event(my_predbat):
     # Test 15: Update export end_time
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_end_time"
     new_time = "19:30:00"
-    await solax_api.write_battery_schedule_event(entity_id, new_time)
+    await solax_api.select_event(entity_id, new_time)
 
     if solax_api.controls[test_plant_id]["export"]["end_time"] != new_time:
         print(f"**** ERROR: Export end_time not updated. Expected {new_time}, got {solax_api.controls[test_plant_id]['export']['end_time']} ****")
@@ -518,7 +522,7 @@ async def test_write_setting_from_event(my_predbat):
 
     # Test 16: Update export enable (switch - turn_on service)
     entity_id = f"switch.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_enable"
-    await solax_api.write_battery_schedule_event(entity_id, "turn_on")
+    await solax_api.switch_event(entity_id, "turn_on")
 
     if solax_api.controls[test_plant_id]["export"]["enable"] != True:
         print(f"**** ERROR: Export enable not set to True ****")
@@ -527,7 +531,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"✓ Export enable turned on")
 
     # Test 17: Update export enable (switch - toggle service)
-    await solax_api.write_battery_schedule_event(entity_id, "toggle")
+    await solax_api.switch_event(entity_id, "toggle")
 
     if solax_api.controls[test_plant_id]["export"]["enable"] != False:
         print(f"**** ERROR: Export enable not toggled to False ****")
@@ -643,5 +647,275 @@ async def test_fetch_controls(solax_api, test_plant_id):
         failed = True
     else:
         print("✓ Export rate fetched correctly (4500)")
+
+    return failed
+
+
+async def test_publish_plant_info_main(my_predbat):
+    """
+    Wrapper for test_publish_plant_info
+    """
+    # Create mock SolaX API instance
+    solax_api = MockSolaxAPI(prefix="predbat")
+
+    # Test plant configuration
+    test_plant_id = "1618699116555534337"
+    test_plant_name = "Test Plant"
+
+    # Set up plant info
+    solax_api.plant_info = [
+        {
+            "plantId": test_plant_id,
+            "plantName": test_plant_name,
+            "pvCapacity": 8.5,
+            "batteryCapacity": 15.0,
+        }
+    ]
+
+    # Set up plant inverters and batteries
+    solax_api.plant_inverters[test_plant_id] = ["H1231231932123"]
+    solax_api.plant_batteries[test_plant_id] = ["TP123456123123"]
+
+    # Set up device info
+    solax_api.device_info["H1231231932123"] = {
+        "deviceSn": "H1231231932123",
+        "deviceType": 1,
+        "plantId": test_plant_id,
+        "ratedPower": 10.0,
+    }
+    solax_api.device_info["TP123456123123"] = {
+        "deviceSn": "TP123456123123",
+        "deviceType": 2,
+        "plantId": test_plant_id,
+        "ratedPower": 5.0,
+    }
+
+    # Set up realtime data
+    solax_api.realtime_data[test_plant_id] = {
+        "totalYield": 3250.5,
+        "totalCharged": 1850.2,
+        "totalDischarged": 1720.8,
+        "totalImported": 4200.3,
+        "totalExported": 2800.7,
+        "totalEarnings": 485.50,
+    }
+
+    # Set up realtime device data for battery
+    solax_api.realtime_device_data["TP123456123123"] = {
+        "batterySOC": 75,
+        "batteryTemperature": 18.5,
+    }
+
+    return await test_publish_plant_info(solax_api, test_plant_id, test_plant_name)
+
+
+async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
+    """
+    Test publish_plant_info method - publishes plant sensors to dashboard
+    """
+    failed = False
+    prefix = solax_api.prefix
+
+    # Clear dashboard items
+    solax_api.dashboard_items = {}
+
+    # Call publish_plant_info
+    await solax_api.publish_plant_info()
+
+    # Test 1: Battery SOC sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_battery_soc"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Battery SOC sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        expected_soc = 11.25  # 75% of 15.0 kWh
+        if item["state"] != expected_soc:
+            print(f"**** ERROR: Battery SOC incorrect. Expected {expected_soc}, got {item['state']} ****")
+            failed = True
+        elif item["attributes"]["unit_of_measurement"] != "kWh":
+            print(f"**** ERROR: Battery SOC unit incorrect ****")
+            failed = True
+        else:
+            print(f"✓ Battery SOC sensor published correctly ({expected_soc} kWh)")
+
+    # Test 2: Battery capacity sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_battery_capacity"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Battery capacity sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        if item["state"] != 15.0:
+            print(f"**** ERROR: Battery capacity incorrect. Expected 15.0, got {item['state']} ****")
+            failed = True
+        else:
+            print(f"✓ Battery capacity sensor published correctly (15.0 kWh)")
+
+    # Test 3: Battery temperature sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_battery_temperature"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Battery temperature sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        if item["state"] != 18.5:
+            print(f"**** ERROR: Battery temperature incorrect. Expected 18.5, got {item['state']} ****")
+            failed = True
+        elif item["attributes"]["unit_of_measurement"] != "°C":
+            print(f"**** ERROR: Battery temperature unit incorrect ****")
+            failed = True
+        else:
+            print(f"✓ Battery temperature sensor published correctly (18.5°C)")
+
+    # Test 4: Battery max power sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_battery_max_power"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Battery max power sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        expected_power = 5000  # 5.0 kW * 1000
+        if item["state"] != expected_power:
+            print(f"**** ERROR: Battery max power incorrect. Expected {expected_power}, got {item['state']} ****")
+            failed = True
+        elif item["attributes"]["unit_of_measurement"] != "W":
+            print(f"**** ERROR: Battery max power unit incorrect ****")
+            failed = True
+        else:
+            print(f"✓ Battery max power sensor published correctly ({expected_power}W)")
+
+    # Test 5: Inverter max power sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_inverter_max_power"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Inverter max power sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        expected_power = 10000  # 10.0 kW * 1000
+        if item["state"] != expected_power:
+            print(f"**** ERROR: Inverter max power incorrect. Expected {expected_power}, got {item['state']} ****")
+            failed = True
+        elif item["attributes"]["unit_of_measurement"] != "W":
+            print(f"**** ERROR: Inverter max power unit incorrect ****")
+            failed = True
+        else:
+            print(f"✓ Inverter max power sensor published correctly ({expected_power}W)")
+
+    # Test 6: PV capacity sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_pv_capacity"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: PV capacity sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        if item["state"] != 8.5:
+            print(f"**** ERROR: PV capacity incorrect. Expected 8.5, got {item['state']} ****")
+            failed = True
+        elif item["attributes"]["unit_of_measurement"] != "kWp":
+            print(f"**** ERROR: PV capacity unit incorrect ****")
+            failed = True
+        else:
+            print(f"✓ PV capacity sensor published correctly (8.5 kWp)")
+
+    # Test 7: Total yield sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_yield"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Total yield sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        if item["state"] != 3250.5:
+            print(f"**** ERROR: Total yield incorrect. Expected 3250.5, got {item['state']} ****")
+            failed = True
+        elif item["attributes"]["unit_of_measurement"] != "kWh":
+            print(f"**** ERROR: Total yield unit incorrect ****")
+            failed = True
+        else:
+            print(f"✓ Total yield sensor published correctly (3250.5 kWh)")
+
+    # Test 8: Total charged sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_charged"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Total charged sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        if item["state"] != 1850.2:
+            print(f"**** ERROR: Total charged incorrect. Expected 1850.2, got {item['state']} ****")
+            failed = True
+        else:
+            print(f"✓ Total charged sensor published correctly (1850.2 kWh)")
+
+    # Test 9: Total discharged sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_discharged"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Total discharged sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        if item["state"] != 1720.8:
+            print(f"**** ERROR: Total discharged incorrect. Expected 1720.8, got {item['state']} ****")
+            failed = True
+        else:
+            print(f"✓ Total discharged sensor published correctly (1720.8 kWh)")
+
+    # Test 10: Total imported sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_imported"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Total imported sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        if item["state"] != 4200.3:
+            print(f"**** ERROR: Total imported incorrect. Expected 4200.3, got {item['state']} ****")
+            failed = True
+        else:
+            print(f"✓ Total imported sensor published correctly (4200.3 kWh)")
+
+    # Test 11: Total exported sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_exported"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Total exported sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        if item["state"] != 2800.7:
+            print(f"**** ERROR: Total exported incorrect. Expected 2800.7, got {item['state']} ****")
+            failed = True
+        else:
+            print(f"✓ Total exported sensor published correctly (2800.7 kWh)")
+
+    # Test 12: Total load sensor (calculated)
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_load"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Total load sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        # Formula: imported + discharged - exported - charged + yield
+        # 4200.3 + 1720.8 - 2800.7 - 1850.2 + 3250.5 = 4520.7
+        expected_load = 4520.7
+        if abs(item["state"] - expected_load) > 0.01:  # Allow small floating point error
+            print(f"**** ERROR: Total load incorrect. Expected {expected_load}, got {item['state']} ****")
+            failed = True
+        else:
+            print(f"✓ Total load sensor published correctly ({expected_load} kWh)")
+
+    # Test 13: Total earnings sensor
+    entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_earnings"
+    if entity_id not in solax_api.dashboard_items:
+        print(f"**** ERROR: Total earnings sensor not published ****")
+        failed = True
+    else:
+        item = solax_api.dashboard_items[entity_id]
+        if item["state"] != 485.50:
+            print(f"**** ERROR: Total earnings incorrect. Expected 485.50, got {item['state']} ****")
+            failed = True
+        elif item["attributes"]["unit_of_measurement"] != "currency":
+            print(f"**** ERROR: Total earnings unit incorrect ****")
+            failed = True
+        else:
+            print(f"✓ Total earnings sensor published correctly (485.50)")
 
     return failed

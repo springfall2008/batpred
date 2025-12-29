@@ -425,7 +425,7 @@ class SolaxAPI(ComponentBase):
 
     async def number_event(self, entity_id, value):
         if "_setting_" in entity_id:
-            await self.write_setting_from_event(entity_id, value, is_number=True)
+            await self.write_setting_from_event(entity_id, value)
         elif "_battery_schedule_" in entity_id:
             await self.write_battery_schedule_event(entity_id, value)
 
