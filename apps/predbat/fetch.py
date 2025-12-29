@@ -1653,6 +1653,35 @@ class Fetch:
 
         return carbon_data, carbon_history
 
+    def validate_curve(self, curve, curve_name):
+        """
+        Validate a power or temperature curve dictionary
+        Ensures all keys are integers and all values are floats
+
+        Args:
+            curve: Dictionary to validate
+            curve_name: Name of the curve for logging
+
+        Returns:
+            Validated dictionary with integer keys and float values
+        """
+        if not isinstance(curve, dict):
+            self.log("Warn: {} is incorrectly configured - ignoring".format(curve_name))
+            self.record_status("{} is incorrectly configured - ignoring".format(curve_name), had_errors=True)
+            return {}
+
+        validated_curve = {}
+        for key in curve:
+            try:
+                int_key = int(key)
+                value = float(curve[key])
+                validated_curve[int_key] = value
+            except (ValueError, TypeError):
+                self.log("Warn: {} has bad key/value for key {} - ignoring".format(curve_name, key))
+                self.record_status("{} has bad key/value for key {} - ignoring".format(curve_name, key), had_errors=True)
+
+        return validated_curve
+
     def fetch_config_options(self):
         """
         Fetch all the configuration options
@@ -1744,51 +1773,20 @@ class Fetch:
             self.battery_charge_power_curve_auto = True
         else:
             self.battery_charge_power_curve_auto = False
-            self.battery_charge_power_curve = self.args.get("battery_charge_power_curve", {})
-            # Check power curve is a dictionary
-            if not isinstance(self.battery_charge_power_curve, dict):
-                self.battery_charge_power_curve = {}
-                self.log("Warn: battery_charge_power_curve is incorrectly configured - ignoring")
-                self.record_status("battery_charge_power_curve is incorrectly configured - ignoring", had_errors=True)
-
-        self.battery_charge_power_curve_default = self.args.get("battery_charge_power_curve_default", {})
-        if not isinstance(self.battery_charge_power_curve_default, dict):
-            self.battery_charge_power_curve_default = {}
-            self.log("Warn: battery_charge_power_curve_default is incorrectly configured - ignoring")
-            self.record_status("battery_charge_power_curve_default is incorrectly configured - ignoring", had_errors=True)
+            self.battery_charge_power_curve = self.validate_curve(self.args.get("battery_charge_power_curve", {}), "battery_charge_power_curve")
+        self.battery_charge_power_curve_default = self.validate_curve(self.args.get("battery_charge_power_curve_default", {}), "battery_charge_power_curve_default")
 
         # Discharge curve
         if self.args.get("battery_discharge_power_curve", "") == "auto":
             self.battery_discharge_power_curve_auto = True
         else:
             self.battery_discharge_power_curve_auto = False
-            self.battery_discharge_power_curve = self.args.get("battery_discharge_power_curve", {})
-            # Check power curve is a dictionary
-            if not isinstance(self.battery_discharge_power_curve, dict):
-                self.battery_discharge_power_curve = {}
-                self.log("Warn: battery_discharge_power_curve is incorrectly configured - ignoring")
-                self.record_status("battery_discharge_power_curve is incorrectly configured - ignoring", had_errors=True)
+            self.battery_discharge_power_curve = self.validate_curve(self.args.get("battery_discharge_power_curve", {}), "battery_discharge_power_curve")
+        self.battery_discharge_power_curve_default = self.validate_curve(self.args.get("battery_discharge_power_curve_default", {}), "battery_discharge_power_curve_default")
 
-        self.battery_discharge_power_curve_default = self.args.get("battery_discharge_power_curve_default", {})
-        if not isinstance(self.battery_discharge_power_curve_default, dict):
-            self.battery_discharge_power_curve_default = {}
-            self.log("Warn: battery_discharge_power_curve_default is incorrectly configured - ignoring")
-            self.record_status("battery_discharge_power_curve_default is incorrectly configured - ignoring", had_errors=True)
-
-        # Temperature curve charge
-        self.battery_temperature_charge_curve = self.args.get("battery_temperature_charge_curve", {})
-        if not isinstance(self.battery_temperature_charge_curve, dict):
-            self.log("Data is {}".format(self.battery_temperature_charge_curve))
-            self.battery_temperature_charge_curve = {}
-            self.log("Warn: battery_temperature_charge_curve is incorrectly configured - ignoring")
-            self.record_status("battery_temperature_charge_curve is incorrectly configured - ignoring", had_errors=True)
-
-        # Temperature curve discharge
-        self.battery_temperature_discharge_curve = self.args.get("battery_temperature_discharge_curve", {})
-        if not isinstance(self.battery_temperature_discharge_curve, dict):
-            self.battery_temperature_discharge_curve = {}
-            self.log("Warn: battery_temperature_discharge_curve is incorrectly configured - ignoring")
-            self.record_status("battery_temperature_discharge_curve is incorrectly configured - ignoring", had_errors=True)
+        # Temperature curve charge/discharge
+        self.battery_temperature_charge_curve = self.validate_curve(self.args.get("battery_temperature_charge_curve", {}), "battery_temperature_charge_curve")
+        self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_margin = 0.0
