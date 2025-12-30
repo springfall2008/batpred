@@ -296,7 +296,7 @@ class SolaxAPI(ComponentBase):
     Handles authentication and plant information retrieval
     """
 
-    def initialize(self, client_id, client_secret, region="eu", plant_id=None, automatic=False):
+    def initialize(self, client_id, client_secret, region="eu", plant_id=None, automatic=False, enable_controls=True):
         """
         Initialize the SolaX API component
 
@@ -315,7 +315,6 @@ class SolaxAPI(ComponentBase):
         self.current_mode_hash = None
         self.current_mode_hash_timestamp = None
         self.have_set_default_mode = False
-        self.enable_controls = False # XXXX: Temporary disable controls until tested
 
         # Build base URL from region
         self.base_url = f"https://{SOLAX_REGIONS.get(region, SOLAX_REGIONS['eu'])}"

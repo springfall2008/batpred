@@ -236,6 +236,7 @@ COMPONENT_LIST = {
             "plant_id": {"required": False, "config": "solax_plant_id"},
             "region": {"required": False, "config": "solax_region", "default": "eu"},
             "automatic": {"required": False, "config": "solax_automatic", "default": False},
+            "enable_controls": {"required": False, "config": "solax_enable_controls", "default": True},
         },
         "phase": 1,
         "can_restart": True,
