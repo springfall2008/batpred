@@ -374,8 +374,6 @@ class SolaxAPI(ComponentBase):
 
         # Set up entity references for each plant
         # Load/import/export from plant realtime data
-        inverter_list = [self.plant_inverters[plant][0] for plant in plants]
-
         self.set_arg("load_today", [f"sensor.{self.prefix}_solax_{plant}_total_load" for plant in plants])
         self.set_arg("import_today", [f"sensor.{self.prefix}_solax_{plant}_total_imported" for plant in plants])
         self.set_arg("export_today", [f"sensor.{self.prefix}_solax_{plant}_total_exported" for plant in plants])
