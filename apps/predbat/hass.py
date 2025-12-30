@@ -161,11 +161,13 @@ class Hass:
         possible_locations = [
             os.getenv("PREDBAT_SECRETS_FILE"),
             "secrets.yaml",
+            "/homeassistant/secrets.yaml",
+            "/conf/secrets.yaml",
             "/config/secrets.yaml",
         ]
 
         for location in possible_locations:
-            if location and os.path.exists(location):
+            if location and os.path.isfile(location):
                 secrets_file = location
                 break
 

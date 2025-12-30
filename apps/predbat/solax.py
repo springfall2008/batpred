@@ -315,6 +315,7 @@ class SolaxAPI(ComponentBase):
         self.current_mode_hash = None
         self.current_mode_hash_timestamp = None
         self.have_set_default_mode = False
+        self.enable_controls = enable_controls
 
         # Build base URL from region
         self.base_url = f"https://{SOLAX_REGIONS.get(region, SOLAX_REGIONS['eu'])}"
