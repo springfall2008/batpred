@@ -16,7 +16,6 @@ import traceback
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
 
-
 SOLAX_TIMEOUT = 20
 SOLAX_RETRIES = 5
 SOLAX_COMMAND_RETRY_DELAY = 2.0
@@ -552,7 +551,13 @@ class SolaxAPI(ComponentBase):
         max_soc = 0
         for plant_info in self.plant_info:
             if plant_info.get("plantId") == plant_id:
-                max_soc = plant_info.get("batteryCapacity", 0)
+                try:
+                    max_soc += plant_info.get("batteryCapacity", 0)
+                except (TypeError, ValueError):
+                    pass
+        ## Fallback to calculating from current SOC if not available
+        if max_soc == 0:
+            battery_soc, max_soc = self.get_current_soc_battery_kwh(plant_id)
         return max_soc  # in kWh
 
     def get_charge_discharge_power_battery(self, plant_id):
@@ -564,13 +569,16 @@ class SolaxAPI(ComponentBase):
     def get_current_soc_battery_kwh(self, plant_id):
         current_soc = 0
         count_devices = 0
+        battery_remainings = 0
+        battery_size_max = 0
         for device_id in self.plant_batteries.get(plant_id, []):
             current_soc += self.realtime_device_data.get(device_id, {}).get("batterySOC", 0)
+            battery_remainings += self.realtime_device_data.get(device_id, {}).get("batteryRemainings", 0)
             count_devices += 1
         if count_devices > 0:
             current_soc = current_soc / count_devices
-            current_soc = current_soc * self.get_max_soc_battery(plant_id) / 100.0  # Convert % to kWh
-        return current_soc  # in kWh
+            battery_size_max = round(battery_remainings * 100 / current_soc if current_soc > 0 else 0, 2)
+        return battery_remainings, battery_size_max  # in kWh
 
     def get_battery_temperature(self, plant_id):
         temperature = 100.0
@@ -864,8 +872,8 @@ class SolaxAPI(ComponentBase):
                         self.log("Warn: SolaX API: Auth failed - Invalid client ID or secret")
                         self.token_expiry = None
                         self.access_token = None
-                        self.error_count += 1
-                        return None
+                        # Don't count error here as its counted when the exception is raised caught
+                        raise aiohttp.ClientError("Invalid client ID or secret")
                     elif code != 0:
                         error_msg = data.get("message", "Unknown error")
                         self.log(f"Warn: SolaX API: Auth failed with code {data.get('code')}: {error_msg}")
@@ -1494,7 +1502,6 @@ class SolaxAPI(ComponentBase):
             return None
         self.log("Solax: query_request_result response {}".format(response))
 
-        # Check response code (note: this API uses 'code': 0 for success, not 10000)
         code = response.get("code")
         error, error_description = self.decode_api_code(code)
         if error:
@@ -1714,7 +1721,7 @@ class SolaxAPI(ComponentBase):
                 self.log(f"SolaX API: Set default work mode to Self Use for device {sn_list}")
                 self.have_set_default_mode = True
             else:
-                self.log(f"Warn: SolaX API: Failed to set default work mode for device {sn}")
+                self.log(f"Warn: SolaX API: Failed to set default work mode for device {sn_list}")
             return success
         return True
 
@@ -1893,7 +1900,10 @@ class SolaxAPI(ComponentBase):
             load_power = 0
 
             if device_type == 1:  # Inverter
-                ac_power = realtime.get("acPower1", 0) + realtime.get("acPower2", 0) + realtime.get("acPower3", 0)
+                ac_power1 = realtime.get("acPower1", 0)
+                ac_power2 = realtime.get("acPower2", 0)
+                ac_power3 = realtime.get("acPower3", 0)
+                ac_power = (ac_power1 if ac_power1 else 0) + (ac_power2 if ac_power2 else 0) + (ac_power3 if ac_power3 else 0)
                 gridPower = realtime.get("gridPower", 0)
                 pvMap = realtime.get("pvMap", {})
                 mpptMap = realtime.get("mpptMap", {}) # cSpell:disable-line
@@ -2079,7 +2089,7 @@ class SolaxAPI(ComponentBase):
             inverter_max_power = self.get_max_power_inverter(plant_id)
             battery_max_power = self.get_max_power_battery(plant_id)
             battery_soc_max = self.get_max_soc_battery(plant_id)
-            battery_soc = self.get_current_soc_battery_kwh(plant_id)
+            battery_soc, battery_size_max_approx = self.get_current_soc_battery_kwh(plant_id)
             battery_temp = self.get_battery_temperature(plant_id)
             charge_discharge_power = self.get_charge_discharge_power_battery(plant_id)
 
@@ -2351,7 +2361,7 @@ class SolaxAPI(ComponentBase):
         return True
 
 
-class MockBase:
+class MockBase: # pragma: no cover
     """Mock base class for standalone testing"""
 
     def __init__(self):
@@ -2399,7 +2409,7 @@ class MockBase:
         print(f"Set arg {key} = {value} (state={state})")
 
 
-async def test_solax_api(client_id, client_secret, region, plant_id):
+async def test_solax_api(client_id, client_secret, region, plant_id): # pragma: no cover
     """
     Test function for standalone execution
 
@@ -2428,6 +2438,7 @@ async def test_solax_api(client_id, client_secret, region, plant_id):
         region=region,
         plant_id=plant_id,
         automatic=True,
+        enable_controls=False,
     )
     result = await solax.run(first=True, seconds=0)
     if not result:
@@ -2483,7 +2494,7 @@ async def test_solax_api(client_id, client_secret, region, plant_id):
     print(f"{'=' * 60}\n")
 
 
-def main():
+def main(): # pragma: no cover
     """Main entry point for standalone testing"""
     parser = argparse.ArgumentParser(description="Test SolaX Cloud API")
     parser.add_argument("--client-id", required=True, help="SolaX Cloud client ID")
@@ -2496,5 +2507,5 @@ def main():
     asyncio.run(test_solax_api(args.client_id, args.client_secret, args.region, args.plant_id))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": # pragma: no cover
     main()
