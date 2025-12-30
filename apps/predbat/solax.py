@@ -380,10 +380,10 @@ class SolaxAPI(ComponentBase):
         self.set_arg("import_today", [f"sensor.{self.prefix}_solax_{plant}_total_imported" for plant in plants])
         self.set_arg("export_today", [f"sensor.{self.prefix}_solax_{plant}_total_exported" for plant in plants])
         self.set_arg("pv_today", [f"sensor.{self.prefix}_solax_{plant}_total_yield" for plant in plants])
+        self.set_arg("battery_power", [f"sensor.{self.prefix}_solax_{plant}_battery_charge_discharge_power" for plant in plants])
 
         # Power and SOC from device realtime data (using first inverter)
         inverter_list = [self.plant_inverters[plant][0] for plant in plants]
-        self.set_arg("battery_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_charge_discharge_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("grid_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_grid_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("pv_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_pv_power" for plant, inv in zip(plants, inverter_list)])
         self.set_arg("load_power", [f"sensor.{self.prefix}_solax_{plant}_{inv}_ac_power" for plant, inv in zip(plants, inverter_list)])
@@ -556,6 +556,12 @@ class SolaxAPI(ComponentBase):
             if plant_info.get("plantId") == plant_id:
                 max_soc = plant_info.get("batteryCapacity", 0)
         return max_soc  # in kWh
+
+    def get_charge_discharge_power_battery(self, plant_id):
+        total_power = 0
+        for device_id in self.plant_batteries.get(plant_id, []):
+            total_power += self.realtime_device_data.get(device_id, {}).get("chargeDischargePower", 0)
+        return total_power  # in Watts
 
     def get_current_soc_battery_kwh(self, plant_id):
         current_soc = 0
@@ -2077,6 +2083,7 @@ class SolaxAPI(ComponentBase):
             battery_soc_max = self.get_max_soc_battery(plant_id)
             battery_soc = self.get_current_soc_battery_kwh(plant_id)
             battery_temp = self.get_battery_temperature(plant_id)
+            charge_discharge_power = self.get_charge_discharge_power_battery(plant_id)
 
             # Battery SOC
             self.dashboard_item(
@@ -2088,6 +2095,18 @@ class SolaxAPI(ComponentBase):
                     "device_class": "energy",
                     "state_class": "measurement",
                     "soc_max": battery_soc_max,
+                },
+                app="solax",
+            )
+            # Battery Charge/Discharge Power
+            self.dashboard_item(
+                f"sensor.{self.prefix}_solax_{plant_id}_battery_charge_discharge_power",
+                state=charge_discharge_power,
+                attributes={
+                    "friendly_name": f"SolaX {plant_name} Battery Charge/Discharge Power",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                    "state_class": "measurement",
                 },
                 app="solax",
             )
