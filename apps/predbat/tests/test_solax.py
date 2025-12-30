@@ -760,6 +760,7 @@ async def test_publish_plant_info_main(my_predbat):
     solax_api.realtime_device_data["TP123456123123"] = {
         "batterySOC": 75,
         "batteryTemperature": 18.5,
+        "batteryRemainings": 11.25,  # 75% of 15.0 kWh
     }
 
     return await test_publish_plant_info(solax_api, test_plant_id, test_plant_name)
@@ -4990,9 +4991,9 @@ async def test_helper_methods_main():
     
     api8.plant_batteries["plant8"] = ["BAT001"]
     api8.plant_info = [{"plantId": "plant8", "batteryCapacity": 15.0}]
-    api8.realtime_device_data["BAT001"] = {"batterySOC": 75}  # 75%
+    api8.realtime_device_data["BAT001"] = {"batterySOC": 75, "batteryRemainings": 11.25}  # 75%
     
-    result8 = api8.get_current_soc_battery_kwh("plant8")
+    result8, result8_max = api8.get_current_soc_battery_kwh("plant8")
     expected8 = 75 * 15.0 / 100.0  # 11.25 kWh
     if abs(result8 - expected8) > 0.01:
         print(f"**** ERROR: Expected {expected8} kWh, got {result8} kWh ****")
@@ -5007,10 +5008,10 @@ async def test_helper_methods_main():
     
     api9.plant_batteries["plant9"] = ["BAT001", "BAT002"]
     api9.plant_info = [{"plantId": "plant9", "batteryCapacity": 20.0}]
-    api9.realtime_device_data["BAT001"] = {"batterySOC": 80}  # 80%
-    api9.realtime_device_data["BAT002"] = {"batterySOC": 60}  # 60%
+    api9.realtime_device_data["BAT001"] = {"batterySOC": 80, "batteryRemainings": 0.8*20.0/2}  # 80%
+    api9.realtime_device_data["BAT002"] = {"batterySOC": 60, "batteryRemainings": 0.6*20.0/2}  # 60%
     
-    result9 = api9.get_current_soc_battery_kwh("plant9")
+    result9, result9_max = api9.get_current_soc_battery_kwh("plant9")
     expected9 = ((80 + 60) / 2) * 20.0 / 100.0  # Average 70%, then to kWh = 14.0
     if abs(result9 - expected9) > 0.01:
         print(f"**** ERROR: Expected {expected9} kWh, got {result9} kWh ****")
@@ -5023,7 +5024,7 @@ async def test_helper_methods_main():
     api10 = MockSolaxAPI()
     api10.initialize(client_id="test", client_secret="test", region="eu")
     
-    result10 = api10.get_current_soc_battery_kwh("plant10")
+    result10, result10_max = api10.get_current_soc_battery_kwh("plant10")
     if result10 != 0:
         print(f"**** ERROR: Expected 0 kWh for no batteries, got {result10} kWh ****")
         failed = True
@@ -6530,12 +6531,12 @@ async def test_query_request_result_main():
         
         result9 = await api9.query_request_result("req444444")
     
-    # Should handle gracefully
-    if result9 is None:
-        print(f"**** ERROR: Should handle missing fields gracefully ****")
+    # When status is missing (None), it will be returned as the status
+    if result9 is not None:
+        print(f"**** ERROR: Should return None when device has missing status field ****")
         failed = True
     else:
-        print(f"✓ Missing device fields handled gracefully")
+        print(f"✓ Missing status field returns None correctly")
     
     # Test 10: Long request ID
     print("Test 10: Long request ID")

@@ -16,7 +16,6 @@ import traceback
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
 
-
 SOLAX_TIMEOUT = 20
 SOLAX_RETRIES = 5
 SOLAX_COMMAND_RETRY_DELAY = 2.0
@@ -552,7 +551,13 @@ class SolaxAPI(ComponentBase):
         max_soc = 0
         for plant_info in self.plant_info:
             if plant_info.get("plantId") == plant_id:
-                max_soc = plant_info.get("batteryCapacity", 0)
+                try:
+                    max_soc += plant_info.get("batteryCapacity", 0)
+                except (TypeError, ValueError):
+                    pass
+        ## Fallback to calculating from current SOC if not available
+        if max_soc == 0:
+            battery_soc, max_soc = self.get_current_soc_battery_kwh(plant_id)
         return max_soc  # in kWh
 
     def get_charge_discharge_power_battery(self, plant_id):
@@ -564,13 +569,16 @@ class SolaxAPI(ComponentBase):
     def get_current_soc_battery_kwh(self, plant_id):
         current_soc = 0
         count_devices = 0
+        battery_remainings = 0
+        battery_size_max = 0
         for device_id in self.plant_batteries.get(plant_id, []):
             current_soc += self.realtime_device_data.get(device_id, {}).get("batterySOC", 0)
+            battery_remainings += self.realtime_device_data.get(device_id, {}).get("batteryRemainings", 0)
             count_devices += 1
         if count_devices > 0:
             current_soc = current_soc / count_devices
-            current_soc = current_soc * self.get_max_soc_battery(plant_id) / 100.0  # Convert % to kWh
-        return current_soc  # in kWh
+            battery_size_max = round(battery_remainings * 100 / current_soc if current_soc > 0 else 0, 2)
+        return battery_remainings, battery_size_max  # in kWh
 
     def get_battery_temperature(self, plant_id):
         temperature = 100.0
@@ -864,8 +872,8 @@ class SolaxAPI(ComponentBase):
                         self.log("Warn: SolaX API: Auth failed - Invalid client ID or secret")
                         self.token_expiry = None
                         self.access_token = None
-                        self.error_count += 1
-                        return None
+                        # Don't count error here as its counted when the exception is raised caught
+                        raise aiohttp.ClientError("Invalid client ID or secret")
                     elif code != 0:
                         error_msg = data.get("message", "Unknown error")
                         self.log(f"Warn: SolaX API: Auth failed with code {data.get('code')}: {error_msg}")
@@ -1892,7 +1900,10 @@ class SolaxAPI(ComponentBase):
             load_power = 0
 
             if device_type == 1:  # Inverter
-                ac_power = realtime.get("acPower1", 0) + realtime.get("acPower2", 0) + realtime.get("acPower3", 0)
+                ac_power1 = realtime.get("acPower1", 0)
+                ac_power2 = realtime.get("acPower2", 0)
+                ac_power3 = realtime.get("acPower3", 0)
+                ac_power = (ac_power1 if ac_power1 else 0) + (ac_power2 if ac_power2 else 0) + (ac_power3 if ac_power3 else 0)
                 gridPower = realtime.get("gridPower", 0)
                 pvMap = realtime.get("pvMap", {})
                 mpptMap = realtime.get("mpptMap", {}) # cSpell:disable-line
@@ -2078,7 +2089,7 @@ class SolaxAPI(ComponentBase):
             inverter_max_power = self.get_max_power_inverter(plant_id)
             battery_max_power = self.get_max_power_battery(plant_id)
             battery_soc_max = self.get_max_soc_battery(plant_id)
-            battery_soc = self.get_current_soc_battery_kwh(plant_id)
+            battery_soc, battery_size_max_approx = self.get_current_soc_battery_kwh(plant_id)
             battery_temp = self.get_battery_temperature(plant_id)
             charge_discharge_power = self.get_charge_discharge_power_battery(plant_id)
 
