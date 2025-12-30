@@ -1494,7 +1494,6 @@ class SolaxAPI(ComponentBase):
             return None
         self.log("Solax: query_request_result response {}".format(response))
 
-        # Check response code (note: this API uses 'code': 0 for success, not 10000)
         code = response.get("code")
         error, error_description = self.decode_api_code(code)
         if error:
@@ -1714,7 +1713,7 @@ class SolaxAPI(ComponentBase):
                 self.log(f"SolaX API: Set default work mode to Self Use for device {sn_list}")
                 self.have_set_default_mode = True
             else:
-                self.log(f"Warn: SolaX API: Failed to set default work mode for device {sn}")
+                self.log(f"Warn: SolaX API: Failed to set default work mode for device {sn_list}")
             return success
         return True
 
@@ -2351,7 +2350,7 @@ class SolaxAPI(ComponentBase):
         return True
 
 
-class MockBase:
+class MockBase: # pragma: no cover
     """Mock base class for standalone testing"""
 
     def __init__(self):
@@ -2399,7 +2398,7 @@ class MockBase:
         print(f"Set arg {key} = {value} (state={state})")
 
 
-async def test_solax_api(client_id, client_secret, region, plant_id):
+async def test_solax_api(client_id, client_secret, region, plant_id): # pragma: no cover
     """
     Test function for standalone execution
 
@@ -2428,6 +2427,7 @@ async def test_solax_api(client_id, client_secret, region, plant_id):
         region=region,
         plant_id=plant_id,
         automatic=True,
+        enable_controls=False,
     )
     result = await solax.run(first=True, seconds=0)
     if not result:
@@ -2483,7 +2483,7 @@ async def test_solax_api(client_id, client_secret, region, plant_id):
     print(f"{'=' * 60}\n")
 
 
-def main():
+def main(): # pragma: no cover
     """Main entry point for standalone testing"""
     parser = argparse.ArgumentParser(description="Test SolaX Cloud API")
     parser.add_argument("--client-id", required=True, help="SolaX Cloud client ID")
@@ -2496,5 +2496,5 @@ def main():
     asyncio.run(test_solax_api(args.client_id, args.client_secret, args.region, args.plant_id))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": # pragma: no cover
     main()
