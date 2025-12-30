@@ -2235,7 +2235,7 @@ function saveSectionState() {
 function restoreSectionState() {
     const stateStr = sessionStorage.getItem('dashboardSectionState');
     if (!stateStr) return;
-    
+
     try {
         const state = JSON.parse(stateStr);
         Object.keys(state).forEach(sectionId => {
