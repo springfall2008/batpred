@@ -327,6 +327,161 @@ you will need to wait until you have a few days of history established (at least
 
 **NOTE:** It's recommended to store `ge_cloud_key` in `secrets.yaml` and reference it as `ge_cloud_key: !secret givenergy_api_key` - see [Storing secrets](#storing-secrets).
 
+### SolaX Cloud Direct
+
+Predbat supports direct communication with the SolaX Cloud API to control SolaX inverters and batteries without requiring local integrations.
+
+To use SolaX Cloud Direct, you need to obtain API credentials (client ID and client secret) from your SolaX Cloud account.
+
+#### Getting your SolaX Cloud API credentials
+
+1. Log in to your SolaX Cloud account at:
+   - EU: <https://www.solaxcloud.com>
+   - US: <https://www.solaxcloud.us>
+   - CN: <https://www.solaxcloud.com.cn>
+2. Navigate to Settings → API Management (or Developer Settings)
+3. Create a new API application or access existing credentials
+4. Copy your **Client ID** and **Client Secret**
+5. Add these to your `apps.yaml` configuration
+
+#### Basic SolaX Cloud configuration
+
+If you set **solax_automatic** to `true`, Predbat will automatically discover your plants, inverters, and batteries, and configure all necessary entities without manual intervention.
+
+```yaml
+  solax_client_id: 'your_client_id_here'
+  solax_client_secret: 'your_client_secret_here'
+  solax_region: 'eu'  # Options: 'eu', 'us', or 'cn'
+  solax_automatic: true
+  solax_enable_controls: true
+```
+
+**NOTE:** It's **strongly recommended** to store `solax_client_id` and `solax_client_secret` in `secrets.yaml` and reference them as:
+
+```yaml
+  solax_client_id: !secret solax_client_id
+  solax_client_secret: !secret solax_client_secret
+```
+
+See [Storing secrets](#storing-secrets) for more information.
+
+#### Region selection
+
+Set **solax_region** based on where your SolaX Cloud account is registered:
+
+- `'eu'` - European region (default) - openapi-eu.solaxcloud.com
+- `'us'` - United States region - openapi-us.solaxcloud.com
+- `'cn'` - China region - openapi.solaxcloud.com
+
+#### Optional configuration options
+
+**solax_plant_id**: If you have multiple plants registered in your SolaX Cloud account but only want Predbat to control specific plants, you can filter by plant ID:
+
+```yaml
+  solax_plant_id: '1618699116555534337'
+```
+
+If not specified, Predbat will control all plants found in your account.
+
+**solax_enable_controls**: Set to `False` to disable automatic inverter control (read-only mode). Useful for monitoring without control:
+
+```yaml
+  solax_enable_controls: False
+```
+
+#### Automatic configuration (solax_automatic: true)
+
+When **solax_automatic** is enabled, Predbat will:
+
+1. Discover all plants with inverters and batteries in your SolaX Cloud account
+2. Automatically configure `num_inverters` based on the number of plants found
+3. Set `inverter_type` to `SolaxCloud` for each plant
+4. Create and configure all required entities including:
+   - Battery power, SOC, capacity, and temperature sensors
+   - Inverter and PV power sensors
+   - Energy totals (yield, charged, discharged, imported, exported, load)
+   - Charge/discharge schedule controls (start/end times, target SOC, rates)
+   - Enable/disable switches for charge and export schedules
+   - Reserve SOC setting
+
+No manual entity configuration is required when using automatic mode.
+
+#### Published entities
+
+When SolaX Cloud is configured, Predbat creates the following entities for each plant (replace `{plant_id}` with your actual plant ID):
+
+**Sensors:**
+
+- `sensor.predbat_solax_{plant_id}_battery_soc` - Battery state of charge (kWh)
+- `sensor.predbat_solax_{plant_id}_battery_capacity` - Battery capacity (kWh)
+- `sensor.predbat_solax_{plant_id}_battery_temperature` - Battery temperature (°C)
+- `sensor.predbat_solax_{plant_id}_battery_max_power` - Battery maximum power (W)
+- `sensor.predbat_solax_{plant_id}_inverter_max_power` - Inverter maximum power (W)
+- `sensor.predbat_solax_{plant_id}_pv_capacity` - PV array capacity (kWp)
+- `sensor.predbat_solax_{plant_id}_total_yield` - Total PV generation (kWh)
+- `sensor.predbat_solax_{plant_id}_total_charged` - Total battery charged (kWh)
+- `sensor.predbat_solax_{plant_id}_total_discharged` - Total battery discharged (kWh)
+- `sensor.predbat_solax_{plant_id}_total_imported` - Total grid import (kWh)
+- `sensor.predbat_solax_{plant_id}_total_exported` - Total grid export (kWh)
+- `sensor.predbat_solax_{plant_id}_total_load` - Total load consumption (kWh, calculated)
+- `sensor.predbat_solax_{plant_id}_total_earnings` - Total earnings from exports
+
+**Control entities:**
+
+- `number.predbat_solax_{plant_id}_setting_reserve` - Battery reserve SOC (%)
+- `select.predbat_solax_{plant_id}_battery_schedule_charge_start_time` - Charge start time
+- `select.predbat_solax_{plant_id}_battery_schedule_charge_end_time` - Charge end time
+- `number.predbat_solax_{plant_id}_battery_schedule_charge_target_soc` - Charge target SOC (%)
+- `number.predbat_solax_{plant_id}_battery_schedule_charge_rate` - Charge rate (W)
+- `switch.predbat_solax_{plant_id}_battery_schedule_charge_enable` - Enable/disable charging
+- `select.predbat_solax_{plant_id}_battery_schedule_export_start_time` - Export start time
+- `select.predbat_solax_{plant_id}_battery_schedule_export_end_time` - Export end time
+- `number.predbat_solax_{plant_id}_battery_schedule_export_target_soc` - Export target SOC (%)
+- `number.predbat_solax_{plant_id}_battery_schedule_export_rate` - Export rate (W)
+- `switch.predbat_solax_{plant_id}_battery_schedule_export_enable` - Enable/disable exporting
+
+#### Manual configuration (solax_automatic: False)
+
+If you disable automatic configuration, you must manually configure inverter entities in `apps.yaml` similar to other inverter types. In this case, set:
+
+```yaml
+  solax_automatic: False
+  num_inverters: 1
+  inverter_type: 'SolaxCloud'
+```
+
+Then manually configure all required entities following the standard Predbat inverter configuration pattern.
+
+#### Multi-inverter / Multi-plant setup
+
+If you have multiple SolaX plants, automatic configuration will handle them automatically. Each plant will be treated as a separate inverter in Predbat's configuration.
+
+#### Supported inverter types
+
+SolaX Cloud API supports various SolaX inverter models including:
+
+- X1 series (single-phase)
+- X3 series (three-phase)
+- X3-Hybrid series
+- Other SolaX cloud-connected inverters
+
+Both residential (business_type=1) and commercial (business_type=4) installations are supported.
+
+#### Troubleshooting
+
+If you experience connection issues:
+
+1. Verify your client ID and client secret are correct
+2. Confirm you're using the correct region setting
+3. Check that your SolaX Cloud account has API access enabled
+4. Review Predbat logs for authentication errors
+5. Test your API credentials using the standalone test:
+
+```bash
+cd /config/appdaemon/apps/predbat
+python3 solax.py --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET --region eu
+```
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
@@ -352,6 +507,7 @@ inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should 
   SFMB: Sofar HYD with solarman modbus
   SIG: SigEnergy Sigenstor
   SK: Sunsynk
+  SolaxCloud: SolaX Cloud API integration
   SX4: Solax Gen4 (Modbus Power Control)
 
 If you have multiple inverters, then set inverter_type to a list of the inverter types.

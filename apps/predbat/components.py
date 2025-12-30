@@ -15,6 +15,7 @@ from ohme import OhmeAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
 from axle import AxleAPI
+from solax import SolaxAPI
 from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
@@ -224,6 +225,21 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "config": "axle_automatic", "default": True},
         },
         "phase": 1,
+    },
+    "solax": {
+        "class": SolaxAPI,
+        "name": "SolaX Cloud API",
+        "event_filter": "predbat_solax_",
+        "args": {
+            "client_id": {"required": True, "config": "solax_client_id"},
+            "client_secret": {"required": True, "config": "solax_client_secret"},
+            "plant_id": {"required": False, "config": "solax_plant_id"},
+            "region": {"required": False, "config": "solax_region", "default": "eu"},
+            "automatic": {"required": False, "config": "solax_automatic", "default": False},
+            "enable_controls": {"required": False, "config": "solax_enable_controls", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
     },
 }
 
