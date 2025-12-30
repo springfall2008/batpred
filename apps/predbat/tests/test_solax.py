@@ -3917,8 +3917,8 @@ async def test_control_mode_functions_main():
     elif captured_calls[0]["payload"]["targetSoc"] != 95:
         print(f"**** ERROR: Expected targetSoc 95, got {captured_calls[0]['payload']['targetSoc']} ****")
         failed = True
-    elif captured_calls[0]["payload"]["chargeDischargPower"] != 5000:
-        print(f"**** ERROR: Expected power 5000, got {captured_calls[0]['payload']['chargeDischargPower']} ****")
+    elif captured_calls[0]["payload"]["chargeDischargPower"] != 5000:  # cspell:disable-line
+        print(f"**** ERROR: Expected power 5000, got {captured_calls[0]['payload']['chargeDischargPower']} ****")  # cspell:disable-line
         failed = True
     elif captured_calls[0]["command_name"] != "soc-target":
         print(f"**** ERROR: Wrong command_name ****")
@@ -3942,8 +3942,8 @@ async def test_control_mode_functions_main():
     elif captured_calls[0]["payload"]["targetSoc"] != 15:
         print(f"**** ERROR: Expected targetSoc 15, got {captured_calls[0]['payload']['targetSoc']} ****")
         failed = True
-    elif captured_calls[0]["payload"]["chargeDischargPower"] != -4500:
-        print(f"**** ERROR: Expected power -4500, got {captured_calls[0]['payload']['chargeDischargPower']} ****")
+    elif captured_calls[0]["payload"]["chargeDischargPower"] != -4500:  # cspell:disable-line
+        print(f"**** ERROR: Expected power -4500, got {captured_calls[0]['payload']['chargeDischargPower']} ****")  # cspell:disable-line
         failed = True
     else:
         print(f"✓ soc_target_control_mode discharge mode test passed")
