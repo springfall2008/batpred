@@ -1910,7 +1910,7 @@ INVERTER_DEF = {
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
-    },    
+    },
 }
 
 # Control modes for Solax inverters
