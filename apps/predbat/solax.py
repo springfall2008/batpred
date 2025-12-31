@@ -264,7 +264,7 @@ Inside a Predbat charge window use SOC target control mode (soc_target_control_m
 Inside a Predbat export window use SOC target control mode (soc_target_control_mode) to reach minimum SOC by end of window
 Outside a Predbat window use self_consume_mode to avoid charging from grid and only discharge to support self consumption
 For freeze charge use self_consume_charge_only_mode to avoid discharging to support self consumption
-For freeze export - Unclear TBD
+For freeze export - Use feedin_priority_mode to export to the grid and avoid discharging
 
 HA Entity controls
 
@@ -321,7 +321,6 @@ class SolaxAPI(ComponentBase):
         self.automatic = automatic
         self.current_mode_hash = None
         self.current_mode_hash_timestamp = None
-        self.have_set_default_mode = False
         self.enable_controls = enable_controls
 
         # Build base URL from region
@@ -637,6 +636,8 @@ class SolaxAPI(ComponentBase):
         charge_window = False
         export_window = False
 
+        current_soc_kwh, max_soc_kwh = self.get_current_soc_battery_kwh(plant_id)
+        current_soc = int((current_soc_kwh / max_soc_kwh) * 100) if max_soc_kwh > 0 else 0
         reserve_soc = as_int(self.controls.get(plant_id, {}).get("reserve"), 10)
         charge_start_str = self.controls.get(plant_id, {}).get("charge", {}).get("start_time", "00:00:00")
         charge_end_str = self.controls.get(plant_id, {}).get("charge", {}).get("end_time", "00:00:00")
@@ -668,17 +669,33 @@ class SolaxAPI(ComponentBase):
 
         # Export takes priority over charge (although overlapping windows should not be possible)
         if export_window:
-            new_mode = "export"
-            new_power = -export_power
             new_target_soc = max(export_target_soc, reserve_soc)
             duration = (export_end - now).total_seconds()
             new_end = export_end_minutes
+            if new_target_soc >= current_soc:
+                # Freeze export
+                new_mode = "freeze_export"
+                new_power = 0
+                new_target_soc = current_soc
+            else:
+                new_mode = "export"
+                new_power = -export_power
         elif charge_window:
-            new_mode = "charge"
-            new_power = charge_power
-            new_target_soc = max(charge_target_soc, reserve_soc)
             duration = (charge_end - now).total_seconds()
             new_end = charge_end_minutes
+            new_target_soc = max(charge_target_soc, reserve_soc)
+            if (new_target_soc == reserve_soc) or (new_target_soc == current_soc):
+                # Freeze charge
+                new_mode = "freeze_charge"
+                new_power = 0
+                new_target_soc = current_soc
+            elif new_target_soc < current_soc:
+                # Target SOC is lower than current, go to ECO mode
+                new_mode = "eco"
+                new_power = 0
+            else:
+                new_mode = "charge"
+                new_power = charge_power
         else:
             new_mode = "eco"
             new_target_soc = reserve_soc
@@ -701,10 +718,32 @@ class SolaxAPI(ComponentBase):
             success = True
             if new_mode == "eco":
                 self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying self consume mode")
-                success = await self.self_consume_mode(sn_list, time_of_duration=duration)
-            else:
+                success1 = await self.set_default_work_mode(sn_list, mode="selfuse")
+                success2 = await self.self_consume_mode(sn_list, time_of_duration=duration)
+                success = success1 and success2
+            elif new_mode == "freeze_charge":
+                self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying self consume charge only mode")
+                success2 = await self.set_default_work_mode(sn_list, mode="selfuse")
+                success1 = await self.self_consume_charge_only_mode(sn_list, time_of_duration=duration)
+                success = success1 and success2
+            elif new_mode == "freeze_export":
+                success1 = await self.set_default_work_mode(sn_list, mode="feedin")
+                success2 = await self.exit_vpp_mode(sn_list)
+                success = success1 and success2
+            elif new_mode == "charge":
                 self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying SOC target control mode")
-                success = await self.soc_target_control_mode(sn_list, new_target_soc, charge_discharge_power=new_power)
+                success1 = await self.set_default_work_mode(sn_list, mode="selfuse")
+                success2 = await self.soc_target_control_mode(sn_list, new_target_soc, charge_discharge_power=new_power)
+                success = success1 and success2
+            elif new_mode == "export":
+                self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying SOC target control mode for export")
+                success1 = await self.set_default_work_mode(sn_list, mode="feedin")
+                success2 = await self.soc_target_control_mode(sn_list, new_target_soc, charge_discharge_power=new_power)
+                success = success1 and success2
+            else:
+                self.log(f"SolaX API: Unknown mode {new_mode} for plant {plant_id}")
+                success = False
+
             if success:
                 self.current_mode_hash = new_mode_hash
                 self.current_mode_hash_timestamp = now
@@ -1586,7 +1625,7 @@ class SolaxAPI(ComponentBase):
                 await asyncio.sleep(SOLAX_COMMAND_RETRY_DELAY + attempt)
                 status = await self.query_request_result(request_id)
 
-                if status > SOLAX_COMMAND_STATUS_ISSUE_SUCCESS:
+                if status is not None and (status > SOLAX_COMMAND_STATUS_ISSUE_SUCCESS):
                     if status == SOLAX_COMMAND_STATUS_EXECUTION_SUCCESS:
                         self.log(f"SolaX API: Command execution succeeded for requestId {request_id}")
                         return True
@@ -1683,6 +1722,8 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, "self-consume", sn_list)
 
+
+
     async def self_consume_charge_only_mode(self, sn_list, time_of_duration, next_motion=161,
                                             business_type=None):
         """
@@ -1721,28 +1762,42 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, "self-consume-charge-only", sn_list)
 
-    async def set_default_work_modes(self, plant_id, business_type=None):
+    async def exit_vpp_mode(self, sn_list, business_type=None):
         """
-        Set all inverters to default work mode (Self Use)
+        Exit remote control mode
+
+        Batch set inverter to exit remote control (VPP mode).
 
         Args:
+            sn_list: List of device serial numbers (minimum 1, maximum 10 devices)
             business_type: Business type (1=Residential, 4=Commercial), defaults to residential
 
         Returns:
-            True if all commands executed successfully, False otherwise
-        """
-        await self.set_default_work_mode(self.plant_inverters.get(plant_id, []), business_type=business_type)
+            True if command executed successfully, False otherwise
 
-    async def set_default_work_mode(self, sn_list, business_type=None):
-        if not self.have_set_default_mode:
-            success = await self.set_work_mode("selfuse", sn_list, 10, 100, 0, "00:00", "00:00", "00:00", "23:59", business_type=business_type)
-            if success:
-                self.log(f"SolaX API: Set default work mode to Self Use for device {sn_list}")
-                self.have_set_default_mode = True
-            else:
-                self.log(f"Warn: SolaX API: Failed to set default work mode for device {sn_list}")
-            return success
-        return True
+        Notes:
+            - Exits remote control mode for all specified inverters
+            - Inverters return to their default operation mode
+            - Can control 1-10 devices in a single request
+        """
+        # Build POST body
+        payload = {
+            "snList": sn_list,
+            "businessType": business_type if business_type is not None else BUSINESS_TYPE_RESIDENTIAL,
+        }
+
+        endpoint = "/openapi/v2/device/inverter_vpp_mode/exit_vpp_mode"
+
+        # Send command and wait for result
+        return await self.send_command_and_wait(endpoint, payload, "exit-vpp-mode", sn_list)
+
+    async def set_default_work_mode(self, sn_list, business_type=None, mode="selfuse"):
+        success = await self.set_work_mode(mode, sn_list, 10, 100, 0, "00:00", "00:00", "00:00", "23:59", business_type=business_type)
+        if success:
+            self.log(f"SolaX API: Set default work mode to {mode} for device {sn_list}")
+        else:
+            self.log(f"Warn: SolaX API: Failed to set default work mode to {mode} for device {sn_list}")
+        return success
 
     async def set_work_mode(self, mode, sn_list, min_soc, charge_upper_soc, charge_from_grid_enable,
                                 charge_start_time, charge_end_time,
@@ -2362,11 +2417,6 @@ class SolaxAPI(ComponentBase):
 
         # Apply controls
         if not is_readonly and self.enable_controls:
-            if first:
-                # Ensure default work modes are set on first run
-                for plantID in self.plant_list:
-                    await self.set_default_work_modes(plantID)
-
             # Control
             if first or seconds % 60 == 0:
                 for plantID in self.plant_list:
@@ -2430,7 +2480,7 @@ class MockBase: # pragma: no cover
         print(f"Set arg {key} = {value} (state={state})")
 
 
-async def test_solax_api(client_id, client_secret, region, plant_id): # pragma: no cover
+async def test_solax_api(client_id, client_secret, region, plant_id, test_mode=None): # pragma: no cover
     """
     Test function for standalone execution
 
@@ -2439,6 +2489,7 @@ async def test_solax_api(client_id, client_secret, region, plant_id): # pragma: 
         client_secret: SolaX client secret
         region: API region
         plant_id: Optional plant ID filter
+        test_mode: Optional control mode to test ('eco', 'charge', 'freeze_charge', 'export', 'freeze_export')
     """
     print(f"\n{'=' * 60}")
     print(f"Testing SolaX API")
@@ -2446,12 +2497,15 @@ async def test_solax_api(client_id, client_secret, region, plant_id): # pragma: 
     print(f"Client ID: {client_id[:10]}...")
     if plant_id:
         print(f"Plant ID filter: {plant_id}")
+    if test_mode:
+        print(f"Test mode: {test_mode}")
     print(f"{'=' * 60}\n")
 
     # Create mock base
     mock_base = MockBase()
 
     # Create SolaX API instance
+    enable_controls = test_mode is not None
     solax = SolaxAPI(
         mock_base,
         client_id=client_id,
@@ -2459,7 +2513,7 @@ async def test_solax_api(client_id, client_secret, region, plant_id): # pragma: 
         region=region,
         plant_id=plant_id,
         automatic=True,
-        enable_controls=False,
+        enable_controls=enable_controls,
     )
     result = await solax.run(first=True, seconds=0)
     if not result:
@@ -2468,64 +2522,132 @@ async def test_solax_api(client_id, client_secret, region, plant_id): # pragma: 
     else:
         print("✓ Initialization successful")
 
-    return 0
+    # If test_mode is specified, apply controls
+    if test_mode and solax.plant_list:
+        test_plant_id = solax.plant_list[0]
+        print(f"\n{'=' * 60}")
+        print(f"Testing control mode: {test_mode}")
+        print(f"Plant ID: {test_plant_id}")
+        print(f"{'=' * 60}\n")
 
+        # Mock the controls structure based on the test mode
+        now = datetime.now(solax.local_tz)
 
-    # Test authentication
-    print("\n--- Testing Authentication ---")
-    token = await solax.get_access_token()
-    if token:
-        print(f"✓ Authentication successful")
-        print(f"  Token: {token[:20]}...")
-        print(f"  Expires: {solax.token_expiry.isoformat()}")
-    else:
-        print("✗ Authentication failed")
-        return
+        if test_mode == "eco":
+            # Set up controls with no active windows
+            solax.controls[test_plant_id] = {
+                "reserve": 10,
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": 5000},
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": 5000},
+            }
+            print("✓ Configured for ECO mode (no active windows)")
 
-    # Test plant info query
-    print("\n--- Testing Plant Info Query ---")
-    plants = await solax.query_plant_info()
-    if plants is not None:
-        print(f"✓ Query successful")
-        print(f"  Found {len(plants)} plants")
+        elif test_mode == "charge":
+            # Set up controls with active charge window
+            charge_start = now - timedelta(minutes=30)
+            charge_end = now + timedelta(hours=2)
+            solax.controls[test_plant_id] = {
+                "reserve": 10,
+                "charge": {
+                    "start_time": charge_start.strftime("%H:%M:%S"),
+                    "end_time": charge_end.strftime("%H:%M:%S"),
+                    "enable": True,
+                    "target_soc": 95,
+                    "rate": 5000
+                },
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": 5000},
+            }
+            print(f"✓ Configured for CHARGE mode ({charge_start.strftime('%H:%M')} - {charge_end.strftime('%H:%M')}, target: 95%)")
 
-        if plants:
-            print("\n--- Plant Details ---")
-            for i, plant in enumerate(plants, 1):
-                print(f"\nPlant {i}:")
-                print(f"  ID: {plant.get('plantId')}")
-                print(f"  Name: {plant.get('plantName')}")
-                print(f"  Owner: {plant.get('loginName')}")
-                print(f"  Battery Capacity: {plant.get('batteryCapacity')} kWh")
-                print(f"  PV Capacity: {plant.get('pvCapacity')} kWp")
-                print(f"  Status: {plant.get('plantState')}")
-                print(f"  Address: {plant.get('plantAddress')}")
-                print(f"  Timezone: {plant.get('plantTimeZone')}")
-                print(f"  Created: {plant.get('createTime')}")
+        elif test_mode == "freeze_charge":
+            # Set up controls with charge window but current SOC = target SOC
+            charge_start = now - timedelta(minutes=30)
+            charge_end = now + timedelta(hours=2)
+            current_soc_kwh, max_soc_kwh = solax.get_current_soc_battery_kwh(test_plant_id)
+            current_soc = int((current_soc_kwh / max_soc_kwh) * 100) if max_soc_kwh > 0 else 50
+            solax.controls[test_plant_id] = {
+                "reserve": 10,
+                "charge": {
+                    "start_time": charge_start.strftime("%H:%M:%S"),
+                    "end_time": charge_end.strftime("%H:%M:%S"),
+                    "enable": True,
+                    "target_soc": current_soc,  # Same as current = freeze
+                    "rate": 5000
+                },
+                "export": {"start_time": "23:30:00", "end_time": "23:59:00", "enable": False, "target_soc": 10, "rate": 5000},
+            }
+            print(f"✓ Configured for FREEZE CHARGE mode ({charge_start.strftime('%H:%M')} - {charge_end.strftime('%H:%M')}, current SOC: {current_soc}%)")
 
-            print("\n--- Full JSON (First Plant) ---")
-            print(json.dumps(plants[0], indent=2))
+        elif test_mode == "export":
+            # Set up controls with active export window
+            export_start = now - timedelta(minutes=30)
+            export_end = now + timedelta(hours=2)
+            solax.controls[test_plant_id] = {
+                "reserve": 10,
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": 5000},
+                "export": {
+                    "start_time": export_start.strftime("%H:%M:%S"),
+                    "end_time": export_end.strftime("%H:%M:%S"),
+                    "enable": True,
+                    "target_soc": 15,
+                    "rate": 4500
+                },
+            }
+            print(f"✓ Configured for EXPORT mode ({export_start.strftime('%H:%M')} - {export_end.strftime('%H:%M')}, target: 15%)")
+
+        elif test_mode == "freeze_export":
+            # Set up controls with export window but target SOC >= current SOC
+            export_start = now - timedelta(minutes=30)
+            export_end = now + timedelta(hours=2)
+            current_soc_kwh, max_soc_kwh = solax.get_current_soc_battery_kwh(test_plant_id)
+            current_soc = int((current_soc_kwh / max_soc_kwh) * 100) if max_soc_kwh > 0 else 50
+            target_soc = min(100, current_soc + 10)  # Higher than current = freeze
+            solax.controls[test_plant_id] = {
+                "reserve": 10,
+                "charge": {"start_time": "23:00:00", "end_time": "23:30:00", "enable": False, "target_soc": 100, "rate": 5000},
+                "export": {
+                    "start_time": export_start.strftime("%H:%M:%S"),
+                    "end_time": export_end.strftime("%H:%M:%S"),
+                    "enable": True,
+                    "target_soc": target_soc,  # Higher than current = freeze
+                    "rate": 4500
+                },
+            }
+            print(f"✓ Configured for FREEZE EXPORT mode ({export_start.strftime('%H:%M')} - {export_end.strftime('%H:%M')}, current: {current_soc}%, target: {target_soc}%)")
+
         else:
-            print("  No plants found")
-    else:
-        print("✗ Query failed")
+            print(f"✗ Unknown test mode: {test_mode}")
+            return 1
 
-    print(f"\n{'=' * 60}")
-    print(f"Test Complete - Error count: {solax.error_count}")
-    print(f"{'=' * 60}\n")
+        # Apply the controls
+        print("\nApplying controls...")
+        result = await solax.apply_controls(test_plant_id)
+        if result:
+            print("✓ Controls applied successfully")
+        else:
+            print("✗ Controls application failed")
+            return 1
+
+    return 0
 
 
 def main(): # pragma: no cover
     """Main entry point for standalone testing"""
-    parser = argparse.ArgumentParser(description="Test SolaX Cloud API")
+    parser = argparse.ArgumentParser(
+        description="Test SolaX Cloud API and control modes",
+        epilog="Example: python solax.py --client-id YOUR_ID --client-secret YOUR_SECRET --test-mode charge",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--client-id", required=True, help="SolaX Cloud client ID")
     parser.add_argument("--client-secret", required=True, help="SolaX Cloud client secret")
     parser.add_argument("--region", default="eu", choices=["eu", "us", "cn"], help="API region (default: eu)")
     parser.add_argument("--plant-id", help="Optional plant ID to filter")
+    parser.add_argument("--test-mode", choices=["eco", "charge", "freeze_charge", "export", "freeze_export"],
+                       help="Test control mode: eco (no windows), charge (active charge), freeze_charge (at target), export (active export), freeze_export (at/above target)")
 
     args = parser.parse_args()
 
-    asyncio.run(test_solax_api(args.client_id, args.client_secret, args.region, args.plant_id))
+    asyncio.run(test_solax_api(args.client_id, args.client_secret, args.region, args.plant_id, args.test_mode))
 
 
 if __name__ == "__main__": # pragma: no cover
