@@ -87,17 +87,19 @@ class MockSolaxAPI(SolaxAPI):
         """Mock update_success_timestamp method"""
         pass
 
-    async def self_consume_mode(self, sn_list, time_of_duration, next_motion=161, business_type=None):
-        """Mock self_consume_mode for testing"""
-        self.self_consume_mode_called = True
-        self.last_mode_call = {"mode": "eco", "sn_list": sn_list, "duration": time_of_duration}
-        return True
+    async def set_default_work_mode(self, sn_list, business_type=None, mode="selfuse"):
+        """Mock set_default_work_mode - calls set_work_mode (which can be mocked in tests)"""
+        self.set_default_work_mode_called = True
+        self.last_work_mode = mode
+        # Call set_work_mode (tests can mock this)
+        success = await self.set_work_mode(mode, sn_list, 10, 100, 0, "00:00", "00:00", "00:00", "23:59", business_type=business_type)
+        if success:
+            self.log(f"SolaX API: Set default work mode to {mode} for device {sn_list}")
+        else:
+            self.log(f"Warn: SolaX API: Failed to set default work mode to {mode} for device {sn_list}")
+        return success
 
-    async def soc_target_control_mode(self, sn_list, target_soc, charge_discharge_power):
-        """Mock soc_target_control_mode for testing"""
-        self.soc_target_control_mode_called = True
-        self.last_mode_call = {"mode": "charge" if charge_discharge_power > 0 else "export", "sn_list": sn_list, "target_soc": target_soc, "power": charge_discharge_power}
-        return True
+    # Don't override these - let tests call real methods from SolaxAPI and mock send_command_and_wait
 
 
 def run_solax_tests(my_predbat):
@@ -112,28 +114,43 @@ def run_solax_tests(my_predbat):
         failed |= asyncio.run(test_get_access_token_main(my_predbat))
         failed |= asyncio.run(test_request_wrapper_main(my_predbat))
         failed |= asyncio.run(test_request_get_impl_get(my_predbat))
+        if failed:
+            assert not failed
         failed |= asyncio.run(test_request_get_impl_post(my_predbat))
         failed |= asyncio.run(test_fetch_paginated_data(my_predbat))
         failed |= asyncio.run(test_fetch_single_result(my_predbat))
         failed |= asyncio.run(test_query_plant_info(my_predbat))
+        if failed:
+            assert not failed
         failed |= asyncio.run(test_query_device_info(my_predbat))
         failed |= asyncio.run(test_query_plant_realtime_data_main())
         failed |= asyncio.run(test_query_device_realtime_data_main())
         failed |= asyncio.run(test_query_device_realtime_data_all_main())
+        if failed:
+            assert not failed
         failed |= asyncio.run(test_query_plant_statistics_daily_main())
         failed |= asyncio.run(test_send_command_and_wait_main())
         failed |= asyncio.run(test_control_mode_functions_main())
         failed |= asyncio.run(test_publish_device_info_main())
+        if failed:
+            assert not failed
         failed |= asyncio.run(test_publish_device_realtime_data_main())
         failed |= asyncio.run(test_helper_methods_main())
         failed |= asyncio.run(test_automatic_config_main())
         failed |= asyncio.run(test_publish_controls_main())
+        if failed:
+            assert not failed
         failed |= asyncio.run(test_run_main())
         failed |= asyncio.run(test_set_default_work_mode_main())
         failed |= asyncio.run(test_positive_or_negative_mode_main())
         failed |= asyncio.run(test_self_consume_charge_only_mode_main())
+        if failed:
+            assert not failed
+        failed |= asyncio.run(test_exit_vpp_mode_main())
         failed |= asyncio.run(test_query_request_result_main())
         failed |= asyncio.run(test_fetch_controls_value_conversion_main())
+        if failed:
+            assert not failed
         failed |= asyncio.run(test_write_setting_from_event(my_predbat))
         failed |= asyncio.run(test_fetch_controls_main(my_predbat))
         failed |= asyncio.run(test_apply_controls_main(my_predbat))
@@ -188,6 +205,9 @@ async def test_apply_controls_main(my_predbat):
     solax_api.device_info["TP123456123123"] = {"deviceSn": "TP123456123123", "deviceType": 2, "plantId": test_plant_id, "ratedPower": 5.0}
     solax_api.plant_info = [{"plantId": test_plant_id, "batteryCapacity": 15.0}]
 
+    # Set up realtime device data for battery SOC (50% = 7.5 kWh out of 15 kWh)
+    solax_api.realtime_device_data["TP123456123123"] = {"deviceSn": "TP123456123123", "batterySOC": 50, "batteryRemainings": 7.5}
+
     return await test_apply_controls(solax_api, test_plant_id)
 
 
@@ -213,39 +233,41 @@ async def test_apply_controls(solax_api, test_plant_id):
     # Mock current time to 12:00 (outside windows)
     test_time = datetime.now(solax_api.local_tz).replace(hour=12, minute=0, second=0, microsecond=0)
 
-    with patch("solax.datetime") as mock_datetime:
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
         mock_datetime.now.return_value = test_time
         mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
-
-        solax_api.self_consume_mode_called = False
-        solax_api.soc_target_control_mode_called = False
-        solax_api.last_mode_call = None
+        mock_send.return_value = True
 
         result = await solax_api.apply_controls(test_plant_id)
 
         if not result:
             print("**** ERROR: apply_controls returned False for eco mode ****")
             failed = True
-        elif not solax_api.self_consume_mode_called:
-            print("**** ERROR: self_consume_mode not called for eco mode ****")
-            failed = True
-        elif solax_api.soc_target_control_mode_called:
-            print("**** ERROR: soc_target_control_mode called during eco mode ****")
+        elif mock_send.call_count != 2:
+            print(f"**** ERROR: Expected 2 API calls for eco mode, got {mock_send.call_count} ****")
             failed = True
         else:
-            print(f"✓ ECO mode applied correctly at 12:00")
+            # Verify first call is set_default_work_mode (batch_set_spontaneity_self_use endpoint)
+            first_call_endpoint = mock_send.call_args_list[0][0][0]
+            # Verify second call is self_consume_mode (self_consume/charge_or_discharge_mode endpoint)
+            second_call_endpoint = mock_send.call_args_list[1][0][0]
+            if "batch_set_spontaneity_self_use" not in first_call_endpoint:
+                print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
+                failed = True
+            elif "self_consume/charge_or_discharge_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not self_consume_mode, got {second_call_endpoint} ****")
+                failed = True
+            else:
+                print(f"✓ ECO mode applied correctly at 12:00")
 
     # Test 2: Charge mode (inside charge window) at 03:00
     print("\n--- Test 2: Charge mode (03:00) ---")
     test_time = datetime.now(solax_api.local_tz).replace(hour=3, minute=0, second=0, microsecond=0)
 
-    with patch("solax.datetime") as mock_datetime:
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
         mock_datetime.now.return_value = test_time
         mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
-
-        solax_api.self_consume_mode_called = False
-        solax_api.soc_target_control_mode_called = False
-        solax_api.last_mode_call = None
+        mock_send.return_value = True
         solax_api.current_mode_hash = None  # Reset hash
 
         result = await solax_api.apply_controls(test_plant_id)
@@ -253,32 +275,42 @@ async def test_apply_controls(solax_api, test_plant_id):
         if not result:
             print("**** ERROR: apply_controls returned False for charge mode ****")
             failed = True
-        elif solax_api.self_consume_mode_called:
-            print("**** ERROR: self_consume_mode called during charge mode ****")
-            failed = True
-        elif not solax_api.soc_target_control_mode_called:
-            print("**** ERROR: soc_target_control_mode not called for charge mode ****")
-            failed = True
-        elif solax_api.last_mode_call["power"] != 5000:
-            print(f"**** ERROR: Charge power incorrect. Expected 5000, got {solax_api.last_mode_call['power']} ****")
-            failed = True
-        elif solax_api.last_mode_call["target_soc"] != 95:
-            print(f"**** ERROR: Charge target_soc incorrect. Expected 95, got {solax_api.last_mode_call['target_soc']} ****")
+        elif mock_send.call_count != 2:
+            print(f"**** ERROR: Expected 2 API calls for charge mode, got {mock_send.call_count} ****")
             failed = True
         else:
-            print(f"✓ Charge mode applied correctly at 03:00 (power=5000W, target_soc=95%)")
+            # Verify first call is set_default_work_mode (batch_set_spontaneity_self_use endpoint)
+            first_call_endpoint = mock_send.call_args_list[0][0][0]
+            # Verify second call is soc_target_control_mode
+            second_call_endpoint = mock_send.call_args_list[1][0][0]
+            if "batch_set_spontaneity_self_use" not in first_call_endpoint:
+                print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
+                failed = True
+            elif "soc_target_control_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not soc_target_control_mode, got {second_call_endpoint} ****")
+                failed = True
+            else:
+                # Verify charge parameters (target_soc=95, power=5000W)
+                second_call_payload = mock_send.call_args_list[1][0][1]
+                target_soc = second_call_payload.get("targetSoc")
+                power = second_call_payload.get("chargeDischargPower")  # cSpell:disable-line
+                if target_soc != 95:
+                    print(f"**** ERROR: Wrong target_soc, expected 95 got {target_soc} ****")
+                    failed = True
+                elif power != 5000:
+                    print(f"**** ERROR: Wrong charge power, expected 5000 got {power} ****")
+                    failed = True
+                else:
+                    print(f"✓ Charge mode applied correctly at 03:00 (power=5000W, target_soc=95%)")
 
     # Test 3: Export mode (inside export window) at 18:00
     print("\n--- Test 3: Export mode (18:00) ---")
     test_time = datetime.now(solax_api.local_tz).replace(hour=18, minute=0, second=0, microsecond=0)
 
-    with patch("solax.datetime") as mock_datetime:
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
         mock_datetime.now.return_value = test_time
         mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
-
-        solax_api.self_consume_mode_called = False
-        solax_api.soc_target_control_mode_called = False
-        solax_api.last_mode_call = None
+        mock_send.return_value = True
         solax_api.current_mode_hash = None  # Reset hash
 
         result = await solax_api.apply_controls(test_plant_id)
@@ -286,44 +318,54 @@ async def test_apply_controls(solax_api, test_plant_id):
         if not result:
             print("**** ERROR: apply_controls returned False for export mode ****")
             failed = True
-        elif solax_api.self_consume_mode_called:
-            print("**** ERROR: self_consume_mode called during export mode ****")
-            failed = True
-        elif not solax_api.soc_target_control_mode_called:
-            print("**** ERROR: soc_target_control_mode not called for export mode ****")
-            failed = True
-        elif solax_api.last_mode_call["power"] != -4500:
-            print(f"**** ERROR: Export power incorrect. Expected -4500, got {solax_api.last_mode_call['power']} ****")
-            failed = True
-        elif solax_api.last_mode_call["target_soc"] != 15:
-            print(f"**** ERROR: Export target_soc incorrect. Expected 15, got {solax_api.last_mode_call['target_soc']} ****")
+        elif mock_send.call_count != 2:
+            print(f"**** ERROR: Expected 2 API calls for export mode, got {mock_send.call_count} ****")
             failed = True
         else:
-            print(f"✓ Export mode applied correctly at 18:00 (power=-4500W, target_soc=15%)")
+            # Verify first call is set_default_work_mode (batch_set_on_grid_first endpoint for feedin)
+            first_call_endpoint = mock_send.call_args_list[0][0][0]
+            # Verify second call is soc_target_control_mode
+            second_call_endpoint = mock_send.call_args_list[1][0][0]
+            if "batch_set_on_grid_first" not in first_call_endpoint:
+                print(f"**** ERROR: First call not set_default_work_mode (feedin), got {first_call_endpoint} ****")
+                failed = True
+            elif "soc_target_control_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not soc_target_control_mode, got {second_call_endpoint} ****")
+                failed = True
+            else:
+                # Verify export parameters (target_soc=15, power=-4500W)
+                second_call_payload = mock_send.call_args_list[1][0][1]
+                target_soc = second_call_payload.get("targetSoc")
+                power = second_call_payload.get("chargeDischargPower")  # cSpell:disable-line
+                if target_soc != 15:
+                    print(f"**** ERROR: Wrong target_soc, expected 15 got {target_soc} ****")
+                    failed = True
+                elif power != -4500:
+                    print(f"**** ERROR: Wrong export power, expected -4500 got {power} ****")
+                    failed = True
+                else:
+                    print(f"✓ Export mode applied correctly at 18:00 (power=-4500W, target_soc=15%)")
 
     # Test 4: Hash prevents re-application (same charge mode at 03:00)
     print("\n--- Test 4: Hash caching (repeat charge at 03:00) ---")
     test_time = datetime.now(solax_api.local_tz).replace(hour=3, minute=0, second=0, microsecond=0)
 
-    with patch("solax.datetime") as mock_datetime:
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
         mock_datetime.now.return_value = test_time
         mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
 
         # Set hash from previous charge call
         solax_api.current_mode_hash = hash(("charge", 5000, 95, 360))  # 06:00 = 360 minutes
         solax_api.current_mode_hash_timestamp = test_time
-
-        solax_api.self_consume_mode_called = False
-        solax_api.soc_target_control_mode_called = False
-        solax_api.last_mode_call = None
 
         result = await solax_api.apply_controls(test_plant_id)
 
         if not result:
             print("**** ERROR: apply_controls returned False when hash matched ****")
             failed = True
-        elif solax_api.self_consume_mode_called or solax_api.soc_target_control_mode_called:
-            print("**** ERROR: Mode command sent when hash should have prevented it ****")
+        elif mock_send.called:
+            print(f"**** ERROR: send_command_and_wait called {mock_send.call_count} times when hash should have prevented it ****")
             failed = True
         else:
             print(f"✓ Hash correctly prevented re-application of same mode")
@@ -332,26 +374,23 @@ async def test_apply_controls(solax_api, test_plant_id):
     print("\n--- Test 5: Hash expiry (16 minutes later) ---")
     test_time = datetime.now(solax_api.local_tz).replace(hour=3, minute=16, second=0, microsecond=0)
 
-    with patch("solax.datetime") as mock_datetime:
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
         mock_datetime.now.return_value = test_time
         mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
 
         # Hash timestamp is 16 minutes old (> 15 minute threshold)
         old_timestamp = test_time - timedelta(minutes=16)
         solax_api.current_mode_hash = hash(("charge", 5000, 95, 360))
         solax_api.current_mode_hash_timestamp = old_timestamp
 
-        solax_api.self_consume_mode_called = False
-        solax_api.soc_target_control_mode_called = False
-        solax_api.last_mode_call = None
-
         result = await solax_api.apply_controls(test_plant_id)
 
         if not result:
             print("**** ERROR: apply_controls returned False when hash expired ****")
             failed = True
-        elif not solax_api.soc_target_control_mode_called:
-            print("**** ERROR: Mode command not sent when hash should have expired ****")
+        elif mock_send.call_count != 2:
+            print(f"**** ERROR: Expected 2 API calls when hash expired, got {mock_send.call_count} ****")
             failed = True
         else:
             print(f"✓ Hash correctly expired after 15 minutes, mode re-applied")
@@ -360,30 +399,35 @@ async def test_apply_controls(solax_api, test_plant_id):
     print("\n--- Test 6: Charge disabled (03:00) ---")
     test_time = datetime.now(solax_api.local_tz).replace(hour=3, minute=0, second=0, microsecond=0)
 
-    with patch("solax.datetime") as mock_datetime:
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
         mock_datetime.now.return_value = test_time
         mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
 
         solax_api.controls[test_plant_id]["charge"]["enable"] = False
         solax_api.current_mode_hash = None  # Reset hash
-
-        solax_api.self_consume_mode_called = False
-        solax_api.soc_target_control_mode_called = False
-        solax_api.last_mode_call = None
 
         result = await solax_api.apply_controls(test_plant_id)
 
         if not result:
             print("**** ERROR: apply_controls returned False when charge disabled ****")
             failed = True
-        elif not solax_api.self_consume_mode_called:
-            print("**** ERROR: ECO mode not applied when charge disabled ****")
-            failed = True
-        elif solax_api.soc_target_control_mode_called:
-            print("**** ERROR: Charge mode applied when charge disabled ****")
+        elif mock_send.call_count != 2:
+            print(f"**** ERROR: Expected 2 API calls for eco mode when charge disabled, got {mock_send.call_count} ****")
             failed = True
         else:
-            print(f"✓ ECO mode correctly applied when charge disabled at 03:00")
+            # Verify first call is set_default_work_mode (selfuse)
+            first_call_endpoint = mock_send.call_args_list[0][0][0]
+            # Verify second call is self_consume_mode
+            second_call_endpoint = mock_send.call_args_list[1][0][0]
+            if "batch_set_spontaneity_self_use" not in first_call_endpoint:
+                print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
+                failed = True
+            elif "self_consume/charge_or_discharge_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not self_consume_mode, got {second_call_endpoint} ****")
+                failed = True
+            else:
+                print(f"✓ ECO mode correctly applied when charge disabled at 03:00")
 
     return failed
 
@@ -5181,7 +5225,7 @@ async def test_run_main():
             with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
                 with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
                     with patch.object(api, "fetch_controls", new_callable=AsyncMock):
-                        with patch.object(api, "set_default_work_modes", new_callable=AsyncMock):
+                        with patch.object(api, "set_default_work_mode", new_callable=AsyncMock):
                             with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
                                 with patch.object(api, "publish_device_info", new_callable=AsyncMock):
                                     with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
@@ -5331,7 +5375,7 @@ async def test_run_main():
                 with patch.object(api6, "query_plant_realtime_data", new_callable=AsyncMock):
                     with patch.object(api6, "query_device_realtime_data_all", new_callable=AsyncMock):
                         with patch.object(api6, "fetch_controls", new_callable=AsyncMock):
-                            with patch.object(api6, "set_default_work_modes", new_callable=AsyncMock):
+                            with patch.object(api6, "set_default_work_mode", new_callable=AsyncMock):
                                 with patch.object(api6, "publish_plant_info", new_callable=AsyncMock):
                                     with patch.object(api6, "publish_device_info", new_callable=AsyncMock):
                                         with patch.object(api6, "publish_device_realtime_data", new_callable=AsyncMock):
@@ -5376,8 +5420,8 @@ async def test_set_default_work_mode_main():
     failed = False
     print("\n=== Testing set_default_work_mode ===")
 
-    # Test 1: First call should invoke set_work_mode
-    print("Test 1: First call should invoke set_work_mode")
+    # Test 1: Successful call should invoke set_work_mode
+    print("Test 1: Successful call should invoke set_work_mode")
     api = MockSolaxAPI()
     api.initialize(client_id="test", client_secret="test", region="eu")
 
@@ -5390,13 +5434,10 @@ async def test_set_default_work_mode_main():
         result = await api.set_default_work_mode(sn_list, business_type=1)
 
     if not result:
-        print(f"**** ERROR: First call should return True ****")
+        print(f"**** ERROR: Successful call should return True ****")
         failed = True
     elif not mock_set_work_mode.called:
-        print(f"**** ERROR: set_work_mode should be called on first invocation ****")
-        failed = True
-    elif not api.have_set_default_mode:
-        print(f"**** ERROR: have_set_default_mode flag should be set to True ****")
+        print(f"**** ERROR: set_work_mode should be called ****")
         failed = True
     else:
         # Verify the correct parameters were passed
@@ -5414,100 +5455,95 @@ async def test_set_default_work_mode_main():
             print(f"**** ERROR: Expected charge_upper_soc 100, got {call_args[0][3]} ****")
             failed = True
         else:
-            print(f"✓ First call invokes set_work_mode with correct parameters")
+            print(f"✓ Successful call invokes set_work_mode with correct parameters")
 
-    # Test 2: Second call should skip set_work_mode (flag already set)
-    print("Test 2: Second call should skip set_work_mode (flag already set)")
+    # Test 2: Failed set_work_mode should not set flag
+    print("Test 2: Failed set_work_mode should not set flag")
     api2 = MockSolaxAPI()
     api2.initialize(client_id="test", client_secret="test", region="eu")
-    api2.have_set_default_mode = True  # Pre-set the flag
 
     with patch.object(api2, "set_work_mode", new_callable=AsyncMock) as mock_set_work_mode2:
-        mock_set_work_mode2.return_value = True
+        mock_set_work_mode2.return_value = False  # Simulate failure
 
-        result2 = await api2.set_default_work_mode(["INV003"], business_type=1)
+        result2 = await api2.set_default_work_mode(["INV004"], business_type=1)
 
-    if not result2:
-        print(f"**** ERROR: Second call should return True ****")
-        failed = True
-    elif mock_set_work_mode2.called:
-        print(f"**** ERROR: set_work_mode should NOT be called when flag is set ****")
-        failed = True
-    else:
-        print(f"✓ Second call correctly skips set_work_mode")
-
-    # Test 3: Failed set_work_mode should not set flag
-    print("Test 3: Failed set_work_mode should not set flag")
-    api3 = MockSolaxAPI()
-    api3.initialize(client_id="test", client_secret="test", region="eu")
-
-    with patch.object(api3, "set_work_mode", new_callable=AsyncMock) as mock_set_work_mode3:
-        mock_set_work_mode3.return_value = False  # Simulate failure
-
-        result3 = await api3.set_default_work_mode(["INV004"], business_type=1)
-
-    if result3:
+    if result2:
         print(f"**** ERROR: Should return False when set_work_mode fails ****")
-        failed = True
-    elif api3.have_set_default_mode:
-        print(f"**** ERROR: Flag should NOT be set when set_work_mode fails ****")
         failed = True
     else:
         print(f"✓ Failed set_work_mode correctly does not set flag")
 
-    # Test 4: Verify log messages
-    print("Test 4: Verify log messages")
-    api4 = MockSolaxAPI()
-    api4.initialize(client_id="test", client_secret="test", region="eu")
+    # Test 3: Verify success log messages
+    print("Test 3: Verify success log messages")
+    api3 = MockSolaxAPI()
+    api3.initialize(client_id="test", client_secret="test", region="eu")
 
-    with patch.object(api4, "set_work_mode", new_callable=AsyncMock) as mock_set_work_mode4:
-        mock_set_work_mode4.return_value = True
+    with patch.object(api3, "set_work_mode", new_callable=AsyncMock) as mock_set_work_mode3:
+        mock_set_work_mode3.return_value = True
 
-        await api4.set_default_work_mode(["INV005"], business_type=1)
+        await api3.set_default_work_mode(["INV005"], business_type=1, mode="selfuse")
 
     # Check that success log was generated
-    success_logs = [msg for msg in api4.log_messages if "Set default work mode to Self Use" in msg]
+    success_logs = [msg for msg in api3.log_messages if "Set default work mode to selfuse" in msg]
     if not success_logs:
         print(f"**** ERROR: Success log message not found ****")
         failed = True
     else:
         print(f"✓ Success log message generated correctly")
 
-    # Test 5: Failed call should generate warning log
-    print("Test 5: Failed call should generate warning log")
-    api5 = MockSolaxAPI()
-    api5.initialize(client_id="test", client_secret="test", region="eu")
+    # Test 4: Failed call should generate warning log
+    print("Test 4: Failed call should generate warning log")
+    api4 = MockSolaxAPI()
+    api4.initialize(client_id="test", client_secret="test", region="eu")
 
-    with patch.object(api5, "set_work_mode", new_callable=AsyncMock) as mock_set_work_mode5:
-        mock_set_work_mode5.return_value = False
+    with patch.object(api4, "set_work_mode", new_callable=AsyncMock) as mock_set_work_mode4:
+        mock_set_work_mode4.return_value = False
 
-        await api5.set_default_work_mode(["INV006"], business_type=1)
+        await api4.set_default_work_mode(["INV006"], business_type=1)
 
-    # Check that warning log was generated (note: there's a bug in the code - it uses 'sn' instead of 'sn_list')
-    warning_logs = [msg for msg in api5.log_messages if "Failed to set default work mode" in msg]
+    # Check that warning log was generated
+    warning_logs = [msg for msg in api4.log_messages if "Failed to set default work mode" in msg]
     if not warning_logs:
         print(f"**** ERROR: Warning log message not found ****")
         failed = True
     else:
         print(f"✓ Warning log message generated correctly")
 
-    # Test 6: Verify business_type parameter is passed through
-    print("Test 6: Verify business_type parameter is passed through")
+    # Test 5: Verify business_type parameter is passed through
+    print("Test 5: Verify business_type parameter is passed through")
+    api5 = MockSolaxAPI()
+    api5.initialize(client_id="test", client_secret="test", region="eu")
+
+    with patch.object(api5, "set_work_mode", new_callable=AsyncMock) as mock_set_work_mode5:
+        mock_set_work_mode5.return_value = True
+
+        await api5.set_default_work_mode(["INV007"], business_type=4)  # Commercial
+
+    # Verify business_type was passed correctly
+    call_kwargs = mock_set_work_mode5.call_args[1]
+    if call_kwargs.get("business_type") != 4:
+        print(f"**** ERROR: Expected business_type=4, got {call_kwargs.get('business_type')} ****")
+        failed = True
+    else:
+        print(f"✓ business_type parameter passed through correctly")
+
+    # Test 6: Verify mode parameter is passed through (backup mode)
+    print("Test 6: Verify mode parameter is passed through (backup mode)")
     api6 = MockSolaxAPI()
     api6.initialize(client_id="test", client_secret="test", region="eu")
 
     with patch.object(api6, "set_work_mode", new_callable=AsyncMock) as mock_set_work_mode6:
         mock_set_work_mode6.return_value = True
 
-        await api6.set_default_work_mode(["INV007"], business_type=4)  # Commercial
+        await api6.set_default_work_mode(["INV008"], business_type=1, mode="backup")
 
-    # Verify business_type was passed correctly
-    call_kwargs = mock_set_work_mode6.call_args[1]
-    if call_kwargs.get("business_type") != 4:
-        print(f"**** ERROR: Expected business_type=4, got {call_kwargs.get('business_type')} ****")
+    # Verify mode was passed correctly
+    call_args6 = mock_set_work_mode6.call_args
+    if call_args6[0][0] != "backup":
+        print(f"**** ERROR: Expected mode 'backup', got {call_args6[0][0]} ****")
         failed = True
     else:
-        print(f"✓ business_type parameter passed through correctly")
+        print(f"✓ mode parameter passed through correctly")
 
     if not failed:
         print("✓ set_default_work_mode tests passed")
@@ -6412,5 +6448,186 @@ async def test_fetch_controls_value_conversion_main():
 
     if not failed:
         print("✓ fetch_controls value conversion tests passed")
+
+    return failed
+
+
+async def test_exit_vpp_mode_main():
+    """
+    Test exit_vpp_mode() - Exit remote control mode
+    """
+    failed = False
+    print("\n=== Testing exit_vpp_mode ===")
+
+    # Test 1: Single inverter exit VPP mode
+    print("Test 1: Single inverter exit VPP mode")
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+
+    with patch.object(api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_send.return_value = True
+
+        result = await api.exit_vpp_mode(sn_list=["INV001"], business_type=1)
+
+    if not result:
+        print(f"**** ERROR: Should return True on success ****")
+        failed = True
+    elif not mock_send.called:
+        print(f"**** ERROR: send_command_and_wait should be called ****")
+        failed = True
+    else:
+        call_args = mock_send.call_args
+        endpoint = call_args[0][0]
+        payload = call_args[0][1]
+        command_name = call_args[0][2]
+        sn_list = call_args[0][3]
+
+        if endpoint != "/openapi/v2/device/inverter_vpp_mode/exit_vpp_mode":
+            print(f"**** ERROR: Wrong endpoint: {endpoint} ****")
+            failed = True
+        elif payload.get("snList") != ["INV001"]:
+            print(f"**** ERROR: Wrong snList: {payload.get('snList')} ****")
+            failed = True
+        elif payload.get("businessType") != 1:
+            print(f"**** ERROR: Wrong business_type: {payload.get('businessType')} ****")
+            failed = True
+        elif command_name != "exit-vpp-mode":
+            print(f"**** ERROR: Wrong command_name: {command_name} ****")
+            failed = True
+        elif sn_list != ["INV001"]:
+            print(f"**** ERROR: Wrong sn_list passed: {sn_list} ****")
+            failed = True
+        else:
+            print(f"✓ Single inverter exit VPP mode correct")
+
+    # Test 2: Multiple inverters
+    print("Test 2: Multiple inverters")
+    api2 = MockSolaxAPI()
+    api2.initialize(client_id="test", client_secret="test", region="eu")
+
+    with patch.object(api2, "send_command_and_wait", new_callable=AsyncMock) as mock_send2:
+        mock_send2.return_value = True
+
+        result2 = await api2.exit_vpp_mode(sn_list=["INV001", "INV002", "INV003"], business_type=1)
+
+    if not result2:
+        print(f"**** ERROR: Should return True on success ****")
+        failed = True
+    else:
+        call_args2 = mock_send2.call_args
+        payload2 = call_args2[0][1]
+        if payload2.get("snList") != ["INV001", "INV002", "INV003"]:
+            print(f"**** ERROR: Wrong snList for multiple inverters: {payload2.get('snList')} ****")
+            failed = True
+        else:
+            print(f"✓ Multiple inverters handled correctly")
+
+    # Test 3: Default business_type (residential)
+    print("Test 3: Default business_type (residential)")
+    api3 = MockSolaxAPI()
+    api3.initialize(client_id="test", client_secret="test", region="eu")
+
+    with patch.object(api3, "send_command_and_wait", new_callable=AsyncMock) as mock_send3:
+        mock_send3.return_value = True
+
+        result3 = await api3.exit_vpp_mode(sn_list=["INV001"])
+
+    if not result3:
+        print(f"**** ERROR: Should return True on success ****")
+        failed = True
+    else:
+        call_args3 = mock_send3.call_args
+        payload3 = call_args3[0][1]
+        if payload3.get("businessType") != 1:
+            print(f"**** ERROR: Default business_type should be 1, got {payload3.get('businessType')} ****")
+            failed = True
+        else:
+            print(f"✓ Default business_type (residential) correct")
+
+    # Test 4: Custom business_type (commercial)
+    print("Test 4: Custom business_type (commercial)")
+    api4 = MockSolaxAPI()
+    api4.initialize(client_id="test", client_secret="test", region="eu")
+
+    with patch.object(api4, "send_command_and_wait", new_callable=AsyncMock) as mock_send4:
+        mock_send4.return_value = True
+
+        result4 = await api4.exit_vpp_mode(sn_list=["INV001"], business_type=4)
+
+    if not result4:
+        print(f"**** ERROR: Should return True on success ****")
+        failed = True
+    else:
+        call_args4 = mock_send4.call_args
+        payload4 = call_args4[0][1]
+        if payload4.get("businessType") != 4:
+            print(f"**** ERROR: business_type should be 4 (commercial), got {payload4.get('businessType')} ****")
+            failed = True
+        else:
+            print(f"✓ Custom business_type (commercial) correct")
+
+    # Test 5: Failed command execution
+    print("Test 5: Failed command execution")
+    api5 = MockSolaxAPI()
+    api5.initialize(client_id="test", client_secret="test", region="eu")
+
+    with patch.object(api5, "send_command_and_wait", new_callable=AsyncMock) as mock_send5:
+        mock_send5.return_value = False
+
+        result5 = await api5.exit_vpp_mode(sn_list=["INV001"])
+
+    if result5:
+        print(f"**** ERROR: Should return False on failure ****")
+        failed = True
+    else:
+        print(f"✓ Failed command execution handled correctly")
+
+    # Test 6: Maximum 10 devices
+    print("Test 6: Maximum 10 devices")
+    api6 = MockSolaxAPI()
+    api6.initialize(client_id="test", client_secret="test", region="eu")
+
+    with patch.object(api6, "send_command_and_wait", new_callable=AsyncMock) as mock_send6:
+        mock_send6.return_value = True
+
+        ten_devices = [f"INV{i:03d}" for i in range(1, 11)]
+        result6 = await api6.exit_vpp_mode(sn_list=ten_devices)
+
+    if not result6:
+        print(f"**** ERROR: Should return True on success ****")
+        failed = True
+    else:
+        call_args6 = mock_send6.call_args
+        payload6 = call_args6[0][1]
+        if len(payload6.get("snList")) != 10:
+            print(f"**** ERROR: Expected 10 devices, got {len(payload6.get('snList'))} ****")
+            failed = True
+        else:
+            print(f"✓ Maximum 10 devices handled correctly")
+
+    # Test 7: Empty list (edge case)
+    print("Test 7: Empty list (edge case)")
+    api7 = MockSolaxAPI()
+    api7.initialize(client_id="test", client_secret="test", region="eu")
+
+    with patch.object(api7, "send_command_and_wait", new_callable=AsyncMock) as mock_send7:
+        mock_send7.return_value = True
+
+        result7 = await api7.exit_vpp_mode(sn_list=[])
+
+    if not result7:
+        print(f"**** ERROR: Should return True even with empty list ****")
+        failed = True
+    else:
+        call_args7 = mock_send7.call_args
+        payload7 = call_args7[0][1]
+        if payload7.get("snList") != []:
+            print(f"**** ERROR: Empty list should be preserved, got {payload7.get('snList')} ****")
+            failed = True
+        else:
+            print(f"✓ Empty list handled correctly")
+
+    if not failed:
+        print("✓ exit_vpp_mode tests passed")
 
     return failed
