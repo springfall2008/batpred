@@ -168,6 +168,7 @@ from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer
+from tests.test_rate_replicate_missing_slots import test_rate_replicate_missing_slots, test_rate_replicate_no_previous_day
 from tests.test_carbon import (
     test_carbon_initialization,
     test_fetch_carbon_data_success,
@@ -409,6 +410,8 @@ def main():
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
+        ("rate_replicate_missing", test_rate_replicate_missing_slots, "Rate replicate missing 23:00/23:30 slots tests", False),
+        ("rate_replicate_no_prev", test_rate_replicate_no_previous_day, "Rate replicate without previous day data tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),

@@ -1045,6 +1045,10 @@ class Fetch:
                     minute_mod = minute - 24 * 60
                 else:
                     minute_mod = minute % (24 * 60)
+                    # If modulo gives us the same minute (for minutes < 1440), try looking back 24 hours
+                    # This handles the case where today's 23:00 (minute 1380) is missing but yesterday's 23:00 (minute -60) might exist
+                    if minute_mod == minute and minute >= 0 and minute < 24 * 60:
+                        minute_mod = minute - 24 * 60
 
                 if rate_io and (minute_mod in rate_io) and rate_io[minute_mod]:
                     # Dont replicate Intelligent rates into the next day as it will be different
@@ -1076,8 +1080,11 @@ class Fetch:
 
                     adjusted_rates[minute] = True
 
-                rates[minute] = rate_offset
-                replicated_rates[minute] = adjust_type
+                # Don't add rates with value 0 if we haven't seen any real rates yet (rate_last == 0)
+                # This prevents filling negative minutes with 0, which would later be used as fallback values
+                if rate_offset > 0 or rate_last > 0:
+                    rates[minute] = rate_offset
+                    replicated_rates[minute] = adjust_type
             else:
                 rate_last = rates[minute]
             minute += 1
