@@ -13,7 +13,7 @@ from datetime import datetime
 
 def test_rate_replicate_missing_slots(my_predbat):
     """
-    Test for rate_replicate function handling missing 23:00 and 23:30 slots
+    Test for rate_replicate function handling missing 23:00 and 23:30 slots.
     
     This test reproduces the Octopus Agile issue where:
     - Current day rates only go up to 22:30 (before 4PM when tomorrow's rates are released)
@@ -21,7 +21,7 @@ def test_rate_replicate_missing_slots(my_predbat):
     - Previous day has full rates including 23:00 and 23:30
     - Predbat should replicate previous day's 23:00 and 23:30 into current day's missing slots
     
-    Bug: The rate_replicate function shows 0.00 for these slots instead of replicating from previous day
+    Bug: The rate_replicate function shows 0.00 for these slots instead of replicating from previous day.
     """
     failed = 0
 
@@ -120,7 +120,7 @@ def test_rate_replicate_missing_slots(my_predbat):
 
 def test_rate_replicate_no_previous_day(my_predbat):
     """
-    Test for rate_replicate when there's NO previous day data at all
+    Test for rate_replicate when there's NO previous day data at all.
     
     This tests the edge case where the API doesn't return any previous day rates.
     In this case, the function should use modulo to find the same time from current day,
