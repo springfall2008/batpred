@@ -429,6 +429,77 @@ async def test_apply_controls(solax_api, test_plant_id):
             else:
                 print(f"✓ ECO mode correctly applied when charge disabled at 03:00")
 
+    # Test 7: Freeze charge mode (inside charge window, target_soc == current_soc)
+    print("\n--- Test 7: Freeze charge mode (03:00, target_soc == current_soc) ---")
+    test_time = datetime.now(solax_api.local_tz).replace(hour=3, minute=0, second=0, microsecond=0)
+
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+        solax_api.current_mode_hash = None  # Reset hash
+
+        # Re-enable charge and set target to current SOC (50%) to trigger freeze_charge
+        solax_api.controls[test_plant_id]["charge"]["enable"] = True
+        solax_api.controls[test_plant_id]["charge"]["target_soc"] = 50  # Same as battery SOC
+
+        result = await solax_api.apply_controls(test_plant_id)
+
+        if not result:
+            print("**** ERROR: apply_controls returned False for freeze_charge mode ****")
+            failed = True
+        elif mock_send.call_count != 2:
+            print(f"**** ERROR: Expected 2 API calls for freeze_charge mode, got {mock_send.call_count} ****")
+            failed = True
+        else:
+            # Verify first call is set_default_work_mode (batch_set_spontaneity_self_use endpoint)
+            first_call_endpoint = mock_send.call_args_list[0][0][0]
+            # Verify second call is self_consume_charge_only_mode
+            second_call_endpoint = mock_send.call_args_list[1][0][0]
+            if "batch_set_spontaneity_self_use" not in first_call_endpoint:
+                print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
+                failed = True
+            elif "self_consume/charge_only_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not self_consume_charge_only_mode, got {second_call_endpoint} ****")
+                failed = True
+            else:
+                print(f"✓ Freeze charge mode applied correctly at 03:00 (target_soc == current_soc)")
+
+    # Test 8: Freeze export mode (inside export window, target_soc >= current_soc)
+    print("\n--- Test 8: Freeze export mode (18:00, target_soc >= current_soc) ---")
+    test_time = datetime.now(solax_api.local_tz).replace(hour=18, minute=0, second=0, microsecond=0)
+
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+        solax_api.current_mode_hash = None  # Reset hash
+
+        # Set export target to >= current SOC (50%) to trigger freeze_export
+        solax_api.controls[test_plant_id]["export"]["target_soc"] = 60  # Higher than battery SOC
+
+        result = await solax_api.apply_controls(test_plant_id)
+
+        if not result:
+            print("**** ERROR: apply_controls returned False for freeze_export mode ****")
+            failed = True
+        elif mock_send.call_count != 2:
+            print(f"**** ERROR: Expected 2 API calls for freeze_export mode, got {mock_send.call_count} ****")
+            failed = True
+        else:
+            # Verify first call is set_default_work_mode (batch_set_on_grid_first endpoint for feedin)
+            first_call_endpoint = mock_send.call_args_list[0][0][0]
+            # Verify second call is exit_vpp_mode
+            second_call_endpoint = mock_send.call_args_list[1][0][0]
+            if "batch_set_on_grid_first" not in first_call_endpoint:
+                print(f"**** ERROR: First call not set_default_work_mode (feedin), got {first_call_endpoint} ****")
+                failed = True
+            elif "exit_vpp_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not exit_vpp_mode, got {second_call_endpoint} ****")
+                failed = True
+            else:
+                print(f"✓ Freeze export mode applied correctly at 18:00 (target_soc >= current_soc)")
+
     return failed
 
 
