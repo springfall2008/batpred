@@ -287,6 +287,14 @@ Export target SOC
 """
 
 
+def as_int(value, default=0):
+    """
+    Safely convert a value to int, with a default fallback
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class SolaxAPI(ComponentBase):
@@ -606,6 +614,7 @@ class SolaxAPI(ComponentBase):
             current_value = not current_value
         return current_value
 
+
     async def apply_controls(self, plant_id):
         """
         Apply control settings to the plant
@@ -628,29 +637,17 @@ class SolaxAPI(ComponentBase):
         charge_window = False
         export_window = False
 
-        reserve_soc = self.controls.get(plant_id, {}).get("reserve", 10)
-
+        reserve_soc = as_int(self.controls.get(plant_id, {}).get("reserve"), 10)
         charge_start_str = self.controls.get(plant_id, {}).get("charge", {}).get("start_time", "00:00:00")
         charge_end_str = self.controls.get(plant_id, {}).get("charge", {}).get("end_time", "00:00:00")
         charge_enable = self.controls.get(plant_id, {}).get("charge", {}).get("enable", False)
-        charge_target_soc = self.controls.get(plant_id, {}).get("charge", {}).get("target_soc", 100)
-        charge_power = self.controls.get(plant_id, {}).get("charge", {}).get("rate", rated_power)
-
-        try:
-            charge_power = float(charge_power)
-        except (TypeError, ValueError):
-            charge_power = rated_power
-
+        charge_target_soc = as_int(self.controls.get(plant_id, {}).get("charge", {}).get("target_soc"), 100)
+        charge_power = as_int(self.controls.get(plant_id, {}).get("charge", {}).get("rate"), rated_power)
         export_start_str = self.controls.get(plant_id, {}).get("export", {}).get("start_time", "00:00:00")
         export_end_str = self.controls.get(plant_id, {}).get("export", {}).get("end_time", "00:00:00")
         export_enable = self.controls.get(plant_id, {}).get("export", {}).get("enable", False)
-        export_target_soc = self.controls.get(plant_id, {}).get("export", {}).get("target_soc", 10)
-        export_power = self.controls.get(plant_id, {}).get("export", {}).get("rate", rated_power)
-
-        try:
-            export_power = float(export_power)
-        except (TypeError, ValueError):
-            export_power = rated_power
+        export_target_soc = as_int(self.controls.get(plant_id, {}).get("export", {}).get("target_soc"), 10)
+        export_power = as_int(self.controls.get(plant_id, {}).get("export", {}).get("rate"), rated_power)
 
         if charge_enable:
             charge_start = now.replace(hour=int(charge_start_str.split(":")[0]), minute=int(charge_start_str.split(":")[1]), second=0, microsecond=0)
@@ -782,15 +779,15 @@ class SolaxAPI(ComponentBase):
                 if direction not in self.controls[plant_id]:
                     self.controls[plant_id][direction] = {}
                 if field_type == 'number':
-                    try:
-                        state = int(state)
-                    except (TypeError, ValueError):
-                        state = default
+                    state = as_int(state, default=default)
                     state = max(min_value, min(max_value, state))
                 self.controls[plant_id][direction][field] = state
         for field in ["reserve"]:
             item_name, ha_name, friendly_name, field_type, field_units, default, min_value, max_value = self.control_info(plant_id, None, field)
             state = self.get_state_wrapper(ha_name, default=default)
+            if field_type == 'number':
+                state = as_int(state, default=default)
+                state = max(min_value, min(max_value, state))
             if plant_id not in self.controls:
                 self.controls[plant_id] = {}
             self.controls[plant_id][field] = state

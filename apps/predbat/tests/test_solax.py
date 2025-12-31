@@ -133,6 +133,7 @@ def run_solax_tests(my_predbat):
         failed |= asyncio.run(test_positive_or_negative_mode_main())
         failed |= asyncio.run(test_self_consume_charge_only_mode_main())
         failed |= asyncio.run(test_query_request_result_main())
+        failed |= asyncio.run(test_fetch_controls_value_conversion_main())
         failed |= asyncio.run(test_write_setting_from_event(my_predbat))
         failed |= asyncio.run(test_fetch_controls_main(my_predbat))
         failed |= asyncio.run(test_apply_controls_main(my_predbat))
@@ -6202,5 +6203,214 @@ async def test_query_request_result_main():
 
     if not failed:
         print("✓ query_request_result tests passed")
+
+    return failed
+
+
+async def test_fetch_controls_value_conversion_main():
+    """
+    Test fetch_controls() - number conversion, text values, min/max bounding, defaults
+    """
+    failed = False
+    print("\n=== Testing fetch_controls value conversion ===")
+
+    plant_id = "1618699116555534337"
+
+    # Test 1: Text values converted to numbers
+    print("Test 1: Text values converted to numbers")
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+
+    def mock_get_state_text(entity_id, default=None):
+        if "charge_start_time" in entity_id:
+            return "08:00:00"
+        elif "charge_end_time" in entity_id:
+            return "12:00:00"
+        elif "charge_enable" in entity_id:
+            return True
+        elif "charge_target_soc" in entity_id:
+            return "85"  # Text value
+        elif "charge_rate" in entity_id:
+            return "6000"  # Text value
+        elif "export_start_time" in entity_id:
+            return "14:00:00"
+        elif "export_end_time" in entity_id:
+            return "18:00:00"
+        elif "export_enable" in entity_id:
+            return False
+        elif "export_target_soc" in entity_id:
+            return "25"  # Text value
+        elif "export_rate" in entity_id:
+            return "5000"  # Text value
+        elif "reserve" in entity_id:
+            return "20"  # Text value
+        return default
+
+    api.get_state_wrapper = mock_get_state_text
+    api.plant_inverters = {plant_id: ["H1231231932123"]}
+    api.device_info = {"H1231231932123": {"ratedPower": 10.0}}
+
+    result = await api.fetch_controls(plant_id)
+
+    if not result:
+        print(f"**** ERROR: fetch_controls returned False ****")
+        failed = True
+    elif not isinstance(api.controls[plant_id]["charge"]["target_soc"], int):
+        print(f"**** ERROR: target_soc not converted to int, got type {type(api.controls[plant_id]['charge']['target_soc'])} ****")
+        failed = True
+    elif api.controls[plant_id]["charge"]["target_soc"] != 85:
+        print(f"**** ERROR: Expected target_soc 85, got {api.controls[plant_id]['charge']['target_soc']} ****")
+        failed = True
+    elif api.controls[plant_id]["charge"]["rate"] != 6000:
+        print(f"**** ERROR: Expected rate 6000, got {api.controls[plant_id]['charge']['rate']} ****")
+        failed = True
+    elif api.controls[plant_id]["reserve"] != 20:
+        print(f"**** ERROR: Expected reserve 20, got {api.controls[plant_id]['reserve']} ****")
+        failed = True
+    else:
+        print(f"✓ Text values converted to numbers correctly")
+
+    # Test 2: Values bounded by min/max
+    print("Test 2: Values bounded by min/max")
+    api2 = MockSolaxAPI()
+    api2.initialize(client_id="test", client_secret="test", region="eu")
+
+    def mock_get_state_out_of_range(entity_id, default=None):
+        if "charge_target_soc" in entity_id:
+            return 150  # Above max (100)
+        elif "export_target_soc" in entity_id:
+            return 5  # Below min (10)
+        elif "reserve" in entity_id:
+            return 105  # Above max (100)
+        elif "charge_rate" in entity_id:
+            return -500  # Below min (0)
+        elif "export_rate" in entity_id:
+            return 99999  # Above max
+        return default
+
+    api2.get_state_wrapper = mock_get_state_out_of_range
+    api2.plant_inverters = {plant_id: ["H1231231932123"]}
+    api2.device_info = {"H1231231932123": {"ratedPower": 10.0}}
+
+    await api2.fetch_controls(plant_id)
+
+    if api2.controls[plant_id]["charge"]["target_soc"] != 100:
+        print(f"**** ERROR: Expected target_soc capped at 100, got {api2.controls[plant_id]['charge']['target_soc']} ****")
+        failed = True
+    elif api2.controls[plant_id]["export"]["target_soc"] != 10:
+        print(f"**** ERROR: Expected export target_soc floored at 10, got {api2.controls[plant_id]['export']['target_soc']} ****")
+        failed = True
+    elif api2.controls[plant_id]["reserve"] != 100:
+        print(f"**** ERROR: Expected reserve capped at 100, got {api2.controls[plant_id]['reserve']} ****")
+        failed = True
+    elif api2.controls[plant_id]["charge"]["rate"] != 0:
+        print(f"**** ERROR: Expected charge_rate floored at 0, got {api2.controls[plant_id]['charge']['rate']} ****")
+        failed = True
+    else:
+        print(f"✓ Out-of-range values bounded correctly")
+
+    # Test 3: Default values used when state not available
+    print("Test 3: Default values used when state not available")
+    api3 = MockSolaxAPI()
+    api3.initialize(client_id="test", client_secret="test", region="eu")
+
+    def mock_get_state_none(entity_id, default=None):
+        return default  # Always return default
+
+    api3.get_state_wrapper = mock_get_state_none
+    api3.plant_inverters = {plant_id: ["H1231231932123"]}
+    api3.device_info = {"H1231231932123": {"ratedPower": 10.0}}
+
+    await api3.fetch_controls(plant_id)
+
+    if api3.controls[plant_id]["charge"]["start_time"] != "00:00":
+        print(f"**** ERROR: Expected default start_time 00:00, got {api3.controls[plant_id]['charge']['start_time']} ****")
+        failed = True
+    elif api3.controls[plant_id]["charge"]["enable"] != False:
+        print(f"**** ERROR: Expected default enable False, got {api3.controls[plant_id]['charge']['enable']} ****")
+        failed = True
+    elif api3.controls[plant_id]["charge"]["target_soc"] != 100:
+        print(f"**** ERROR: Expected default charge target_soc 100, got {api3.controls[plant_id]['charge']['target_soc']} ****")
+        failed = True
+    elif api3.controls[plant_id]["export"]["target_soc"] != 10:
+        print(f"**** ERROR: Expected default export target_soc 10, got {api3.controls[plant_id]['export']['target_soc']} ****")
+        failed = True
+    elif api3.controls[plant_id]["reserve"] != 10:
+        print(f"**** ERROR: Expected default reserve 10, got {api3.controls[plant_id]['reserve']} ****")
+        failed = True
+    else:
+        print(f"✓ Default values used correctly")
+
+    # Test 4: Invalid text values fall back to defaults
+    print("Test 4: Invalid text values fall back to defaults")
+    api4 = MockSolaxAPI()
+    api4.initialize(client_id="test", client_secret="test", region="eu")
+
+    def mock_get_state_invalid(entity_id, default=None):
+        if "target_soc" in entity_id:
+            return "invalid_number"
+        elif "rate" in entity_id:
+            return "not_a_number"
+        elif "reserve" in entity_id:
+            return "bad_value"
+        return default
+
+    api4.get_state_wrapper = mock_get_state_invalid
+    api4.plant_inverters = {plant_id: ["H1231231932123"]}
+    api4.device_info = {"H1231231932123": {"ratedPower": 10.0}}
+
+    await api4.fetch_controls(plant_id)
+
+    # Should fall back to defaults since as_int() returns default on ValueError
+    if api4.controls[plant_id]["charge"]["target_soc"] != 100:
+        print(f"**** ERROR: Expected default charge target_soc 100 for invalid input, got {api4.controls[plant_id]['charge']['target_soc']} ****")
+        failed = True
+    elif api4.controls[plant_id]["reserve"] != 10:
+        print(f"**** ERROR: Expected default reserve 10 for invalid input, got {api4.controls[plant_id]['reserve']} ****")
+        failed = True
+    else:
+        print(f"✓ Invalid text values fall back to defaults")
+
+    # Test 5: Mixed valid numeric and text values
+    print("Test 5: Mixed valid numeric and text values")
+    api5 = MockSolaxAPI()
+    api5.initialize(client_id="test", client_secret="test", region="eu")
+
+    def mock_get_state_mixed(entity_id, default=None):
+        if "charge_target_soc" in entity_id:
+            return 90  # Numeric
+        elif "export_target_soc" in entity_id:
+            return "30"  # Text
+        elif "charge_rate" in entity_id:
+            return "5000"  # Text
+        elif "export_rate" in entity_id:
+            return 4000  # Numeric
+        elif "reserve" in entity_id:
+            return 15  # Numeric
+        return default
+
+    api5.get_state_wrapper = mock_get_state_mixed
+    api5.plant_inverters = {plant_id: ["H1231231932123"]}
+    api5.device_info = {"H1231231932123": {"ratedPower": 10.0}}
+
+    await api5.fetch_controls(plant_id)
+
+    if api5.controls[plant_id]["charge"]["target_soc"] != 90:
+        print(f"**** ERROR: Expected charge target_soc 90, got {api5.controls[plant_id]['charge']['target_soc']} ****")
+        failed = True
+    elif api5.controls[plant_id]["export"]["target_soc"] != 30:
+        print(f"**** ERROR: Expected export target_soc 30, got {api5.controls[plant_id]['export']['target_soc']} ****")
+        failed = True
+    elif api5.controls[plant_id]["charge"]["rate"] != 5000:
+        print(f"**** ERROR: Expected charge rate 5000, got {api5.controls[plant_id]['charge']['rate']} ****")
+        failed = True
+    elif api5.controls[plant_id]["reserve"] != 15:
+        print(f"**** ERROR: Expected reserve 15, got {api5.controls[plant_id]['reserve']} ****")
+        failed = True
+    else:
+        print(f"✓ Mixed numeric and text values handled correctly")
+
+    if not failed:
+        print("✓ fetch_controls value conversion tests passed")
 
     return failed
