@@ -1031,6 +1031,7 @@ class Fetch:
         """
         minute = -24 * 60
         rate_last = 0
+        rate_last_valid = False  # Track if we've seen any real rates yet
         adjusted_rates = {}
         replicated_rates = {}
 
@@ -1080,13 +1081,14 @@ class Fetch:
 
                     adjusted_rates[minute] = True
 
-                # Don't add rates with value 0 if we haven't seen any real rates yet (rate_last == 0)
-                # This prevents filling negative minutes with 0, which would later be used as fallback values
-                if rate_offset > 0 or rate_last > 0:
+                # Don't add rates if we haven't seen any real rates yet
+                # This prevents filling negative minutes with invalid fallback values
+                if rate_last_valid:
                     rates[minute] = rate_offset
                     replicated_rates[minute] = adjust_type
             else:
                 rate_last = rates[minute]
+                rate_last_valid = True
             minute += 1
         return rates, replicated_rates
 

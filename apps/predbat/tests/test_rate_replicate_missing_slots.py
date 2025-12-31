@@ -177,3 +177,86 @@ def test_rate_replicate_no_previous_day(my_predbat):
         print(f"  ✓ Minute 1410 filled with fallback rate: {result[1410]}")
     
     return failed
+
+
+def test_rate_replicate_with_zero_rates(my_predbat):
+    """
+    Test for rate_replicate with legitimate zero rates (free electricity).
+    
+    Verifies that legitimate 0 rates (e.g., free electricity periods) are preserved
+    and not treated as missing data. This is important for scenarios like:
+    - Free electricity promotions
+    - Negative pricing events
+    - Special tariff periods
+    """
+    failed = 0
+
+    print("\n*** Test: Zero rates are legitimate values (free electricity) ***")
+    
+    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.forecast_minutes = 2880
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.metric_future_rate_offset_export = 0
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+    
+    # Create rate dict with legitimate 0 rates
+    # - Previous day with 0 rate at 23:00 (free electricity)
+    # - Current day with normal rates up to 22:30
+    # - Missing: current day 23:00 and 23:30
+    rates = {}
+    
+    # Previous day rates with FREE ELECTRICITY at 23:00
+    for minute in range(-1440, 0):
+        if minute == -60:  # 23:00 yesterday - FREE ELECTRICITY
+            rates[minute] = 0.0
+        elif minute == -30:  # 23:30 yesterday - also free
+            rates[minute] = 0.0
+        else:
+            rates[minute] = 20.0
+    
+    # Current day rates - only up to 22:30
+    for minute in range(0, 1351):
+        rates[minute] = 15.0
+    
+    print(f"  Setup: Previous day 23:00 (minute -60) rate = {rates[-60]} (FREE ELECTRICITY)")
+    print(f"  Setup: Previous day 23:30 (minute -30) rate = {rates[-30]} (FREE ELECTRICITY)")
+    print(f"  Setup: Current day minute 1350 (22:30) rate = {rates[1350]}")
+    print(f"  Setup: Current day minute 1380 (23:00) = MISSING")
+    print(f"  Setup: Current day minute 1410 (23:30) = MISSING")
+    
+    # Run rate_replicate
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False)
+    
+    print(f"\n  After rate_replicate:")
+    print(f"    Minute 1380 (23:00) rate = {result.get(1380, 'MISSING')}")
+    print(f"    Minute 1410 (23:30) rate = {result.get(1410, 'MISSING')}")
+    
+    # Expected: 23:00 and 23:30 should be replicated from previous day's 0.0 rates
+    if 1380 not in result:
+        print(f"  ✗ ERROR: Minute 1380 (23:00) is missing after rate_replicate")
+        failed |= 1
+    elif result[1380] != 0.0:
+        print(f"  ✗ ERROR: Minute 1380 (23:00) should be 0.0 (from minute -60), got {result[1380]}")
+        failed |= 1
+    else:
+        print(f"  ✓ Minute 1380 (23:00) correctly replicated from previous day: 0.0 (FREE)")
+    
+    if 1410 not in result:
+        print(f"  ✗ ERROR: Minute 1410 (23:30) is missing after rate_replicate")
+        failed |= 1
+    elif result[1410] != 0.0:
+        print(f"  ✗ ERROR: Minute 1410 (23:30) should be 0.0 (from minute -30), got {result[1410]}")
+        failed |= 1
+    else:
+        print(f"  ✓ Minute 1410 (23:30) correctly replicated from previous day: 0.0 (FREE)")
+    
+    # Also verify that previous day rates with 0 are still present
+    if result.get(-60) != 0.0:
+        print(f"  ✗ ERROR: Previous day minute -60 should still be 0.0, got {result.get(-60)}")
+        failed |= 1
+    else:
+        print(f"  ✓ Previous day 0.0 rates preserved correctly")
+    
+    return failed
