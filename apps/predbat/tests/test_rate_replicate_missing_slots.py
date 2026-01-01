@@ -62,21 +62,10 @@ def test_rate_replicate_missing_slots(my_predbat):
     # Verify previous day rates exist
     assert -60 in rates, "Test setup error: minute -60 should exist"
     assert -30 in rates, "Test setup error: minute -30 should exist"
-    print(f"  Setup: Previous day 23:00 (minute -60) rate = {rates[-60]}")
-    print(f"  Setup: Previous day 23:30 (minute -30) rate = {rates[-30]}")
-    print(f"  Setup: Current day has {len([m for m in rates if 0 <= m < 1440])} minutes")
-    print(f"  Setup: Missing current day slots: 1380 (23:00) and 1410 (23:30)")
     
     # Run rate_replicate
     result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False)
-    
-    # Check results
-    print(f"\n  After rate_replicate:")
-    print(f"    Minute 1380 (23:00) rate = {result.get(1380, 'MISSING')}")
-    print(f"    Minute 1410 (23:30) rate = {result.get(1410, 'MISSING')}")
-    print(f"    Replicated type for 1380: {result_replicated.get(1380, 'MISSING')}")
-    print(f"    Replicated type for 1410: {result_replicated.get(1410, 'MISSING')}")
-    
+
     # Expected behavior: 23:00 and 23:30 should be replicated from previous day
     if 1380 not in result:
         print(f"  ✗ ERROR: Minute 1380 (23:00) is still missing after rate_replicate")
@@ -87,8 +76,6 @@ def test_rate_replicate_missing_slots(my_predbat):
     elif result[1380] == 0.0:
         print(f"  ✗ ERROR: Minute 1380 (23:00) is 0.0 - this is the BUG we're fixing!")
         failed |= 1
-    else:
-        print(f"  ✓ Minute 1380 (23:00) correctly replicated from previous day: {result[1380]}")
     
     if 1410 not in result:
         print(f"  ✗ ERROR: Minute 1410 (23:30) is still missing after rate_replicate")
@@ -99,21 +86,15 @@ def test_rate_replicate_missing_slots(my_predbat):
     elif result[1410] == 0.0:
         print(f"  ✗ ERROR: Minute 1410 (23:30) is 0.0 - this is the BUG we're fixing!")
         failed |= 1
-    else:
-        print(f"  ✓ Minute 1410 (23:30) correctly replicated from previous day: {result[1410]}")
     
     # Check that replicated type is marked as "copy"
     if result_replicated.get(1380) != "copy":
         print(f"  ✗ ERROR: Minute 1380 should be marked as 'copy', got {result_replicated.get(1380)}")
         failed |= 1
-    else:
-        print(f"  ✓ Minute 1380 correctly marked as 'copy'")
     
     if result_replicated.get(1410) != "copy":
         print(f"  ✗ ERROR: Minute 1410 should be marked as 'copy', got {result_replicated.get(1410)}")
         failed |= 1
-    else:
-        print(f"  ✓ Minute 1410 correctly marked as 'copy'")
     
     return failed
 
@@ -145,16 +126,8 @@ def test_rate_replicate_no_previous_day(my_predbat):
     for minute in range(0, 1351):
         rates[minute] = 15.0
     
-    print(f"  Setup: No previous day data")
-    print(f"  Setup: Current day has {len(rates)} minutes (0 to 1350)")
-    print(f"  Setup: Missing slots: 1380 (23:00) and 1410 (23:30)")
-    
     # Run rate_replicate
     result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False)
-    
-    print(f"\n  After rate_replicate:")
-    print(f"    Minute 1380 (23:00) rate = {result.get(1380, 'MISSING')}")
-    print(f"    Minute 1410 (23:30) rate = {result.get(1410, 'MISSING')}")
     
     # Without previous day data, the function should fall back to rate_last (last seen rate)
     # which should be rates[1350] = 15.0 (22:30's rate)
@@ -164,8 +137,6 @@ def test_rate_replicate_no_previous_day(my_predbat):
     elif result[1380] == 0.0:
         print(f"  ✗ ERROR: Minute 1380 should not be 0.0 (should use rate_last fallback)")
         failed |= 1
-    else:
-        print(f"  ✓ Minute 1380 filled with fallback rate: {result[1380]}")
     
     if 1410 not in result:
         print(f"  ✗ ERROR: Minute 1410 should be filled (even without previous day data)")
@@ -173,8 +144,6 @@ def test_rate_replicate_no_previous_day(my_predbat):
     elif result[1410] == 0.0:
         print(f"  ✗ ERROR: Minute 1410 should not be 0.0 (should use rate_last fallback)")
         failed |= 1
-    else:
-        print(f"  ✓ Minute 1410 filled with fallback rate: {result[1410]}")
     
     return failed
 
@@ -220,18 +189,8 @@ def test_rate_replicate_with_zero_rates(my_predbat):
     for minute in range(0, 1351):
         rates[minute] = 15.0
     
-    print(f"  Setup: Previous day 23:00 (minute -60) rate = {rates[-60]} (FREE ELECTRICITY)")
-    print(f"  Setup: Previous day 23:30 (minute -30) rate = {rates[-30]} (FREE ELECTRICITY)")
-    print(f"  Setup: Current day minute 1350 (22:30) rate = {rates[1350]}")
-    print(f"  Setup: Current day minute 1380 (23:00) = MISSING")
-    print(f"  Setup: Current day minute 1410 (23:30) = MISSING")
-    
     # Run rate_replicate
     result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False)
-    
-    print(f"\n  After rate_replicate:")
-    print(f"    Minute 1380 (23:00) rate = {result.get(1380, 'MISSING')}")
-    print(f"    Minute 1410 (23:30) rate = {result.get(1410, 'MISSING')}")
     
     # Expected: 23:00 and 23:30 should be replicated from previous day's 0.0 rates
     if 1380 not in result:
@@ -240,8 +199,6 @@ def test_rate_replicate_with_zero_rates(my_predbat):
     elif result[1380] != 0.0:
         print(f"  ✗ ERROR: Minute 1380 (23:00) should be 0.0 (from minute -60), got {result[1380]}")
         failed |= 1
-    else:
-        print(f"  ✓ Minute 1380 (23:00) correctly replicated from previous day: 0.0 (FREE)")
     
     if 1410 not in result:
         print(f"  ✗ ERROR: Minute 1410 (23:30) is missing after rate_replicate")
@@ -249,14 +206,10 @@ def test_rate_replicate_with_zero_rates(my_predbat):
     elif result[1410] != 0.0:
         print(f"  ✗ ERROR: Minute 1410 (23:30) should be 0.0 (from minute -30), got {result[1410]}")
         failed |= 1
-    else:
-        print(f"  ✓ Minute 1410 (23:30) correctly replicated from previous day: 0.0 (FREE)")
     
     # Also verify that previous day rates with 0 are still present
     if result.get(-60) != 0.0:
         print(f"  ✗ ERROR: Previous day minute -60 should still be 0.0, got {result.get(-60)}")
         failed |= 1
-    else:
-        print(f"  ✓ Previous day 0.0 rates preserved correctly")
     
     return failed
