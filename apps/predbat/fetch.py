@@ -1031,6 +1031,8 @@ class Fetch:
         """
         minute = -24 * 60
         rate_last = 0
+        rate_first = 0
+        rate_first_valid = False
         rate_last_valid = False  # Track if we've seen any real rates yet
         adjusted_rates = {}
         replicated_rates = {}
@@ -1085,7 +1087,17 @@ class Fetch:
             else:
                 rate_last = rates[minute]
                 rate_last_valid = True
+                if not rate_first_valid:
+                    rate_first = rate_last
+                    rate_first_valid = True
             minute += 1
+
+        # Backfill any missing rates at start and end
+        for minute in range(-24 * 60, self.forecast_minutes + 48 * 60):
+            if minute not in rates:
+                rates[minute] = rate_first
+                replicated_rates[minute] = "copy"
+
         return rates, replicated_rates
 
     def find_charge_window(self, rates, minute, threshold_rate, find_high, alt_rates={}):
