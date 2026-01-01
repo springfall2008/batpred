@@ -212,7 +212,7 @@ See the components documentation for details [Components - Fox cloud](components
 
 ## Solax Cloud
 
-** Experimental **
+**Experimental**
 
 - Predbat now has a built-in Solax cloud integration.
 
