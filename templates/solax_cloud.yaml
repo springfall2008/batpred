@@ -30,8 +30,8 @@ pred_bat:
 
   # Obtain the Solax Cloud key by creating an app on https://developer.solaxcloud.com/application
   # Copy the new client ID and client secret to secrets.yaml
-  solax_client_id: !secret solax_client_id
-  solax_client_secret: !secret solax_client_secret
+  solax_client_id: 'xxxxxx'
+  solax_client_secret: 'yyyyyy'
   solax_enable_controls: True
   solax_automatic: True
   #
