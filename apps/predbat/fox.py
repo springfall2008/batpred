@@ -1194,7 +1194,12 @@ class FoxAPI(ComponentBase):
                         soc_total += soc
                         soc_total_count += 1
             if soc_total_count > 0:
-                self.device_values[sn]["soc"] = {"name": "State of Charge Total", "unit": "%", "value": round(soc_total / soc_total_count, 0)}
+                # Remove the SOC dictionary key (any case) otherwise we might create a duplicate (different case)
+                for key in list(self.device_values[sn].keys()):
+                    if key.lower() == "soc":
+                        del self.device_values[sn][key]
+                # Add total SOC
+                self.device_values[sn]["SoC"] = {"name": "State of Charge Total", "unit": "%", "value": round(soc_total / soc_total_count, 0)}
 
         # Publish device values
         for sn in self.device_values:
@@ -1546,11 +1551,10 @@ class MockBase:  # pragma: no cover
 
     def __init__(self):
         self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
         self.prefix = "predbat"
         self.args = {}
         self.midnight_utc = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
         self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
         self.entities = {}
 

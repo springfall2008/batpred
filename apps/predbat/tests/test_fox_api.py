@@ -4402,7 +4402,7 @@ def test_publish_data_device_values_dual_soc(my_predbat):
 
     soc_entity = f"sensor.predbat_fox_{deviceSN.lower()}_soc"
     assert soc_entity in fox.dashboard_items
-    assert fox.dashboard_items[soc_entity]["state"] == 62, f"Expected 63 but got {fox.dashboard_items[soc_entity]['state']}"  # Zero DPs
+    assert fox.dashboard_items[soc_entity]["state"] == 62, f"Expected 62 but got {fox.dashboard_items[soc_entity]['state']}"  # Zero DPs
 
     # Verify energy entity has correct device_class and state_class
     gen_entity = f"sensor.predbat_fox_{deviceSN.lower()}_generation"
