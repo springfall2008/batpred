@@ -1580,7 +1580,7 @@ class Output:
         for minute in range(-24 * 60, self.minutes_now + self.forecast_minutes + 24 * 60, self.plan_interval_minutes):
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
-            rates_time[stamp] = dp2(rates[minute])
+            rates_time[stamp] = dp2(rates.get(minute, 0))
 
         if export:
             self.publish_rates_export()
@@ -1592,7 +1592,7 @@ class Output:
         if export:
             self.dashboard_item(
                 self.prefix + ".rates_export",
-                state=dp2(rates[self.minutes_now]),
+                state=dp2(rates.get(self.minutes_now, 0)),
                 attributes={
                     "min": dp2(self.rate_export_min),
                     "max": dp2(self.rate_export_max),
@@ -1608,7 +1608,7 @@ class Output:
         elif gas:
             self.dashboard_item(
                 self.prefix + ".rates_gas",
-                state=dp2(rates[self.minutes_now]),
+                state=dp2(rates.get(self.minutes_now, 0)),
                 attributes={
                     "min": dp2(self.rate_gas_min),
                     "max": dp2(self.rate_gas_max),
@@ -1623,7 +1623,7 @@ class Output:
         else:
             self.dashboard_item(
                 self.prefix + ".rates",
-                state=dp2(rates[self.minutes_now]),
+                state=dp2(rates.get(self.minutes_now, 0)),
                 attributes={
                     "min": dp2(self.rate_min),
                     "max": dp2(self.rate_max),

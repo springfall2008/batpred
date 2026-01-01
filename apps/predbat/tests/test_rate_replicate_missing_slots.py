@@ -234,3 +234,90 @@ def test_rate_replicate_with_zero_rates(my_predbat):
     my_predbat.forecast_minutes = 24*60
 
     return failed
+
+
+def test_rate_replicate_undefined_negative_minutes(my_predbat):
+    """
+    Test for rate_replicate when rates start at minute 0 or later (no negative minutes).
+
+    This tests the edge case where rate_replicate is called with rates that DON'T include
+    negative minutes (previous day data). When iterating from -1440, the rate_last_valid
+    flag stays False until a rate at minute >= 0 is encountered, preventing negative
+    minutes from being filled.
+
+    This causes KeyError in publish_rates which iterates from -1440 and expects all
+    minutes to be defined.
+
+    Bug reported in issue #3158: KeyError: -1440 in publish_rates after update to 8.31.5
+
+    The rate_replicate function has a guard at line 1083-1086 that prevents filling
+    negative minutes when rate_last_valid is False (no rates at minute >= 0 seen yet).
+    """
+    failed = 0
+
+    print("\n*** Test: rate_replicate with no negative minute data (KeyError -1440) ***")
+
+    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.forecast_minutes = 2880
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.metric_future_rate_offset_export = 0
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+
+    # Create rate dict with NO negative minute data, starting from minute 0
+    # This simulates the actual bug scenario from issue #3158
+    rates = {}
+    for minute in range(0, 1440):  # Only current day: 0 to 1439
+        rates[minute] = 15.0 + (minute % 100) / 100.0  # Varying rates
+
+    print(f"  Input rates: {len(rates)} entries (minutes 0 to 1439)")
+    print(f"  Rate at -1440: {rates.get(-1440, 'MISSING')}")
+    print(f"  Rate at 0: {rates.get(0, 'MISSING')}")
+    print(f"  Rate at 1439: {rates.get(1439, 'MISSING')}")
+
+    # Run rate_replicate
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False)
+
+    print(f"  After rate_replicate: {len(result)} entries")
+
+    # The bug: rate_replicate won't fill negative minutes when rate_last_valid is False
+    # This happens because no rates at minute >= 0 have been seen
+    missing_minutes = []
+    for minute in range(-1440, 0):
+        if minute not in result:
+            missing_minutes.append(minute)
+
+    if missing_minutes:
+        print(f"  ✗ ERROR: {len(missing_minutes)} negative minutes are undefined after rate_replicate")
+        print(f"    First missing: {missing_minutes[0]}, Last missing: {missing_minutes[-1]}")
+        print(f"    This would cause KeyError in publish_rates when iterating from -1440")
+
+        # Demonstrate the KeyError that would occur in publish_rates
+        try:
+            # Simulate what publish_rates does: access rates[minute] directly
+            test_minute = -1440
+            value = result[test_minute]  # This will raise KeyError
+            print(f"    No KeyError at minute {test_minute} (unexpected!)")
+        except KeyError as e:
+            print(f"    ✓ Confirmed: KeyError accessing minute {test_minute}: {e}")
+            failed |= 1
+    else:
+        print(f"  ✓ All negative minutes were filled correctly")
+
+    # Also check if any positive minutes were created (there shouldn't be any with only negative input)
+    positive_minutes = [m for m in result.keys() if m >= 0]
+    if positive_minutes:
+        print(f"  Note: {len(positive_minutes)} positive minutes were created despite no input data")
+    else:
+        print(f"  ✓ No positive minutes created (expected with only negative input)")
+
+    # Restore time context to current time
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
+
+    return failed
