@@ -10,7 +10,6 @@ from utils import str2time, dp1
 import asyncio
 import json
 import random
-import time
 import yaml
 import os
 from component_base import ComponentBase
