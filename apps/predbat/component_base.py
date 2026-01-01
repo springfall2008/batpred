@@ -245,7 +245,7 @@ class ComponentBase(ABC):
         Wait for the component to start.
 
         Args:
-            timeout: Maximum time to wait in seconds (default: 5*60)
+            timeout: Maximum time to wait in seconds (default: 10*60)
 
         Returns:
             bool: True if component started successfully, False if timeout
