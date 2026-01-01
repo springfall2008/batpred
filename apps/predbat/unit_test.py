@@ -40,7 +40,7 @@ from tests.test_solax import run_solax_tests
 from tests.test_single_debug import run_single_debug
 from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints
 from tests.test_secrets import run_secrets_tests
-from tests.test_ge_cloud import run_test_ge_cloud, test_ge_cloud
+from tests.test_ge_cloud import test_ge_cloud
 from tests.test_axle import test_axle
 from tests.test_db_manager import test_db_manager
 from tests.test_hahistory import run_hahistory_tests
@@ -238,7 +238,6 @@ def main():
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--compare", action="store_true", help="Run compare")
-    parser.add_argument("--gecloud", action="store_true", help="Run tests for GivEnergy Cloud")
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
     parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
@@ -268,10 +267,6 @@ def main():
     if args.debug_file:
         run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug)
         sys.exit(0)
-
-    if not failed and args.gecloud:
-        failed |= run_test_ge_cloud(my_predbat)
-        return failed
 
     # Collect tests to run based on arguments
     tests_to_run = []
