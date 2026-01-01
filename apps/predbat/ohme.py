@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 from datetime import timedelta, timezone
-from config import TIME_FORMAT_HA
+from const import TIME_FORMAT_HA
 from component_base import ComponentBase
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line

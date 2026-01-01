@@ -15,13 +15,13 @@ import json
 import yaml
 import re
 import copy
-from config import (
+from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
-    THIS_VERSION,
-    CONFIG_API_OVERRIDE,
     PREDBAT_MODE_MONITOR,
 )
+from config import CONFIG_API_OVERRIDE
+from predbat import THIS_VERSION
 
 DEBUG_EXCLUDE_LIST = [
     "pool",

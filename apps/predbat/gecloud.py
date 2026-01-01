@@ -1636,3 +1636,98 @@ class GECloudData(ComponentBase):
         Get the GECloudData data
         """
         return self.mdata, self.oldest_data_time
+
+
+class MockBase:  # pragma: no cover
+    """Mock base class for testing"""
+
+    def __init__(self):
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
+        self.prefix = "predbat"
+        self.args = {}
+        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.entities = {}
+        self.config_root = "./temp_gecloud"
+        self.plan_interval_minutes = 30
+
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
+        if raw:
+            return self.entities.get(entity_id, {})
+        else:
+            return self.entities.get(entity_id, {}).get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
+
+    def log(self, message):
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        print(f"ENTITY: {entity_id} = {state}")
+        if attributes:
+            if "options" in attributes:
+                attributes["options"] = "..."
+            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, key, default=None):
+        return default
+
+    def set_arg(self, key, value):
+        state = None
+        if isinstance(value, str) and "." in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and "." in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
+
+
+async def test_gecloud_direct(api_key):  # pragma: no cover
+    """
+    Test the GECloud Direct API
+    """
+
+    print(f"Testing GECloud Direct API with key: {api_key}")
+
+    # Create a mock base object
+    mock_base = MockBase()
+
+    # Create GECloudDirect instanceFoxAPI(mock_base, **arg_dict)
+    arg_dict = {
+        "ge_cloud_direct": True,
+        "api_key": api_key,
+        "automatic": True,
+    }
+    gecloud_direct = GECloudDirect(mock_base, **arg_dict)
+    await gecloud_direct.run(0, True)
+    await gecloud_direct.run(1, False)
+    await gecloud_direct.final()
+
+    print("Test completed")
+
+
+def main():  # pragma: no cover
+    """
+    Main function for command line execution to test Octopus API
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test GECloud Direct API")
+    parser.add_argument("--api-key", required=True, help="GECloud Direct API key")
+
+    args = parser.parse_args()
+
+    # Run the test
+    asyncio.run(test_gecloud_direct(args.api_key))
+
+
+if __name__ == "__main__":
+    main()

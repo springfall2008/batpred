@@ -23,7 +23,76 @@ if parent_dir not in sys.path:
 from download import get_github_directory_listing, check_install, predbat_update_download, compute_file_sha1, download_predbat_file_from_github, predbat_update_move
 
 
-def test_get_github_directory_listing_success(my_predbat):
+def test_download(my_predbat):
+    """
+    Comprehensive test suite for Predbat download/update functionality.
+
+    Tests all major functionality including:
+    - GitHub API directory listing
+    - File SHA1 computation
+    - Installation validation
+    - Download operations
+    - File move/update operations
+    """
+
+    # Registry of all sub-tests
+    sub_tests = [
+        ("github_listing_success", _test_get_github_directory_listing_success, "GitHub directory listing success"),
+        ("github_listing_failure", _test_get_github_directory_listing_failure, "GitHub API failure (404)"),
+        ("github_listing_exception", _test_get_github_directory_listing_exception, "GitHub API exception handling"),
+        ("compute_sha1", _test_compute_file_sha1, "Compute file SHA1"),
+        ("compute_sha1_missing", _test_compute_file_sha1_missing_file, "SHA1 computation on missing file"),
+        ("check_install_valid", _test_check_install_with_valid_manifest, "Check install with valid manifest"),
+        ("check_install_missing", _test_check_install_missing_file, "Check install missing file"),
+        ("check_install_zero", _test_check_install_zero_byte_file, "Check install zero byte file"),
+        ("check_install_size_mismatch", _test_check_install_size_mismatch, "Check install size mismatch"),
+        ("check_install_sha_mismatch", _test_check_install_sha_mismatch, "Check install SHA mismatch"),
+        ("check_install_no_manifest", _test_check_install_no_manifest_downloads, "Check install downloads manifest"),
+        ("update_download_success", _test_predbat_update_download_success, "Update download success"),
+        ("update_download_api_failure", _test_predbat_update_download_api_failure, "Update download API failure"),
+        ("update_download_file_failure", _test_predbat_update_download_file_failure, "Update download file failure"),
+        ("download_file_success", _test_download_predbat_file_success, "Download file success"),
+        ("download_file_failure", _test_download_predbat_file_failure, "Download file failure"),
+        ("download_file_no_filename", _test_download_predbat_file_no_filename, "Download file no filename"),
+        ("update_move_success", _test_predbat_update_move_success, "Move files success"),
+        ("update_move_empty", _test_predbat_update_move_empty_files, "Move files empty list"),
+        ("update_move_none", _test_predbat_update_move_none_files, "Move files none list"),
+        ("update_move_invalid_version", _test_predbat_update_move_invalid_version, "Move files invalid version"),
+    ]
+
+    print("\n" + "=" * 70)
+    print("PREDBAT DOWNLOAD/UPDATE TEST SUITE")
+    print("=" * 70)
+
+    failed = 0
+    passed = 0
+
+    for test_name, test_func, test_desc in sub_tests:
+        print(f"\n[{test_name}] {test_desc}")
+        print("-" * 70)
+        try:
+            test_result = test_func(my_predbat)
+            if test_result:
+                print(f"✗ FAILED: {test_name}")
+                failed += 1
+            else:
+                print(f"✓ PASSED: {test_name}")
+                passed += 1
+        except Exception as e:
+            print(f"✗ EXCEPTION in {test_name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed += 1
+
+    print("\n" + "=" * 70)
+    print(f"RESULTS: {passed} passed, {failed} failed out of {len(sub_tests)} tests")
+    print("=" * 70)
+
+    return failed
+
+
+def _test_get_github_directory_listing_success(my_predbat):
     """
     Test successful GitHub API directory listing
     """
@@ -46,9 +115,10 @@ def test_get_github_directory_listing_success(my_predbat):
         assert result[0]["sha"] == "abc123"
         assert result[1]["name"] == "config.py"
         mock_get.assert_called_once()
+    return 0
 
 
-def test_get_github_directory_listing_failure(my_predbat):
+def _test_get_github_directory_listing_failure(my_predbat):
     """
     Test GitHub API failure
     """
@@ -59,9 +129,10 @@ def test_get_github_directory_listing_failure(my_predbat):
         result = get_github_directory_listing("v8.30.8")
 
         assert result is None
+    return 0
 
 
-def test_get_github_directory_listing_exception(my_predbat):
+def _test_get_github_directory_listing_exception(my_predbat):
     """
     Test GitHub API exception handling
     """
@@ -71,9 +142,10 @@ def test_get_github_directory_listing_exception(my_predbat):
         result = get_github_directory_listing("v8.30.8")
 
         assert result is None
+    return 0
 
 
-def test_compute_file_sha1(my_predbat):
+def _test_compute_file_sha1(my_predbat):
     """
     Test Git blob SHA1 hash computation (matches GitHub's SHA)
     """
@@ -88,17 +160,19 @@ def test_compute_file_sha1(my_predbat):
         assert sha1 == "d670460b4b4aece5915caf5c68d12f560a9fe3e4"
     finally:
         os.unlink(temp_path)
+    return 0
 
 
-def test_compute_file_sha1_missing_file(my_predbat):
+def _test_compute_file_sha1_missing_file(my_predbat):
     """
     Test SHA1 computation on missing file
     """
     sha1 = compute_file_sha1("/nonexistent/file.txt")
     assert sha1 is None
+    return 0
 
 
-def test_check_install_with_valid_manifest(my_predbat):
+def _test_check_install_with_valid_manifest(my_predbat):
     """
     Test check_install with valid manifest and matching files
     """
@@ -129,9 +203,10 @@ def test_check_install_with_valid_manifest(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_check_install_missing_file(my_predbat):
+def _test_check_install_missing_file(my_predbat):
     """
     Test check_install with missing file
     """
@@ -152,9 +227,10 @@ def test_check_install_missing_file(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_check_install_zero_byte_file(my_predbat):
+def _test_check_install_zero_byte_file(my_predbat):
     """
     Test check_install with zero-byte file
     """
@@ -179,9 +255,10 @@ def test_check_install_zero_byte_file(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_check_install_size_mismatch(my_predbat):
+def _test_check_install_size_mismatch(my_predbat):
     """
     Test check_install warns on size mismatch but doesn't fail
     """
@@ -207,9 +284,10 @@ def test_check_install_size_mismatch(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_check_install_sha_mismatch(my_predbat):
+def _test_check_install_sha_mismatch(my_predbat):
     """
     Test check_install warns on SHA mismatch but doesn't fail
     """
@@ -235,9 +313,10 @@ def test_check_install_sha_mismatch(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_check_install_no_manifest_downloads(my_predbat):
+def _test_check_install_no_manifest_downloads(my_predbat):
     """
     Test check_install downloads manifest from GitHub if missing
     """
@@ -262,9 +341,10 @@ def test_check_install_no_manifest_downloads(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_predbat_update_download_success(my_predbat):
+def _test_predbat_update_download_success(my_predbat):
     """
     Test successful download of all files
     """
@@ -288,9 +368,10 @@ def test_predbat_update_download_success(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_predbat_update_download_api_failure(my_predbat):
+def _test_predbat_update_download_api_failure(my_predbat):
     """
     Test download aborts when GitHub API fails
     """
@@ -304,9 +385,10 @@ def test_predbat_update_download_api_failure(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_predbat_update_download_file_failure(my_predbat):
+def _test_predbat_update_download_file_failure(my_predbat):
     """
     Test download aborts when individual file download fails
     """
@@ -323,9 +405,10 @@ def test_predbat_update_download_file_failure(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_download_predbat_file_success(my_predbat):
+def _test_download_predbat_file_success(my_predbat):
     """
     Test successful download of a file from GitHub
     """
@@ -349,9 +432,10 @@ def test_download_predbat_file_success(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_download_predbat_file_failure(my_predbat):
+def _test_download_predbat_file_failure(my_predbat):
     """
     Test failed download of a file from GitHub
     """
@@ -372,9 +456,10 @@ def test_download_predbat_file_failure(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_download_predbat_file_no_filename(my_predbat):
+def _test_download_predbat_file_no_filename(my_predbat):
     """
     Test download without saving to file (returns content only)
     """
@@ -384,9 +469,10 @@ def test_download_predbat_file_no_filename(my_predbat):
     with patch("download.requests.get", return_value=mock_response):
         result = download_predbat_file_from_github("v8.30.8", "test.py", None)
         assert result == 'print("test file content")\n'
+    return 0
 
 
-def test_predbat_update_move_success(my_predbat):
+def _test_predbat_update_move_success(my_predbat):
     """
     Test successful move of downloaded files into place
     """
@@ -419,9 +505,10 @@ def test_predbat_update_move_success(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
+    return 0
 
 
-def test_predbat_update_move_empty_files(my_predbat):
+def _test_predbat_update_move_empty_files(my_predbat):
     """
     Test predbat_update_move with empty file list
     """
@@ -429,15 +516,16 @@ def test_predbat_update_move_empty_files(my_predbat):
     assert result is False
 
 
-def test_predbat_update_move_none_files(my_predbat):
+def _test_predbat_update_move_none_files(my_predbat):
     """
     Test predbat_update_move with None file list
     """
     result = predbat_update_move("v8.30.8", None)
     assert result is False
+    return 0
 
 
-def test_predbat_update_move_invalid_version(my_predbat):
+def _test_predbat_update_move_invalid_version(my_predbat):
     """
     Test predbat_update_move with empty version string still executes
     """
@@ -454,29 +542,4 @@ def test_predbat_update_move_invalid_version(my_predbat):
 
     finally:
         shutil.rmtree(temp_dir)
-
-
-# Test registry for the test runner
-TEST_FUNCTIONS = [
-    test_get_github_directory_listing_success,
-    test_get_github_directory_listing_failure,
-    test_get_github_directory_listing_exception,
-    test_compute_file_sha1,
-    test_compute_file_sha1_missing_file,
-    test_check_install_with_valid_manifest,
-    test_check_install_missing_file,
-    test_check_install_zero_byte_file,
-    test_check_install_size_mismatch,
-    test_check_install_sha_mismatch,
-    test_check_install_no_manifest_downloads,
-    test_predbat_update_download_success,
-    test_predbat_update_download_api_failure,
-    test_predbat_update_download_file_failure,
-    test_download_predbat_file_success,
-    test_download_predbat_file_failure,
-    test_download_predbat_file_no_filename,
-    test_predbat_update_move_success,
-    test_predbat_update_move_empty_files,
-    test_predbat_update_move_none_files,
-    test_predbat_update_move_invalid_version,
-]
+    return 0

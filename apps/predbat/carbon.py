@@ -16,7 +16,7 @@ TIME_FORMAT_CARBON = "%Y-%m-%dT%H:%MZ"
 
 from datetime import datetime, timezone, timedelta
 import aiohttp
-from config import TIME_FORMAT_HA
+from const import TIME_FORMAT_HA
 from component_base import ComponentBase
 
 

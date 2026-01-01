@@ -191,7 +191,125 @@ class MockOhmeApiClient(OhmeApiClient):
 # Helper Function Tests
 # ============================================================================
 
-def test_ohme_time_next_occurs_today(my_predbat=None):
+
+def test_ohme(my_predbat=None):
+    """
+    ======================================================================
+    OHME EV CHARGER TEST SUITE
+    ======================================================================
+    Comprehensive test suite for Ohme EV charger integration including:
+    - Helper functions (time_next_occurs, slot_list, vehicle_to_name)
+    - OhmeApiClient methods (status, mode, power, slots, vehicles)
+    - API operations (login, refresh, get_charge_session, update_device_info)
+    - HTTP operations (_make_request with GET/POST/PUT)
+    - OhmeAPI component (publish_data, run method, event handlers)
+    - HA event handlers (select, number, switch)
+    """
+    print("\n" + "="*70)
+    print("OHME EV CHARGER TEST SUITE")
+    print("="*70)
+
+    # Sub-test registry - each entry is (key, function, description)
+    sub_tests = [
+        ("time_next_today", _test_ohme_time_next_occurs_today, "time_next_occurs for a time later today"),
+        ("time_next_tomorrow", _test_ohme_time_next_occurs_tomorrow, "time_next_occurs for a time tomorrow"),
+        ("slot_list_empty", _test_ohme_slot_list_empty, "slot_list with empty slots"),
+        ("slot_list_single", _test_ohme_slot_list_single, "slot_list with single slot"),
+        ("slot_list_merged", _test_ohme_slot_list_merged, "slot_list with merged slots"),
+        ("vehicle_name_custom", _test_ohme_vehicle_to_name_custom, "vehicle_to_name with custom name"),
+        ("vehicle_name_model", _test_ohme_vehicle_to_name_model, "vehicle_to_name with model name"),
+        ("status_charging", _test_ohme_client_status_charging, "OhmeApiClient status CHARGING"),
+        ("status_unplugged", _test_ohme_client_status_unplugged, "OhmeApiClient status UNPLUGGED"),
+        ("status_pending", _test_ohme_client_status_pending_approval, "OhmeApiClient status PENDING_APPROVAL"),
+        ("mode_smart", _test_ohme_client_mode_smart_charge, "OhmeApiClient mode SMART_CHARGE"),
+        ("mode_max", _test_ohme_client_mode_max_charge, "OhmeApiClient mode MAX_CHARGE"),
+        ("power", _test_ohme_client_power, "OhmeApiClient power property"),
+        ("target_soc_progress", _test_ohme_client_target_soc_in_progress, "OhmeApiClient target_soc in progress"),
+        ("target_soc_paused", _test_ohme_client_target_soc_paused, "OhmeApiClient target_soc paused"),
+        ("target_time", _test_ohme_client_target_time, "OhmeApiClient target_time"),
+        ("slots", _test_ohme_client_slots, "OhmeApiClient slots property"),
+        ("vehicles", _test_ohme_client_vehicles, "OhmeApiClient vehicles property"),
+        ("current_vehicle", _test_ohme_client_current_vehicle, "OhmeApiClient current_vehicle"),
+        ("pause_charge", _test_ohme_client_async_pause_charge, "async_pause_charge"),
+        ("resume_charge", _test_ohme_client_async_resume_charge, "async_resume_charge"),
+        ("approve_charge", _test_ohme_client_async_approve_charge, "async_approve_charge"),
+        ("max_charge_enable", _test_ohme_client_async_max_charge_enable, "max_charge enable"),
+        ("max_charge_disable", _test_ohme_client_async_max_charge_disable, "max_charge disable"),
+        ("set_target", _test_ohme_client_async_set_target, "async_set_target"),
+        ("get_session", _test_ohme_client_async_get_charge_session, "async_get_charge_session"),
+        ("update_device", _test_ohme_client_async_update_device_info, "async_update_device_info"),
+        ("login_success", _test_ohme_client_async_login_success, "login success"),
+        ("refresh_no_token", _test_ohme_client_async_refresh_session_no_token, "refresh session no token"),
+        ("refresh_recent", _test_ohme_client_async_refresh_session_recent_token, "refresh session recent token"),
+        ("refresh_expired", _test_ohme_client_async_refresh_session_expired_token, "refresh session expired"),
+        ("refresh_failure", _test_ohme_client_async_refresh_session_failure, "refresh session failure"),
+        ("make_request_get", _test_ohme_client_make_request_get_success, "_make_request GET"),
+        ("make_request_put", _test_ohme_client_make_request_put_success, "_make_request PUT"),
+        ("make_request_post_json", _test_ohme_client_make_request_post_json, "_make_request POST JSON"),
+        ("make_request_post_text", _test_ohme_client_make_request_post_skip_json, "_make_request POST text"),
+        ("make_request_error", _test_ohme_client_make_request_api_error, "_make_request API error"),
+        ("make_request_session", _test_ohme_client_make_request_creates_session, "_make_request creates session"),
+        ("session_retry", _test_ohme_client_async_get_charge_session_retry, "session retry on CALCULATING"),
+        ("set_mode_max", _test_ohme_client_async_set_mode_max_charge, "async_set_mode MAX_CHARGE"),
+        ("set_mode_smart", _test_ohme_client_async_set_mode_smart_charge, "async_set_mode SMART_CHARGE"),
+        ("set_mode_paused", _test_ohme_client_async_set_mode_paused, "async_set_mode PAUSED"),
+        ("set_mode_string", _test_ohme_client_async_set_mode_string, "async_set_mode string"),
+        ("set_vehicle_found", _test_ohme_client_async_set_vehicle_found, "async_set_vehicle found"),
+        ("set_vehicle_not_found", _test_ohme_client_async_set_vehicle_not_found, "async_set_vehicle not found"),
+        ("update_schedule_all", _test_ohme_client_async_update_schedule_all_params, "async_update_schedule all params"),
+        ("update_schedule_partial", _test_ohme_client_async_update_schedule_partial_params, "async_update_schedule partial"),
+        ("update_schedule_no_rule", _test_ohme_client_async_update_schedule_no_rule, "async_update_schedule no rule"),
+        ("publish_data", _test_ohme_publish_data, "OhmeAPI publish_data"),
+        ("publish_disconnected", _test_ohme_publish_data_disconnected, "OhmeAPI publish_data disconnected"),
+        ("run_first", _test_ohme_run_first_call, "OhmeAPI run first call"),
+        ("run_30min", _test_ohme_run_periodic_30min, "OhmeAPI run 30min periodic"),
+        ("run_120s", _test_ohme_run_periodic_120s, "OhmeAPI run 120s periodic"),
+        ("run_no_periodic", _test_ohme_run_no_periodic, "OhmeAPI run no periodic"),
+        ("run_queued_events", _test_ohme_run_with_queued_events, "OhmeAPI run with queued events"),
+        ("run_exception", _test_ohme_run_event_handler_exception, "OhmeAPI run event handler exception"),
+        ("run_octopus", _test_ohme_run_first_with_octopus_intelligent, "OhmeAPI run with octopus intelligent"),
+        ("select_target_time", _test_ohme_select_event_handler_target_time, "select_event_handler target_time"),
+        ("select_invalid_time", _test_ohme_select_event_handler_invalid_time, "select_event_handler invalid time"),
+        ("number_target_soc", _test_ohme_number_event_handler_target_soc, "number_event_handler target_soc"),
+        ("number_target_soc_invalid", _test_ohme_number_event_handler_target_soc_invalid, "number_event_handler invalid SoC"),
+        ("number_preconditioning", _test_ohme_number_event_handler_preconditioning, "number_event_handler preconditioning"),
+        ("number_preconditioning_off", _test_ohme_number_event_handler_preconditioning_off, "number_event_handler preconditioning off"),
+        ("number_preconditioning_invalid", _test_ohme_number_event_handler_preconditioning_invalid, "number_event_handler invalid preconditioning"),
+        ("switch_max_charge_on", _test_ohme_switch_event_handler_max_charge_on, "switch_event_handler max_charge on"),
+        ("switch_max_charge_off", _test_ohme_switch_event_handler_max_charge_off, "switch_event_handler max_charge off"),
+        ("switch_approve_charge", _test_ohme_switch_event_handler_approve_charge, "switch_event_handler approve_charge"),
+        ("switch_approve_wrong_status", _test_ohme_switch_event_handler_approve_charge_wrong_status, "switch_event_handler approve wrong status"),
+    ]
+
+    # Run all sub-tests
+    passed = 0
+    failed = 0
+    for key, test_func, description in sub_tests:
+        print(f"\n[{key}] {description}")
+        print("-" * 70)
+        try:
+            result = test_func(my_predbat)
+            if result:
+                print(f"✗ FAILED: {key}")
+                failed += 1
+            else:
+                print(f"✓ PASSED: {key}")
+                passed += 1
+        except Exception as e:
+            print(f"✗ EXCEPTION in {key}: {e}")
+            import traceback
+            traceback.print_exc()
+            failed += 1
+
+    # Print summary
+    print("\n" + "="*70)
+    print(f"RESULTS: {passed} passed, {failed} failed out of {len(sub_tests)} tests")
+    print("="*70)
+
+    return failed > 0
+
+
+def _test_ohme_time_next_occurs_today(my_predbat=None):
     """Test time_next_occurs for a time later today"""
     print("**** Running test_ohme_time_next_occurs_today ****")
 
@@ -215,7 +333,7 @@ def test_ohme_time_next_occurs_today(my_predbat=None):
     return 0
 
 
-def test_ohme_time_next_occurs_tomorrow(my_predbat=None):
+def _test_ohme_time_next_occurs_tomorrow(my_predbat=None):
     """Test time_next_occurs for a time that should be tomorrow"""
     print("**** Running test_ohme_time_next_occurs_tomorrow ****")
 
@@ -240,7 +358,7 @@ def test_ohme_time_next_occurs_tomorrow(my_predbat=None):
     return 0
 
 
-def test_ohme_slot_list_empty(my_predbat=None):
+def _test_ohme_slot_list_empty(my_predbat=None):
     """Test slot_list with no slots"""
     print("**** Running test_ohme_slot_list_empty ****")
 
@@ -253,7 +371,7 @@ def test_ohme_slot_list_empty(my_predbat=None):
     return 0
 
 
-def test_ohme_slot_list_single(my_predbat=None):
+def _test_ohme_slot_list_single(my_predbat=None):
     """Test slot_list with single slot"""
     print("**** Running test_ohme_slot_list_single ****")
 
@@ -278,7 +396,7 @@ def test_ohme_slot_list_single(my_predbat=None):
     return 0
 
 
-def test_ohme_slot_list_merged(my_predbat=None):
+def _test_ohme_slot_list_merged(my_predbat=None):
     """Test slot_list merges adjacent slots"""
     print("**** Running test_ohme_slot_list_merged ****")
 
@@ -308,7 +426,7 @@ def test_ohme_slot_list_merged(my_predbat=None):
     return 0
 
 
-def test_ohme_vehicle_to_name_custom(my_predbat=None):
+def _test_ohme_vehicle_to_name_custom(my_predbat=None):
     """Test vehicle_to_name with custom name"""
     print("**** Running test_ohme_vehicle_to_name_custom ****")
 
@@ -321,7 +439,7 @@ def test_ohme_vehicle_to_name_custom(my_predbat=None):
     return 0
 
 
-def test_ohme_vehicle_to_name_model(my_predbat=None):
+def _test_ohme_vehicle_to_name_model(my_predbat=None):
     """Test vehicle_to_name with model data"""
     print("**** Running test_ohme_vehicle_to_name_model ****")
 
@@ -346,7 +464,7 @@ def test_ohme_vehicle_to_name_model(my_predbat=None):
 # OhmeApiClient Property Tests
 # ============================================================================
 
-def test_ohme_client_status_charging(my_predbat=None):
+def _test_ohme_client_status_charging(my_predbat=None):
     """Test status property returns CHARGING"""
     print("**** Running test_ohme_client_status_charging ****")
 
@@ -363,7 +481,7 @@ def test_ohme_client_status_charging(my_predbat=None):
     return 0
 
 
-def test_ohme_client_status_unplugged(my_predbat=None):
+def _test_ohme_client_status_unplugged(my_predbat=None):
     """Test status property returns UNPLUGGED"""
     print("**** Running test_ohme_client_status_unplugged ****")
 
@@ -377,7 +495,7 @@ def test_ohme_client_status_unplugged(my_predbat=None):
     return 0
 
 
-def test_ohme_client_status_pending_approval(my_predbat=None):
+def _test_ohme_client_status_pending_approval(my_predbat=None):
     """Test status property returns PENDING_APPROVAL"""
     print("**** Running test_ohme_client_status_pending_approval ****")
 
@@ -391,7 +509,7 @@ def test_ohme_client_status_pending_approval(my_predbat=None):
     return 0
 
 
-def test_ohme_client_mode_smart_charge(my_predbat=None):
+def _test_ohme_client_mode_smart_charge(my_predbat=None):
     """Test mode property returns SMART_CHARGE"""
     print("**** Running test_ohme_client_mode_smart_charge ****")
 
@@ -405,7 +523,7 @@ def test_ohme_client_mode_smart_charge(my_predbat=None):
     return 0
 
 
-def test_ohme_client_mode_max_charge(my_predbat=None):
+def _test_ohme_client_mode_max_charge(my_predbat=None):
     """Test mode property returns MAX_CHARGE"""
     print("**** Running test_ohme_client_mode_max_charge ****")
 
@@ -419,7 +537,7 @@ def test_ohme_client_mode_max_charge(my_predbat=None):
     return 0
 
 
-def test_ohme_client_power(my_predbat=None):
+def _test_ohme_client_power(my_predbat=None):
     """Test power property returns ChargerPower"""
     print("**** Running test_ohme_client_power ****")
 
@@ -441,7 +559,7 @@ def test_ohme_client_power(my_predbat=None):
     return 0
 
 
-def test_ohme_client_target_soc_in_progress(my_predbat=None):
+def _test_ohme_client_target_soc_in_progress(my_predbat=None):
     """Test target_soc for charge in progress"""
     print("**** Running test_ohme_client_target_soc_in_progress ****")
 
@@ -459,7 +577,7 @@ def test_ohme_client_target_soc_in_progress(my_predbat=None):
     return 0
 
 
-def test_ohme_client_target_soc_paused(my_predbat=None):
+def _test_ohme_client_target_soc_paused(my_predbat=None):
     """Test target_soc for paused charge with suspended rule"""
     print("**** Running test_ohme_client_target_soc_paused ****")
 
@@ -476,7 +594,7 @@ def test_ohme_client_target_soc_paused(my_predbat=None):
     return 0
 
 
-def test_ohme_client_target_time(my_predbat=None):
+def _test_ohme_client_target_time(my_predbat=None):
     """Test target_time calculation"""
     print("**** Running test_ohme_client_target_time ****")
 
@@ -494,7 +612,7 @@ def test_ohme_client_target_time(my_predbat=None):
     return 0
 
 
-def test_ohme_client_slots(my_predbat=None):
+def _test_ohme_client_slots(my_predbat=None):
     """Test slots property"""
     print("**** Running test_ohme_client_slots ****")
 
@@ -513,7 +631,7 @@ def test_ohme_client_slots(my_predbat=None):
     return 0
 
 
-def test_ohme_client_vehicles(my_predbat=None):
+def _test_ohme_client_vehicles(my_predbat=None):
     """Test vehicles property"""
     print("**** Running test_ohme_client_vehicles ****")
 
@@ -532,7 +650,7 @@ def test_ohme_client_vehicles(my_predbat=None):
     return 0
 
 
-def test_ohme_client_current_vehicle(my_predbat=None):
+def _test_ohme_client_current_vehicle(my_predbat=None):
     """Test current_vehicle property"""
     print("**** Running test_ohme_client_current_vehicle ****")
 
@@ -553,7 +671,7 @@ def test_ohme_client_current_vehicle(my_predbat=None):
 # OhmeApiClient Push Method Tests
 # ============================================================================
 
-def test_ohme_client_async_pause_charge(my_predbat=None):
+def _test_ohme_client_async_pause_charge(my_predbat=None):
     """Test async_pause_charge sends correct request"""
     print("**** Running test_ohme_client_async_pause_charge ****")
 
@@ -574,7 +692,7 @@ def test_ohme_client_async_pause_charge(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_resume_charge(my_predbat=None):
+def _test_ohme_client_async_resume_charge(my_predbat=None):
     """Test async_resume_charge sends correct request"""
     print("**** Running test_ohme_client_async_resume_charge ****")
 
@@ -594,7 +712,7 @@ def test_ohme_client_async_resume_charge(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_approve_charge(my_predbat=None):
+def _test_ohme_client_async_approve_charge(my_predbat=None):
     """Test async_approve_charge sends correct request"""
     print("**** Running test_ohme_client_async_approve_charge ****")
 
@@ -614,7 +732,7 @@ def test_ohme_client_async_approve_charge(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_max_charge_enable(my_predbat=None):
+def _test_ohme_client_async_max_charge_enable(my_predbat=None):
     """Test async_max_charge enables max charge"""
     print("**** Running test_ohme_client_async_max_charge_enable ****")
 
@@ -634,7 +752,7 @@ def test_ohme_client_async_max_charge_enable(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_max_charge_disable(my_predbat=None):
+def _test_ohme_client_async_max_charge_disable(my_predbat=None):
     """Test async_max_charge disables max charge"""
     print("**** Running test_ohme_client_async_max_charge_disable ****")
 
@@ -653,7 +771,7 @@ def test_ohme_client_async_max_charge_disable(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_set_target(my_predbat=None):
+def _test_ohme_client_async_set_target(my_predbat=None):
     """Test async_set_target for active session"""
     print("**** Running test_ohme_client_async_set_target ****")
 
@@ -683,7 +801,7 @@ def test_ohme_client_async_set_target(my_predbat=None):
 # OhmeApiClient Pull Method Tests
 # ============================================================================
 
-def test_ohme_client_async_get_charge_session(my_predbat=None):
+def _test_ohme_client_async_get_charge_session(my_predbat=None):
     """Test async_get_charge_session fetches and parses data"""
     print("**** Running test_ohme_client_async_get_charge_session ****")
 
@@ -705,7 +823,7 @@ def test_ohme_client_async_get_charge_session(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_update_device_info(my_predbat=None):
+def _test_ohme_client_async_update_device_info(my_predbat=None):
     """Test async_update_device_info fetches device details"""
     print("**** Running test_ohme_client_async_update_device_info ****")
 
@@ -729,7 +847,7 @@ def test_ohme_client_async_update_device_info(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_login_success(my_predbat=None):
+def _test_ohme_client_async_login_success(my_predbat=None):
     """Test async_login with successful authentication"""
     print("**** Running test_ohme_client_async_login_success ****")
 
@@ -759,7 +877,7 @@ def test_ohme_client_async_login_success(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_refresh_session_no_token(my_predbat=None):
+def _test_ohme_client_async_refresh_session_no_token(my_predbat=None):
     """Test _async_refresh_session calls async_login when no token"""
     print("**** Running test_ohme_client_async_refresh_session_no_token ****")
 
@@ -785,7 +903,7 @@ def test_ohme_client_async_refresh_session_no_token(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_refresh_session_recent_token(my_predbat=None):
+def _test_ohme_client_async_refresh_session_recent_token(my_predbat=None):
     """Test _async_refresh_session skips refresh for recent token"""
     print("**** Running test_ohme_client_async_refresh_session_recent_token ****")
 
@@ -811,7 +929,7 @@ def test_ohme_client_async_refresh_session_recent_token(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_refresh_session_expired_token(my_predbat=None):
+def _test_ohme_client_async_refresh_session_expired_token(my_predbat=None):
     """Test _async_refresh_session refreshes expired token"""
     print("**** Running test_ohme_client_async_refresh_session_expired_token ****")
 
@@ -854,7 +972,7 @@ def test_ohme_client_async_refresh_session_expired_token(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_refresh_session_failure(my_predbat=None):
+def _test_ohme_client_async_refresh_session_failure(my_predbat=None):
     """Test _async_refresh_session handles refresh failure"""
     print("**** Running test_ohme_client_async_refresh_session_failure ****")
 
@@ -889,7 +1007,7 @@ def test_ohme_client_async_refresh_session_failure(my_predbat=None):
     return 0
 
 
-def test_ohme_client_make_request_get_success(my_predbat=None):
+def _test_ohme_client_make_request_get_success(my_predbat=None):
     """Test _make_request GET request returns JSON"""
     print("**** Running test_ohme_client_make_request_get_success ****")
 
@@ -935,7 +1053,7 @@ def test_ohme_client_make_request_get_success(my_predbat=None):
     return 0
 
 
-def test_ohme_client_make_request_put_success(my_predbat=None):
+def _test_ohme_client_make_request_put_success(my_predbat=None):
     """Test _make_request PUT request returns True"""
     print("**** Running test_ohme_client_make_request_put_success ****")
 
@@ -979,7 +1097,7 @@ def test_ohme_client_make_request_put_success(my_predbat=None):
     return 0
 
 
-def test_ohme_client_make_request_post_json(my_predbat=None):
+def _test_ohme_client_make_request_post_json(my_predbat=None):
     """Test _make_request POST request returns JSON by default"""
     print("**** Running test_ohme_client_make_request_post_json ****")
 
@@ -1024,7 +1142,7 @@ def test_ohme_client_make_request_post_json(my_predbat=None):
     return 0
 
 
-def test_ohme_client_make_request_post_skip_json(my_predbat=None):
+def _test_ohme_client_make_request_post_skip_json(my_predbat=None):
     """Test _make_request POST request with skip_json returns text"""
     print("**** Running test_ohme_client_make_request_post_skip_json ****")
 
@@ -1062,7 +1180,7 @@ def test_ohme_client_make_request_post_skip_json(my_predbat=None):
     return 0
 
 
-def test_ohme_client_make_request_api_error(my_predbat=None):
+def _test_ohme_client_make_request_api_error(my_predbat=None):
     """Test _make_request raises ApiException on non-200 status"""
     print("**** Running test_ohme_client_make_request_api_error ****")
 
@@ -1104,7 +1222,7 @@ def test_ohme_client_make_request_api_error(my_predbat=None):
     return 0
 
 
-def test_ohme_client_make_request_creates_session(my_predbat=None):
+def _test_ohme_client_make_request_creates_session(my_predbat=None):
     """Test _make_request creates session if none exists"""
     print("**** Running test_ohme_client_make_request_creates_session ****")
 
@@ -1143,7 +1261,7 @@ def test_ohme_client_make_request_creates_session(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_get_charge_session_retry(my_predbat=None):
+def _test_ohme_client_async_get_charge_session_retry(my_predbat=None):
     """Test async_get_charge_session retries on CALCULATING state"""
     print("**** Running test_ohme_client_async_get_charge_session_retry ****")
 
@@ -1178,7 +1296,7 @@ def test_ohme_client_async_get_charge_session_retry(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_set_mode_max_charge(my_predbat=None):
+def _test_ohme_client_async_set_mode_max_charge(my_predbat=None):
     """Test async_set_mode with MAX_CHARGE mode"""
     print("**** Running test_ohme_client_async_set_mode_max_charge ****")
 
@@ -1197,7 +1315,7 @@ def test_ohme_client_async_set_mode_max_charge(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_set_mode_smart_charge(my_predbat=None):
+def _test_ohme_client_async_set_mode_smart_charge(my_predbat=None):
     """Test async_set_mode with SMART_CHARGE mode"""
     print("**** Running test_ohme_client_async_set_mode_smart_charge ****")
 
@@ -1216,7 +1334,7 @@ def test_ohme_client_async_set_mode_smart_charge(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_set_mode_paused(my_predbat=None):
+def _test_ohme_client_async_set_mode_paused(my_predbat=None):
     """Test async_set_mode with PAUSED mode"""
     print("**** Running test_ohme_client_async_set_mode_paused ****")
 
@@ -1235,7 +1353,7 @@ def test_ohme_client_async_set_mode_paused(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_set_mode_string(my_predbat=None):
+def _test_ohme_client_async_set_mode_string(my_predbat=None):
     """Test async_set_mode with string mode"""
     print("**** Running test_ohme_client_async_set_mode_string ****")
 
@@ -1254,7 +1372,7 @@ def test_ohme_client_async_set_mode_string(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_set_vehicle_found(my_predbat=None):
+def _test_ohme_client_async_set_vehicle_found(my_predbat=None):
     """Test async_set_vehicle with matching vehicle"""
     print("**** Running test_ohme_client_async_set_vehicle_found ****")
 
@@ -1278,7 +1396,7 @@ def test_ohme_client_async_set_vehicle_found(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_set_vehicle_not_found(my_predbat=None):
+def _test_ohme_client_async_set_vehicle_not_found(my_predbat=None):
     """Test async_set_vehicle with non-matching vehicle"""
     print("**** Running test_ohme_client_async_set_vehicle_not_found ****")
 
@@ -1299,7 +1417,7 @@ def test_ohme_client_async_set_vehicle_not_found(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_update_schedule_all_params(my_predbat=None):
+def _test_ohme_client_async_update_schedule_all_params(my_predbat=None):
     """Test async_update_schedule with all parameters"""
     print("**** Running test_ohme_client_async_update_schedule_all_params ****")
 
@@ -1337,7 +1455,7 @@ def test_ohme_client_async_update_schedule_all_params(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_update_schedule_partial_params(my_predbat=None):
+def _test_ohme_client_async_update_schedule_partial_params(my_predbat=None):
     """Test async_update_schedule with partial parameters"""
     print("**** Running test_ohme_client_async_update_schedule_partial_params ****")
 
@@ -1364,7 +1482,7 @@ def test_ohme_client_async_update_schedule_partial_params(my_predbat=None):
     return 0
 
 
-def test_ohme_client_async_update_schedule_no_rule(my_predbat=None):
+def _test_ohme_client_async_update_schedule_no_rule(my_predbat=None):
     """Test async_update_schedule with no rule"""
     print("**** Running test_ohme_client_async_update_schedule_no_rule ****")
 
@@ -1416,7 +1534,7 @@ class MockOhmeAPI(OhmeAPI):
         }
 
 
-def test_ohme_publish_data(my_predbat=None):
+def _test_ohme_publish_data(my_predbat=None):
     """Test publish_data publishes all entities correctly"""
     print("**** Running test_ohme_publish_data ****")
 
@@ -1527,7 +1645,7 @@ def test_ohme_publish_data(my_predbat=None):
     return 0
 
 
-def test_ohme_publish_data_disconnected(my_predbat=None):
+def _test_ohme_publish_data_disconnected(my_predbat=None):
     """Test publish_data when charger is disconnected"""
     print("**** Running test_ohme_publish_data_disconnected ****")
 
@@ -1566,7 +1684,7 @@ def test_ohme_publish_data_disconnected(my_predbat=None):
     return 0
 
 
-def test_ohme_run_first_call(my_predbat=None):
+def _test_ohme_run_first_call(my_predbat=None):
     """Test run method on first call"""
     print("**** Running test_ohme_run_first_call ****")
 
@@ -1616,7 +1734,7 @@ def test_ohme_run_first_call(my_predbat=None):
     return 0
 
 
-def test_ohme_run_periodic_30min(my_predbat=None):
+def _test_ohme_run_periodic_30min(my_predbat=None):
     """Test run method on 30-minute periodic call"""
     print("**** Running test_ohme_run_periodic_30min ****")
 
@@ -1660,7 +1778,7 @@ def test_ohme_run_periodic_30min(my_predbat=None):
     return 0
 
 
-def test_ohme_run_periodic_120s(my_predbat=None):
+def _test_ohme_run_periodic_120s(my_predbat=None):
     """Test run method on 120-second periodic call"""
     print("**** Running test_ohme_run_periodic_120s ****")
 
@@ -1704,7 +1822,7 @@ def test_ohme_run_periodic_120s(my_predbat=None):
     return 0
 
 
-def test_ohme_run_no_periodic(my_predbat=None):
+def _test_ohme_run_no_periodic(my_predbat=None):
     """Test run method on non-periodic call"""
     print("**** Running test_ohme_run_no_periodic ****")
 
@@ -1746,7 +1864,7 @@ def test_ohme_run_no_periodic(my_predbat=None):
     return 0
 
 
-def test_ohme_run_with_queued_events(my_predbat=None):
+def _test_ohme_run_with_queued_events(my_predbat=None):
     """Test run method with queued events"""
     print("**** Running test_ohme_run_with_queued_events ****")
 
@@ -1801,7 +1919,7 @@ def test_ohme_run_with_queued_events(my_predbat=None):
     return 0
 
 
-def test_ohme_run_event_handler_exception(my_predbat=None):
+def _test_ohme_run_event_handler_exception(my_predbat=None):
     """Test run method handles event handler exceptions"""
     print("**** Running test_ohme_run_event_handler_exception ****")
 
@@ -1837,7 +1955,7 @@ def test_ohme_run_event_handler_exception(my_predbat=None):
     return 0
 
 
-def test_ohme_run_first_with_octopus_intelligent(my_predbat=None):
+def _test_ohme_run_first_with_octopus_intelligent(my_predbat=None):
     """Test run method on first call with octopus intelligent enabled"""
     print("**** Running test_ohme_run_first_with_octopus_intelligent ****")
 
@@ -1882,7 +2000,7 @@ def test_ohme_run_first_with_octopus_intelligent(my_predbat=None):
 # Event Handler Tests
 # ============================================================================
 
-def test_ohme_select_event_handler_target_time(my_predbat=None):
+def _test_ohme_select_event_handler_target_time(my_predbat=None):
     """Test select_event_handler for target_time"""
     print("**** Running test_ohme_select_event_handler_target_time ****")
 
@@ -1911,7 +2029,7 @@ def test_ohme_select_event_handler_target_time(my_predbat=None):
     return 0
 
 
-def test_ohme_select_event_handler_invalid_time(my_predbat=None):
+def _test_ohme_select_event_handler_invalid_time(my_predbat=None):
     """Test select_event_handler with invalid target_time"""
     print("**** Running test_ohme_select_event_handler_invalid_time ****")
 
@@ -1936,7 +2054,7 @@ def test_ohme_select_event_handler_invalid_time(my_predbat=None):
     return 0
 
 
-def test_ohme_number_event_handler_target_soc(my_predbat=None):
+def _test_ohme_number_event_handler_target_soc(my_predbat=None):
     """Test number_event_handler for target_soc"""
     print("**** Running test_ohme_number_event_handler_target_soc ****")
 
@@ -1960,7 +2078,7 @@ def test_ohme_number_event_handler_target_soc(my_predbat=None):
     return 0
 
 
-def test_ohme_number_event_handler_target_soc_invalid(my_predbat=None):
+def _test_ohme_number_event_handler_target_soc_invalid(my_predbat=None):
     """Test number_event_handler with invalid target_soc"""
     print("**** Running test_ohme_number_event_handler_target_soc_invalid ****")
 
@@ -1985,7 +2103,7 @@ def test_ohme_number_event_handler_target_soc_invalid(my_predbat=None):
     return 0
 
 
-def test_ohme_number_event_handler_preconditioning(my_predbat=None):
+def _test_ohme_number_event_handler_preconditioning(my_predbat=None):
     """Test number_event_handler for preconditioning"""
     print("**** Running test_ohme_number_event_handler_preconditioning ****")
 
@@ -2014,7 +2132,7 @@ def test_ohme_number_event_handler_preconditioning(my_predbat=None):
     return 0
 
 
-def test_ohme_number_event_handler_preconditioning_off(my_predbat=None):
+def _test_ohme_number_event_handler_preconditioning_off(my_predbat=None):
     """Test number_event_handler for preconditioning set to 0 (off)"""
     print("**** Running test_ohme_number_event_handler_preconditioning_off ****")
 
@@ -2039,7 +2157,7 @@ def test_ohme_number_event_handler_preconditioning_off(my_predbat=None):
     return 0
 
 
-def test_ohme_number_event_handler_preconditioning_invalid(my_predbat=None):
+def _test_ohme_number_event_handler_preconditioning_invalid(my_predbat=None):
     """Test number_event_handler with invalid preconditioning value"""
     print("**** Running test_ohme_number_event_handler_preconditioning_invalid ****")
 
@@ -2064,7 +2182,7 @@ def test_ohme_number_event_handler_preconditioning_invalid(my_predbat=None):
     return 0
 
 
-def test_ohme_switch_event_handler_max_charge_on(my_predbat=None):
+def _test_ohme_switch_event_handler_max_charge_on(my_predbat=None):
     """Test switch_event_handler for max_charge turn_on"""
     print("**** Running test_ohme_switch_event_handler_max_charge_on ****")
 
@@ -2087,7 +2205,7 @@ def test_ohme_switch_event_handler_max_charge_on(my_predbat=None):
     return 0
 
 
-def test_ohme_switch_event_handler_max_charge_off(my_predbat=None):
+def _test_ohme_switch_event_handler_max_charge_off(my_predbat=None):
     """Test switch_event_handler for max_charge turn_off"""
     print("**** Running test_ohme_switch_event_handler_max_charge_off ****")
 
@@ -2110,7 +2228,7 @@ def test_ohme_switch_event_handler_max_charge_off(my_predbat=None):
     return 0
 
 
-def test_ohme_switch_event_handler_approve_charge(my_predbat=None):
+def _test_ohme_switch_event_handler_approve_charge(my_predbat=None):
     """Test switch_event_handler for approve_charge"""
     print("**** Running test_ohme_switch_event_handler_approve_charge ****")
 
@@ -2137,7 +2255,7 @@ def test_ohme_switch_event_handler_approve_charge(my_predbat=None):
     return 0
 
 
-def test_ohme_switch_event_handler_approve_charge_wrong_status(my_predbat=None):
+def _test_ohme_switch_event_handler_approve_charge_wrong_status(my_predbat=None):
     """Test switch_event_handler for approve_charge with wrong status"""
     print("**** Running test_ohme_switch_event_handler_approve_charge_wrong_status ****")
 

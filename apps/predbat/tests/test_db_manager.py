@@ -64,7 +64,62 @@ class MockDatabaseManager(DatabaseManager):
         return self.base.local_tz
 
 
-def test_db_manager_set_get_state(my_predbat=None):
+def test_db_manager(my_predbat=None):
+    """
+    DATABASE MANAGER TEST SUITE
+
+    Comprehensive test suite for DatabaseManager component covering:
+    - State operations: set/get state with attributes
+    - Entities and history: entity registration, history queries with time windows
+    - Error handling: database errors, corrupted files, missing directories
+    - Persistence: data survival across restarts, state recovery
+    - Commit throttling: 5-second interval enforcement
+
+    Total: 5 sub-tests
+    """
+
+    # Registry of all Database Manager tests
+    sub_tests = [
+        ("set_get_state", _test_db_manager_set_get_state, "Set/get state operations with attributes"),
+        ("entities_history", _test_db_manager_entities_and_history, "Entities and history queries"),
+        ("error_handling", _test_db_manager_error_handling, "Error handling (corrupted files, missing dirs)"),
+        ("persistence", _test_db_manager_persistence, "Data persistence across restarts"),
+        ("commit_throttle", _test_db_manager_commit_throttling, "Commit throttling (5 second interval)"),
+    ]
+
+    print("\n" + "=" * 70)
+    print("DATABASE MANAGER TEST SUITE")
+    print("=" * 70)
+
+    passed = 0
+    failed = 0
+
+    for key, test_func, description in sub_tests:
+        print(f"\n[{key}] {description}")
+        print("-" * 70)
+        try:
+            result = test_func(my_predbat)
+            if result:
+                print(f"✗ FAILED: {key}")
+                failed += 1
+            else:
+                print(f"✓ PASSED: {key}")
+                passed += 1
+        except Exception as e:
+            print(f"✗ EXCEPTION in {key}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed += 1
+
+    print("\n" + "=" * 70)
+    print(f"RESULTS: {passed} passed, {failed} failed out of {len(sub_tests)} tests")
+    print("=" * 70)
+
+    return failed > 0
+
+
+def _test_db_manager_set_get_state(my_predbat=None):
     """Test DatabaseManager set_state_db and get_state_db operations with attributes"""
     print("\n=== Testing DatabaseManager set/get state operations ===")
 
@@ -172,7 +227,7 @@ def test_db_manager_set_get_state(my_predbat=None):
     print("=== test_db_manager_set_get_state PASSED ===\n")
 
 
-def test_db_manager_entities_and_history(my_predbat=None):
+def _test_db_manager_entities_and_history(my_predbat=None):
     """Test DatabaseManager get_all_entities_db and get_history_db operations"""
     print("\n=== Testing DatabaseManager entities and history operations ===")
 
@@ -302,7 +357,7 @@ def test_db_manager_entities_and_history(my_predbat=None):
     print("=== test_db_manager_entities_and_history PASSED ===\n")
 
 
-def test_db_manager_error_handling(my_predbat=None):
+def _test_db_manager_error_handling(my_predbat=None):
     """Test DatabaseManager error handling for non-existent entities"""
     print("\n=== Testing DatabaseManager error handling ===")
 
@@ -389,7 +444,7 @@ def test_db_manager_error_handling(my_predbat=None):
     print("=== test_db_manager_error_handling PASSED ===\n")
 
 
-def test_db_manager_persistence(my_predbat=None):
+def _test_db_manager_persistence(my_predbat=None):
     """Test DatabaseManager data persistence across restarts"""
     print("\n=== Testing DatabaseManager persistence across restarts ===")
 
@@ -512,7 +567,7 @@ def test_db_manager_persistence(my_predbat=None):
     print("=== test_db_manager_persistence PASSED ===\n")
 
 
-def test_db_manager_commit_throttling(my_predbat=None):
+def _test_db_manager_commit_throttling(my_predbat=None):
     """Test DatabaseManager commit throttling - commits should only happen every 5 seconds when queue is empty"""
     print("\n=== Testing DatabaseManager commit throttling ===")
 

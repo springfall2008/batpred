@@ -10,7 +10,8 @@
 
 import math
 from datetime import datetime, timedelta
-from config import THIS_VERSION, TIME_FORMAT, PREDICT_STEP
+from config import THIS_VERSION
+from const import TIME_FORMAT, PREDICT_STEP
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state
 from prediction import Prediction
 

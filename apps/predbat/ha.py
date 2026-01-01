@@ -18,7 +18,7 @@ import traceback
 import threading
 import time
 from utils import str2time
-from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
+from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
 
 
