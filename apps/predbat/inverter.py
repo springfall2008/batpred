@@ -2452,7 +2452,7 @@ class Inverter:
                 return True
 
         self.base.log(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
-        self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
+        self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete", had_errors=True)
         return False
 
     def rest_readData(self, api="readData", retry=True):

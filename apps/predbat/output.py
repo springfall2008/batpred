@@ -2317,8 +2317,12 @@ class Output:
 
         self.current_status = message + extra
         if notify and self.previous_status != message and self.set_status_notify:
-            self.call_notify("Predbat status change to: " + message + extra)
-            self.previous_status = message
+            if self.had_errors and had_errors:
+                # Already in error state, do not notify second error in a single run (spam)
+                pass
+            else:
+                self.call_notify("Predbat status change to: " + message + extra)
+                self.previous_status = message
 
         error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
         try:

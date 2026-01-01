@@ -1461,7 +1461,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
             self.log("Error: " + traceback.format_exc())
-            self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+            self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
             raise e
 
         # Run every N minutes aligned to the minute
@@ -1542,7 +1542,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False
@@ -1599,7 +1599,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False
@@ -1620,7 +1620,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
                 raise e
 
     def register_hook(self, hook_name, callback):
