@@ -115,6 +115,7 @@ def _test_get_github_directory_listing_success(my_predbat):
         assert result[0]["sha"] == "abc123"
         assert result[1]["name"] == "config.py"
         mock_get.assert_called_once()
+    return 0
 
 
 def _test_get_github_directory_listing_failure(my_predbat):
@@ -141,6 +142,7 @@ def _test_get_github_directory_listing_exception(my_predbat):
         result = get_github_directory_listing("v8.30.8")
 
         assert result is None
+    return 0
 
 
 def _test_compute_file_sha1(my_predbat):

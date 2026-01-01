@@ -212,7 +212,7 @@ def _test_fetch_carbon_data_success(my_predbat=None):
             return 1
 
     print("  ✓ Carbon data fetched successfully")
-    return 0
+    return failed
 
 
 def _test_fetch_carbon_data_http_error(my_predbat=None):
