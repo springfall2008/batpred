@@ -10,7 +10,6 @@ from utils import str2time, dp1
 import asyncio
 import json
 import random
-import time
 import yaml
 import os
 from component_base import ComponentBase
@@ -1402,26 +1401,6 @@ class GECloudData(ComponentBase):
         self.requests_total = 0
         self.failures_total = 0
         self.oldest_data_time = None
-
-    def wait_api_started(self, timeout=MAX_START_TIME):
-        """
-        Wait for the API to start with custom timeout
-
-        Args:
-            timeout: Maximum time to wait in seconds
-
-        Returns:
-            bool: True if component started successfully, False if timeout
-        """
-        self.log("GECloudData: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < timeout and not self.api_fatal:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: GECloudData: API failed to start in required time")
-            return False
-        return True
 
     async def run(self, seconds, first):
         """
