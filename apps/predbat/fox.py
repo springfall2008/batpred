@@ -302,6 +302,9 @@ class FoxAPI(ComponentBase):
                 sn = device.get("deviceSN", None)
                 if sn:
                     await self.get_real_time_data(sn)
+
+        # Refresh HA entities every minute
+        if first or (seconds % (60) == 0):
             await self.publish_data()
 
         # Automatic configuration on first run
