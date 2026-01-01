@@ -4368,6 +4368,48 @@ def test_publish_data_device_values(my_predbat):
 
     return False
 
+def test_publish_data_device_values_dual_soc(my_predbat):
+    """
+    Test publish_data creates value entities correctly
+    """
+    print("  - test_publish_data_device_values_dual_soc")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {
+        "pvPower": {"value": 3.5, "name": "PV Power", "unit": "kW"},
+        "SoC": {"value": 0.0, "name": "SoC", "unit": "%"},
+        "SoC_1": {"value": 50.0, "name": "SoC", "unit": "%"},
+        "SoC_2": {"value": 75.0, "name": "SoC", "unit": "%"},
+        "generation": {"value": 1000.5, "name": "Generation", "unit": "kWh"},
+    }
+    fox.device_settings[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    run_async(fox.publish_data())
+
+    # Verify value entities were created
+    pv_entity = f"sensor.predbat_fox_{deviceSN.lower()}_pvpower"
+    assert pv_entity in fox.dashboard_items
+    assert fox.dashboard_items[pv_entity]["state"] == 3.5
+    assert fox.dashboard_items[pv_entity]["attributes"]["unit_of_measurement"] == "kW"
+
+    soc_entity = f"sensor.predbat_fox_{deviceSN.lower()}_soc"
+    assert soc_entity in fox.dashboard_items
+    assert fox.dashboard_items[soc_entity]["state"] == 62, f"Expected 63 but got {fox.dashboard_items[soc_entity]['state']}" # Zero DPs
+
+    # Verify energy entity has correct device_class and state_class
+    gen_entity = f"sensor.predbat_fox_{deviceSN.lower()}_generation"
+    assert gen_entity in fox.dashboard_items
+    assert fox.dashboard_items[gen_entity]["attributes"]["device_class"] == "energy"
+    assert fox.dashboard_items[gen_entity]["attributes"]["state_class"] == "total"
+
+    return False
 
 def test_publish_data_device_settings(my_predbat):
     """
@@ -5122,6 +5164,7 @@ def run_fox_api_tests(my_predbat):
         # publish_data tests
         failed |= test_publish_data_device_info(my_predbat)
         failed |= test_publish_data_device_values(my_predbat)
+        failed |= test_publish_data_device_values_dual_soc(my_predbat)
         failed |= test_publish_data_device_settings(my_predbat)
         failed |= test_publish_data_no_battery_skips_settings(my_predbat)
 
