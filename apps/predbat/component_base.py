@@ -240,7 +240,7 @@ class ComponentBase(ABC):
     def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
         return self.base.set_state_wrapper(entity_id, state, attributes=attributes, required_unit=required_unit)
 
-    def wait_api_started(self, timeout=5 * 60):
+    def wait_api_started(self, timeout=10 * 60):
         """
         Wait for the component to start.
 
