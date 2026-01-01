@@ -153,6 +153,158 @@ def run_test_manual_times(my_predbat):
         print("ERROR: T7 Expected minute {} for Friday 14:00 but got {}".format(expected_minute, manual_demand_keep))
         failed = True
 
+    # Test 8: Bug #3075 - Selecting same time multiple times should not create duplicates
+    print("Test 8: Bug #3075 - Selecting same time multiple times should not create duplicates")
+    # Reset to midnight for clean test
+    my_predbat.midnight_utc = datetime(2025, 12, 19, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight = my_predbat.midnight_utc.astimezone(my_predbat.local_tz)
+    my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=0)  # Start at midnight
+    my_predbat.minutes_now = 0
+
+    # Clear any existing selection
+    my_predbat.manual_select("manual_demand", "off")
+
+    # Select the same time "07:30" three times
+    print("  Selecting 07:30 (first time)")
+    my_predbat.manual_select("manual_demand", "07:30")
+    manual_demand_keep_1 = my_predbat.manual_times("manual_demand")
+
+    print("  Selecting 07:30 (second time)")
+    my_predbat.manual_select("manual_demand", "07:30")
+    manual_demand_keep_2 = my_predbat.manual_times("manual_demand")
+
+    print("  Selecting 07:30 (third time)")
+    my_predbat.manual_select("manual_demand", "07:30")
+    manual_demand_keep_3 = my_predbat.manual_times("manual_demand")
+
+    # Check results
+    expected_minute = 450  # 07:30 = 7*60 + 30 = 450 minutes from midnight
+
+    # Count occurrences of the expected minute
+    count_1 = manual_demand_keep_1.count(expected_minute)
+    count_2 = manual_demand_keep_2.count(expected_minute)
+    count_3 = manual_demand_keep_3.count(expected_minute)
+
+    print("  After 1st select: {} occurrences of minute {} in {}".format(count_1, expected_minute, manual_demand_keep_1))
+    print("  After 2nd select: {} occurrences of minute {} in {}".format(count_2, expected_minute, manual_demand_keep_2))
+    print("  After 3rd select: {} occurrences of minute {} in {}".format(count_3, expected_minute, manual_demand_keep_3))
+
+    if count_1 != 1:
+        print("ERROR: T8 After first select, expected 1 occurrence of minute {} but got {}".format(expected_minute, count_1))
+        failed = True
+    elif count_2 != 1:
+        print("ERROR: T8 After second select, expected 1 occurrence of minute {} but got {}".format(expected_minute, count_2))
+        failed = True
+    elif count_3 != 1:
+        print("ERROR: T8 After third select, expected 1 occurrence of minute {} but got {}".format(expected_minute, count_3))
+        failed = True
+    else:
+        print("PASS: T8 Selecting same time multiple times correctly maintains only one entry")
+
+    # Test 9: Bug #3075 - Manual rates - same time with same rate should not create duplicates
+    print("Test 9: Bug #3075 - Manual import rates - same time/same rate duplicates")
+    # Reset to midnight for clean test
+    my_predbat.midnight_utc = datetime(2025, 12, 19, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight = my_predbat.midnight_utc.astimezone(my_predbat.local_tz)
+    my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=0)  # Start at midnight
+    my_predbat.minutes_now = 0
+
+    # Clear any existing selection
+    my_predbat.manual_select("manual_import_rates", "off")
+
+    # Select the same time "08:00=25.5" (same rate) three times
+    print("  Selecting 08:00=25.5 (first time)")
+    my_predbat.manual_select("manual_import_rates", "08:00=25.5")
+    manual_import_keep_1 = my_predbat.manual_rates("manual_import_rates", default_rate=10.0)
+
+    print("  Selecting 08:00=25.5 (second time)")
+    my_predbat.manual_select("manual_import_rates", "08:00=25.5")
+    manual_import_keep_2 = my_predbat.manual_rates("manual_import_rates", default_rate=10.0)
+
+    print("  Selecting 08:00=25.5 (third time)")
+    my_predbat.manual_select("manual_import_rates", "08:00=25.5")
+    manual_import_keep_3 = my_predbat.manual_rates("manual_import_rates", default_rate=10.0)
+
+    # Check results - minute 480 (08:00) should have rate 25.5
+    expected_minute = 480  # 08:00 = 8*60 = 480 minutes from midnight
+
+    # Count occurrences of the expected minute in the dictionary
+    count_1 = 1 if expected_minute in manual_import_keep_1 else 0
+    count_2 = 1 if expected_minute in manual_import_keep_2 else 0
+    count_3 = 1 if expected_minute in manual_import_keep_3 else 0
+
+    # Verify the rate is correct
+    rate_1 = manual_import_keep_1.get(expected_minute, None)
+    rate_2 = manual_import_keep_2.get(expected_minute, None)
+    rate_3 = manual_import_keep_3.get(expected_minute, None)
+
+    print("  After 1st select: minute {} present={}, rate={}".format(expected_minute, count_1 == 1, rate_1))
+    print("  After 2nd select: minute {} present={}, rate={}".format(expected_minute, count_2 == 1, rate_2))
+    print("  After 3rd select: minute {} present={}, rate={}".format(expected_minute, count_3 == 1, rate_3))
+
+    if count_1 != 1 or rate_1 != 25.5:
+        print("ERROR: T9 After first select, expected minute {} with rate 25.5 but got rate={}".format(expected_minute, rate_1))
+        failed = True
+    elif count_2 != 1 or rate_2 != 25.5:
+        print("ERROR: T9 After second select, expected minute {} with rate 25.5 but got rate={}".format(expected_minute, rate_2))
+        failed = True
+    elif count_3 != 1 or rate_3 != 25.5:
+        print("ERROR: T9 After third select, expected minute {} with rate 25.5 but got rate={}".format(expected_minute, rate_3))
+        failed = True
+    else:
+        print("PASS: T9 Selecting same time/rate multiple times correctly maintains only one entry")
+
+    # Test 10: Manual rates - same time with different rates should update (not duplicate)
+    print("Test 10: Manual import rates - same time with different rates should update")
+
+    # Clear any existing selection
+    my_predbat.manual_select("manual_import_rates", "off")
+
+    # Select 09:00 with rate 10.0
+    print("  Selecting 09:00=10.0")
+    my_predbat.manual_select("manual_import_rates", "09:00=10.0")
+    manual_import_keep_1 = my_predbat.manual_rates("manual_import_rates", default_rate=5.0)
+
+    # Select 09:00 again with rate 20.0 (should update, not add)
+    print("  Selecting 09:00=20.0 (updating rate)")
+    my_predbat.manual_select("manual_import_rates", "09:00=20.0")
+    manual_import_keep_2 = my_predbat.manual_rates("manual_import_rates", default_rate=5.0)
+
+    # Select 09:00 again with rate 30.0 (should update again)
+    print("  Selecting 09:00=30.0 (updating rate again)")
+    my_predbat.manual_select("manual_import_rates", "09:00=30.0")
+    manual_import_keep_3 = my_predbat.manual_rates("manual_import_rates", default_rate=5.0)
+
+    expected_minute = 540  # 09:00 = 9*60 = 540 minutes from midnight
+
+    rate_1 = manual_import_keep_1.get(expected_minute, None)
+    rate_2 = manual_import_keep_2.get(expected_minute, None)
+    rate_3 = manual_import_keep_3.get(expected_minute, None)
+
+    # Count total entries to ensure no duplicates
+    total_entries_1 = len([k for k in manual_import_keep_1.keys() if k >= expected_minute and k < expected_minute + 30])
+    total_entries_2 = len([k for k in manual_import_keep_2.keys() if k >= expected_minute and k < expected_minute + 30])
+    total_entries_3 = len([k for k in manual_import_keep_3.keys() if k >= expected_minute and k < expected_minute + 30])
+
+    print("  After selecting 09:00=10.0: rate={}, entries in slot={}".format(rate_1, total_entries_1))
+    print("  After selecting 09:00=20.0: rate={}, entries in slot={}".format(rate_2, total_entries_2))
+    print("  After selecting 09:00=30.0: rate={}, entries in slot={}".format(rate_3, total_entries_3))
+
+    if rate_1 != 10.0:
+        print("ERROR: T10 After first select, expected rate 10.0 but got {}".format(rate_1))
+        failed = True
+    elif rate_2 != 20.0:
+        print("ERROR: T10 After second select with different rate, expected rate 20.0 but got {}".format(rate_2))
+        failed = True
+    elif rate_3 != 30.0:
+        print("ERROR: T10 After third select with different rate, expected rate 30.0 but got {}".format(rate_3))
+        failed = True
+    elif total_entries_1 != 30 or total_entries_2 != 30 or total_entries_3 != 30:
+        print("ERROR: T10 Expected 30 minute entries in each slot but got {}, {}, {}".format(total_entries_1, total_entries_2, total_entries_3))
+        failed = True
+    else:
+        print("PASS: T10 Selecting same time with different rates correctly updates the rate")
+
     # Restore time context to current time
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -161,4 +313,5 @@ def run_test_manual_times(my_predbat):
 
     # Clean up
     my_predbat.manual_select("manual_demand", "off")
+    my_predbat.manual_select("manual_import_rates", "off")
     return failed
