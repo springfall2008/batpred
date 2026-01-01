@@ -3630,6 +3630,9 @@ async def test_query_plant_statistics_daily_main():
     api.query_plant_statistics = mock_query_statistics
 
     result = await api.query_plant_statistics_daily("1618699116555534337")
+    # Get data as string YYYY-MM for current month
+    today_date = datetime.now()
+    expected_date_str = today_date.strftime("%Y-%m")
 
     if result is None:
         print(f"**** ERROR: Expected successful result, got None ****")
@@ -3646,7 +3649,7 @@ async def test_query_plant_statistics_daily_main():
     elif captured_calls[0]["date_type"] != "2":
         print(f"**** ERROR: Expected date_type='2' (monthly), got {captured_calls[0]['date_type']} ****")
         failed = True
-    elif not captured_calls[0]["date"].startswith("2025-"):
+    elif not captured_calls[0]["date"].startswith(expected_date_str):
         print(f"**** ERROR: Expected date format YYYY-MM, got {captured_calls[0]['date']} ****")
         failed = True
     else:
