@@ -718,10 +718,7 @@ def main():
             continue
 
         # Show descriptive message for keyword/specific tests, simple for full suite
-        if args.keyword or args.test:
-            print(f"**** Running test: {name} - {desc} ****")
-        else:
-            print(f"**** Running: {name} ****")
+        print(f"**** Running: {name} - {desc} ****")
 
         start_time = time.time()
         test_failed = func(my_predbat)

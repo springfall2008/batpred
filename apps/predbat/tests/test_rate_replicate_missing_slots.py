@@ -95,7 +95,13 @@ def test_rate_replicate_missing_slots(my_predbat):
     if result_replicated.get(1410) != "copy":
         print(f"  ✗ ERROR: Minute 1410 should be marked as 'copy', got {result_replicated.get(1410)}")
         failed |= 1
-
+    # Restore time context to current time
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
     return failed
 
 
@@ -144,6 +150,14 @@ def test_rate_replicate_no_previous_day(my_predbat):
     elif result[1410] == 0.0:
         print(f"  ✗ ERROR: Minute 1410 should not be 0.0 (should use rate_last fallback)")
         failed |= 1
+
+    # Restore time context to current time
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
 
     return failed
 
@@ -211,5 +225,12 @@ def test_rate_replicate_with_zero_rates(my_predbat):
     if result.get(-60) != 0.0:
         print(f"  ✗ ERROR: Previous day minute -60 should still be 0.0, got {result.get(-60)}")
         failed |= 1
+    # Restore time context to current time
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc =  my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
 
     return failed
