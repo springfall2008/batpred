@@ -16,7 +16,7 @@ from datetime import datetime
 from utils import calc_percent_limit
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
-from config import MINUTE_WATT, INVERTER_MAX_RETRY_REST
+from const import MINUTE_WATT, INVERTER_MAX_RETRY_REST
 from inverter import Inverter
 
 

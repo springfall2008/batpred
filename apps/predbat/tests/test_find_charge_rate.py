@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from utils import find_charge_rate
-from config import MINUTE_WATT
+from const import MINUTE_WATT
 
 
 def test_find_charge_rate(my_predbat):

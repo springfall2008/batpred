@@ -13,7 +13,7 @@ from carbon import CarbonAPI
 import aiohttp
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone, timedelta
-from config import TIME_FORMAT_HA
+from const import TIME_FORMAT_HA
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -73,42 +73,112 @@ MOCK_CARBON_API_RESPONSE = {
 MOCK_CARBON_API_RESPONSE_EMPTY = {"data": {"regionid": 11, "dnoregion": "WPD South West", "shortname": "South West England", "postcode": "BS16", "data": []}}
 
 
+def test_carbon(my_predbat=None):
+    """
+    Comprehensive test suite for Carbon Intensity API.
+
+    Tests all major functionality including:
+    - Initialization and configuration
+    - Data fetching (success, errors, timeouts)
+    - Caching behavior
+    - Data publishing
+    - Time/date handling
+    - Automatic configuration flow
+    """
+
+    # Registry of all sub-tests
+    sub_tests = [
+        ("initialization", _test_carbon_initialization, "Carbon API initialization"),
+        ("fetch_success", _test_fetch_carbon_data_success, "Fetch carbon data success"),
+        ("http_error", _test_fetch_carbon_data_http_error, "HTTP error handling (404, 500)"),
+        ("timeout", _test_fetch_carbon_data_timeout, "Timeout handling"),
+        ("json_error", _test_fetch_carbon_data_json_error, "JSON parsing error"),
+        ("empty_data", _test_fetch_carbon_data_empty, "Empty data response"),
+        ("cache_skip", _test_fetch_carbon_data_cache_skip, "Cache skip (<4 hours)"),
+        ("cache_refresh", _test_fetch_carbon_data_cache_refresh, "Cache refresh (>4 hours)"),
+        ("publish_current", _test_publish_carbon_data_current, "Publish current intensity"),
+        ("publish_forecast", _test_publish_carbon_data_forecast, "Publish forecast data"),
+        ("publish_unknown", _test_publish_carbon_data_unknown, "Publish unknown state"),
+        ("postcode_strip", _test_postcode_stripping, "Postcode stripping"),
+        ("multiple_dates", _test_multiple_date_fetches, "Multiple date fetches"),
+        ("time_format", _test_time_format_conversion, "Time format conversion"),
+        ("timezone", _test_timezone_handling, "Timezone handling"),
+        ("json_collection", _test_json_data_collection, "JSON data collection"),
+        ("failure_counter", _test_failure_counter, "Failure counter"),
+        ("run_first", _test_run_first_call, "run() first call"),
+        ("run_interval", _test_run_15min_interval, "run() 15-minute interval"),
+        ("auto_config", _test_automatic_config_flow, "Automatic config flow"),
+    ]
+
+    print("\n" + "=" * 70)
+    print("CARBON INTENSITY API TEST SUITE")
+    print("=" * 70)
+
+    failed = 0
+    passed = 0
+
+    for test_name, test_func, test_desc in sub_tests:
+        print(f"\n[{test_name}] {test_desc}")
+        print("-" * 70)
+        try:
+            test_result = test_func(my_predbat)
+            if test_result:
+                print(f"✗ FAILED: {test_name}")
+                failed += 1
+            else:
+                print(f"✓ PASSED: {test_name}")
+                passed += 1
+        except Exception as e:
+            print(f"✗ EXCEPTION in {test_name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed += 1
+
+    print("\n" + "=" * 70)
+    print(f"RESULTS: {passed} passed, {failed} failed out of {len(sub_tests)} tests")
+    print("=" * 70)
+
+    return failed
+
+
 # =============================================================================
 # Phase 1: Core Functionality Tests (8 tests)
 # =============================================================================
 
 
-def test_carbon_initialization(my_predbat=None):
+def _test_carbon_initialization(my_predbat=None):
     """Test CarbonAPI initialization"""
-    print("Test: Carbon API initialization")
+    failed = 0
 
     api = MockCarbonAPI()
     api.postcode = "SW1A 1AA"
     api.automatic = True
 
     if api.postcode != "SW1A 1AA":
-        print("ERROR: Postcode not set correctly")
-        return 1
+        print("  ✗ ERROR: Postcode not set correctly")
+        failed = 1
 
     if api.automatic != True:
-        print("ERROR: Automatic flag not set correctly")
-        return 1
+        print("  ✗ ERROR: Automatic flag not set correctly")
+        failed = 1
 
     if api.failures_total != 0:
-        print("ERROR: failures_total should be 0")
-        return 1
+        print("  ✗ ERROR: failures_total should be 0")
+        failed = 1
 
     if api.carbon_data_points != []:
-        print("ERROR: carbon_data_points should be empty list")
-        return 1
+        print("  ✗ ERROR: carbon_data_points should be empty list")
+        failed = 1
 
-    print("  ✓ CarbonAPI initialized correctly")
-    return 0
+    if not failed:
+        print("  ✓ CarbonAPI initialized correctly")
+    return failed
 
 
-def test_fetch_carbon_data_success(my_predbat=None):
+def _test_fetch_carbon_data_success(my_predbat=None):
     """Test successful carbon data fetch"""
-    print("Test: Carbon API fetch success")
+    failed = 0
 
     api = MockCarbonAPI()
     api.postcode = "BS16"
@@ -145,7 +215,7 @@ def test_fetch_carbon_data_success(my_predbat=None):
     return 0
 
 
-def test_fetch_carbon_data_http_error(my_predbat=None):
+def _test_fetch_carbon_data_http_error(my_predbat=None):
     """Test HTTP error handling (404, 500, etc.)"""
     print("Test: Carbon API HTTP error handling")
 
@@ -174,7 +244,7 @@ def test_fetch_carbon_data_http_error(my_predbat=None):
     return 0
 
 
-def test_fetch_carbon_data_timeout(my_predbat=None):
+def _test_fetch_carbon_data_timeout(my_predbat=None):
     """Test request timeout handling"""
     print("Test: Carbon API timeout handling")
 
@@ -201,7 +271,7 @@ def test_fetch_carbon_data_timeout(my_predbat=None):
     return 0
 
 
-def test_fetch_carbon_data_json_error(my_predbat=None):
+def _test_fetch_carbon_data_json_error(my_predbat=None):
     """Test JSON parsing error handling"""
     print("Test: Carbon API JSON parsing error")
 
@@ -230,7 +300,7 @@ def test_fetch_carbon_data_json_error(my_predbat=None):
     return 0
 
 
-def test_fetch_carbon_data_empty(my_predbat=None):
+def _test_fetch_carbon_data_empty(my_predbat=None):
     """Test empty data response handling"""
     print("Test: Carbon API empty data response")
 
@@ -260,7 +330,7 @@ def test_fetch_carbon_data_empty(my_predbat=None):
     return 0
 
 
-def test_fetch_carbon_data_cache_skip(my_predbat=None):
+def _test_fetch_carbon_data_cache_skip(my_predbat=None):
     """Test cache skip when data is less than 4 hours old"""
     print("Test: Carbon API cache skip (<4 hours)")
 
@@ -282,7 +352,7 @@ def test_fetch_carbon_data_cache_skip(my_predbat=None):
     return 0
 
 
-def test_fetch_carbon_data_cache_refresh(my_predbat=None):
+def _test_fetch_carbon_data_cache_refresh(my_predbat=None):
     """Test cache refresh when data is more than 4 hours old"""
     print("Test: Carbon API cache refresh (>4 hours)")
 
@@ -318,7 +388,7 @@ def test_fetch_carbon_data_cache_refresh(my_predbat=None):
 # =============================================================================
 
 
-def test_publish_carbon_data_current(my_predbat=None):
+def _test_publish_carbon_data_current(my_predbat=None):
     """Test publishing current carbon intensity"""
     print("Test: Carbon API publish current intensity")
 
@@ -368,7 +438,7 @@ def test_publish_carbon_data_current(my_predbat=None):
     return 0
 
 
-def test_publish_carbon_data_forecast(my_predbat=None):
+def _test_publish_carbon_data_forecast(my_predbat=None):
     """Test forecast data in attributes"""
     print("Test: Carbon API publish forecast attribute")
 
@@ -418,7 +488,7 @@ def test_publish_carbon_data_forecast(my_predbat=None):
     return 0
 
 
-def test_publish_carbon_data_unknown(my_predbat=None):
+def _test_publish_carbon_data_unknown(my_predbat=None):
     """Test unknown state when no current data matches"""
     print("Test: Carbon API publish unknown state")
 
@@ -453,7 +523,7 @@ def test_publish_carbon_data_unknown(my_predbat=None):
 # =============================================================================
 
 
-def test_postcode_stripping(my_predbat=None):
+def _test_postcode_stripping(my_predbat=None):
     """Test postcode space stripping"""
     print("Test: Carbon API postcode stripping")
 
@@ -482,7 +552,7 @@ def test_postcode_stripping(my_predbat=None):
     return 0
 
 
-def test_multiple_date_fetches(my_predbat=None):
+def _test_multiple_date_fetches(my_predbat=None):
     """Test that two API calls are made (date_now and date_plus_48)"""
     print("Test: Carbon API multiple date fetches")
 
@@ -525,7 +595,7 @@ def test_multiple_date_fetches(my_predbat=None):
     return 0
 
 
-def test_time_format_conversion(my_predbat=None):
+def _test_time_format_conversion(my_predbat=None):
     """Test time format conversion from Carbon API to HA format"""
     print("Test: Carbon API time format conversion")
 
@@ -560,7 +630,7 @@ def test_time_format_conversion(my_predbat=None):
     return 0
 
 
-def test_timezone_handling(my_predbat=None):
+def _test_timezone_handling(my_predbat=None):
     """Test UTC timezone preservation"""
     print("Test: Carbon API timezone handling")
 
@@ -602,7 +672,7 @@ def test_timezone_handling(my_predbat=None):
     return 0
 
 
-def test_json_data_collection(my_predbat=None):
+def _test_json_data_collection(my_predbat=None):
     """Test data collection from multiple API calls"""
     print("Test: Carbon API data collection from multiple dates")
 
@@ -667,7 +737,7 @@ def test_json_data_collection(my_predbat=None):
     return 0
 
 
-def test_failure_counter(my_predbat=None):
+def _test_failure_counter(my_predbat=None):
     """Test failures_total counter increments correctly"""
     print("Test: Carbon API failure counter")
 
@@ -708,7 +778,7 @@ def test_failure_counter(my_predbat=None):
 # =============================================================================
 
 
-def test_run_first_call(my_predbat=None):
+def _test_run_first_call(my_predbat=None):
     """Test run() calls fetch on first run"""
     print("Test: Carbon API run() first call")
 
@@ -736,7 +806,7 @@ def test_run_first_call(my_predbat=None):
     return 0
 
 
-def test_run_15min_interval(my_predbat=None):
+def _test_run_15min_interval(my_predbat=None):
     """Test run() calls fetch every 15 minutes"""
     print("Test: Carbon API run() 15-minute interval")
 
@@ -768,7 +838,7 @@ def test_run_15min_interval(my_predbat=None):
     return 0
 
 
-def test_automatic_config_flow(my_predbat=None):
+def _test_automatic_config_flow(my_predbat=None):
     """Test automatic_config flow"""
     print("Test: Carbon API automatic config flow")
 

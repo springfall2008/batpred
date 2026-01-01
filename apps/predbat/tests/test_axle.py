@@ -12,7 +12,7 @@
 from axle import AxleAPI
 from unittest.mock import patch
 from datetime import datetime, timezone, timedelta
-from config import TIME_FORMAT
+from const import TIME_FORMAT
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
 
 
@@ -80,7 +80,74 @@ class MockAxleAPI(AxleAPI):
         return datetime.now(timezone.utc)
 
 
-def test_axle_initialization(my_predbat=None):
+def test_axle(my_predbat=None):
+    """
+    ======================================================================
+    AXLE ENERGY VPP TEST SUITE
+    ======================================================================
+    Comprehensive test suite for Axle Energy Virtual Power Plant integration including:
+    - Initialization and configuration
+    - Event fetching (active, future, past, no events)
+    - Error handling (HTTP errors, request exceptions, JSON parse errors)
+    - Retry logic and datetime parsing
+    - History loading and cleanup
+    - Fetch sessions and load slot export
+    - Active status checking
+    """
+    print("\n" + "=" * 70)
+    print("AXLE ENERGY VPP TEST SUITE")
+    print("=" * 70)
+
+    # Sub-test registry - each entry is (key, function, description)
+    sub_tests = [
+        ("initialization", _test_axle_initialization, "Axle API initialization"),
+        ("active_event", _test_axle_fetch_with_active_event, "Fetch with active event"),
+        ("future_event", _test_axle_fetch_with_future_event, "Fetch with future event"),
+        ("past_event", _test_axle_fetch_with_past_event, "Fetch with past event"),
+        ("no_event", _test_axle_fetch_no_event, "Fetch with no event"),
+        ("http_error", _test_axle_http_error, "HTTP error handling"),
+        ("request_exception", _test_axle_request_exception, "Request exception handling"),
+        ("retry_success", _test_axle_retry_success_after_failure, "Retry success after failure"),
+        ("datetime_parsing", _test_axle_datetime_parsing_variations, "Datetime parsing variations"),
+        ("json_parse_error", _test_axle_json_parse_error, "JSON parse error handling"),
+        ("run_method", _test_axle_run_method, "Run method execution"),
+        ("history_loading", _test_axle_history_loading, "History loading from state"),
+        ("history_cleanup", _test_axle_history_cleanup, "History cleanup old events"),
+        ("fetch_sessions", _test_axle_fetch_sessions, "Fetch sessions from API"),
+        ("load_slot_export", _test_axle_load_slot_export, "Load slot export integration"),
+        ("active_function", _test_axle_active_function, "Active status checking"),
+    ]
+
+    # Run all sub-tests
+    passed = 0
+    failed = 0
+    for key, test_func, description in sub_tests:
+        print(f"\n[{key}] {description}")
+        print("-" * 70)
+        try:
+            result = test_func(my_predbat)
+            if result:
+                print(f"✗ FAILED: {key}")
+                failed += 1
+            else:
+                print(f"✓ PASSED: {key}")
+                passed += 1
+        except Exception as e:
+            print(f"✗ EXCEPTION in {key}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed += 1
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print(f"RESULTS: {passed} passed, {failed} failed out of {len(sub_tests)} tests")
+    print("=" * 70)
+
+    return failed > 0
+
+
+def _test_axle_initialization(my_predbat=None):
     """Test AxleAPI component initialization"""
     print("Test: Axle API initialization")
 
@@ -99,7 +166,7 @@ def test_axle_initialization(my_predbat=None):
     return False
 
 
-def test_axle_fetch_with_active_event(my_predbat=None):
+def _test_axle_fetch_with_active_event(my_predbat=None):
     """Test fetching an active VPP event from API"""
     print("Test: Axle API fetch with active event")
 
@@ -149,7 +216,7 @@ def test_axle_fetch_with_active_event(my_predbat=None):
     return False
 
 
-def test_axle_fetch_with_future_event(my_predbat=None):
+def _test_axle_fetch_with_future_event(my_predbat=None):
     """Test fetching a future VPP event (not yet active)"""
     print("Test: Axle API fetch with future event")
 
@@ -185,7 +252,7 @@ def test_axle_fetch_with_future_event(my_predbat=None):
     return False
 
 
-def test_axle_fetch_with_past_event(my_predbat=None):
+def _test_axle_fetch_with_past_event(my_predbat=None):
     """Test fetching a past VPP event (already ended) - should be added to history"""
     print("Test: Axle API fetch with past event")
 
@@ -218,7 +285,7 @@ def test_axle_fetch_with_past_event(my_predbat=None):
     return False
 
 
-def test_axle_fetch_no_event(my_predbat=None):
+def _test_axle_fetch_no_event(my_predbat=None):
     """Test API response when no event is scheduled"""
     print("Test: Axle API fetch with no event")
 
@@ -250,7 +317,7 @@ def test_axle_fetch_no_event(my_predbat=None):
     return False
 
 
-def test_axle_http_error(my_predbat=None):
+def _test_axle_http_error(my_predbat=None):
     """Test handling of HTTP errors (no retry on non-200 status)"""
     print("Test: Axle API HTTP error handling")
 
@@ -275,7 +342,7 @@ def test_axle_http_error(my_predbat=None):
     return False
 
 
-def test_axle_request_exception(my_predbat=None):
+def _test_axle_request_exception(my_predbat=None):
     """Test handling of request exceptions with retry mechanism"""
     print("Test: Axle API request exception handling with retries")
 
@@ -318,7 +385,7 @@ def test_axle_request_exception(my_predbat=None):
     return False
 
 
-def test_axle_retry_success_after_failure(my_predbat=None):
+def _test_axle_retry_success_after_failure(my_predbat=None):
     """Test successful request after initial failures (retry succeeds)"""
     print("Test: Axle API retry success after failures")
 
@@ -370,7 +437,7 @@ def test_axle_retry_success_after_failure(my_predbat=None):
     return False
 
 
-def test_axle_datetime_parsing_variations(my_predbat=None):
+def _test_axle_datetime_parsing_variations(my_predbat=None):
     """Test parsing of different ISO 8601 datetime formats"""
     print("Test: Axle API datetime parsing variations")
 
@@ -399,7 +466,7 @@ def test_axle_datetime_parsing_variations(my_predbat=None):
     return False
 
 
-def test_axle_json_parse_error(my_predbat=None):
+def _test_axle_json_parse_error(my_predbat=None):
     """Test handling of JSON parsing errors (no retry)"""
     print("Test: Axle API JSON parsing error handling")
 
@@ -424,7 +491,7 @@ def test_axle_json_parse_error(my_predbat=None):
     return False
 
 
-def test_axle_run_method(my_predbat=None):
+def _test_axle_run_method(my_predbat=None):
     """Test the run method polling logic and history loading"""
     print("Test: Axle API run method")
 
@@ -459,7 +526,7 @@ def test_axle_run_method(my_predbat=None):
     return False
 
 
-def test_axle_history_loading(my_predbat=None):
+def _test_axle_history_loading(my_predbat=None):
     """Test loading event history from sensor on startup"""
     print("Test: Axle API history loading")
 
@@ -504,7 +571,7 @@ def test_axle_history_loading(my_predbat=None):
     return False
 
 
-def test_axle_history_cleanup(my_predbat=None):
+def _test_axle_history_cleanup(my_predbat=None):
     """Test cleanup of events older than 7 days"""
     print("Test: Axle API history cleanup")
 
@@ -539,7 +606,7 @@ def test_axle_history_cleanup(my_predbat=None):
     return False
 
 
-def test_axle_fetch_sessions(my_predbat=None):
+def _test_axle_fetch_sessions(my_predbat=None):
     """Test fetching Axle sessions from sensor (current + history)"""
     print("Test: Axle API fetch sessions")
 
@@ -612,7 +679,7 @@ def test_axle_fetch_sessions(my_predbat=None):
     return False
 
 
-def test_axle_load_slot_export(my_predbat=None):
+def _test_axle_load_slot_export(my_predbat=None):
     """
     Test that load_axle_slot increases export rates by pence_per_kwh for export events
     """
@@ -697,7 +764,7 @@ def test_axle_load_slot_export(my_predbat=None):
     return False
 
 
-def test_axle_active_function(my_predbat=None):
+def _test_axle_active_function(my_predbat=None):
     """Test fetch_axle_active function to check if VPP event is currently active"""
     print("Testing fetch_axle_active function...")
 

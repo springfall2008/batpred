@@ -8,7 +8,7 @@ import asyncio
 import requests
 import re
 from datetime import datetime, timedelta, timezone
-from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
+from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 from component_base import ComponentBase
 import aiohttp
@@ -2349,3 +2349,114 @@ class Octopus:
                 if state:
                     self.log("Octopus Saving session is active!")
         return octopus_free_slots, octopus_saving_slots
+
+
+class MockBase:  # pragma: no cover
+    """Mock base class for testing"""
+
+    def __init__(self):
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
+        self.prefix = "predbat"
+        self.args = {}
+        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.entities = {}
+        self.config_root = "./temp_octopus"
+        self.plan_interval_minutes = 30
+
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
+        if raw:
+            return self.entities.get(entity_id, {})
+        else:
+            return self.entities.get(entity_id, {}).get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
+
+    def log(self, message):
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        print(f"ENTITY: {entity_id} = {state}")
+        if attributes:
+            if "options" in attributes:
+                attributes["options"] = "..."
+            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, key, default=None):
+        return default
+
+    def set_arg(self, key, value):
+        state = None
+        if isinstance(value, str) and "." in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and "." in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
+
+
+async def test_octopus_api(api_key, account_id):  # pragma: no cover
+    """
+    Test the Octopus API
+    """
+
+    print(f"Testing Octopus API with account: {account_id}")
+
+    # Create a mock base object
+    mock_base = MockBase()
+
+    # Create OctopusAPI instanceFoxAPI(mock_base, **arg_dict)
+    arg_dict = {
+        "key": api_key,
+        "account_id": account_id,
+        "automatic": True,
+    }
+    octopus_api = OctopusAPI(mock_base, **arg_dict)
+    await octopus_api.run(0, True)
+
+    # Fetch data
+    planned_dispatches = octopus_api.get_intelligent_planned_dispatches()
+    completed_dispatches = octopus_api.get_intelligent_completed_dispatches()
+    vehicle = octopus_api.get_intelligent_vehicle()
+    available_events, joined_events = octopus_api.get_saving_session_data()
+
+    print("Planned dispatches: {}".format(planned_dispatches))
+    print("Completed dispatches: {}".format(completed_dispatches))
+    print("Vehicle: {}".format(vehicle))
+    print("Saving session available {}".format(available_events))
+    print("Saving session joined {}".format(joined_events))
+
+    # Test joining a saving session event
+    octopus_api.join_saving_session_event("EVENT_3_210125")
+    await octopus_api.run(1, False)
+    await octopus_api.final()
+
+    print("Test completed")
+
+
+def main():  # pragma: no cover
+    """
+    Main function for command line execution to test Octopus API
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test Octopus API")
+    parser.add_argument("--api-key", required=True, help="Octopus API key")
+    parser.add_argument("--account", required=True, help="Octopus account ID")
+
+    args = parser.parse_args()
+
+    # Run the test
+    asyncio.run(test_octopus_api(args.api_key, args.account))
+
+
+if __name__ == "__main__":
+    main()

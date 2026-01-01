@@ -15,7 +15,6 @@ import glob
 import argparse
 
 from predbat import PredBat
-from octopus import OctopusAPI
 from tests.test_infra import TestHAInterface
 from tests.test_compute_metric import run_compute_metric_tests
 from tests.test_perf import run_perf_test
@@ -41,83 +40,9 @@ from tests.test_solax import run_solax_tests
 from tests.test_single_debug import run_single_debug
 from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints
 from tests.test_secrets import run_secrets_tests
-from tests.test_ge_cloud import (
-    run_test_ge_cloud,
-    test_async_get_inverter_data_success,
-    test_async_get_inverter_data_auth_error,
-    test_async_get_inverter_data_rate_limit,
-    test_async_get_inverter_data_timeout,
-    test_async_get_inverter_data_json_error,
-    test_async_get_inverter_data_retry,
-    test_async_get_inverter_data_post,
-    test_async_get_devices_with_ems,
-    test_async_get_devices_with_gateway,
-    test_async_get_devices_with_batteries,
-    test_async_get_devices_empty,
-    test_async_get_evc_devices,
-    test_async_get_smart_devices,
-    test_async_get_evc_commands,
-    test_async_get_evc_device_data,
-    test_async_get_evc_device,
-    test_async_send_evc_command,
-    test_async_get_smart_device,
-    test_async_get_evc_sessions,
-    test_run_method,
-    test_async_automatic_config,
-    test_enable_default_options,
-    test_async_get_inverter_status,
-    test_async_get_inverter_meter,
-    test_async_get_device_info,
-    test_async_get_inverter_settings_success,
-    test_async_get_inverter_settings_partial_failure,
-    test_async_read_inverter_setting_success,
-    test_async_read_inverter_setting_error_codes,
-    test_async_write_inverter_setting_success,
-    test_async_write_inverter_setting_failure,
-    test_switch_event,
-    test_number_event,
-    test_select_event,
-    test_publish_status,
-    test_publish_meter,
-    test_publish_info,
-    test_publish_registers,
-    test_publish_evc_data,
-    test_download_ge_data_single_day,
-    test_download_ge_data_multi_day,
-    test_download_ge_data_pagination,
-    test_get_ge_url_cache_hit,
-    test_get_ge_url_cache_miss,
-    test_clean_ge_url_cache,
-    test_load_save_ge_cache,
-    test_load_ge_cache_corrupt_file,
-    test_regname_to_ha,
-    test_get_data,
-)
-from tests.test_axle import (
-    test_axle_initialization,
-    test_axle_fetch_with_active_event,
-    test_axle_fetch_with_future_event,
-    test_axle_fetch_with_past_event,
-    test_axle_fetch_no_event,
-    test_axle_http_error,
-    test_axle_request_exception,
-    test_axle_retry_success_after_failure,
-    test_axle_json_parse_error,
-    test_axle_datetime_parsing_variations,
-    test_axle_run_method,
-    test_axle_history_loading,
-    test_axle_history_cleanup,
-    test_axle_fetch_sessions,
-    test_axle_load_slot_export,
-    test_axle_active_function,
-)
-from tests.test_db_manager import (
-    test_db_manager_set_get_state,
-    test_db_manager_entities_and_history,
-    test_db_manager_error_handling,
-    test_db_manager_persistence,
-    test_db_manager_commit_throttling,
-)
+from tests.test_ge_cloud import run_test_ge_cloud, test_ge_cloud
+from tests.test_axle import test_axle
+from tests.test_db_manager import test_db_manager
 from tests.test_hahistory import run_hahistory_tests
 from tests.test_hainterface_state import run_hainterface_state_tests
 from tests.test_hainterface_api import run_hainterface_api_tests
@@ -140,14 +65,7 @@ from tests.test_previous_days_modal import test_previous_days_modal_filter
 from tests.test_octopus_free import test_octopus_free
 from tests.test_prune_today import test_prune_today
 from tests.test_cumulative import test_get_now_from_cumulative
-from tests.test_octopus_url import (
-    test_download_octopus_url_wrapper,
-    test_async_get_day_night_rates_wrapper,
-    test_get_saving_session_data,
-    test_async_intelligent_update_sensor_wrapper,
-    test_async_find_tariffs_wrapper,
-    test_edf_freephase_dynamic_url_wrapper,
-)
+from tests.test_octopus_url import test_octopus_url
 from tests.test_octopus_cache import test_octopus_cache_wrapper
 from tests.test_octopus_events import test_octopus_events_wrapper
 from tests.test_octopus_refresh_token import test_octopus_refresh_token_wrapper
@@ -168,156 +86,15 @@ from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer
-from tests.test_rate_replicate_missing_slots import test_rate_replicate_missing_slots, test_rate_replicate_no_previous_day, test_rate_replicate_with_zero_rates, test_rate_replicate_undefined_negative_minutes
-from tests.test_carbon import (
-    test_carbon_initialization,
-    test_fetch_carbon_data_success,
-    test_fetch_carbon_data_http_error,
-    test_fetch_carbon_data_timeout,
-    test_fetch_carbon_data_json_error,
-    test_fetch_carbon_data_empty,
-    test_fetch_carbon_data_cache_skip,
-    test_fetch_carbon_data_cache_refresh,
-    test_publish_carbon_data_current,
-    test_publish_carbon_data_forecast,
-    test_publish_carbon_data_unknown,
-    test_postcode_stripping,
-    test_multiple_date_fetches,
-    test_time_format_conversion,
-    test_timezone_handling,
-    test_json_data_collection,
-    test_failure_counter,
-    test_run_first_call,
-    test_run_15min_interval,
-    test_automatic_config_flow,
-)
-from tests.test_download import (
-    test_get_github_directory_listing_success,
-    test_get_github_directory_listing_failure,
-    test_get_github_directory_listing_exception,
-    test_compute_file_sha1,
-    test_compute_file_sha1_missing_file,
-    test_check_install_with_valid_manifest,
-    test_check_install_missing_file,
-    test_check_install_zero_byte_file,
-    test_check_install_size_mismatch,
-    test_check_install_sha_mismatch,
-    test_check_install_no_manifest_downloads,
-    test_predbat_update_download_success,
-    test_predbat_update_download_api_failure,
-    test_predbat_update_download_file_failure,
-    test_download_predbat_file_success,
-    test_download_predbat_file_failure,
-    test_download_predbat_file_no_filename,
-    test_predbat_update_move_success,
-    test_predbat_update_move_empty_files,
-    test_predbat_update_move_none_files,
-    test_predbat_update_move_invalid_version,
-)
-from tests.test_ohme import (
-    test_ohme_time_next_occurs_today,
-    test_ohme_time_next_occurs_tomorrow,
-    test_ohme_slot_list_empty,
-    test_ohme_slot_list_single,
-    test_ohme_slot_list_merged,
-    test_ohme_vehicle_to_name_custom,
-    test_ohme_vehicle_to_name_model,
-    test_ohme_client_status_charging,
-    test_ohme_client_status_unplugged,
-    test_ohme_client_status_pending_approval,
-    test_ohme_client_mode_smart_charge,
-    test_ohme_client_mode_max_charge,
-    test_ohme_client_power,
-    test_ohme_client_target_soc_in_progress,
-    test_ohme_client_target_soc_paused,
-    test_ohme_client_target_time,
-    test_ohme_client_slots,
-    test_ohme_client_vehicles,
-    test_ohme_client_current_vehicle,
-    test_ohme_client_async_pause_charge,
-    test_ohme_client_async_resume_charge,
-    test_ohme_client_async_approve_charge,
-    test_ohme_client_async_max_charge_enable,
-    test_ohme_client_async_max_charge_disable,
-    test_ohme_client_async_set_target,
-    test_ohme_client_async_get_charge_session,
-    test_ohme_client_async_update_device_info,
-    test_ohme_client_async_login_success,
-    test_ohme_client_async_refresh_session_no_token,
-    test_ohme_client_async_refresh_session_recent_token,
-    test_ohme_client_async_refresh_session_expired_token,
-    test_ohme_client_async_refresh_session_failure,
-    test_ohme_client_make_request_get_success,
-    test_ohme_client_make_request_put_success,
-    test_ohme_client_make_request_post_json,
-    test_ohme_client_make_request_post_skip_json,
-    test_ohme_client_make_request_api_error,
-    test_ohme_client_make_request_creates_session,
-    test_ohme_client_async_get_charge_session_retry,
-    test_ohme_client_async_set_mode_max_charge,
-    test_ohme_client_async_set_mode_smart_charge,
-    test_ohme_client_async_set_mode_paused,
-    test_ohme_client_async_set_mode_string,
-    test_ohme_client_async_set_vehicle_found,
-    test_ohme_client_async_set_vehicle_not_found,
-    test_ohme_client_async_update_schedule_all_params,
-    test_ohme_client_async_update_schedule_partial_params,
-    test_ohme_client_async_update_schedule_no_rule,
-    test_ohme_publish_data,
-    test_ohme_publish_data_disconnected,
-    test_ohme_run_first_call,
-    test_ohme_run_periodic_30min,
-    test_ohme_run_periodic_120s,
-    test_ohme_run_no_periodic,
-    test_ohme_run_with_queued_events,
-    test_ohme_run_event_handler_exception,
-    test_ohme_run_first_with_octopus_intelligent,
-    test_ohme_select_event_handler_target_time,
-    test_ohme_select_event_handler_invalid_time,
-    test_ohme_number_event_handler_target_soc,
-    test_ohme_number_event_handler_target_soc_invalid,
-    test_ohme_number_event_handler_preconditioning,
-    test_ohme_number_event_handler_preconditioning_off,
-    test_ohme_number_event_handler_preconditioning_invalid,
-    test_ohme_switch_event_handler_max_charge_on,
-    test_ohme_switch_event_handler_max_charge_off,
-    test_ohme_switch_event_handler_approve_charge,
-    test_ohme_switch_event_handler_approve_charge_wrong_status,
-)
+from tests.test_rate_replicate_missing_slots import test_rate_replicate
+from tests.test_carbon import test_carbon
+from tests.test_download import test_download
+from tests.test_ohme import test_ohme
 
 
 # Mock the components and plugin system
 
 KEEP_SCALE = 0.5
-
-
-def run_test_octopus_api(my_predbat, octopus_api, octopus_account):
-    """
-    Run the Octopus API tests
-    """
-    print("Test Octopus API")
-    failed = False
-
-    octopus_api = OctopusAPI(octopus_api, octopus_account, my_predbat)
-    my_predbat.create_task(octopus_api.start())
-    octopus_api.wait_api_started()
-
-    planned_dispatches = octopus_api.get_intelligent_planned_dispatches()
-    completed_dispatches = octopus_api.get_intelligent_completed_dispatches()
-    vehicle = octopus_api.get_intelligent_vehicle()
-    available_events, joined_events = octopus_api.get_saving_session_data()
-    print("Planned dispatches: {}".format(planned_dispatches))
-    print("Completed dispatches: {}".format(completed_dispatches))
-    print("Vehicle: {}".format(vehicle))
-    print("Saving session available {}".format(available_events))
-    print("Saving session joined {}".format(joined_events))
-    octopus_api.join_saving_session_event("EVENT_3_210125")
-    time.sleep(10)
-    octopus_api.stop()
-    time.sleep(1)
-
-    failed = 1
-    return failed
 
 
 def run_debug_cases(my_predbat):
@@ -379,12 +156,8 @@ def main():
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
-        ("octopus_url", test_download_octopus_url_wrapper, "Octopus URL download tests", False),
-        ("day_night_rates", test_async_get_day_night_rates_wrapper, "Octopus day/night rates tests", False),
-        ("saving_sessions", test_get_saving_session_data, "Octopus saving sessions tests", False),
-        ("intelligent_dispatch", test_async_intelligent_update_sensor_wrapper, "Octopus intelligent dispatch tests", False),
-        ("find_tariffs", test_async_find_tariffs_wrapper, "Octopus find tariffs tests", False),
-        ("edf_freephase_dynamic", test_edf_freephase_dynamic_url_wrapper, "EDF FreePhase Dynamic tariff tests", False),
+        # Octopus Energy URL/API tests
+        ("octopus_url", test_octopus_url, "Octopus URL/API comprehensive tests (downloads, day/night rates, saving sessions, intelligent dispatch, tariffs, EDF)", False),
         ("octopus_cache", test_octopus_cache_wrapper, "Octopus cache save/load tests", False),
         ("octopus_events", test_octopus_events_wrapper, "Octopus event handler tests", False),
         ("octopus_refresh_token", test_octopus_refresh_token_wrapper, "Octopus refresh token tests", False),
@@ -410,10 +183,7 @@ def main():
         ("nordpool", run_nordpool_test, "Nordpool tests", False),
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
-        ("rate_replicate_missing", test_rate_replicate_missing_slots, "Rate replicate missing 23:00/23:30 slots tests", False),
-        ("rate_replicate_no_prev", test_rate_replicate_no_previous_day, "Rate replicate without previous day data tests", False),
-        ("rate_replicate_zero", test_rate_replicate_with_zero_rates, "Rate replicate with zero rates (free electricity) tests", False),
-        ("rate_replicate_undefined", test_rate_replicate_undefined_negative_minutes, "Rate replicate undefined negative minutes (KeyError -1440) tests", False),
+        ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
@@ -433,102 +203,15 @@ def main():
         ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
         # GE Cloud unit tests
-        ("ge_api_success", test_async_get_inverter_data_success, "GE Cloud API success", False),
-        ("ge_api_auth_error", test_async_get_inverter_data_auth_error, "GE Cloud API auth error", False),
-        ("ge_api_rate_limit", test_async_get_inverter_data_rate_limit, "GE Cloud API rate limit", False),
-        ("ge_api_timeout", test_async_get_inverter_data_timeout, "GE Cloud API timeout", False),
-        ("ge_api_json_error", test_async_get_inverter_data_json_error, "GE Cloud API JSON error", False),
-        ("ge_api_retry", test_async_get_inverter_data_retry, "GE Cloud API retry logic", False),
-        ("ge_api_post", test_async_get_inverter_data_post, "GE Cloud API POST with/without datain", False),
-        ("ge_devices_ems", test_async_get_devices_with_ems, "GE Cloud devices with EMS", False),
-        ("ge_devices_gateway", test_async_get_devices_with_gateway, "GE Cloud devices with Gateway", False),
-        ("ge_devices_batteries", test_async_get_devices_with_batteries, "GE Cloud devices with batteries", False),
-        ("ge_devices_empty", test_async_get_devices_empty, "GE Cloud empty devices", False),
-        ("ge_evc_devices", test_async_get_evc_devices, "GE Cloud EV charger devices", False),
-        ("ge_smart_devices", test_async_get_smart_devices, "GE Cloud smart devices", False),
-        ("ge_evc_commands", test_async_get_evc_commands, "GE Cloud EV charger commands", False),
-        ("ge_evc_device_data", test_async_get_evc_device_data, "GE Cloud EV charger device data", False),
-        ("ge_evc_device", test_async_get_evc_device, "GE Cloud EV charger device", False),
-        ("ge_send_evc_command", test_async_send_evc_command, "GE Cloud send EV charger command", False),
-        ("ge_smart_device", test_async_get_smart_device, "GE Cloud smart device", False),
-        ("ge_evc_sessions", test_async_get_evc_sessions, "GE Cloud EV charger sessions", False),
-        ("ge_run_method", test_run_method, "GE Cloud run method", False),
-        ("ge_automatic_config", test_async_automatic_config, "GE Cloud automatic config", False),
-        ("ge_enable_defaults", test_enable_default_options, "GE Cloud enable default options", False),
-        ("ge_inverter_status", test_async_get_inverter_status, "GE Cloud inverter status", False),
-        ("ge_inverter_meter", test_async_get_inverter_meter, "GE Cloud inverter meter", False),
-        ("ge_device_info", test_async_get_device_info, "GE Cloud device info", False),
-        ("ge_settings_success", test_async_get_inverter_settings_success, "GE Cloud settings fetch", False),
-        ("ge_settings_partial", test_async_get_inverter_settings_partial_failure, "GE Cloud settings partial failure", False),
-        ("ge_read_setting", test_async_read_inverter_setting_success, "GE Cloud read setting", False),
-        ("ge_read_errors", test_async_read_inverter_setting_error_codes, "GE Cloud read error codes", False),
-        ("ge_write_success", test_async_write_inverter_setting_success, "GE Cloud write setting", False),
-        ("ge_write_failure", test_async_write_inverter_setting_failure, "GE Cloud write failure", False),
-        ("ge_switch_event", test_switch_event, "GE Cloud switch event", False),
-        ("ge_number_event", test_number_event, "GE Cloud number event", False),
-        ("ge_select_event", test_select_event, "GE Cloud select event", False),
-        ("ge_publish_status", test_publish_status, "GE Cloud publish status", False),
-        ("ge_publish_meter", test_publish_meter, "GE Cloud publish meter", False),
-        ("ge_publish_info", test_publish_info, "GE Cloud publish info", False),
-        ("ge_publish_registers", test_publish_registers, "GE Cloud publish registers", False),
-        ("ge_publish_evc_data", test_publish_evc_data, "GE Cloud publish EVC data", False),
-        ("ge_download_single", test_download_ge_data_single_day, "GE Cloud download single day", False),
-        ("ge_download_multi", test_download_ge_data_multi_day, "GE Cloud download multi-day", False),
-        ("ge_download_pagination", test_download_ge_data_pagination, "GE Cloud download pagination", False),
-        ("ge_cache_hit", test_get_ge_url_cache_hit, "GE Cloud cache hit", False),
-        ("ge_cache_miss", test_get_ge_url_cache_miss, "GE Cloud cache miss", False),
-        ("ge_cache_clean", test_clean_ge_url_cache, "GE Cloud cache cleanup", False),
-        ("ge_cache_persist", test_load_save_ge_cache, "GE Cloud cache persistence", False),
-        ("ge_cache_corrupt", test_load_ge_cache_corrupt_file, "GE Cloud cache corrupt file", False),
-        ("ge_regname_to_ha", test_regname_to_ha, "GE Cloud regname to HA", False),
-        ("ge_get_data", test_get_data, "GE Cloud get data", False),
+        ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
         # Download tests
-        ("download_github_listing_success", test_get_github_directory_listing_success, "GitHub directory listing success", False),
-        ("download_github_listing_failure", test_get_github_directory_listing_failure, "GitHub directory listing failure", False),
-        ("download_github_listing_exception", test_get_github_directory_listing_exception, "GitHub directory listing exception", False),
-        ("download_compute_sha1", test_compute_file_sha1, "Compute file SHA1", False),
-        ("download_compute_sha1_missing", test_compute_file_sha1_missing_file, "Compute SHA1 missing file", False),
-        ("download_check_install_valid", test_check_install_with_valid_manifest, "Check install with valid manifest", False),
-        ("download_check_install_missing", test_check_install_missing_file, "Check install missing file", False),
-        ("download_check_install_zero", test_check_install_zero_byte_file, "Check install zero byte file", False),
-        ("download_check_install_size_mismatch", test_check_install_size_mismatch, "Check install size mismatch", False),
-        ("download_check_install_sha_mismatch", test_check_install_sha_mismatch, "Check install SHA mismatch", False),
-        ("download_check_install_no_manifest", test_check_install_no_manifest_downloads, "Check install downloads manifest", False),
-        ("download_update_success", test_predbat_update_download_success, "Update download success", False),
-        ("download_update_api_failure", test_predbat_update_download_api_failure, "Update download API failure", False),
-        ("download_update_file_failure", test_predbat_update_download_file_failure, "Update download file failure", False),
-        ("download_file_success", test_download_predbat_file_success, "Download file success", False),
-        ("download_file_failure", test_download_predbat_file_failure, "Download file failure", False),
-        ("download_file_no_filename", test_download_predbat_file_no_filename, "Download file no filename", False),
-        ("download_move_success", test_predbat_update_move_success, "Move files success", False),
-        ("download_move_empty", test_predbat_update_move_empty_files, "Move files empty list", False),
-        ("download_move_none", test_predbat_update_move_none_files, "Move files none list", False),
-        ("download_move_invalid_version", test_predbat_update_move_invalid_version, "Move files invalid version", False),
+        ("download", test_download, "Predbat download/update comprehensive tests (GitHub API, SHA1, install check, file ops)", False),
         # Axle Energy VPP unit tests
-        ("axle_init", test_axle_initialization, "Axle Energy initialization", False),
-        ("axle_active_event", test_axle_fetch_with_active_event, "Axle Energy active event", False),
-        ("axle_future_event", test_axle_fetch_with_future_event, "Axle Energy future event", False),
-        ("axle_past_event", test_axle_fetch_with_past_event, "Axle Energy past event", False),
-        ("axle_no_event", test_axle_fetch_no_event, "Axle Energy no event", False),
-        ("axle_http_error", test_axle_http_error, "Axle Energy HTTP error", False),
-        ("axle_request_error", test_axle_request_exception, "Axle Energy request exception", False),
-        ("axle_retry_success", test_axle_retry_success_after_failure, "Axle Energy retry success", False),
-        ("axle_json_error", test_axle_json_parse_error, "Axle Energy JSON parse error", False),
-        ("axle_datetime_parsing", test_axle_datetime_parsing_variations, "Axle Energy datetime parsing", False),
-        ("axle_run_method", test_axle_run_method, "Axle Energy run method", False),
-        ("axle_history_loading", test_axle_history_loading, "Axle Energy history loading", False),
-        ("axle_history_cleanup", test_axle_history_cleanup, "Axle Energy history cleanup", False),
-        ("axle_fetch_sessions", test_axle_fetch_sessions, "Axle Energy fetch sessions", False),
-        ("axle_load_slot", test_axle_load_slot_export, "Axle Energy load slot export", False),
-        ("axle_active", test_axle_active_function, "Axle Energy active check", False),
+        ("axle", test_axle, "Axle Energy VPP comprehensive tests (init, event fetching, error handling, history, sessions)", False),
         # Database Manager unit tests
-        ("db_manager_set_get", test_db_manager_set_get_state, "DatabaseManager set/get state operations", False),
-        ("db_manager_entities_history", test_db_manager_entities_and_history, "DatabaseManager entities and history", False),
-        ("db_manager_errors", test_db_manager_error_handling, "DatabaseManager error handling", False),
-        ("db_manager_persistence", test_db_manager_persistence, "DatabaseManager data persistence across restarts", False),
-        ("db_manager_commit_throttle", test_db_manager_commit_throttling, "DatabaseManager commit throttling (5 second interval)", False),
+        ("db_manager", test_db_manager, "DatabaseManager comprehensive tests (state ops, entities/history, error handling, persistence, commit throttling)", False),
         # HAHistory component tests
         ("hahistory", run_hahistory_tests, "HAHistory component tests", False),
         # HAInterface state management tests
@@ -542,95 +225,9 @@ def main():
         # HAInterface websocket tests
         ("hainterface_websocket", run_hainterface_websocket_tests, "HAInterface websocket tests", False),
         # Carbon Intensity API unit tests
-        ("carbon_init", test_carbon_initialization, "Carbon API initialization", False),
-        ("carbon_fetch_success", test_fetch_carbon_data_success, "Carbon API fetch success", False),
-        ("carbon_http_error", test_fetch_carbon_data_http_error, "Carbon API HTTP error handling", False),
-        ("carbon_timeout", test_fetch_carbon_data_timeout, "Carbon API timeout handling", False),
-        ("carbon_json_error", test_fetch_carbon_data_json_error, "Carbon API JSON parsing error", False),
-        ("carbon_empty_data", test_fetch_carbon_data_empty, "Carbon API empty data response", False),
-        ("carbon_cache_skip", test_fetch_carbon_data_cache_skip, "Carbon API cache skip (<4 hours)", False),
-        ("carbon_cache_refresh", test_fetch_carbon_data_cache_refresh, "Carbon API cache refresh (>4 hours)", False),
-        ("carbon_publish_current", test_publish_carbon_data_current, "Carbon API publish current intensity", False),
-        ("carbon_publish_forecast", test_publish_carbon_data_forecast, "Carbon API publish forecast", False),
-        ("carbon_publish_unknown", test_publish_carbon_data_unknown, "Carbon API publish unknown state", False),
-        ("carbon_postcode_strip", test_postcode_stripping, "Carbon API postcode stripping", False),
-        ("carbon_multiple_dates", test_multiple_date_fetches, "Carbon API multiple date fetches", False),
-        ("carbon_time_format", test_time_format_conversion, "Carbon API time format conversion", False),
-        ("carbon_timezone", test_timezone_handling, "Carbon API timezone handling", False),
-        ("carbon_data_merge", test_json_data_collection, "Carbon API data collection from multiple dates", False),
-        ("carbon_failure_count", test_failure_counter, "Carbon API failure counter", False),
-        ("carbon_run_first", test_run_first_call, "Carbon API run() first call", False),
-        ("carbon_run_interval", test_run_15min_interval, "Carbon API run() 15-minute interval", False),
-        ("carbon_auto_config", test_automatic_config_flow, "Carbon API automatic config flow", False),
+        ("carbon", test_carbon, "Carbon Intensity API comprehensive tests (fetch, cache, publish, config)", False),
         # Ohme EV charger API unit tests
-        ("ohme_time_next_today", test_ohme_time_next_occurs_today, "Ohme time_next_occurs today", False),
-        ("ohme_time_next_tomorrow", test_ohme_time_next_occurs_tomorrow, "Ohme time_next_occurs tomorrow", False),
-        ("ohme_slot_list_empty", test_ohme_slot_list_empty, "Ohme slot_list empty", False),
-        ("ohme_slot_list_single", test_ohme_slot_list_single, "Ohme slot_list single", False),
-        ("ohme_slot_list_merged", test_ohme_slot_list_merged, "Ohme slot_list merged", False),
-        ("ohme_vehicle_name_custom", test_ohme_vehicle_to_name_custom, "Ohme vehicle_to_name custom", False),
-        ("ohme_vehicle_name_model", test_ohme_vehicle_to_name_model, "Ohme vehicle_to_name model", False),
-        ("ohme_status_charging", test_ohme_client_status_charging, "Ohme status CHARGING", False),
-        ("ohme_status_unplugged", test_ohme_client_status_unplugged, "Ohme status UNPLUGGED", False),
-        ("ohme_status_pending", test_ohme_client_status_pending_approval, "Ohme status PENDING_APPROVAL", False),
-        ("ohme_mode_smart", test_ohme_client_mode_smart_charge, "Ohme mode SMART_CHARGE", False),
-        ("ohme_mode_max", test_ohme_client_mode_max_charge, "Ohme mode MAX_CHARGE", False),
-        ("ohme_power", test_ohme_client_power, "Ohme power property", False),
-        ("ohme_target_soc_progress", test_ohme_client_target_soc_in_progress, "Ohme target_soc in progress", False),
-        ("ohme_target_soc_paused", test_ohme_client_target_soc_paused, "Ohme target_soc paused", False),
-        ("ohme_target_time", test_ohme_client_target_time, "Ohme target_time", False),
-        ("ohme_slots", test_ohme_client_slots, "Ohme slots property", False),
-        ("ohme_vehicles", test_ohme_client_vehicles, "Ohme vehicles property", False),
-        ("ohme_current_vehicle", test_ohme_client_current_vehicle, "Ohme current_vehicle", False),
-        ("ohme_pause_charge", test_ohme_client_async_pause_charge, "Ohme async_pause_charge", False),
-        ("ohme_resume_charge", test_ohme_client_async_resume_charge, "Ohme async_resume_charge", False),
-        ("ohme_approve_charge", test_ohme_client_async_approve_charge, "Ohme async_approve_charge", False),
-        ("ohme_max_charge_enable", test_ohme_client_async_max_charge_enable, "Ohme max_charge enable", False),
-        ("ohme_max_charge_disable", test_ohme_client_async_max_charge_disable, "Ohme max_charge disable", False),
-        ("ohme_set_target", test_ohme_client_async_set_target, "Ohme async_set_target", False),
-        ("ohme_get_session", test_ohme_client_async_get_charge_session, "Ohme async_get_charge_session", False),
-        ("ohme_update_device", test_ohme_client_async_update_device_info, "Ohme async_update_device_info", False),
-        ("ohme_login_success", test_ohme_client_async_login_success, "Ohme login success", False),
-        ("ohme_refresh_no_token", test_ohme_client_async_refresh_session_no_token, "Ohme refresh session no token", False),
-        ("ohme_refresh_recent", test_ohme_client_async_refresh_session_recent_token, "Ohme refresh session recent token", False),
-        ("ohme_refresh_expired", test_ohme_client_async_refresh_session_expired_token, "Ohme refresh session expired", False),
-        ("ohme_refresh_failure", test_ohme_client_async_refresh_session_failure, "Ohme refresh session failure", False),
-        ("ohme_make_request_get", test_ohme_client_make_request_get_success, "Ohme _make_request GET", False),
-        ("ohme_make_request_put", test_ohme_client_make_request_put_success, "Ohme _make_request PUT", False),
-        ("ohme_make_request_post_json", test_ohme_client_make_request_post_json, "Ohme _make_request POST JSON", False),
-        ("ohme_make_request_post_text", test_ohme_client_make_request_post_skip_json, "Ohme _make_request POST text", False),
-        ("ohme_make_request_error", test_ohme_client_make_request_api_error, "Ohme _make_request API error", False),
-        ("ohme_make_request_session", test_ohme_client_make_request_creates_session, "Ohme _make_request creates session", False),
-        ("ohme_session_retry", test_ohme_client_async_get_charge_session_retry, "Ohme session retry on CALCULATING", False),
-        ("ohme_set_mode_max", test_ohme_client_async_set_mode_max_charge, "Ohme async_set_mode MAX_CHARGE", False),
-        ("ohme_set_mode_smart", test_ohme_client_async_set_mode_smart_charge, "Ohme async_set_mode SMART_CHARGE", False),
-        ("ohme_set_mode_paused", test_ohme_client_async_set_mode_paused, "Ohme async_set_mode PAUSED", False),
-        ("ohme_set_mode_string", test_ohme_client_async_set_mode_string, "Ohme async_set_mode string", False),
-        ("ohme_set_vehicle_found", test_ohme_client_async_set_vehicle_found, "Ohme async_set_vehicle found", False),
-        ("ohme_set_vehicle_not_found", test_ohme_client_async_set_vehicle_not_found, "Ohme async_set_vehicle not found", False),
-        ("ohme_update_schedule_all", test_ohme_client_async_update_schedule_all_params, "Ohme async_update_schedule all params", False),
-        ("ohme_update_schedule_partial", test_ohme_client_async_update_schedule_partial_params, "Ohme async_update_schedule partial", False),
-        ("ohme_update_schedule_no_rule", test_ohme_client_async_update_schedule_no_rule, "Ohme async_update_schedule no rule", False),
-        ("ohme_publish_data", test_ohme_publish_data, "Ohme publish_data", False),
-        ("ohme_publish_disconnected", test_ohme_publish_data_disconnected, "Ohme publish_data disconnected", False),
-        ("ohme_run_first", test_ohme_run_first_call, "Ohme run first call", False),
-        ("ohme_run_30min", test_ohme_run_periodic_30min, "Ohme run 30min periodic", False),
-        ("ohme_run_120s", test_ohme_run_periodic_120s, "Ohme run 120s periodic", False),
-        ("ohme_run_no_periodic", test_ohme_run_no_periodic, "Ohme run no periodic", False),
-        ("ohme_run_queued_events", test_ohme_run_with_queued_events, "Ohme run with queued events", False),
-        ("ohme_run_exception", test_ohme_run_event_handler_exception, "Ohme run event handler exception", False),
-        ("ohme_run_octopus", test_ohme_run_first_with_octopus_intelligent, "Ohme run with octopus intelligent", False),
-        ("ohme_select_target_time", test_ohme_select_event_handler_target_time, "Ohme select_event_handler target_time", False),
-        ("ohme_select_invalid_time", test_ohme_select_event_handler_invalid_time, "Ohme select_event_handler invalid time", False),
-        ("ohme_number_target_soc", test_ohme_number_event_handler_target_soc, "Ohme number_event_handler target_soc", False),
-        ("ohme_number_target_soc_invalid", test_ohme_number_event_handler_target_soc_invalid, "Ohme number_event_handler invalid SoC", False),
-        ("ohme_number_preconditioning", test_ohme_number_event_handler_preconditioning, "Ohme number_event_handler preconditioning", False),
-        ("ohme_number_preconditioning_off", test_ohme_number_event_handler_preconditioning_off, "Ohme number_event_handler preconditioning off", False),
-        ("ohme_number_preconditioning_invalid", test_ohme_number_event_handler_preconditioning_invalid, "Ohme number_event_handler invalid preconditioning", False),
-        ("ohme_switch_max_charge_on", test_ohme_switch_event_handler_max_charge_on, "Ohme switch_event_handler max_charge on", False),
-        ("ohme_switch_max_charge_off", test_ohme_switch_event_handler_max_charge_off, "Ohme switch_event_handler max_charge off", False),
-        ("ohme_switch_approve_charge", test_ohme_switch_event_handler_approve_charge, "Ohme switch_event_handler approve_charge", False),
-        ("ohme_switch_approve_wrong_status", test_ohme_switch_event_handler_approve_charge_wrong_status, "Ohme switch_event_handler approve wrong status", False),
+        ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
@@ -642,8 +239,6 @@ def main():
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--compare", action="store_true", help="Run compare")
     parser.add_argument("--gecloud", action="store_true", help="Run tests for GivEnergy Cloud")
-    parser.add_argument("--octopus_api", action="store", help="Run Octopus API tests with given token")
-    parser.add_argument("--octopus_account", action="store", help="Octopus API account ID")
     parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
     parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
@@ -676,10 +271,6 @@ def main():
 
     if not failed and args.gecloud:
         failed |= run_test_ge_cloud(my_predbat)
-        return failed
-
-    if not failed and args.octopus_api:
-        failed |= run_test_octopus_api(my_predbat, args.octopus_api, args.octopus_account)
         return failed
 
     # Collect tests to run based on arguments

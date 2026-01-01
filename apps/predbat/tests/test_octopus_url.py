@@ -16,7 +16,64 @@ from octopus import OctopusAPI, DATE_TIME_STR_FORMAT
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
-def test_download_octopus_url_wrapper(my_predbat):
+def test_octopus_url(my_predbat=None):
+    """
+    OCTOPUS URL API TEST SUITE
+
+    Comprehensive test suite for Octopus Energy URL/API operations covering:
+    - URL downloads: Rate data fetching, pagination, error handling
+    - Day/night rates: Tariff parsing, time window extraction
+    - Saving sessions: Event retrieval, joining events, data parsing
+    - Intelligent dispatch: Planned/completed dispatches, vehicle data
+    - Tariff finding: Product search, tariff code extraction
+    - EDF FreePhase Dynamic: Special tariff handling
+
+    Total: 6 sub-tests
+    """
+
+    # Registry of all Octopus URL tests
+    sub_tests = [
+        ("download_url", _test_download_octopus_url_wrapper, "Octopus URL download (pagination, errors)"),
+        ("day_night_rates", _test_async_get_day_night_rates_wrapper, "Day/night rates parsing and time windows"),
+        ("saving_sessions", _test_get_saving_session_data, "Saving session events (available, joined)"),
+        ("intelligent_dispatch", _test_async_intelligent_update_sensor_wrapper, "Intelligent dispatch (planned, completed, vehicle)"),
+        ("find_tariffs", _test_async_find_tariffs_wrapper, "Find tariffs (product search, codes)"),
+        ("edf_freephase", _test_edf_freephase_dynamic_url_wrapper, "EDF FreePhase Dynamic tariff handling"),
+    ]
+
+    print("\n" + "=" * 70)
+    print("OCTOPUS URL API TEST SUITE")
+    print("=" * 70)
+
+    passed = 0
+    failed = 0
+
+    for key, test_func, description in sub_tests:
+        print(f"\n[{key}] {description}")
+        print("-" * 70)
+        try:
+            result = test_func(my_predbat)
+            if result:
+                print(f"✗ FAILED: {key}")
+                failed += 1
+            else:
+                print(f"✓ PASSED: {key}")
+                passed += 1
+        except Exception as e:
+            print(f"✗ EXCEPTION in {key}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed += 1
+
+    print("\n" + "=" * 70)
+    print(f"RESULTS: {passed} passed, {failed} failed out of {len(sub_tests)} tests")
+    print("=" * 70)
+
+    return failed > 0
+
+
+def _test_download_octopus_url_wrapper(my_predbat):
     """
     Wrapper to run the async test function
     """
@@ -190,7 +247,7 @@ async def test_download_octopus_url(my_predbat):
     return failed
 
 
-def test_async_get_day_night_rates_wrapper(my_predbat):
+def _test_async_get_day_night_rates_wrapper(my_predbat):
     """
     Wrapper to run the async test function for day/night rates
     """
@@ -426,7 +483,7 @@ async def test_async_get_day_night_rates(my_predbat):
     return failed
 
 
-def test_get_saving_session_data(my_predbat):
+def _test_get_saving_session_data(my_predbat):
     """
     Test the get_saving_session_data function with various scenarios
 
@@ -629,7 +686,7 @@ def test_get_saving_session_data(my_predbat):
     return failed
 
 
-def test_async_intelligent_update_sensor_wrapper(my_predbat):
+def _test_async_intelligent_update_sensor_wrapper(my_predbat):
     """
     Wrapper to run the async test function for intelligent update sensor
     """
@@ -834,7 +891,7 @@ async def test_async_intelligent_update_sensor(my_predbat):
     return failed
 
 
-def test_async_find_tariffs_wrapper(my_predbat):
+def _test_async_find_tariffs_wrapper(my_predbat):
     return asyncio.run(test_async_find_tariffs(my_predbat))
 
 
@@ -1075,7 +1132,7 @@ async def test_async_find_tariffs(my_predbat):
     return failed
 
 
-def test_edf_freephase_dynamic_url_wrapper(my_predbat):
+def _test_edf_freephase_dynamic_url_wrapper(my_predbat):
     """
     Wrapper to run the async test function for EDF FreePhase Dynamic tariff URL
     """

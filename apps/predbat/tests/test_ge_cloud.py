@@ -131,7 +131,110 @@ class MockGECloudData(GECloudData):
 # =============================================================================
 
 
-def test_async_get_inverter_data_success(my_predbat):
+def test_ge_cloud(my_predbat=None):
+    """
+    ======================================================================
+    GE CLOUD API TEST SUITE
+    ======================================================================
+    Comprehensive test suite for GivEnergy Cloud integration including:
+    - API infrastructure (success, auth errors, rate limits, timeouts, JSON errors, retry logic)
+    - Device management (EMS, gateway, batteries, EV chargers, smart devices)
+    - EVC operations (commands, device data, sessions)
+    - Inverter operations (status, meter, device info, settings read/write)
+    - Event handlers (switch, number, select)
+    - Data publishing (status, meter, info, registers, EVC data)
+    - Configuration (automatic config, enable defaults)
+    - Data download (single day, multi-day, pagination)
+    - Cache management (hit, miss, clean, persist, corrupt file)
+    - Utility functions (regname_to_ha, get_data)
+    """
+    print("\n" + "=" * 70)
+    print("GE CLOUD API TEST SUITE")
+    print("=" * 70)
+
+    # Sub-test registry - each entry is (key, function, description)
+    sub_tests = [
+        ("api_success", _test_async_get_inverter_data_success, "API call success"),
+        ("api_auth_error", _test_async_get_inverter_data_auth_error, "API auth error handling"),
+        ("api_rate_limit", _test_async_get_inverter_data_rate_limit, "API rate limit handling"),
+        ("api_timeout", _test_async_get_inverter_data_timeout, "API timeout handling"),
+        ("api_json_error", _test_async_get_inverter_data_json_error, "API JSON error handling"),
+        ("api_retry", _test_async_get_inverter_data_retry, "API retry logic"),
+        ("api_post", _test_async_get_inverter_data_post, "API POST with/without datain"),
+        ("devices_ems", _test_async_get_devices_with_ems, "Get devices with EMS"),
+        ("devices_gateway", _test_async_get_devices_with_gateway, "Get devices with Gateway"),
+        ("devices_batteries", _test_async_get_devices_with_batteries, "Get devices with batteries"),
+        ("devices_empty", _test_async_get_devices_empty, "Get empty devices"),
+        ("evc_devices", _test_async_get_evc_devices, "Get EV charger devices"),
+        ("smart_devices", _test_async_get_smart_devices, "Get smart devices"),
+        ("evc_commands", _test_async_get_evc_commands, "Get EV charger commands"),
+        ("evc_device_data", _test_async_get_evc_device_data, "Get EV charger device data"),
+        ("evc_device", _test_async_get_evc_device, "Get EV charger device"),
+        ("send_evc_command", _test_async_send_evc_command, "Send EV charger command"),
+        ("smart_device", _test_async_get_smart_device, "Get smart device"),
+        ("evc_sessions", _test_async_get_evc_sessions, "Get EV charger sessions"),
+        ("run_method", _test_run_method, "Run method execution"),
+        ("inverter_status", _test_async_get_inverter_status, "Get inverter status"),
+        ("inverter_meter", _test_async_get_inverter_meter, "Get inverter meter"),
+        ("device_info", _test_async_get_device_info, "Get device info"),
+        ("settings_success", _test_async_get_inverter_settings_success, "Get inverter settings success"),
+        ("settings_partial", _test_async_get_inverter_settings_partial_failure, "Get inverter settings partial failure"),
+        ("read_setting", _test_async_read_inverter_setting_success, "Read inverter setting success"),
+        ("read_errors", _test_async_read_inverter_setting_error_codes, "Read inverter setting error codes"),
+        ("write_success", _test_async_write_inverter_setting_success, "Write inverter setting success"),
+        ("write_failure", _test_async_write_inverter_setting_failure, "Write inverter setting failure"),
+        ("switch_event", _test_switch_event, "Switch event handler"),
+        ("number_event", _test_number_event, "Number event handler"),
+        ("select_event", _test_select_event, "Select event handler"),
+        ("publish_status", _test_publish_status, "Publish status"),
+        ("publish_meter", _test_publish_meter, "Publish meter"),
+        ("publish_info", _test_publish_info, "Publish info"),
+        ("publish_registers", _test_publish_registers, "Publish registers"),
+        ("publish_evc_data", _test_publish_evc_data, "Publish EVC data"),
+        ("automatic_config", _test_async_automatic_config, "Automatic config"),
+        ("enable_defaults", _test_enable_default_options, "Enable default options"),
+        ("download_single", _test_download_ge_data_single_day, "Download single day"),
+        ("download_multi", _test_download_ge_data_multi_day, "Download multi-day"),
+        ("download_pagination", _test_download_ge_data_pagination, "Download pagination"),
+        ("cache_hit", _test_get_ge_url_cache_hit, "Cache hit"),
+        ("cache_miss", _test_get_ge_url_cache_miss, "Cache miss"),
+        ("cache_clean", _test_clean_ge_url_cache, "Cache cleanup"),
+        ("cache_persist", _test_load_save_ge_cache, "Cache persistence"),
+        ("cache_corrupt", _test_load_ge_cache_corrupt_file, "Cache corrupt file"),
+        ("regname_to_ha", _test_regname_to_ha, "Regname to HA conversion"),
+        ("get_data", _test_get_data, "Get data method"),
+    ]
+
+    # Run all sub-tests
+    passed = 0
+    failed = 0
+    for key, test_func, description in sub_tests:
+        print(f"\n[{key}] {description}")
+        print("-" * 70)
+        try:
+            result = test_func(my_predbat)
+            if result:
+                print(f"✗ FAILED: {key}")
+                failed += 1
+            else:
+                print(f"✓ PASSED: {key}")
+                passed += 1
+        except Exception as e:
+            print(f"✗ EXCEPTION in {key}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            failed += 1
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print(f"RESULTS: {passed} passed, {failed} failed out of {len(sub_tests)} tests")
+    print("=" * 70)
+
+    return failed > 0
+
+
+def _test_async_get_inverter_data_success(my_predbat):
     """Test successful API call"""
 
     async def test():
@@ -161,7 +264,7 @@ def test_async_get_inverter_data_success(my_predbat):
     return run_async(test())
 
 
-def test_async_get_inverter_data_auth_error(my_predbat):
+def _test_async_get_inverter_data_auth_error(my_predbat):
     """Test authentication error (401)"""
 
     async def test():
@@ -187,7 +290,7 @@ def test_async_get_inverter_data_auth_error(my_predbat):
     return run_async(test())
 
 
-def test_async_get_inverter_data_rate_limit(my_predbat):
+def _test_async_get_inverter_data_rate_limit(my_predbat):
     """Test rate limiting (429)"""
 
     async def test():
@@ -213,7 +316,7 @@ def test_async_get_inverter_data_rate_limit(my_predbat):
     return run_async(test())
 
 
-def test_async_get_inverter_data_timeout(my_predbat):
+def _test_async_get_inverter_data_timeout(my_predbat):
     """Test timeout error"""
 
     async def test():
@@ -249,7 +352,7 @@ def test_async_get_inverter_data_timeout(my_predbat):
     return run_async(test())
 
 
-def test_async_get_inverter_data_json_error(my_predbat):
+def _test_async_get_inverter_data_json_error(my_predbat):
     """Test JSON decode error
 
     NOTE: Potential bug found in gecloud.py lines 1323-1341:
@@ -280,7 +383,7 @@ def test_async_get_inverter_data_json_error(my_predbat):
     return run_async(test())
 
 
-def test_async_get_inverter_data_retry(my_predbat):
+def _test_async_get_inverter_data_retry(my_predbat):
     """Test retry logic"""
 
     async def test():
@@ -318,7 +421,7 @@ def test_async_get_inverter_data_retry(my_predbat):
 # =============================================================================
 
 
-def test_async_get_inverter_data_post(my_predbat):
+def _test_async_get_inverter_data_post(my_predbat):
     """Test POST requests with and without datain parameter"""
 
     async def test():
@@ -444,7 +547,7 @@ def test_async_get_inverter_data_post(my_predbat):
     return run_async(test())
 
 
-def test_async_get_devices_with_ems(my_predbat):
+def _test_async_get_devices_with_ems(my_predbat):
     """Test device discovery with EMS device"""
 
     async def test():
@@ -471,7 +574,7 @@ def test_async_get_devices_with_ems(my_predbat):
     return run_async(test())
 
 
-def test_async_get_devices_with_gateway(my_predbat):
+def _test_async_get_devices_with_gateway(my_predbat):
     """Test device discovery with Gateway device"""
 
     async def test():
@@ -495,7 +598,7 @@ def test_async_get_devices_with_gateway(my_predbat):
     return run_async(test())
 
 
-def test_async_get_devices_with_batteries(my_predbat):
+def _test_async_get_devices_with_batteries(my_predbat):
     """Test device discovery with battery inverters"""
 
     async def test():
@@ -522,7 +625,7 @@ def test_async_get_devices_with_batteries(my_predbat):
     return run_async(test())
 
 
-def test_async_get_devices_empty(my_predbat):
+def _test_async_get_devices_empty(my_predbat):
     """Test device discovery with no devices"""
 
     async def test():
@@ -544,7 +647,7 @@ def test_async_get_devices_empty(my_predbat):
     return run_async(test())
 
 
-def test_async_get_evc_devices(my_predbat):
+def _test_async_get_evc_devices(my_predbat):
     """Test getting EV charger devices"""
 
     async def test():
@@ -604,7 +707,7 @@ def test_async_get_evc_devices(my_predbat):
     return run_async(test())
 
 
-def test_async_get_smart_devices(my_predbat):
+def _test_async_get_smart_devices(my_predbat):
     """Test getting smart devices"""
 
     async def test():
@@ -671,7 +774,7 @@ def test_async_get_smart_devices(my_predbat):
     return run_async(test())
 
 
-def test_async_get_evc_commands(my_predbat):
+def _test_async_get_evc_commands(my_predbat):
     """Test getting EV charger commands"""
 
     async def test():
@@ -753,7 +856,7 @@ def test_async_get_evc_commands(my_predbat):
     return run_async(test())
 
 
-def test_async_send_evc_command(my_predbat):
+def _test_async_send_evc_command(my_predbat):
     """Test sending EV charger commands"""
 
     async def test():
@@ -855,7 +958,7 @@ def test_async_send_evc_command(my_predbat):
     return run_async(test())
 
 
-def test_async_get_evc_device_data(my_predbat):
+def _test_async_get_evc_device_data(my_predbat):
     """Test getting EV charger device data"""
 
     async def test():
@@ -1008,7 +1111,7 @@ def test_async_get_evc_device_data(my_predbat):
     return run_async(test())
 
 
-def test_async_get_evc_device(my_predbat):
+def _test_async_get_evc_device(my_predbat):
     """Test getting a single EV charger device"""
 
     async def test():
@@ -1109,7 +1212,7 @@ def test_async_get_evc_device(my_predbat):
     return run_async(test())
 
 
-def test_async_get_smart_device(my_predbat):
+def _test_async_get_smart_device(my_predbat):
     """Test getting a single smart device"""
 
     async def test():
@@ -1195,7 +1298,7 @@ def test_async_get_smart_device(my_predbat):
     return run_async(test())
 
 
-def test_async_get_evc_sessions(my_predbat):
+def _test_async_get_evc_sessions(my_predbat):
     """Test getting EV charger sessions"""
 
     async def test():
@@ -1278,7 +1381,7 @@ def test_async_get_evc_sessions(my_predbat):
     return run_async(test())
 
 
-def test_run_method(my_predbat):
+def _test_run_method(my_predbat):
     """Test GECloudDirect run method calls functions in correct order"""
 
     async def test():
@@ -1473,7 +1576,7 @@ def test_run_method(my_predbat):
 # =============================================================================
 
 
-def test_async_get_inverter_status(my_predbat):
+def _test_async_get_inverter_status(my_predbat):
     """Test getting inverter status"""
 
     async def test():
@@ -1507,7 +1610,7 @@ def test_async_get_inverter_status(my_predbat):
     return run_async(test())
 
 
-def test_async_get_inverter_meter(my_predbat):
+def _test_async_get_inverter_meter(my_predbat):
     """Test getting inverter meter data"""
 
     async def test():
@@ -1530,7 +1633,7 @@ def test_async_get_inverter_meter(my_predbat):
     return run_async(test())
 
 
-def test_async_get_device_info(my_predbat):
+def _test_async_get_device_info(my_predbat):
     """Test getting device info"""
 
     async def test():
@@ -1557,7 +1660,7 @@ def test_async_get_device_info(my_predbat):
     return run_async(test())
 
 
-def test_async_get_inverter_settings_success(my_predbat):
+def _test_async_get_inverter_settings_success(my_predbat):
     """Test getting inverter settings with parallel fetch"""
 
     async def test():
@@ -1599,7 +1702,7 @@ def test_async_get_inverter_settings_success(my_predbat):
     return run_async(test())
 
 
-def test_async_get_inverter_settings_partial_failure(my_predbat):
+def _test_async_get_inverter_settings_partial_failure(my_predbat):
     """Test getting inverter settings with some failures"""
 
     async def test():
@@ -1637,7 +1740,7 @@ def test_async_get_inverter_settings_partial_failure(my_predbat):
 # =============================================================================
 
 
-def test_async_read_inverter_setting_success(my_predbat):
+def _test_async_read_inverter_setting_success(my_predbat):
     """Test reading inverter setting successfully"""
 
     async def test():
@@ -1661,7 +1764,7 @@ def test_async_read_inverter_setting_success(my_predbat):
     return run_async(test())
 
 
-def test_async_read_inverter_setting_error_codes(my_predbat):
+def _test_async_read_inverter_setting_error_codes(my_predbat):
     """Test error code handling in read inverter setting"""
 
     async def test():
@@ -1691,7 +1794,7 @@ def test_async_read_inverter_setting_error_codes(my_predbat):
     return run_async(test())
 
 
-def test_async_write_inverter_setting_success(my_predbat):
+def _test_async_write_inverter_setting_success(my_predbat):
     """Test writing inverter setting successfully"""
 
     async def test():
@@ -1730,7 +1833,7 @@ def test_async_write_inverter_setting_success(my_predbat):
     return run_async(test())
 
 
-def test_async_write_inverter_setting_failure(my_predbat):
+def _test_async_write_inverter_setting_failure(my_predbat):
     """Test writing inverter setting failure
 
     NOTE: Potential bug found in gecloud.py lines 938-939:
@@ -1773,7 +1876,7 @@ def test_async_write_inverter_setting_failure(my_predbat):
 # =============================================================================
 
 
-def test_switch_event(my_predbat):
+def _test_switch_event(my_predbat):
     """Test switch event handler"""
 
     async def test():
@@ -1821,7 +1924,7 @@ def test_switch_event(my_predbat):
     return run_async(test())
 
 
-def test_number_event(my_predbat):
+def _test_number_event(my_predbat):
     """Test number event handler with validation"""
 
     async def test():
@@ -1859,7 +1962,7 @@ def test_number_event(my_predbat):
     return run_async(test())
 
 
-def test_select_event(my_predbat):
+def _test_select_event(my_predbat):
     """Test select event handler with options validation
 
     NOTE: Potential bug found in gecloud.py line 324:
@@ -1907,7 +2010,7 @@ def test_select_event(my_predbat):
 # =============================================================================
 
 
-def test_publish_status(my_predbat):
+def _test_publish_status(my_predbat):
     """Test publishing status entities"""
     ge_cloud = MockGECloudDirect()
     ge_cloud.config_args["prefix"] = "predbat"
@@ -1928,7 +2031,7 @@ def test_publish_status(my_predbat):
     return 0
 
 
-def test_publish_meter(my_predbat):
+def _test_publish_meter(my_predbat):
     """Test publishing meter entities"""
     ge_cloud = MockGECloudDirect()
     ge_cloud.config_args["prefix"] = "predbat"
@@ -1990,7 +2093,7 @@ def test_publish_meter(my_predbat):
     return 0
 
 
-def test_publish_info(my_predbat):
+def _test_publish_info(my_predbat):
     """Test publishing info entities"""
     ge_cloud = MockGECloudDirect()
     ge_cloud.config_args["prefix"] = "predbat"
@@ -2012,7 +2115,7 @@ def test_publish_info(my_predbat):
     return 0
 
 
-def test_publish_registers(my_predbat):
+def _test_publish_registers(my_predbat):
     """Test publishing register entities"""
     ge_cloud = MockGECloudDirect()
     ge_cloud.config_args["prefix"] = "predbat"
@@ -2048,7 +2151,7 @@ def test_publish_registers(my_predbat):
     return 0
 
 
-def test_publish_evc_data(my_predbat):
+def _test_publish_evc_data(my_predbat):
     """Test publishing EV charger data"""
 
     async def test():
@@ -2130,7 +2233,7 @@ def test_publish_evc_data(my_predbat):
     return run_async(test())
 
 
-def test_async_automatic_config(my_predbat):
+def _test_async_automatic_config(my_predbat):
     """Test automatic configuration of Predbat based on GE Cloud devices"""
 
     async def test():
@@ -2282,7 +2385,7 @@ def test_async_automatic_config(my_predbat):
     return run_async(test())
 
 
-def test_enable_default_options(my_predbat):
+def _test_enable_default_options(my_predbat):
     """Test enabling default options for inverter settings"""
 
     async def test():
@@ -2583,7 +2686,7 @@ def test_enable_default_options(my_predbat):
 # =============================================================================
 
 
-def test_download_ge_data_single_day(my_predbat):
+def _test_download_ge_data_single_day(my_predbat):
     """Test downloading data for a single day"""
 
     async def test():
@@ -2615,7 +2718,7 @@ def test_download_ge_data_single_day(my_predbat):
     return run_async(test())
 
 
-def test_download_ge_data_multi_day(my_predbat):
+def _test_download_ge_data_multi_day(my_predbat):
     """Test downloading data for multiple days"""
 
     async def test():
@@ -2653,7 +2756,7 @@ def test_download_ge_data_multi_day(my_predbat):
     return run_async(test())
 
 
-def test_download_ge_data_pagination(my_predbat):
+def _test_download_ge_data_pagination(my_predbat):
     """Test downloading data with pagination"""
 
     async def test():
@@ -2702,7 +2805,7 @@ def test_download_ge_data_pagination(my_predbat):
     return run_async(test())
 
 
-def test_get_ge_url_cache_hit(my_predbat):
+def _test_get_ge_url_cache_hit(my_predbat):
     """Test cache hit when data is fresh"""
     with tempfile.TemporaryDirectory() as tmpdir:
         ge_data = MockGECloudData(config_root=tmpdir)
@@ -2726,7 +2829,7 @@ def test_get_ge_url_cache_hit(my_predbat):
         return 0
 
 
-def test_get_ge_url_cache_miss(my_predbat):
+def _test_get_ge_url_cache_miss(my_predbat):
     """Test cache miss when data is stale"""
     with tempfile.TemporaryDirectory() as tmpdir:
         ge_data = MockGECloudData(config_root=tmpdir)
@@ -2758,7 +2861,7 @@ def test_get_ge_url_cache_miss(my_predbat):
         return 0
 
 
-def test_clean_ge_url_cache(my_predbat):
+def _test_clean_ge_url_cache(my_predbat):
     """Test cleaning old cache entries"""
     with tempfile.TemporaryDirectory() as tmpdir:
         ge_data = MockGECloudData(config_root=tmpdir)
@@ -2790,7 +2893,7 @@ def test_clean_ge_url_cache(my_predbat):
 # =============================================================================
 
 
-def test_load_save_ge_cache(my_predbat):
+def _test_load_save_ge_cache(my_predbat):
     """Test saving and loading cache to/from disk"""
     with tempfile.TemporaryDirectory() as tmpdir:
         ge_data = MockGECloudData(config_root=tmpdir)
@@ -2823,7 +2926,7 @@ def test_load_save_ge_cache(my_predbat):
         return 0
 
 
-def test_load_ge_cache_corrupt_file(my_predbat):
+def _test_load_ge_cache_corrupt_file(my_predbat):
     """Test loading cache with corrupt/missing file"""
     with tempfile.TemporaryDirectory() as tmpdir:
         ge_data = MockGECloudData(config_root=tmpdir)
@@ -2849,7 +2952,7 @@ def test_load_ge_cache_corrupt_file(my_predbat):
 # =============================================================================
 
 
-def test_regname_to_ha(my_predbat):
+def _test_regname_to_ha(my_predbat):
     """Test register name to HA entity conversion"""
     # NOTE: Potential bug found - dots are NOT replaced with underscores
     # This could create invalid HA entity names if register names contain dots
@@ -2870,7 +2973,7 @@ def test_regname_to_ha(my_predbat):
     return 0
 
 
-def test_get_data(my_predbat):
+def _test_get_data(my_predbat):
     """Test GECloudData.get_data() method"""
     ge_data = MockGECloudData()
 

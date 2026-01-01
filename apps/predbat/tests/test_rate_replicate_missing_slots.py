@@ -11,7 +11,67 @@
 from datetime import datetime
 
 
-def test_rate_replicate_missing_slots(my_predbat):
+def test_rate_replicate(my_predbat):
+    """
+    Comprehensive test suite for rate_replicate function.
+
+    Tests all major code paths including:
+    - Missing slots replication from previous day
+    - No previous day data fallback
+    - Zero rates (free electricity)
+    - Undefined negative minutes (KeyError bug #3158)
+    - Intelligent Octopus rate_io
+    - Future rate adjustments (import/export)
+    - Rate offsets (import/export with negative clamping)
+    - Gas rate handling
+    """
+
+    # Registry of all sub-tests
+    sub_tests = [
+        ("missing_slots", _test_missing_slots, "Missing 23:00 and 23:30 slots (Octopus Agile before 4PM)"),
+        ("no_previous_day", _test_no_previous_day, "Missing slots with NO previous day data"),
+        ("zero_rates", _test_zero_rates, "Zero rates are legitimate values (free electricity)"),
+        ("undefined_negative", _test_undefined_negative_minutes, "Undefined negative minutes (KeyError -1440 bug #3158)"),
+        ("rate_io", _test_rate_io, "Intelligent Octopus rate_io"),
+        ("future_import", _test_future_rate_adjust_import, "Future rate adjust import"),
+        ("future_export", _test_future_rate_adjust_export, "Future rate adjust export (negative clamping)"),
+        ("import_offset", _test_import_offset, "Import rate offset"),
+        ("export_offset", _test_export_offset_negative, "Export rate offset with negative clamping"),
+        ("gas_rates", _test_gas_rates, "Gas rates (is_gas=True)"),
+    ]
+
+    print("\n" + "="*70)
+    print("RATE_REPLICATE TEST SUITE")
+    print("="*70)
+
+    failed = 0
+    passed = 0
+
+    for test_name, test_func, test_desc in sub_tests:
+        print(f"\n[{test_name}] {test_desc}")
+        print("-" * 70)
+        try:
+            test_result = test_func(my_predbat)
+            if test_result:
+                print(f"✗ FAILED: {test_name}")
+                failed += 1
+            else:
+                print(f"✓ PASSED: {test_name}")
+                passed += 1
+        except Exception as e:
+            print(f"✗ EXCEPTION in {test_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            failed += 1
+
+    print("\n" + "="*70)
+    print(f"RESULTS: {passed} passed, {failed} failed out of {len(sub_tests)} tests")
+    print("="*70)
+
+    return failed
+
+
+def _test_missing_slots(my_predbat):
     """
     Test for rate_replicate function handling missing 23:00 and 23:30 slots.
 
@@ -105,17 +165,9 @@ def test_rate_replicate_missing_slots(my_predbat):
     return failed
 
 
-def test_rate_replicate_no_previous_day(my_predbat):
-    """
-    Test for rate_replicate when there's NO previous day data at all.
-
-    This tests the edge case where the API doesn't return any previous day rates.
-    In this case, the function should use modulo to find the same time from current day,
-    or use rate_last as a fallback.
-    """
+def _test_no_previous_day(my_predbat):
+    """Test for rate_replicate when there's NO previous day data at all."""
     failed = 0
-
-    print("\n*** Test: Missing 23:00 and 23:30 with NO previous day data ***")
 
     my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
     my_predbat.forecast_minutes = 2880
@@ -162,19 +214,9 @@ def test_rate_replicate_no_previous_day(my_predbat):
     return failed
 
 
-def test_rate_replicate_with_zero_rates(my_predbat):
-    """
-    Test for rate_replicate with legitimate zero rates (free electricity).
-
-    Verifies that legitimate 0 rates (e.g., free electricity periods) are preserved
-    and not treated as missing data. This is important for scenarios like:
-    - Free electricity promotions
-    - Negative pricing events
-    - Special tariff periods
-    """
+def _test_zero_rates(my_predbat):
+    """Test for rate_replicate with legitimate zero rates (free electricity)."""
     failed = 0
-
-    print("\n*** Test: Zero rates are legitimate values (free electricity) ***")
 
     my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
     my_predbat.forecast_minutes = 2880
@@ -236,26 +278,12 @@ def test_rate_replicate_with_zero_rates(my_predbat):
     return failed
 
 
-def test_rate_replicate_undefined_negative_minutes(my_predbat):
-    """
-    Test for rate_replicate when rates start at minute 0 or later (no negative minutes).
-
-    This tests the edge case where rate_replicate is called with rates that DON'T include
-    negative minutes (previous day data). When iterating from -1440, the rate_last_valid
-    flag stays False until a rate at minute >= 0 is encountered, preventing negative
-    minutes from being filled.
-
-    This causes KeyError in publish_rates which iterates from -1440 and expects all
-    minutes to be defined.
+def _test_undefined_negative_minutes(my_predbat):
+    """Test for rate_replicate when rates start at minute 0 or later (no negative minutes).
 
     Bug reported in issue #3158: KeyError: -1440 in publish_rates after update to 8.31.5
-
-    The rate_replicate function has a guard at line 1083-1086 that prevents filling
-    negative minutes when rate_last_valid is False (no rates at minute >= 0 seen yet).
     """
     failed = 0
-
-    print("\n*** Test: rate_replicate with no negative minute data (KeyError -1440) ***")
 
     my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
     my_predbat.forecast_minutes = 2880
@@ -313,6 +341,355 @@ def test_rate_replicate_undefined_negative_minutes(my_predbat):
         print(f"  ✓ No positive minutes created (expected with only negative input)")
 
     # Restore time context to current time
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
+
+    return failed
+
+
+def _test_rate_io(my_predbat):
+    """Test rate_replicate with Intelligent Octopus rate_io adjustments."""
+    failed = 0
+
+    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.forecast_minutes = 2880
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.metric_future_rate_offset_export = 0
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+
+    # Create rates with Intelligent Octopus slot
+    rates = {}
+    for minute in range(0, 1440):
+        if 120 <= minute < 300:  # 02:00-05:00 intelligent slot
+            rates[minute] = 5.0  # Cheap rate
+        else:
+            rates[minute] = 25.0
+
+    # Mark intelligent slots in rate_io
+    rate_io = {}
+    for minute in range(120, 300):
+        rate_io[minute] = True
+
+    # Run rate_replicate
+    result, result_replicated = my_predbat.rate_replicate(rates, rate_io=rate_io, is_import=True, is_gas=False)
+
+    # Check that next day's 02:00-05:00 is set to rate_max (not replicated from today)
+    next_day_intelligent_start = 1440 + 120
+    if next_day_intelligent_start in result:
+        if result[next_day_intelligent_start] == my_predbat.rate_max:
+            print(f"  ✓ Intelligent slot correctly replaced with rate_max: {result[next_day_intelligent_start]}")
+        else:
+            print(f"  ✗ ERROR: Next day intelligent slot should be {my_predbat.rate_max}, got {result[next_day_intelligent_start]}")
+            failed |= 1
+    else:
+        print(f"  ✗ ERROR: Next day intelligent slot minute {next_day_intelligent_start} missing")
+        failed |= 1
+
+    # Normal rates should still replicate correctly
+    normal_minute_next_day = 1440 + 600  # 10:00 next day
+    if normal_minute_next_day in result and result[normal_minute_next_day] == 25.0:
+        print(f"  ✓ Normal rates replicate correctly: {result[normal_minute_next_day]}")
+    else:
+        print(f"  ✗ ERROR: Normal rate replication failed at minute {normal_minute_next_day}")
+        failed |= 1
+
+    # Restore context
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
+
+    return failed
+
+
+def _test_future_rate_adjust_import(my_predbat):
+    """Test rate_replicate with futurerate_adjust_import feature."""
+    failed = 0
+
+    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.forecast_minutes = 2880
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.metric_future_rate_offset_export = 0
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+
+    # Set futurerate_adjust_import to True via args
+    my_predbat.args["futurerate_adjust_import"] = True
+
+    # Create base rates for current day only
+    rates = {}
+    for minute in range(0, 1440):
+        rates[minute] = 15.0
+
+    # Set future rate adjustments for next day
+    my_predbat.future_energy_rates_import = {}
+    for minute in range(1440, 2880):
+        my_predbat.future_energy_rates_import[minute] = 20.0  # Future rates higher
+        my_predbat.future_energy_rates_import[minute % 1440] = 15.0  # Base rate
+
+    # Run rate_replicate
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False)
+
+    # Check that future rates are applied
+    next_day_minute = 1440 + 600
+    if next_day_minute in result:
+        if result[next_day_minute] == 20.0:
+            print(f"  ✓ Future rate adjustment applied: {result[next_day_minute]}")
+            if result_replicated.get(next_day_minute) == "future":
+                print(f"  ✓ Replicated type correctly marked as 'future'")
+            else:
+                print(f"  ✗ ERROR: Should be marked as 'future', got {result_replicated.get(next_day_minute)}")
+                failed |= 1
+        else:
+            print(f"  ✗ ERROR: Future rate should be 20.0, got {result[next_day_minute]}")
+            failed |= 1
+    else:
+        print(f"  ✗ ERROR: Future rate minute {next_day_minute} missing")
+        failed |= 1
+
+    # Restore context
+    if "futurerate_adjust_import" in my_predbat.args:
+        del my_predbat.args["futurerate_adjust_import"]
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
+
+    return failed
+
+
+def _test_future_rate_adjust_export(my_predbat):
+    """Test rate_replicate with futurerate_adjust_export feature."""
+    failed = 0
+
+    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.forecast_minutes = 2880
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.metric_future_rate_offset_export = 0
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+
+    # Set futurerate_adjust_export to True via args
+    my_predbat.args["futurerate_adjust_export"] = True
+
+    # Create base export rates
+    rates = {}
+    for minute in range(0, 1440):
+        rates[minute] = 10.0
+
+    # Set future export rates including negative value
+    my_predbat.future_energy_rates_export = {}
+    for minute in range(1440, 2880):
+        my_predbat.future_energy_rates_export[minute] = -5.0  # Negative future rate (should be clamped to 0)
+        my_predbat.future_energy_rates_export[minute % 1440] = 10.0  # Base rate
+
+    # Run rate_replicate for export
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=False, is_gas=False)
+
+    # Check that negative future export rates are clamped to 0
+    next_day_minute = 1440 + 600
+    if next_day_minute in result:
+        if result[next_day_minute] == 0.0:
+            print(f"  ✓ Negative export rate clamped to 0: {result[next_day_minute]}")
+            if result_replicated.get(next_day_minute) == "future":
+                print(f"  ✓ Replicated type correctly marked as 'future'")
+            else:
+                print(f"  ✗ ERROR: Should be marked as 'future', got {result_replicated.get(next_day_minute)}")
+                failed |= 1
+        else:
+            print(f"  ✗ ERROR: Negative export rate should be clamped to 0.0, got {result[next_day_minute]}")
+            failed |= 1
+    else:
+        print(f"  ✗ ERROR: Future rate minute {next_day_minute} missing")
+        failed |= 1
+
+    # Restore context
+    if "futurerate_adjust_export" in my_predbat.args:
+        del my_predbat.args["futurerate_adjust_export"]
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
+
+    return failed
+
+
+def _test_import_offset(my_predbat):
+    """Test rate_replicate with metric_future_rate_offset_import."""
+    failed = 0
+
+    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.forecast_minutes = 2880
+    my_predbat.metric_future_rate_offset_import = 5.0  # Add 5p to future rates
+    my_predbat.metric_future_rate_offset_export = 0
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+
+    # Create base rates
+    rates = {}
+    for minute in range(0, 1440):
+        rates[minute] = 15.0
+
+    # Run rate_replicate
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=False)
+
+    # Check that offset is applied to future days
+    next_day_minute = 1440 + 600
+    if next_day_minute in result:
+        expected_rate = 15.0 + 5.0
+        if result[next_day_minute] == expected_rate:
+            print(f"  ✓ Import offset applied correctly: {result[next_day_minute]}")
+            if result_replicated.get(next_day_minute) == "offset":
+                print(f"  ✓ Replicated type correctly marked as 'offset'")
+            else:
+                print(f"  ✗ ERROR: Should be marked as 'offset', got {result_replicated.get(next_day_minute)}")
+                failed |= 1
+        else:
+            print(f"  ✗ ERROR: Rate should be {expected_rate}, got {result[next_day_minute]}")
+            failed |= 1
+
+    # Current day should not have offset
+    if result[600] == 15.0:
+        print(f"  ✓ Current day rate unchanged: {result[600]}")
+    else:
+        print(f"  ✗ ERROR: Current day should be 15.0, got {result[600]}")
+        failed |= 1
+
+    # Restore context
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
+
+    return failed
+
+
+def _test_export_offset_negative(my_predbat):
+    """Test rate_replicate with metric_future_rate_offset_export and negative clamping."""
+    failed = 0
+
+    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.forecast_minutes = 2880
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.metric_future_rate_offset_export = -8.0  # Subtract 8p from export rates
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+
+    # Create base export rates
+    rates = {}
+    for minute in range(0, 1440):
+        rates[minute] = 5.0  # Low export rate
+
+    # Run rate_replicate for export
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=False, is_gas=False)
+
+    # Check that offset results in 0 (5 - 8 = -3, clamped to 0)
+    next_day_minute = 1440 + 600
+    if next_day_minute in result:
+        if result[next_day_minute] == 0.0:
+            print(f"  ✓ Export rate with offset clamped to 0: {result[next_day_minute]}")
+            if result_replicated.get(next_day_minute) == "offset":
+                print(f"  ✓ Replicated type correctly marked as 'offset'")
+            else:
+                print(f"  ✗ ERROR: Should be marked as 'offset', got {result_replicated.get(next_day_minute)}")
+                failed |= 1
+        else:
+            print(f"  ✗ ERROR: Rate should be 0.0 (clamped), got {result[next_day_minute]}")
+            failed |= 1
+
+    # Test with higher rate that doesn't go negative
+    rates2 = {}
+    for minute in range(0, 1440):
+        rates2[minute] = 15.0
+
+    result2, result_replicated2 = my_predbat.rate_replicate(rates2, is_import=False, is_gas=False)
+    expected_rate = 15.0 - 8.0
+    if next_day_minute in result2 and result2[next_day_minute] == expected_rate:
+        print(f"  ✓ Export rate with offset (not clamped): {result2[next_day_minute]}")
+    else:
+        print(f"  ✗ ERROR: Rate should be {expected_rate}, got {result2.get(next_day_minute)}")
+        failed |= 1
+
+    # Restore context
+    my_predbat.metric_future_rate_offset_export = 0
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24*60
+
+    return failed
+
+
+def _test_gas_rates(my_predbat):
+    """Test rate_replicate with is_gas=True to ensure gas rates are handled correctly."""
+    failed = 0
+
+    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.forecast_minutes = 2880
+    my_predbat.metric_future_rate_offset_import = 3.0
+    my_predbat.metric_future_rate_offset_export = 2.0
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+
+    # Create base gas rates
+    rates = {}
+    for minute in range(0, 1440):
+        rates[minute] = 10.0
+
+    # Run rate_replicate for gas (is_import=True, is_gas=True)
+    result, result_replicated = my_predbat.rate_replicate(rates, is_import=True, is_gas=True)
+
+    # Check that gas rates DO get import offset when is_import=True
+    # (the is_gas flag only prevents export offset, not import offset)
+    next_day_minute = 1440 + 600
+    expected_rate = 10.0 + 3.0  # Import offset is applied
+    if next_day_minute in result:
+        if result[next_day_minute] == expected_rate:
+            print(f"  ✓ Gas import rates get import offset applied: {result[next_day_minute]}")
+        else:
+            print(f"  ✗ ERROR: Gas rate should be {expected_rate} (with import offset), got {result[next_day_minute]}")
+            failed |= 1
+
+    # Test export gas rates - should NOT get export offset due to is_gas check
+    rates2 = {}
+    for minute in range(0, 1440):
+        rates2[minute] = 10.0
+
+    result2, result_replicated2 = my_predbat.rate_replicate(rates2, is_import=False, is_gas=True)
+
+    # Export gas rates should replicate WITHOUT export offset (is_gas bypasses export offset)
+    if next_day_minute in result2:
+        if result2[next_day_minute] == 10.0:
+            print(f"  ✓ Gas export rates replicate without export offset: {result2[next_day_minute]}")
+        else:
+            print(f"  ✗ ERROR: Gas export rate should be 10.0 (no export offset due to is_gas), got {result2[next_day_minute]}")
+            failed |= 1
+
+    # Restore context
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.metric_future_rate_offset_export = 0
     my_predbat.now_utc = datetime.now(my_predbat.local_tz)
     my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
