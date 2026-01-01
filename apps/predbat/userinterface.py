@@ -123,7 +123,6 @@ class UserInterface:
                 except KeyError:
                     if not quiet:
                         self.log("Warn: can not resolve {} value {}".format(arg, value))
-                        self.record_status("Warn: can not resolve {} value {}".format(arg, value), had_errors=True)
                     value = default
 
         # Resolve join list by name

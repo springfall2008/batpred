@@ -605,7 +605,7 @@ class PredHeat:
             self.reset()
         except Exception as e:
             self.log("ERROR: Exception raised {}".format(e))
-            self.record_status("ERROR: Exception raised {}".format(e))
+            self.record_status("ERROR: Exception raised {}".format(e), had_errors=True)
             raise e
 
         run_every = self.get_arg("run_every", 5, domain="predheat") * 60
@@ -639,7 +639,7 @@ class PredHeat:
                 self.update_pred(scheduled=False)
             except Exception as e:
                 self.log("ERROR: Exception raised {}".format(e))
-                self.record_status("ERROR: Exception raised {}".format(e))
+                self.record_status("ERROR: Exception raised {}".format(e), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False
@@ -659,7 +659,7 @@ class PredHeat:
                 self.update_pred(scheduled=True)
             except Exception as e:
                 self.log("ERROR: Exception raised {}".format(e))
-                self.record_status("ERROR: Exception raised {}".format(e))
+                self.record_status("ERROR: Exception raised {}".format(e), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False
