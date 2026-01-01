@@ -1102,7 +1102,7 @@ class OctopusAPI(ComponentBase):
             standing = self.get_octopus_rates_direct(tariff, standingCharge=True)
 
             rates_stamp = []
-            for minute in range(0, 60 * 24 * 2, self.plan_interval_minutes):
+            for minute in range(-24 * 60, 60 * 24 * 2, self.plan_interval_minutes):
                 time_now = self.midnight_utc + timedelta(minutes=minute)
                 rate_value = rates.get(minute, None)
                 if rate_value is not None:

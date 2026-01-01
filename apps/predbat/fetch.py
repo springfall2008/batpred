@@ -1052,11 +1052,14 @@ class Fetch:
                 if rate_io and (minute_mod in rate_io) and rate_io[minute_mod]:
                     # Dont replicate Intelligent rates into the next day as it will be different
                     rate_offset = self.rate_max
+                    using_last = False
                 elif minute_mod in rates:
                     rate_offset = rates[minute_mod]
+                    using_last = False
                 else:
                     # Missing rate within 24 hours - fill with dummy last rate
                     rate_offset = rate_last
+                    using_last = True
 
                 # Only offset once not every day
                 futurerate_adjust_import = self.get_arg("futurerate_adjust_import", False)
@@ -1065,9 +1068,11 @@ class Fetch:
                     if is_import and futurerate_adjust_import and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
                         rate_offset = self.future_energy_rates_import[minute]
                         adjust_type = "future"
+                        using_last = False
                     elif (not is_import) and (not is_gas) and futurerate_adjust_export and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
                         rate_offset = max(self.future_energy_rates_export[minute], 0)
                         adjust_type = "future"
+                        using_last = False
                     elif is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
                         if self.metric_future_rate_offset_import:
@@ -1081,7 +1086,7 @@ class Fetch:
 
                 # Don't add rates if we haven't seen any real rates yet
                 # This prevents filling negative minutes with invalid fallback values
-                if rate_last_valid:
+                if rate_last_valid or not using_last:
                     rates[minute] = rate_offset
                     replicated_rates[minute] = adjust_type
             else:
@@ -1091,12 +1096,6 @@ class Fetch:
                     rate_first = rate_last
                     rate_first_valid = True
             minute += 1
-
-        # Backfill any missing rates at start and end
-        for minute in range(-24 * 60, self.forecast_minutes + 48 * 60):
-            if minute not in rates:
-                rates[minute] = rate_first
-                replicated_rates[minute] = "copy"
 
         return rates, replicated_rates
 
