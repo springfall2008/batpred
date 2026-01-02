@@ -1716,13 +1716,13 @@ class Output:
             hour_load += load_energy
 
             if self.rate_import:
-                hour_cost += self.rate_import[minute] * energy_import
-                hour_cost_import += self.rate_import[minute] * energy_import
-                hour_cost_car += self.rate_import[minute] * energy_car
+                hour_cost += self.rate_import.get(minute, 0) * energy_import
+                hour_cost_import += self.rate_import.get(minute, 0) * energy_import
+                hour_cost_car += self.rate_import.get(minute, 0) * energy_car
 
             if self.rate_export:
-                hour_cost -= self.rate_export[minute] * energy_export
-                hour_cost_export -= self.rate_export[minute] * energy_export
+                hour_cost -= self.rate_export.get(minute, 0) * energy_export
+                hour_cost_export -= self.rate_export.get(minute, 0) * energy_export
 
             if self.carbon_enable:
                 hour_carbon_g += self.carbon_history.get(minute_back, 0) * energy_import
@@ -1774,16 +1774,16 @@ class Output:
             day_import += energy
             day_car += car_energy
             if self.rate_import:
-                day_cost += self.rate_import[minute] * energy
-                day_cost_import += self.rate_import[minute] * energy
-                day_cost_nosc += self.rate_import[minute] * energy
-                day_cost_car += self.rate_import[minute] * car_energy
+                day_cost += self.rate_import.get(minute, 0) * energy
+                day_cost_import += self.rate_import.get(minute, 0) * energy
+                day_cost_nosc += self.rate_import.get(minute, 0) * energy
+                day_cost_car += self.rate_import.get(minute, 0) * car_energy
 
             day_export += energy_export
             if self.rate_export:
-                day_cost -= self.rate_export[minute] * energy_export
-                day_cost_nosc -= self.rate_export[minute] * energy_export
-                day_cost_export -= self.rate_export[minute] * energy_export
+                day_cost -= self.rate_export.get(minute, 0) * energy_export
+                day_cost_nosc -= self.rate_export.get(minute, 0) * energy_export
+                day_cost_export -= self.rate_export.get(minute, 0) * energy_export
 
             if self.carbon_enable:
                 carbon_g += self.carbon_history.get(minute_back, 0) * energy
