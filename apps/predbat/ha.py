@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import os
-from datetime import timedelta, datetime, timezone
+from datetime import timedelta, datetime
 import asyncio
 from aiohttp import ClientSession, WSMsgType
 import json
