@@ -711,7 +711,11 @@ class Fetch:
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n]:
                         self.car_charging_slots[car_n] = self.load_octopus_slots(self.octopus_slots, self.octopus_intelligent_consider_full)
                         if self.car_charging_slots[car_n]:
-                            self.log("Car {} using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(car_n, self.car_charging_limit[car_n], self.car_charging_plan_time[car_n], self.car_charging_battery_size[car_n]))
+                            self.log(
+                                "Car {} using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(
+                                    car_n, self.car_charging_limit[car_n], self.car_charging_plan_time[car_n], self.car_charging_battery_size[car_n]
+                                )
+                            )
                             self.car_charging_planned[car_n] = True
                         else:
                             self.log("Car {} using Octopus Intelligent, no charging is planned".format(car_n))
