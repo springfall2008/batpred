@@ -275,13 +275,13 @@ class HAInterface(ComponentBase):
         if self.ha_key:
             self.log("Info: Starting HA interface")
             self.websocket_active = True
-            
+
             # Create async event and start bridge thread
             self.ws_async_event = asyncio.Event()
             self.ws_event_loop = asyncio.get_event_loop()
             self.ws_bridge_thread = threading.Thread(target=self.bridge_event, args=(self.ws_event_loop,), daemon=True)
             self.ws_bridge_thread.start()
-            
+
             await self.socketLoop()
         else:
             self.log("Info: Starting Dummy HA interface")
@@ -332,7 +332,7 @@ class HAInterface(ComponentBase):
         # Add to command queue
         with self.ws_pending_lock:
             self.ws_command_queue.append((domain, service, service_data, return_response, event, result_holder))
-        
+
         # Signal bridge thread to wake socketLoop
         self.ws_sync_event.set()
 
@@ -343,16 +343,16 @@ class HAInterface(ComponentBase):
         if result_holder.get("error"):
             self.log("Warn: Service call {}/{} failed: {}".format(domain, service, result_holder["error"]))
             return None
-        
+
         success = result_holder.get("success", False)
         if not success:
             self.log("Warn: Service call {}/{} data {} failed".format(domain, service, service_data))
             return None
-        
+
         # Return response data if requested
         if return_response:
             return result_holder.get("response")
-        
+
         return None
 
     async def socketLoop(self):
@@ -451,7 +451,7 @@ class HAInterface(ComponentBase):
                                                         result_holder["response"] = data.get("result", {}).get("response", None)
                                                         result_holder["error"] = None
                                                         request_info["event"].set()
-                                            
+
                                             success = data.get("success", False)
                                             if not success:
                                                 self.log("Warn: Web Socket result failed {}".format(data))
@@ -478,32 +478,32 @@ class HAInterface(ComponentBase):
                             elif message and message.type == WSMsgType.ERROR:
                                 error_count += 1
                                 break
-                            
+
                             # Process queued commands (runs even if no message received)
                             while True:
                                 command = None
                                 with self.ws_pending_lock:
                                     if self.ws_command_queue:
                                         command = self.ws_command_queue.pop(0)
-                                
+
                                 if not command:
                                     break
-                                
+
                                 domain, service, service_data, return_response, event, result_holder = command
-                                
+
                                 # Send command with current sid
                                 await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
-                                
+
                                 # Track pending request
                                 with self.ws_pending_lock:
                                     self.ws_pending_requests[sid] = {"event": event, "result_holder": result_holder, "timestamp": time.time()}
-                                
+
                                 sid += 1
-                            
+
                             # Check for command queue updates via async event (non-blocking)
                             if self.ws_async_event and self.ws_async_event.is_set():
                                 self.ws_async_event.clear()
-                            
+
                             # Periodic timeout cleanup (every 10 seconds)
                             current_time = time.time()
                             if current_time - last_timeout_check > 10.0:
@@ -513,7 +513,7 @@ class HAInterface(ComponentBase):
                                     for req_id, req_info in list(self.ws_pending_requests.items()):
                                         if current_time - req_info["timestamp"] > 30.0:
                                             timed_out.append(req_id)
-                                    
+
                                     for req_id in timed_out:
                                         req_info = self.ws_pending_requests.pop(req_id)
                                         req_info["result_holder"]["error"] = "timeout"
@@ -525,7 +525,7 @@ class HAInterface(ComponentBase):
                     self.log("Error: Web Socket exception in startup: {}".format(e))
                     self.log("Error: " + traceback.format_exc())
                     error_count += 1
-                
+
                 # Fail all pending requests on connection drop
                 with self.ws_pending_lock:
                     for req_id, req_info in list(self.ws_pending_requests.items()):

@@ -8,9 +8,7 @@ Tests cover:
 - set_state_external() with CONFIG_ITEMS and watch list triggers
 """
 
-from unittest.mock import patch, MagicMock, AsyncMock
-from aiohttp import WSMsgType
-import json
+from unittest.mock import patch
 
 from tests.test_hainterface_common import MockBase, create_ha_interface
 from tests.test_infra import run_async
@@ -106,7 +104,6 @@ def test_hainterface_async_call_service_basic(my_predbat=None):
 
     # Initialize queue infrastructure (normally done in initialize())
     import threading
-    import asyncio
     import time
     ha_interface.ws_command_queue = []
     ha_interface.ws_pending_requests = {}
@@ -119,29 +116,29 @@ def test_hainterface_async_call_service_basic(my_predbat=None):
             with ha_interface.ws_pending_lock:
                 if ha_interface.ws_command_queue:
                     domain, service, service_data, return_response, event, result_holder = ha_interface.ws_command_queue[0]
-                    
+
                     # Verify command details
                     if domain == "switch" and service == "turn_on" and service_data.get("entity_id") == "switch.test":
                         print("✓ Command queued correctly")
-                    
+
                     # Simulate socketLoop processing
                     result_holder["success"] = True
                     result_holder["response"] = None
                     result_holder["error"] = None
                     event.set()
-        
+
         processor_thread = threading.Thread(target=background_processor, daemon=True)
         processor_thread.start()
-        
+
         # Call the method (will block on event.wait)
         result = await ha_interface.async_call_service_websocket_command("switch", "turn_on", {"entity_id": "switch.test"})
-        
+
         processor_thread.join(timeout=1.0)
         return result, 0
-    
+
     result, test_failed = run_async(test_command())
     failed += test_failed
-    
+
     if test_failed == 0:
         print("✓ Command processed successfully")
 
@@ -158,7 +155,6 @@ def test_hainterface_async_call_service_return_response(my_predbat=None):
 
     # Initialize queue infrastructure
     import threading
-    import asyncio
     import time
     ha_interface.ws_command_queue = []
     ha_interface.ws_pending_requests = {}
@@ -167,44 +163,44 @@ def test_hainterface_async_call_service_return_response(my_predbat=None):
     async def test_command():
         # Start a background thread to simulate socketLoop processing
         result_data = {"result": None}
-        
+
         def background_processor():
             # Wait a bit for command to be queued
             time.sleep(0.1)
-            
+
             # Process the queued command
             with ha_interface.ws_pending_lock:
                 if ha_interface.ws_command_queue:
                     domain, service, service_data, return_response, event, result_holder = ha_interface.ws_command_queue[0]
-                    
+
                     # Verify return_response removed from service_data
                     if "return_response" not in service_data and return_response:
                         result_data["checks_passed"] = True
-                    
+
                     # Simulate successful response
                     result_holder["success"] = True
                     result_holder["response"] = "test_value"
                     result_holder["error"] = None
                     event.set()
-        
+
         processor_thread = threading.Thread(target=background_processor, daemon=True)
         processor_thread.start()
-        
+
         # Call the method (will block on event.wait)
         result = await ha_interface.async_call_service_websocket_command("switch", "turn_on", {"entity_id": "switch.test", "return_response": True})
-        
+
         # Wait for background thread
         processor_thread.join(timeout=2.0)
-        
+
         if result_data.get("checks_passed"):
             print("✓ return_response removed from service_data")
             print("✓ return_response flag set correctly")
-        
+
         return result, 0
-    
+
     result, test_failed = run_async(test_command())
     failed += test_failed
-    
+
     if test_failed == 0 and result == "test_value":
         print("✓ Response returned correctly")
     elif test_failed == 0:
@@ -224,7 +220,6 @@ def test_hainterface_async_call_service_failed(my_predbat=None):
 
     # Initialize queue infrastructure
     import threading
-    import asyncio
     import time
     ha_interface.ws_command_queue = []
     ha_interface.ws_pending_requests = {}
@@ -237,25 +232,25 @@ def test_hainterface_async_call_service_failed(my_predbat=None):
             with ha_interface.ws_pending_lock:
                 if ha_interface.ws_command_queue:
                     domain, service, service_data, return_response, event, result_holder = ha_interface.ws_command_queue[0]
-                    
+
                     # Simulate socketLoop returning failure
                     result_holder["success"] = False
                     result_holder["response"] = None
                     result_holder["error"] = None
                     event.set()
-        
+
         processor_thread = threading.Thread(target=background_processor, daemon=True)
         processor_thread.start()
-        
+
         # Call the method (will block on event.wait)
         result = await ha_interface.async_call_service_websocket_command("switch", "turn_on", {"entity_id": "switch.test"})
-        
+
         processor_thread.join(timeout=1.0)
         return result, 0
-    
+
     result, test_failed = run_async(test_command())
     failed += test_failed
-    
+
     # Should log warning
     if not any("Service call" in log and "failed" in log for log in mock_base.log_messages):
         print("ERROR: Should log warning on failure")
@@ -282,7 +277,6 @@ def test_hainterface_async_call_service_exception(my_predbat=None):
 
     # Initialize queue infrastructure
     import threading
-    import asyncio
     ha_interface.ws_command_queue = []
     ha_interface.ws_pending_requests = {}
     ha_interface.ws_pending_lock = threading.Lock()
@@ -291,16 +285,16 @@ def test_hainterface_async_call_service_exception(my_predbat=None):
     original_wait = threading.Event.wait
     def mock_wait(self, timeout=None):
         return False  # Simulate timeout
-    
+
     async def test_command():
         with patch.object(threading.Event, 'wait', mock_wait):
             # This will timeout immediately
             result = await ha_interface.async_call_service_websocket_command("switch", "turn_on", {"entity_id": "switch.test"})
             return result, 0
-    
+
     result, test_failed = run_async(test_command())
     failed += test_failed
-    
+
     # Should log warning about failure (timeout means no success in result_holder)
     if not any("Service call" in log and "failed" in log for log in mock_base.log_messages):
         print("ERROR: Should log warning on timeout")
@@ -327,7 +321,6 @@ def test_hainterface_async_call_service_error_limit(my_predbat=None):
 
     # Initialize queue infrastructure
     import threading
-    import asyncio
     import time
     ha_interface.ws_command_queue = []
     ha_interface.ws_pending_requests = {}
@@ -340,25 +333,25 @@ def test_hainterface_async_call_service_error_limit(my_predbat=None):
             with ha_interface.ws_pending_lock:
                 if ha_interface.ws_command_queue:
                     domain, service, service_data, return_response, event, result_holder = ha_interface.ws_command_queue[0]
-                    
+
                     # Simulate socketLoop returning error (e.g., connection_lost)
                     result_holder["success"] = False
                     result_holder["response"] = None
                     result_holder["error"] = "connection_lost"
                     event.set()
-        
+
         processor_thread = threading.Thread(target=background_processor, daemon=True)
         processor_thread.start()
-        
+
         # Call the method (will block on event.wait)
         result = await ha_interface.async_call_service_websocket_command("switch", "turn_on", {"entity_id": "switch.test"})
-        
+
         processor_thread.join(timeout=1.0)
         return result, 0
-    
+
     result, test_failed = run_async(test_command())
     failed += test_failed
-    
+
     # Should log warning about error
     if not any("Service call" in log and "failed" in log for log in mock_base.log_messages):
         print("ERROR: Should log warning on error")
