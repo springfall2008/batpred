@@ -306,7 +306,7 @@ class HAInterface(ComponentBase):
         Bridge sync event to async event loop (runs in separate thread)
         """
         while not self.api_stop:
-            self.ws_sync_event.wait()
+            self.ws_sync_event.wait(timeout=1.0)
             self.ws_sync_event.clear()
             if self.ws_event_loop and self.ws_async_event:
                 loop.call_soon_threadsafe(self.ws_async_event.set)
@@ -336,12 +336,17 @@ class HAInterface(ComponentBase):
         # Signal bridge thread to wake socketLoop
         self.ws_sync_event.set()
 
-        # Wait for response with 30s timeout
-        event.wait(timeout=30.0)
+        # Wait for response with 2 minute timeout
+        event.wait(timeout=2*60)
 
         # Extract result
         if result_holder.get("error"):
             self.log("Warn: Service call {}/{} failed: {}".format(domain, service, result_holder["error"]))
+            return None
+        
+        # Check for timeout (neither success nor error was set)
+        if result_holder.get("success") is None and not result_holder.get("error"):
+            self.log("Warn: Service call {}/{} timed out....".format(domain, service))
             return None
         
         success = result_holder.get("success", False)
@@ -492,26 +497,33 @@ class HAInterface(ComponentBase):
                                 domain, service, service_data, return_response, event, result_holder = command
                                 
                                 # Send command with current sid
-                                await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
-                                
-                                # Track pending request
-                                with self.ws_pending_lock:
-                                    self.ws_pending_requests[sid] = {"event": event, "result_holder": result_holder, "timestamp": time.time()}
-                                
-                                sid += 1
+                                try:
+                                    await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+                                    
+                                    # Track pending request (only if send succeeded)
+                                    with self.ws_pending_lock:
+                                        self.ws_pending_requests[sid] = {"event": event, "result_holder": result_holder, "timestamp": time.time()}
+                                    
+                                    sid += 1
+                                except Exception as e:
+                                    # Failed to send - notify caller immediately
+                                    self.log("Warn: Failed to send service call {}/{}: {}".format(domain, service, e))
+                                    result_holder["error"] = "send_failed: {}".format(e)
+                                    result_holder["success"] = False
+                                    event.set()
                             
                             # Check for command queue updates via async event (non-blocking)
                             if self.ws_async_event and self.ws_async_event.is_set():
                                 self.ws_async_event.clear()
                             
-                            # Periodic timeout cleanup (every 10 seconds)
+                            # Periodic timeout cleanup (every 10 seconds), check for requests older than 2 minutes
                             current_time = time.time()
                             if current_time - last_timeout_check > 10.0:
                                 last_timeout_check = current_time
                                 with self.ws_pending_lock:
                                     timed_out = []
                                     for req_id, req_info in list(self.ws_pending_requests.items()):
-                                        if current_time - req_info["timestamp"] > 30.0:
+                                        if current_time - req_info["timestamp"] > 2*60.0:
                                             timed_out.append(req_id)
                                     
                                     for req_id in timed_out:

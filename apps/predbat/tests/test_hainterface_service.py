@@ -301,8 +301,8 @@ def test_hainterface_async_call_service_exception(my_predbat=None):
     result, test_failed = run_async(test_command())
     failed += test_failed
     
-    # Should log warning about failure (timeout means no success in result_holder)
-    if not any("Service call" in log and "failed" in log for log in mock_base.log_messages):
+    # Should log warning about timeout
+    if not any("Service call" in log and "timed out" in log for log in mock_base.log_messages):
         print("ERROR: Should log warning on timeout")
         failed += 1
     else:
