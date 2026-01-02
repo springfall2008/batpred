@@ -234,6 +234,15 @@ class HAInterface(ComponentBase):
         self.state_data = {}
         self.slug = None
 
+        # Websocket command queue infrastructure
+        self.ws_command_queue = []
+        self.ws_pending_requests = {}
+        self.ws_pending_lock = threading.Lock()
+        self.ws_sync_event = threading.Event()
+        self.ws_async_event = None  # Created in async context
+        self.ws_event_loop = None
+        self.ws_bridge_thread = None
+
         if not self.ha_key:
             if not (self.db_enable and self.db_primary):
                 self.log("Error: ha_key or SUPERVISOR_TOKEN not found, you must set ha_url/ha_key in apps.yaml")
@@ -266,6 +275,13 @@ class HAInterface(ComponentBase):
         if self.ha_key:
             self.log("Info: Starting HA interface")
             self.websocket_active = True
+            
+            # Create async event and start bridge thread
+            self.ws_async_event = asyncio.Event()
+            self.ws_event_loop = asyncio.get_event_loop()
+            self.ws_bridge_thread = threading.Thread(target=self.bridge_event, args=(self.ws_event_loop,), daemon=True)
+            self.ws_bridge_thread.start()
+            
             await self.socketLoop()
         else:
             self.log("Info: Starting Dummy HA interface")
@@ -285,6 +301,16 @@ class HAInterface(ComponentBase):
         """
         return self.slug
 
+    def bridge_event(self, loop):
+        """
+        Bridge sync event to async event loop (runs in separate thread)
+        """
+        while not self.api_stop:
+            self.ws_sync_event.wait()
+            self.ws_sync_event.clear()
+            if self.ws_event_loop and self.ws_async_event:
+                loop.call_soon_threadsafe(self.ws_async_event.set)
+
     def call_service_websocket_command(self, domain, service, data):
         """
         Call a service via the web socket interface
@@ -293,58 +319,41 @@ class HAInterface(ComponentBase):
 
     async def async_call_service_websocket_command(self, domain, service, service_data):
         """
-        Call a service via the web socket interface
+        Call a service via the web socket interface (queued via socketLoop)
         """
-        url = "{}/api/websocket".format(self.ha_url)
-        response = None
-        # self.log("Info: Web socket service {}/{} socket for url {}".format(domain, service, url))
-
         return_response = service_data.get("return_response", False)
         if "return_response" in service_data:
             del service_data["return_response"]
 
-        async with ClientSession() as session:
-            try:
-                async with session.ws_connect(url) as websocket:
-                    await websocket.send_json({"type": "auth", "access_token": self.ha_key})
-                    id = 1
-                    await websocket.send_json({"id": id, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+        # Create event and result holder for this request
+        event = threading.Event()
+        result_holder = {"response": None, "success": None, "error": None}
 
-                    async for message in websocket:
-                        if self.api_stop:
-                            self.log("Info: Web socket stopping")
-                            break
+        # Add to command queue
+        with self.ws_pending_lock:
+            self.ws_command_queue.append((domain, service, service_data, return_response, event, result_holder))
+        
+        # Signal bridge thread to wake socketLoop
+        self.ws_sync_event.set()
 
-                        if message.type == WSMsgType.TEXT:
-                            try:
-                                data = json.loads(message.data)
-                                if data:
-                                    message_type = data.get("type", "")
-                                    if message_type == "result":
-                                        response = data.get("result", {}).get("response", None)
-                                        success = data.get("success", False)
-                                        self.api_errors = 0
+        # Wait for response with 30s timeout
+        event.wait(timeout=30.0)
 
-                                        if not success:
-                                            self.log("Warn: Service call {}/{} data {} failed with response {}".format(domain, service, service_data, response))
-                                        break
-
-                            except Exception as e:
-                                self.log("Error: Web Socket exception in update loop: {}".format(e))
-                                self.log("Error: " + traceback.format_exc())
-                                self.api_errors += 1
-                                break
-
-            except Exception as e:
-                self.log("Error: Web Socket exception in startup: {}".format(e))
-                self.log("Error: " + traceback.format_exc())
-                self.api_errors += 1
-
-        if self.api_errors >= 10:
-            self.log("Error: Too many API errors, stopping")
-            self.fatal_error_occurred()
-
-        return response
+        # Extract result
+        if result_holder.get("error"):
+            self.log("Warn: Service call {}/{} failed: {}".format(domain, service, result_holder["error"]))
+            return None
+        
+        success = result_holder.get("success", False)
+        if not success:
+            self.log("Warn: Service call {}/{} data {} failed".format(domain, service, service_data))
+            return None
+        
+        # Return response data if requested
+        if return_response:
+            return result_holder.get("response")
+        
+        return None
 
     async def socketLoop(self):
         """
@@ -393,12 +402,18 @@ class HAInterface(ComponentBase):
                         self.base.update_pending = True  # Force an update when web-socket reconnects
                         self.api_started = True
 
-                        async for message in websocket:
-                            if self.api_stop or self.fatal_error:
-                                self.log("Info: Web socket stopping")
-                                break
+                        # Timeout tracking
+                        last_timeout_check = time.time()
 
-                            if message.type == WSMsgType.TEXT:
+                        while not self.api_stop and not self.fatal_error:
+                            # Check for incoming messages with timeout so we can process commands even if no messages arrive
+                            try:
+                                message = await asyncio.wait_for(websocket.receive(), timeout=0.1)
+                            except asyncio.TimeoutError:
+                                # No message received, but we can still process commands
+                                message = None
+
+                            if message and message.type == WSMsgType.TEXT:
                                 try:
                                     data = json.loads(message.data)
                                     if data:
@@ -425,13 +440,21 @@ class HAInterface(ComponentBase):
                                             else:
                                                 self.log("Info: Web Socket unknown message {}".format(data))
                                         elif message_type == "result":
+                                            # Route result to waiting thread
+                                            result_id = data.get("id")
+                                            if result_id:
+                                                with self.ws_pending_lock:
+                                                    if result_id in self.ws_pending_requests:
+                                                        request_info = self.ws_pending_requests.pop(result_id)
+                                                        result_holder = request_info["result_holder"]
+                                                        result_holder["success"] = data.get("success", False)
+                                                        result_holder["response"] = data.get("result", {}).get("response", None)
+                                                        result_holder["error"] = None
+                                                        request_info["event"].set()
+                                            
                                             success = data.get("success", False)
                                             if not success:
                                                 self.log("Warn: Web Socket result failed {}".format(data))
-                                            # result = data.get("result", {})
-                                            # resultid = data.get("id", None)
-                                            # if result:
-                                            #    self.log("Info: Web Socket result id {} data {}".format(resultid, result))
                                         elif message_type == "auth_required":
                                             pass
                                         elif message_type == "auth_ok":
@@ -443,25 +466,76 @@ class HAInterface(ComponentBase):
                                         else:
                                             self.log("Info: Web Socket unknown message {}".format(data))
 
-                                        self.update_success_timestamp()
-
                                 except Exception as e:
                                     self.log("Error: Web Socket exception in update loop: {}".format(e))
                                     self.log("Error: " + traceback.format_exc())
                                     error_count += 1
                                     break
 
-                            elif message.type == WSMsgType.CLOSED:
+                            elif message and message.type == WSMsgType.CLOSED:
                                 error_count += 1
                                 break
-                            elif message.type == WSMsgType.ERROR:
+                            elif message and message.type == WSMsgType.ERROR:
                                 error_count += 1
                                 break
+                            
+                            # Process queued commands (runs even if no message received)
+                            while True:
+                                command = None
+                                with self.ws_pending_lock:
+                                    if self.ws_command_queue:
+                                        command = self.ws_command_queue.pop(0)
+                                
+                                if not command:
+                                    break
+                                
+                                domain, service, service_data, return_response, event, result_holder = command
+                                
+                                # Send command with current sid
+                                await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+                                
+                                # Track pending request
+                                with self.ws_pending_lock:
+                                    self.ws_pending_requests[sid] = {"event": event, "result_holder": result_holder, "timestamp": time.time()}
+                                
+                                sid += 1
+                            
+                            # Check for command queue updates via async event (non-blocking)
+                            if self.ws_async_event and self.ws_async_event.is_set():
+                                self.ws_async_event.clear()
+                            
+                            # Periodic timeout cleanup (every 10 seconds)
+                            current_time = time.time()
+                            if current_time - last_timeout_check > 10.0:
+                                last_timeout_check = current_time
+                                with self.ws_pending_lock:
+                                    timed_out = []
+                                    for req_id, req_info in list(self.ws_pending_requests.items()):
+                                        if current_time - req_info["timestamp"] > 30.0:
+                                            timed_out.append(req_id)
+                                    
+                                    for req_id in timed_out:
+                                        req_info = self.ws_pending_requests.pop(req_id)
+                                        req_info["result_holder"]["error"] = "timeout"
+                                        req_info["result_holder"]["success"] = False
+                                        req_info["event"].set()
+                                        self.log("Warn: Service call timeout for request id {}".format(req_id))
 
                 except Exception as e:
                     self.log("Error: Web Socket exception in startup: {}".format(e))
                     self.log("Error: " + traceback.format_exc())
                     error_count += 1
+                
+                # Fail all pending requests on connection drop
+                with self.ws_pending_lock:
+                    for req_id, req_info in list(self.ws_pending_requests.items()):
+                        req_info["result_holder"]["error"] = "connection_lost"
+                        req_info["result_holder"]["success"] = False
+                        req_info["event"].set()
+                    self.ws_pending_requests.clear()
+                    if self.ws_command_queue:
+                        self.log("Warn: {} queued commands dropped due to connection loss".format(len(self.ws_command_queue)))
+                        self.ws_command_queue.clear()
 
             if not self.api_stop:
                 self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds - error count {}".format(error_count))

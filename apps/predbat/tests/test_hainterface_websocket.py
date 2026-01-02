@@ -42,11 +42,18 @@ def test_hainterface_socketloop_auth_ok(my_predbat=None):
         create_mock_websocket_message(WSMsgType.CLOSED, None),
     ]
 
-    async def mock_aiter(ws):
-        for msg in messages:
-            yield msg
+    # Mock receive() method instead of __aiter__
+    message_index = [0]
+    async def mock_receive():
+        if message_index[0] < len(messages):
+            msg = messages[message_index[0]]
+            message_index[0] += 1
+            return msg
+        # If out of messages, trigger api_stop
+        ha_interface.api_stop = True
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
 
-    mock_ws.__aiter__ = lambda self: mock_aiter(mock_ws)
+    mock_ws.receive = mock_receive
 
     # Track sleep calls - set api_stop on first sleep (reconnect attempt)
     async def mock_sleep(delay):
@@ -122,12 +129,18 @@ def test_hainterface_socketloop_auth_invalid(my_predbat=None):
         create_mock_websocket_message(WSMsgType.TEXT, {"type": "auth_invalid"}),
     ]
 
-    async def mock_aiter(ws):
-        for msg in messages:
-            yield msg
-        # Auth_invalid causes exception which breaks the loop, so no need for final message
+    # Mock receive() method instead of __aiter__
+    message_index = [0]
+    async def mock_receive():
+        if message_index[0] < len(messages):
+            msg = messages[message_index[0]]
+            message_index[0] += 1
+            return msg
+        # Auth_invalid causes exception which breaks the loop
+        ha_interface.api_stop = True
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
 
-    mock_ws.__aiter__ = lambda self: mock_aiter(mock_ws)
+    mock_ws.receive = mock_receive
 
     async def mock_sleep(delay):
         ha_interface.api_stop = True
@@ -190,13 +203,17 @@ def test_hainterface_socketloop_state_changed(my_predbat=None):
         }),
     ]
 
-    async def mock_aiter(ws):
-        for msg in messages:
-            yield msg
+    # Mock receive() method instead of __aiter__
+    message_index = [0]
+    async def mock_receive():
+        if message_index[0] < len(messages):
+            msg = messages[message_index[0]]
+            message_index[0] += 1
+            return msg
         ha_interface.api_stop = True
-        yield create_mock_websocket_message(WSMsgType.TEXT, {"type": "result", "success": True})
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
 
-    mock_ws.__aiter__ = lambda self: mock_aiter(mock_ws)
+    mock_ws.receive = mock_receive
 
     async def mock_sleep(delay):
         ha_interface.api_stop = True
@@ -273,13 +290,17 @@ def test_hainterface_socketloop_call_service(my_predbat=None):
         }),
     ]
 
-    async def mock_aiter(ws):
-        for msg in messages:
-            yield msg
+    # Mock receive() method instead of __aiter__
+    message_index = [0]
+    async def mock_receive():
+        if message_index[0] < len(messages):
+            msg = messages[message_index[0]]
+            message_index[0] += 1
+            return msg
         ha_interface.api_stop = True
-        yield create_mock_websocket_message(WSMsgType.TEXT, {"type": "result", "success": True})
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
 
-    mock_ws.__aiter__ = lambda self: mock_aiter(mock_ws)
+    mock_ws.receive = mock_receive
 
     async def mock_sleep(delay):
         ha_interface.api_stop = True
@@ -333,14 +354,17 @@ def test_hainterface_socketloop_result_failed(my_predbat=None):
         }),
     ]
 
-    async def mock_aiter(ws):
-        for msg in messages:
-            yield msg
-        # Set api_stop then send final message to trigger the check
+    # Mock receive() method instead of __aiter__
+    message_index = [0]
+    async def mock_receive():
+        if message_index[0] < len(messages):
+            msg = messages[message_index[0]]
+            message_index[0] += 1
+            return msg
         ha_interface.api_stop = True
-        yield create_mock_websocket_message(WSMsgType.TEXT, {"type": "result", "success": True})
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
 
-    mock_ws.__aiter__ = lambda self: mock_aiter(mock_ws)
+    mock_ws.receive = mock_receive
 
     async def mock_sleep(delay):
         ha_interface.api_stop = True
@@ -382,12 +406,18 @@ def test_hainterface_socketloop_message_closed(my_predbat=None):
         create_mock_websocket_message(WSMsgType.CLOSED, None),
     ]
 
+    # Mock receive() method instead of __aiter__
     # CLOSED message breaks the loop, set api_stop to prevent reconnect
-    async def mock_aiter(ws):
-        for msg in messages:
-            yield msg
+    message_index = [0]
+    async def mock_receive():
+        if message_index[0] < len(messages):
+            msg = messages[message_index[0]]
+            message_index[0] += 1
+            return msg
+        ha_interface.api_stop = True
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
 
-    mock_ws.__aiter__ = lambda self: mock_aiter(mock_ws)
+    mock_ws.receive = mock_receive
 
     async def mock_sleep(delay):
         ha_interface.api_stop = True
@@ -429,15 +459,18 @@ def test_hainterface_socketloop_error_limit(my_predbat=None):
     for _ in range(10):
         messages.append(create_mock_websocket_message(WSMsgType.ERROR, None))
 
+    # Mock receive() method instead of __aiter__
     # After 10 ERROR messages, the loop will break and fatal_error will be set
-    # Set api_stop to prevent reconnect attempt
-    async def mock_aiter(ws):
-        for msg in messages:
-            yield msg
+    message_index = [0]
+    async def mock_receive():
+        if message_index[0] < len(messages):
+            msg = messages[message_index[0]]
+            message_index[0] += 1
+            return msg
         ha_interface.api_stop = True
-        yield create_mock_websocket_message(WSMsgType.TEXT, {"type": "result", "success": True})
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
 
-    mock_ws.__aiter__ = lambda self: mock_aiter(mock_ws)
+    mock_ws.receive = mock_receive
 
     async def mock_sleep(delay):
         ha_interface.api_stop = True
@@ -549,14 +582,18 @@ def test_hainterface_socketloop_exception_in_loop(my_predbat=None):
         create_mock_websocket_message(WSMsgType.TEXT, "invalid json"),  # Will cause JSON parse error
     ]
 
+    # Mock receive() method instead of __aiter__
     # Exception breaks the loop, set api_stop to prevent reconnect
-    async def mock_aiter(ws):
-        for msg in messages:
-            yield msg
+    message_index = [0]
+    async def mock_receive():
+        if message_index[0] < len(messages):
+            msg = messages[message_index[0]]
+            message_index[0] += 1
+            return msg
         ha_interface.api_stop = True
-        yield create_mock_websocket_message(WSMsgType.TEXT, {"type": "result", "success": True})
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
 
-    mock_ws.__aiter__ = lambda self: mock_aiter(mock_ws)
+    mock_ws.receive = mock_receive
 
     async def mock_sleep(delay):
         ha_interface.api_stop = True
