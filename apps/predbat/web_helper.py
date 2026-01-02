@@ -2217,6 +2217,200 @@ body.dark-mode .entity-value {
     return text
 
 
+def get_dashboard_collapsible_js():
+    """
+    Return JavaScript for dashboard collapsible sections
+    """
+    text = """
+<script>
+function saveSectionState() {
+    const allSections = document.querySelectorAll('.dashboard-section-content');
+    const state = {};
+    allSections.forEach(section => {
+        state[section.id] = section.classList.contains('collapsed');
+    });
+    sessionStorage.setItem('dashboardSectionState', JSON.stringify(state));
+}
+
+function restoreSectionState() {
+    const stateStr = sessionStorage.getItem('dashboardSectionState');
+    if (!stateStr) return;
+
+    try {
+        const state = JSON.parse(stateStr);
+        Object.keys(state).forEach(sectionId => {
+            const section = document.getElementById(sectionId);
+            const icon = document.getElementById('icon-' + sectionId);
+            if (section && icon) {
+                if (state[sectionId]) {
+                    section.classList.add('collapsed');
+                    icon.textContent = '+';
+                } else {
+                    section.classList.remove('collapsed');
+                    icon.textContent = '−';
+                }
+            }
+        });
+        updateExpandAllButton();
+    } catch (e) {
+        console.error('Error restoring section state:', e);
+    }
+}
+
+function updateExpandAllButton() {
+    const allSections = document.querySelectorAll('.dashboard-section-content');
+    const btn = document.getElementById('expandAllBtn');
+    if (!btn) return;
+
+    const allExpanded = Array.from(allSections).every(s => !s.classList.contains('collapsed'));
+    btn.textContent = allExpanded ? 'Collapse All' : 'Expand All';
+}
+
+function toggleDashboardSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    const icon = document.getElementById('icon-' + sectionId);
+
+    if (section.classList.contains('collapsed')) {
+        section.classList.remove('collapsed');
+        icon.textContent = '−';
+    } else {
+        section.classList.add('collapsed');
+        icon.textContent = '+';
+    }
+
+    // Save state and update the expand all button text
+    saveSectionState();
+    updateExpandAllButton();
+}
+
+function toggleAllSections() {
+    const allSections = document.querySelectorAll('.dashboard-section-content');
+    const allIcons = document.querySelectorAll('.expand-icon');
+    const btn = document.getElementById('expandAllBtn');
+
+    // Check if all are expanded or not
+    const allExpanded = Array.from(allSections).every(s => !s.classList.contains('collapsed'));
+
+    allSections.forEach((section, index) => {
+        if (allExpanded) {
+            section.classList.add('collapsed');
+            if (allIcons[index]) allIcons[index].textContent = '+';
+        } else {
+            section.classList.remove('collapsed');
+            if (allIcons[index]) allIcons[index].textContent = '−';
+        }
+    });
+
+    btn.textContent = allExpanded ? 'Expand All' : 'Collapse All';
+    saveSectionState();
+}
+
+// Restore state when page loads
+document.addEventListener('DOMContentLoaded', restoreSectionState);
+</script>
+"""
+    return text
+
+
+def get_dashboard_css():
+    """
+    Return CSS for dashboard collapsible sections
+    """
+    text = """
+<style>
+.expand-all-button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+}
+
+.expand-all-button:hover {
+    background-color: #45a049;
+}
+
+.dashboard-section {
+    margin: 0;
+    margin-bottom: 2px;
+}
+
+.dashboard-section-header {
+    cursor: pointer;
+    user-select: none;
+    padding: 6px 10px;
+    background-color: #f5f5f5;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+    display: flex;
+    align-items: center;
+    margin: 0;
+}
+
+.dashboard-section-header:hover {
+    background-color: #e8e8e8;
+}
+
+.expand-icon {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    text-align: center;
+    margin-right: 8px;
+    font-weight: bold;
+    font-size: 20px;
+    color: #4CAF50;
+}
+
+.dashboard-section-content {
+    transition: max-height 0.3s ease, opacity 0.3s ease;
+    overflow-y: auto;
+    padding-bottom: 20px;
+}
+
+.dashboard-section-content.collapsed {
+    max-height: 0;
+    opacity: 0;
+}
+
+.dashboard-section-content:not(.collapsed) {
+    max-height: 50000px;
+    opacity: 1;
+}
+
+/* Dark mode for dashboard sections */
+body.dark-mode .expand-all-button {
+    background-color: #4CAF50;
+}
+
+body.dark-mode .expand-all-button:hover {
+    background-color: #45a049;
+}
+
+body.dark-mode .dashboard-section-header {
+    background-color: #333;
+    color: #e0e0e0;
+}
+
+body.dark-mode .dashboard-section-header:hover {
+    background-color: #3a3a3a;
+}
+
+body.dark-mode .expand-icon {
+    color: #4CAF50;
+}
+</style>
+"""
+    return text
+
+
 def get_components_css():
     """
     Return CSS for components page
@@ -2244,6 +2438,10 @@ def get_components_css():
 
 .component-card.active {
     border-color: #4CAF50;
+}
+
+.component-card.error {
+    border-color: #dc3545;
 }
 
 .component-card.inactive {
@@ -2291,8 +2489,7 @@ def get_components_css():
     color: #333;
 }
 
-.restart-button {
-    background-color: #2196F3;
+.restart-button, .edit-button {
     color: white;
     border: none;
     padding: 6px 12px;
@@ -2304,6 +2501,10 @@ def get_components_css():
     margin-left: 10px;
 }
 
+.restart-button {
+    background-color: #2196F3;
+}
+
 .restart-button:hover {
     background-color: #1976D2;
 }
@@ -2311,6 +2512,14 @@ def get_components_css():
 .restart-button:disabled {
     background-color: #ccc;
     cursor: not-allowed;
+}
+
+.edit-button {
+    background-color: #FF9800;
+}
+
+.edit-button:hover {
+    background-color: #F57C00;
 }
 
 .component-details {
@@ -2429,6 +2638,10 @@ body.dark-mode .component-card.active {
     border-color: #4CAF50;
 }
 
+body.dark-mode .component-card.error {
+    border-color: #dc3545;
+}
+
 body.dark-mode .component-card.inactive {
     border-color: #666;
     background: #1e1e1e;
@@ -2515,9 +2728,12 @@ body.dark-mode .error-count-high {
     font-weight: bold;
 }
 
+body.dark-mode .restart-button, body.dark-mode .edit-button {
+    color: white;
+}
+
 body.dark-mode .restart-button {
     background-color: #2196F3;
-    color: white;
 }
 
 body.dark-mode .restart-button:hover {
@@ -2527,6 +2743,14 @@ body.dark-mode .restart-button:hover {
 body.dark-mode .restart-button:disabled {
     background-color: #555;
     color: #999;
+}
+
+body.dark-mode .edit-button {
+    background-color: #FF9800;
+}
+
+body.dark-mode .edit-button:hover {
+    background-color: #F57C00;
 }
 
 /* Responsive design */
@@ -2551,6 +2775,1294 @@ body.dark-mode .restart-button:disabled {
     }
 }
 </style>
+"""
+    return text
+
+
+def get_entity_modal_css():
+    """
+    Return CSS for entity modal popup
+    """
+    text = """
+<style>
+/* Entity Modal Styles */
+.entity-modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+.entity-modal-content {
+    background-color: #fff;
+    margin: 5% auto;
+    padding: 20px;
+    border-radius: 8px;
+    width: 90%;
+    max-width: 1200px;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    color: #333;
+}
+
+.entity-modal-close {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.entity-modal-close:hover,
+.entity-modal-close:focus {
+    color: #000;
+}
+
+.entity-search-input {
+    width: 100%;
+    padding: 10px;
+    margin: 10px 0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.entity-list-table-container {
+    overflow-x: auto;
+    margin-top: 10px;
+}
+
+.entity-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+.entity-list-table th {
+    background-color: #4CAF50;
+    color: white;
+    padding: 12px;
+    text-align: left;
+    border: 1px solid #ddd;
+    font-weight: bold;
+}
+
+.entity-list-table td {
+    padding: 10px;
+    border: 1px solid #ddd;
+    color: #333;
+}
+
+.entity-list-table tbody tr:hover {
+    background-color: #f1f1f1;
+}
+
+.entity-list-table a {
+    color: #2196F3;
+    text-decoration: none;
+}
+
+.entity-list-table a:hover {
+    text-decoration: underline;
+}
+
+.entity-empty-state {
+    text-align: center;
+    padding: 20px;
+    color: #999;
+    font-size: 16px;
+}
+
+/* Dark mode support */
+body.dark-mode .entity-modal-content {
+    background-color: #2c2c2c;
+    color: #e0e0e0;
+}
+
+body.dark-mode .entity-modal-close {
+    color: #aaa;
+}
+
+body.dark-mode .entity-modal-close:hover,
+body.dark-mode .entity-modal-close:focus {
+    color: #fff;
+}
+
+body.dark-mode .entity-search-input {
+    background-color: #333;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .entity-list-table th {
+    background-color: #333;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .entity-list-table td {
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .entity-list-table tbody tr:hover {
+    background-color: #3c3c3c;
+}
+
+body.dark-mode .entity-list-table a {
+    color: #64B5F6;
+}
+
+body.dark-mode .entity-empty-state {
+    color: #999;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .entity-modal-content {
+        width: 90%;
+        margin: 10% auto;
+        padding: 15px;
+    }
+
+    .entity-list-table th,
+    .entity-list-table td {
+        padding: 8px;
+        font-size: 0.9em;
+    }
+}
+</style>
+"""
+    return text
+
+
+def get_component_edit_modal_css():
+    """
+    Return CSS for component edit modal
+    """
+    text = """
+<style>
+/* Component Edit Modal Styles */
+.component-edit-modal-content {
+    max-width: 800px;
+    max-height: 90vh;
+}
+
+.component-edit-form {
+    margin: 20px 0;
+}
+
+.config-field {
+    margin-bottom: 20px;
+    padding: 15px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #f9f9f9;
+}
+
+.config-field-label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: bold;
+    color: #333;
+}
+
+.config-field-label .required-star {
+    color: #f44336;
+    margin-left: 4px;
+}
+
+.config-field-label .required-or-star {
+    color: #FF9800;
+    margin-left: 4px;
+}
+
+.config-field-default {
+    color: #666;
+    font-size: 0.9em;
+    margin-left: 10px;
+    font-weight: normal;
+}
+
+.config-field-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.config-field-input {
+    flex: 1;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.config-field-textarea {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.config-field-input:focus,
+.config-field-textarea:focus {
+    outline: none;
+    border-color: #2196F3;
+}
+
+.config-field-input.error,
+.config-field-textarea.error {
+    border-color: #f44336;
+}
+
+.config-field-error {
+    color: #f44336;
+    font-size: 0.85em;
+    margin-top: 4px;
+    display: none;
+}
+
+.config-field-error.visible {
+    display: block;
+}
+
+.delete-button {
+    background-color: #f44336;
+    color: white;
+    border: none;
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    transition: background-color 0.3s ease;
+}
+
+.delete-button:hover {
+    background-color: #d32f2f;
+}
+
+.add-button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.3s ease;
+    margin-top: 8px;
+}
+
+.add-button:hover {
+    background-color: #45a049;
+}
+
+/* Toggle switch for boolean fields */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: 0.4s;
+    border-radius: 24px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.4s;
+    border-radius: 50%;
+}
+
+input:checked + .toggle-slider {
+    background-color: #dc3545;
+}
+
+input:checked + .toggle-slider:before {
+    transform: translateX(26px);
+}
+
+.toggle-switch.deleted {
+    opacity: 0.4;
+}
+
+.toggle-switch.deleted .toggle-slider {
+    background-color: #999;
+}
+
+.deleted-indicator {
+    color: #ff4444;
+    font-size: 0.9em;
+    margin-left: 10px;
+    font-style: italic;
+}
+
+.component-edit-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #ddd;
+}
+
+.save-button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.3s ease;
+}
+
+.save-button:hover {
+    background-color: #45a049;
+}
+
+.save-button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+.cancel-button {
+    background-color: #999;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background-color 0.3s ease;
+}
+
+.cancel-button:hover {
+    background-color: #777;
+}
+
+.component-edit-error {
+    color: #f44336;
+    padding: 10px;
+    margin: 10px 0;
+    border-radius: 4px;
+    display: none;
+}
+
+.component-edit-error.visible {
+    display: block;
+    background-color: #ffebee;
+}
+
+/* Dark mode support */
+body.dark-mode .config-field {
+    background: #2a2a2a;
+    border-color: #555;
+}
+
+body.dark-mode .config-field-label {
+    color: #e0e0e0;
+}
+
+body.dark-mode .config-field-default {
+    color: #aaa;
+}
+
+body.dark-mode .config-field-input {
+    background-color: #333;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .config-field-textarea {
+    background-color: #333;
+    color: #e0e0e0;
+    border-color: #555;
+}
+
+body.dark-mode .toggle-slider {
+    background-color: #555;
+}
+
+body.dark-mode input:checked + .toggle-slider {
+    background-color: #dc3545;
+}
+
+body.dark-mode .deleted-indicator {
+    color: #ff6666;
+}
+
+body.dark-mode .component-edit-buttons {
+    border-top-color: #555;
+}
+
+body.dark-mode .component-edit-error.visible {
+    background-color: #3a1a1a;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .component-edit-modal-content {
+        width: 95%;
+        max-height: 95vh;
+    }
+
+    .config-field {
+        padding: 10px;
+    }
+
+    .config-field-input-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .delete-button {
+        width: 100%;
+        margin-top: 8px;
+    }
+}
+</style>
+"""
+    return text
+
+
+def get_entity_modal_js():
+    """
+    Return JavaScript for entity modal popup
+    """
+    text = """
+<script>
+let currentEntityData = [];
+
+async function showEntityModal(filter) {
+    const modal = document.getElementById('entityModal');
+    const modalTitle = document.getElementById('entityModalTitle');
+    const tableBody = document.getElementById('entityTableBody');
+    const emptyState = document.getElementById('entityEmptyState');
+    const searchInput = document.getElementById('entitySearchInput');
+
+    // Clear search input
+    searchInput.value = '';
+
+    // Show modal
+    modal.style.display = 'block';
+    modalTitle.textContent = 'Entities matching: ' + filter;
+
+    // Clear table
+    tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center;">Loading...</td></tr>';
+    emptyState.style.display = 'none';
+
+    try {
+        // Fetch entities
+        const response = await fetch('./component_entities?filter=' + encodeURIComponent(filter));
+        const data = await response.json();
+
+        currentEntityData = data.entities || [];
+
+        // Populate table
+        if (currentEntityData.length === 0) {
+            tableBody.innerHTML = '';
+            emptyState.style.display = 'block';
+        } else {
+            renderEntityTable(currentEntityData);
+        }
+    } catch (error) {
+        console.error('Error fetching entities:', error);
+        tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: red;">Error loading entities</td></tr>';
+    }
+}
+
+function renderEntityTable(entities) {
+    const tableBody = document.getElementById('entityTableBody');
+    const emptyState = document.getElementById('entityEmptyState');
+
+    if (entities.length === 0) {
+        tableBody.innerHTML = '';
+        emptyState.style.display = 'block';
+        return;
+    }
+
+    emptyState.style.display = 'none';
+
+    let html = '';
+    for (const entity of entities) {
+        const entityUrl = './entity?entity_id=' + encodeURIComponent(entity.entity_id);
+        // Combine state and unit in one column
+        let stateWithUnit = escapeHtml(entity.state);
+        if (entity.unit_of_measurement && entity.unit_of_measurement !== '?' && entity.unit_of_measurement !== 'None') {
+            stateWithUnit += ' ' + escapeHtml(entity.unit_of_measurement);
+        }
+        html += '<tr>';
+        html += '<td><a href="' + entityUrl + '">' + escapeHtml(entity.entity_id) + '</a></td>';
+        html += '<td>' + escapeHtml(entity.friendly_name) + '</td>';
+        html += '<td>' + stateWithUnit + '</td>';
+        html += '</tr>';
+    }
+    tableBody.innerHTML = html;
+}
+
+function filterEntityTable() {
+    const searchInput = document.getElementById('entitySearchInput');
+    const searchTerm = searchInput.value.toLowerCase();
+
+    if (!searchTerm) {
+        renderEntityTable(currentEntityData);
+        return;
+    }
+
+    const filtered = currentEntityData.filter(entity =>
+        entity.entity_id.toLowerCase().includes(searchTerm) ||
+        entity.friendly_name.toLowerCase().includes(searchTerm)
+    );
+
+    renderEntityTable(filtered);
+}
+
+function closeEntityModal() {
+    const modal = document.getElementById('entityModal');
+    modal.style.display = 'none';
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Close modal when clicking outside of it
+window.onclick = function(event) {
+    const modal = document.getElementById('entityModal');
+    if (event.target === modal) {
+        closeEntityModal();
+    }
+}
+</script>
+"""
+    return text
+
+
+def get_component_edit_modal_js():
+    """
+    Return JavaScript for component edit modal
+    """
+    text = """
+<script>
+let componentConfigData = {};
+let componentFormDirty = false;
+let componentFormValid = true;
+
+async function showComponentEditModal(componentName) {
+    const modal = document.getElementById('componentEditModal');
+    const title = document.getElementById('componentEditModalTitle');
+    const form = document.getElementById('componentEditForm');
+    const errorDiv = document.getElementById('componentEditError');
+
+    // Reset state
+    componentFormDirty = false;
+    componentFormValid = true;
+    form.innerHTML = '<p>Loading...</p>';
+    errorDiv.textContent = '';
+    errorDiv.classList.remove('visible');
+
+    modal.style.display = 'block';
+    title.textContent = 'Edit Component Configuration: ' + componentName;
+
+    try {
+        const response = await fetch('./component_config?component_name=' + encodeURIComponent(componentName));
+        const data = await response.json();
+
+        if (!data.success) {
+            throw new Error(data.message || 'Failed to load configuration');
+        }
+
+        componentConfigData = data;
+        renderComponentConfigForm(data);
+    } catch (error) {
+        console.error('Error loading component config:', error);
+        form.innerHTML = '<p style="color: #f44336;">Error loading configuration: ' + error.message + '</p>';
+    }
+}
+
+function renderComponentConfigForm(data) {
+    const form = document.getElementById('componentEditForm');
+    form.innerHTML = '';
+
+    if (!data.args || data.args.length === 0) {
+        form.innerHTML = '<p>No configurable settings for this component.</p>';
+        return;
+    }
+
+    data.args.forEach(arg => {
+        const fieldDiv = document.createElement('div');
+        fieldDiv.className = 'config-field';
+        fieldDiv.dataset.configKey = arg.config_key;
+
+        // Label with required indicators
+        const label = document.createElement('label');
+        label.className = 'config-field-label';
+        label.textContent = arg.config_key;
+
+        if (arg.required) {
+            const star = document.createElement('span');
+            star.className = 'required-star';
+            star.innerHTML = '&#9733;';
+            star.title = 'Required';
+            label.appendChild(star);
+        } else if (arg.required_or) {
+            const star = document.createElement('span');
+            star.className = 'required-or-star';
+            star.innerHTML = '&#9733;';
+            star.title = 'At least one required';
+            label.appendChild(star);
+        }
+
+        if (arg.default !== null && arg.default !== undefined && arg.default !== '') {
+            const defaultSpan = document.createElement('span');
+            defaultSpan.className = 'config-field-default';
+            defaultSpan.textContent = '(default: ' + arg.default + ')';
+            label.appendChild(defaultSpan);
+        }
+
+        fieldDiv.appendChild(label);
+
+        // Input based on type
+        if (arg.type === 'boolean') {
+            renderBooleanField(fieldDiv, arg);
+        } else if (arg.type === 'string_list') {
+            renderListField(fieldDiv, arg);
+        } else if (arg.type === 'dict') {
+            renderDictField(fieldDiv, arg);
+        } else {
+            renderTextField(fieldDiv, arg);
+        }
+
+        form.appendChild(fieldDiv);
+    });
+}
+
+function renderBooleanField(container, arg) {
+    // Check current state from DOM
+    const existingCheckbox = container.querySelector('input[type="checkbox"]');
+    const existingAddBtn = container.querySelector('.add-button');
+
+    // Determine if we should show the field based on arg or current state
+    let shouldShowField;
+    if (existingCheckbox || existingAddBtn) {
+        // Already rendered, check if we have a checkbox
+        shouldShowField = !!existingCheckbox;
+    } else {
+        // First render, check arg
+        shouldShowField = arg.current_value !== null && arg.current_value !== undefined;
+    }
+
+    // Remove existing input row
+    const existingRow = container.querySelector('.config-field-input-row');
+    if (existingRow) {
+        existingRow.remove();
+    }
+
+    const inputRow = document.createElement('div');
+    inputRow.className = 'config-field-input-row';
+
+    // Define reusable handlers
+    function createAddButton() {
+        const addRow = document.createElement('div');
+        addRow.className = 'config-field-input-row';
+        const addBtn = document.createElement('button');
+        addBtn.className = 'add-button';
+        addBtn.innerHTML = '+ Add';
+        addBtn.type = 'button';
+        addBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            componentFormDirty = true;
+
+            // Remove the add button row
+            addRow.remove();
+
+            // Create the toggle row
+            createToggleWithDelete();
+        };
+        addRow.appendChild(addBtn);
+        container.appendChild(addRow);
+    }
+
+    function createToggleWithDelete() {
+        const newRow = document.createElement('div');
+        newRow.className = 'config-field-input-row';
+
+        const toggleLabel = document.createElement('label');
+        toggleLabel.className = 'toggle-switch';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = arg.current_value === true || arg.current_value === 'true';
+        checkbox.onchange = function() {
+            componentFormDirty = true;
+        };
+
+        const slider = document.createElement('span');
+        slider.className = 'toggle-slider';
+
+        toggleLabel.appendChild(checkbox);
+        toggleLabel.appendChild(slider);
+        newRow.appendChild(toggleLabel);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'delete-button';
+        deleteBtn.innerHTML = '×';
+        deleteBtn.type = 'button';
+        deleteBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            componentFormDirty = true;
+
+            // Remove toggle row
+            newRow.remove();
+
+            // Add back the + Add button
+            createAddButton();
+        };
+        newRow.appendChild(deleteBtn);
+
+        container.appendChild(newRow);
+    }
+
+    if (!shouldShowField) {
+        // Show + Add button
+        createAddButton();
+    } else {
+        // Show toggle with delete button
+        createToggleWithDelete();
+    }
+}
+
+function renderTextField(container, arg) {
+    // Check current state from DOM
+    const existingInput = container.querySelector('.config-field-input');
+    const existingAddBtn = container.querySelector('.add-button');
+
+    // Determine if we should show the field
+    let shouldShowField;
+    if (existingInput || existingAddBtn) {
+        // Already rendered, check if we have an input
+        shouldShowField = !!existingInput;
+    } else {
+        // First render, check arg
+        shouldShowField = arg.current_value !== null && arg.current_value !== undefined && arg.current_value !== '';
+    }
+
+    // Remove existing elements
+    const existingRow = container.querySelector('.config-field-input-row');
+    if (existingRow) {
+        existingRow.remove();
+    }
+    const existingError = container.querySelector('.config-field-error');
+    if (existingError) {
+        existingError.remove();
+    }
+
+    // Define reusable handlers
+    function createAddButton() {
+        const addRow = document.createElement('div');
+        addRow.className = 'config-field-input-row';
+        const addBtn = document.createElement('button');
+        addBtn.className = 'add-button';
+        addBtn.innerHTML = '+ Add';
+        addBtn.type = 'button';
+        addBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            componentFormDirty = true;
+
+            // Remove the add button row
+            addRow.remove();
+
+            // Create the input row
+            createInputWithDelete();
+        };
+        addRow.appendChild(addBtn);
+        container.appendChild(addRow);
+    }
+
+    function createInputWithDelete() {
+        const newRow = document.createElement('div');
+        newRow.className = 'config-field-input-row';
+
+        const input = document.createElement('input');
+        input.type = arg.config_key.includes('password') || arg.config_key.includes('key') || arg.config_key.includes('secret') ? 'password' : 'text';
+        input.className = 'config-field-input';
+        input.placeholder = 'Enter value...';
+        input.value = arg.current_value || '';
+        input.onblur = function() { validateField(input, arg.type); };
+        input.oninput = function() { componentFormDirty = true; };
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'delete-button';
+        deleteBtn.innerHTML = '×';
+        deleteBtn.type = 'button';
+        deleteBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            componentFormDirty = true;
+
+            // Remove input row and error
+            newRow.remove();
+            const err = container.querySelector('.config-field-error');
+            if (err) err.remove();
+
+            // Add back the + Add button
+            createAddButton();
+        };
+
+        newRow.appendChild(input);
+        newRow.appendChild(deleteBtn);
+        container.appendChild(newRow);
+
+        // Error message
+        const errorSpan = document.createElement('span');
+        errorSpan.className = 'config-field-error';
+        container.appendChild(errorSpan);
+    }
+
+    if (!shouldShowField) {
+        // Show + Add button
+        createAddButton();
+    } else {
+        // Show input with delete button
+        createInputWithDelete();
+    }
+}
+
+function renderDictField(container, arg) {
+    // Check current state from DOM
+    const existingTextarea = container.querySelector('.config-field-textarea');
+    const existingAddBtn = container.querySelector('.add-button');
+
+    // Determine if we should show the field
+    let shouldShowField;
+    if (existingTextarea || existingAddBtn) {
+        shouldShowField = !!existingTextarea;
+    } else {
+        shouldShowField = arg.current_value !== null && arg.current_value !== undefined;
+    }
+
+    // Remove existing elements
+    const existingRow = container.querySelector('.config-field-input-row');
+    if (existingRow) {
+        existingRow.remove();
+    }
+    const existingError = container.querySelector('.config-field-error');
+    if (existingError) {
+        existingError.remove();
+    }
+
+    // Define reusable handlers
+    function createAddButton() {
+        const addRow = document.createElement('div');
+        addRow.className = 'config-field-input-row';
+        const addBtn = document.createElement('button');
+        addBtn.className = 'add-button';
+        addBtn.innerHTML = '+ Add';
+        addBtn.type = 'button';
+        addBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            componentFormDirty = true;
+            addRow.remove();
+            createTextareaWithDelete();
+        };
+        addRow.appendChild(addBtn);
+        container.appendChild(addRow);
+    }
+
+    function createTextareaWithDelete() {
+        const newRow = document.createElement('div');
+        newRow.className = 'config-field-input-row';
+        newRow.style.flexDirection = 'column';
+        newRow.style.alignItems = 'stretch';
+
+        const textarea = document.createElement('textarea');
+        textarea.className = 'config-field-textarea';
+        textarea.placeholder = 'Enter YAML dictionary...';
+        textarea.rows = 6;
+        textarea.style.fontFamily = 'monospace';
+        textarea.style.fontSize = '0.9em';
+        textarea.style.resize = 'vertical';
+
+        // Convert dict to YAML string
+        if (arg.current_value && typeof arg.current_value === 'object') {
+            try {
+                // Simple YAML formatting - just use JSON with better formatting
+                textarea.value = JSON.stringify(arg.current_value, null, 2);
+            } catch (e) {
+                textarea.value = String(arg.current_value);
+            }
+        } else {
+            textarea.value = arg.current_value || '';
+        }
+
+        textarea.oninput = function() { componentFormDirty = true; };
+
+        const btnRow = document.createElement('div');
+        btnRow.style.display = 'flex';
+        btnRow.style.justifyContent = 'flex-end';
+        btnRow.style.marginTop = '5px';
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'delete-button';
+        deleteBtn.innerHTML = '×';
+        deleteBtn.type = 'button';
+        deleteBtn.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            componentFormDirty = true;
+            newRow.remove();
+            const err = container.querySelector('.config-field-error');
+            if (err) err.remove();
+            createAddButton();
+        };
+
+        btnRow.appendChild(deleteBtn);
+        newRow.appendChild(textarea);
+        newRow.appendChild(btnRow);
+        container.appendChild(newRow);
+
+        // Error message
+        const errorSpan = document.createElement('span');
+        errorSpan.className = 'config-field-error';
+        container.appendChild(errorSpan);
+    }
+
+    if (!shouldShowField) {
+        createAddButton();
+    } else {
+        createTextareaWithDelete();
+    }
+}
+
+function renderListField(container, arg) {
+    const listContainer = document.createElement('div');
+
+    let values = arg.current_value;
+    if (!Array.isArray(values)) {
+        values = values ? [values] : [''];
+    }
+
+    values.forEach((value, index) => {
+        addListEntry(listContainer, value, arg.type);
+    });
+
+    const addBtn = document.createElement('button');
+    addBtn.className = 'add-button';
+    addBtn.textContent = '+ Add Entry';
+    addBtn.type = 'button';
+    addBtn.onclick = () => {
+        addListEntry(listContainer, '', arg.type);
+        componentFormDirty = true;
+    };
+
+    container.appendChild(listContainer);
+    container.appendChild(addBtn);
+}
+
+function addListEntry(listContainer, value, type) {
+    const inputRow = document.createElement('div');
+    inputRow.className = 'config-field-input-row';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'config-field-input';
+    input.placeholder = 'Enter value...';
+    input.value = value || '';
+    input.onblur = () => validateField(input, type);
+    input.oninput = () => componentFormDirty = true;
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'delete-button';
+    deleteBtn.innerHTML = '×';
+    deleteBtn.type = 'button';
+    deleteBtn.onclick = () => {
+        inputRow.remove();
+        componentFormDirty = true;
+    };
+
+    inputRow.appendChild(input);
+    inputRow.appendChild(deleteBtn);
+    listContainer.appendChild(inputRow);
+
+    // Error message
+    const errorSpan = document.createElement('span');
+    errorSpan.className = 'config-field-error';
+    listContainer.appendChild(errorSpan);
+}
+
+function validateField(input, type) {
+    const value = input.value.trim();
+    const errorSpan = input.parentElement.nextElementSibling || input.parentElement.parentElement.querySelector('.config-field-error');
+
+    if (!errorSpan) return true;
+
+    // Skip validation for empty fields
+    if (value === '') {
+        input.classList.remove('error');
+        errorSpan.textContent = '';
+        errorSpan.classList.remove('visible');
+        return true;
+    }
+
+    let isValid = true;
+    let errorMsg = '';
+
+    try {
+        if (type === 'integer' || type === 'int') {
+            if (!/^-?\\d+$/.test(value)) {
+                isValid = false;
+                errorMsg = 'Must be a valid integer';
+            }
+        } else if (type === 'float' || type === 'number') {
+            if (isNaN(parseFloat(value)) || !isFinite(value)) {
+                isValid = false;
+                errorMsg = 'Must be a valid number';
+            }
+        }
+    } catch (e) {
+        isValid = false;
+        errorMsg = 'Invalid value';
+    }
+
+    if (isValid) {
+        input.classList.remove('error');
+        errorSpan.textContent = '';
+        errorSpan.classList.remove('visible');
+    } else {
+        input.classList.add('error');
+        errorSpan.textContent = errorMsg;
+        errorSpan.classList.add('visible');
+    }
+
+    // Update global valid state
+    componentFormValid = document.querySelectorAll('.config-field-input.error').length === 0;
+    document.getElementById('componentEditSaveBtn').disabled = !componentFormValid;
+
+    return isValid;
+}
+
+async function saveComponentConfig() {
+    if (!componentFormValid) {
+        alert('Please fix validation errors before saving.');
+        return;
+    }
+
+    const form = document.getElementById('componentEditForm');
+    const fields = form.querySelectorAll('.config-field');
+    const changes = {};
+    const deletions = [];
+    const missingRequired = [];
+
+    // First pass: collect changes and deletions
+    fields.forEach(field => {
+        const configKey = field.dataset.configKey;
+        const argData = componentConfigData.args.find(a => a.config_key === configKey);
+        if (!argData) return;
+
+        if (argData.type === 'boolean') {
+            const checkbox = field.querySelector('input[type="checkbox"]');
+
+            // Check if field is missing (showing + Add button)
+            if (!checkbox) {
+                if (argData.current_value !== null && argData.current_value !== undefined && argData.current_value !== '') {
+                    deletions.push(configKey);
+                    if (argData.required) {
+                        missingRequired.push(configKey);
+                    }
+                }
+            } else {
+                const newValue = checkbox.checked;
+                const oldValue = argData.current_value === true || argData.current_value === 'true';
+                if (newValue !== oldValue) {
+                    changes[configKey] = newValue;
+                }
+            }
+        } else if (argData.type === 'string_list') {
+            const inputs = field.querySelectorAll('.config-field-input');
+            const values = [];
+            inputs.forEach(input => {
+                const val = input.value.trim();
+                if (val !== '') {
+                    values.push(val);
+                }
+            });
+
+            if (values.length === 0) {
+                deletions.push(configKey);
+            } else {
+                const oldValues = Array.isArray(argData.current_value) ? argData.current_value : (argData.current_value ? [argData.current_value] : []);
+                if (JSON.stringify(values) !== JSON.stringify(oldValues)) {
+                    changes[configKey] = values;
+                }
+            }
+        } else if (argData.type === 'dict') {
+            const textarea = field.querySelector('.config-field-textarea');
+
+            // Check if field is missing (showing + Add button)
+            if (!textarea) {
+                if (argData.current_value !== null && argData.current_value !== undefined) {
+                    deletions.push(configKey);
+                    if (argData.required) {
+                        missingRequired.push(configKey);
+                    }
+                }
+            } else {
+                const yamlValue = textarea.value.trim();
+
+                if (yamlValue === '') {
+                    if (argData.current_value !== null && argData.current_value !== undefined) {
+                        deletions.push(configKey);
+                        if (argData.required) {
+                            missingRequired.push(configKey);
+                        }
+                    }
+                } else {
+                    // Store as raw YAML string - backend will parse it
+                    const oldYaml = argData.current_value ? JSON.stringify(argData.current_value) : '';
+                    if (yamlValue !== oldYaml) {
+                        changes[configKey] = yamlValue;
+                    }
+                }
+            }
+        } else {
+            const input = field.querySelector('.config-field-input');
+
+            // Check if field is missing (showing + Add button)
+            if (!input) {
+                if (argData.current_value !== null && argData.current_value !== undefined && argData.current_value !== '') {
+                    deletions.push(configKey);
+                    if (argData.required) {
+                        missingRequired.push(configKey);
+                    }
+                }
+            } else {
+                const newValue = input.value.trim();
+
+                if (newValue === '') {
+                    if (argData.current_value !== null && argData.current_value !== undefined && argData.current_value !== '') {
+                        deletions.push(configKey);
+                        if (argData.required) {
+                            missingRequired.push(configKey);
+                        }
+                    }
+                } else if (newValue !== argData.current_value) {
+                    changes[configKey] = newValue;
+                }
+            }
+        }
+    });
+
+    // Check if any required fields will be missing after save
+    if (missingRequired.length > 0) {
+        const fieldList = missingRequired.join(', ');
+        if (!confirm(`Warning: Deleting required field(s) (${fieldList}) will disable this component.\\n\\nPredbat will restart automatically to apply changes. Continue?`)) {
+            return;
+        }
+    } else {
+        if (!confirm('Predbat will restart automatically to apply changes. Continue?')) {
+            return;
+        }
+    }
+
+    if (Object.keys(changes).length === 0 && deletions.length === 0) {
+        alert('No changes to save.');
+        return;
+    }
+
+    const saveBtn = document.getElementById('componentEditSaveBtn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+
+    try {
+        const response = await fetch('./component_config_save', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                component_name: componentConfigData.component_name,
+                changes: changes,
+                deletions: deletions
+            })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            // Reset dirty flag before closing to avoid warning
+            componentFormDirty = false;
+            alert(result.message);
+            closeComponentEditModal();
+            // Reload page to show updated configuration
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            throw new Error(result.message || 'Failed to save configuration');
+        }
+    } catch (error) {
+        console.error('Error saving component config:', error);
+        const errorDiv = document.getElementById('componentEditError');
+        errorDiv.textContent = 'Error: ' + error.message;
+        errorDiv.classList.add('visible');
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save';
+    }
+}
+
+function closeComponentEditModal() {
+    if (componentFormDirty) {
+        if (!confirm('You have unsaved changes. Are you sure you want to close?')) {
+            return;
+        }
+    }
+
+    const modal = document.getElementById('componentEditModal');
+    modal.style.display = 'none';
+    componentFormDirty = false;
+}
+</script>
 """
     return text
 
@@ -3501,7 +5013,7 @@ document.getElementById('editorForm').addEventListener('submit', function(e) {
     try {
         // Only validate if content exists and isn't empty
         if (content && content.trim()) {
-            jsyaml.load(content);
+            jsyaml.load(content, { schema: CUSTOM_SCHEMA });
         }
     } catch (e) {
         console.log('YAML validation error during form submit:', e.message);
@@ -3616,7 +5128,18 @@ function updateButtonStates(saveButton, revertButton, content, hasError = false)
     }
 }
 
-// Custom YAML linter using js-yaml
+// Define custom YAML types for Home Assistant/Predbat tags
+const SECRET_TYPE = new jsyaml.Type('!secret', {
+    kind: 'scalar',
+    construct: function(data) {
+        return '***SECRET***'; // Placeholder value for secrets
+    }
+});
+
+// Create a custom schema that includes the !secret tag
+const CUSTOM_SCHEMA = jsyaml.DEFAULT_SCHEMA.extend([SECRET_TYPE]);
+
+// Custom YAML linter using js-yaml with custom schema
 CodeMirror.registerHelper("lint", "yaml", function(text) {
     const found = [];
     if (!text.trim()) {
@@ -3624,7 +5147,7 @@ CodeMirror.registerHelper("lint", "yaml", function(text) {
     }
 
     try {
-        jsyaml.load(text);
+        jsyaml.load(text, { schema: CUSTOM_SCHEMA });
     } catch (e) {
         // Convert js-yaml error to CodeMirror lint format
         const line = e.mark && e.mark.line ? e.mark.line : 0;
@@ -3702,7 +5225,7 @@ function initializeCodeMirror() {
         try {
             // Parse YAML to check for errors
             if (content.trim()) {
-                jsyaml.load(content);
+                jsyaml.load(content, { schema: CUSTOM_SCHEMA });
             }
         } catch (e) {
             isValid = false;
@@ -3740,7 +5263,7 @@ function initializeCodeMirror() {
             try {
                 const content = editor.getValue();
                 if (content && content.trim()) {
-                    jsyaml.load(content);
+                    jsyaml.load(content, { schema: CUSTOM_SCHEMA });
                 }
             } catch (e) {
                 console.log('Manual YAML validation error during lint event:', e.message);
@@ -3787,7 +5310,7 @@ function initializeCodeMirror() {
                     // Only validate if we have content
                     if (content && content.trim()) {
                         try {
-                            jsyaml.load(content);
+                            jsyaml.load(content, { schema: CUSTOM_SCHEMA });
                         } catch (e) {
                             isValidYaml = false;
                             console.log('YAML validation error in initialization:', e.message);
@@ -3872,7 +5395,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 let isValid = true;
                 if (content && content.trim()) {
                     try {
-                        jsyaml.load(content);
+                        jsyaml.load(content, { schema: CUSTOM_SCHEMA });
                     } catch (e) {
                         isValid = false;
                         console.log('YAML validation error in DOMContentLoaded final check:', e.message);

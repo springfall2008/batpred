@@ -15,13 +15,13 @@ import json
 import yaml
 import re
 import copy
-from config import (
+from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
-    THIS_VERSION,
-    CONFIG_API_OVERRIDE,
     PREDBAT_MODE_MONITOR,
 )
+from config import CONFIG_API_OVERRIDE
+from predbat import THIS_VERSION
 
 DEBUG_EXCLUDE_LIST = [
     "pool",
@@ -123,7 +123,6 @@ class UserInterface:
                 except KeyError:
                     if not quiet:
                         self.log("Warn: can not resolve {} value {}".format(arg, value))
-                        self.record_status("Warn: can not resolve {} value {}".format(arg, value), had_errors=True)
                     value = default
 
         # Resolve join list by name
@@ -698,7 +697,7 @@ class UserInterface:
             if current:
                 # print("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                 if current.get("value", None) != item.get("value", None):
-                    current["value"] = item["value"]
+                    current["value"] = item.get("value", None)
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
 
     def create_debug_yaml(self, write_file=True):
@@ -944,7 +943,14 @@ class UserInterface:
 
             if type == "input_number" and ha_value is not None:
                 try:
+                    # Convert to float first
                     ha_value = float(ha_value)
+                    # For entities with integer step, convert to int to preserve integer format
+                    step = item.get("step", 1)
+                    if isinstance(step, int) or (isinstance(step, float) and step == int(step)):
+                        # Step is an integer (e.g., 1, 2, etc.), so keep value as integer if it has no decimal part
+                        if ha_value == int(ha_value):
+                            ha_value = int(ha_value)
                 except (ValueError, TypeError):
                     ha_value = None
 
@@ -1129,12 +1135,12 @@ class UserInterface:
         Selection on manual times dropdown
         """
         item = self.config_index.get(config_item)
-        manual_rate = item.get("manual_rate", False)
         if not item:
             return
         if not value:
             # Ignore null selections
             return
+        manual_rate = item.get("manual_rate", False)
         if value.startswith("+"):
             # Ignore selections which are just the current value
             return
@@ -1328,8 +1334,9 @@ class UserInterface:
             if override_time:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
-                if (minutes - minutes_now) < manual_rate_max:
+                if (minutes - minutes_now_slot) >= 0 and (minutes - minutes_now) < manual_rate_max:
                     rate_overrides.append((minutes, rate_value))
                     for minute in range(minutes, minutes + plan_interval):
                         rate_overrides_minutes[minute] = rate_value
@@ -1338,8 +1345,9 @@ class UserInterface:
         values_list = []
         for minute, rate in rate_overrides:
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
-            if minute_str not in exclude:
-                values_list.append(minute_str + "=" + str(rate))
+            minute_rate_str = minute_str + "=" + str(rate)
+            if minute_rate_str not in exclude and minute_rate_str not in values_list:
+                values_list.append(minute_rate_str)
         values = ",".join(values_list)
         if values:
             values = "+" + values
@@ -1391,22 +1399,21 @@ class UserInterface:
                 continue
 
             # Parse time with day of week support using utility function
-            from utils import get_override_time_from_string
-
             override_time = get_override_time_from_string(self.now_utc, value, plan_interval)
 
             if override_time:
                 # Calculate minutes from midnight today
                 minutes = int((override_time - self.midnight_utc).total_seconds() / 60)
+                minutes_now_slot = int(minutes_now / plan_interval) * plan_interval
 
-                if (minutes - minutes_now) < manual_time_max:
+                if (minutes >= minutes_now_slot) and (minutes - minutes_now_slot) < manual_time_max:
                     time_overrides.append(minutes)
 
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute in time_overrides:
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
-            if minute_str not in exclude:
+            if minute_str not in exclude and minute_str not in values_list:
                 values_list.append(minute_str)
         values = ",".join(values_list)
         if values:

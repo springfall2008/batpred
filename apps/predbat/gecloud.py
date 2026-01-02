@@ -4,12 +4,12 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
-import requests
+import aiohttp
 from datetime import timedelta, datetime
 from utils import str2time, dp1
 import asyncio
+import json
 import random
-import time
 import yaml
 import os
 from component_base import ComponentBase
@@ -321,7 +321,7 @@ class GECloudDirect(ComponentBase):
                             if validation_rule.startswith("in:"):
                                 options_values = validation_rule.split(":")[1].split(",")
 
-                    if validation.startswith("Value must be one of:"):
+                    if validation and validation.startswith("Value must be one of:"):
                         pre, post = validation.split("(")
                         post = post.replace(")", "")
                         post = post.replace(", ", ",")
@@ -529,7 +529,7 @@ class GECloudDirect(ComponentBase):
             value = registers[key].get("value", None)
             ha_name = regname_to_ha(reg_name)
 
-            if ("export_soc_percent_limit" in ha_name) or ("discharge_soc_percent_limit" in ha_name):
+            if ("export_soc_percent_limit" in ha_name) or ("discharge_soc_percent_limit" in ha_name) or ("lower_soc_percent_limit" in ha_name):
                 if not value or value > 4:
                     self.log("GECloud: Setting {} to 4 for {} was {}".format(ha_name, device, value))
                     result = await self.async_write_inverter_setting(device, key, 4)
@@ -540,7 +540,7 @@ class GECloudDirect(ComponentBase):
                     else:
                         self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
                         return False
-            if ("inverter_max_output_active_power_percent" in ha_name) or ("ac_charge_upper_percent_limit" in ha_name):
+            if ("inverter_max_output_active_power_percent" in ha_name) or ("ac_charge_upper_percent_limit" in ha_name) or ("_upper_soc_percent_limit" in ha_name):
                 if "enable_" in ha_name:
                     continue
 
@@ -554,6 +554,24 @@ class GECloudDirect(ComponentBase):
                     else:
                         self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
                         return False
+            # Reset AC charge start and end times to 00:00 to disable
+            for charge_id in range(2, 11):
+                if (
+                    ("ac_charge_{}_start_time".format(charge_id) in ha_name)
+                    or ("ac_charge_{}_end_time".format(charge_id) in ha_name)
+                    or ("dc_discharge_{}_start_time".format(charge_id) in ha_name)
+                    or ("dc_discharge_{}_end_time".format(charge_id) in ha_name)
+                ):
+                    if value and value != "00:00":
+                        self.log("GECloud: Setting {} to 00:00 for {} was {}".format(ha_name, device, value))
+                        result = await self.async_write_inverter_setting(device, key, "00:00")
+                        if result and ("value" in result):
+                            registers[key]["value"] = result["value"]
+                            await self.publish_registers(device, self.settings[device], select_key=key)
+                            return True
+                        else:
+                            self.log("GECloud: Failed to set {} for {}".format(ha_name, device))
+                            return False
             if "real_time_control" in ha_name:
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
@@ -626,7 +644,7 @@ class GECloudDirect(ComponentBase):
                         attributes["device_class"] = "power"
                         attributes["unit_of_measurement"] = "W"
 
-            if validation.startswith("Value must be one of:"):
+            if validation and validation.startswith("Value must be one of:"):
                 pre, post = validation.split("(")
                 post = post.replace(")", "")
                 post = post.replace(", ", ",")
@@ -1082,6 +1100,9 @@ class GECloudDirect(ComponentBase):
                         value = measurement.get("value", None)
                         unit = measurement.get("unit", None)
                         result[measurand] = value
+        else:
+            return previous
+
         self.log("EVC device point {}".format(result))
         return result
 
@@ -1305,47 +1326,55 @@ class GECloudDirect(ComponentBase):
             "Accept": "application/json",
         }
 
+        timeout = aiohttp.ClientTimeout(total=TIMEOUT)
         try:
-            if post:
-                if datain:
-                    response = await asyncio.to_thread(requests.post, url, headers=headers, json=datain, timeout=TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                if post:
+                    if datain:
+                        async with session.post(url, headers=headers, json=datain) as response:
+                            status = response.status
+                            try:
+                                data = await response.json()
+                            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                                self.log("Warn: GeCloud: Failed to decode response from {}".format(url))
+                                data = None
+                    else:
+                        async with session.post(url, headers=headers) as response:
+                            status = response.status
+                            try:
+                                data = await response.json()
+                            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                                self.log("Warn: GeCloud: Failed to decode response from {}".format(url))
+                                data = None
                 else:
-                    response = await asyncio.to_thread(requests.post, url, headers=headers, timeout=TIMEOUT)
-            else:
-                response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=TIMEOUT)
-        except requests.exceptions.RequestException as e:
+                    async with session.get(url, headers=headers) as response:
+                        status = response.status
+                        try:
+                            data = await response.json()
+                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                            self.log("Warn: GeCloud: Failed to decode response from {}".format(url))
+                            data = None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
             self.failures_total += 1
             return None
-
-        try:
-            data = response.json()
-        except requests.exceptions.JSONDecodeError:
-            self.log("Warn: GeCloud: Failed to decode response from {}".format(url))
-            data = None
-        except (requests.Timeout, requests.exceptions.ReadTimeout):
-            self.log("Warn: GeCloud: Timeout from {}".format(url))
-            data = None
-        except (requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
-            self.log("Warn: GeCloud: Could not connect to {}".format(url))
-            data = None
 
         # Check data
         if data and "data" in data:
             data = data["data"]
         else:
             data = None
-        if response.status_code in [200, 201]:
+        if status in [200, 201]:
             if data is None:
                 data = {}
             self.update_success_timestamp()
             return data
-        if response.status_code in [401, 403, 404, 422]:
+        if status in [401, 403, 404, 422]:
             # Unauthorized
             self.failures_total += 1
-            self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, response.status_code))
+            self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, status))
             return {}
-        if response.status_code == 429:
+        if status == 429:
             # Rate limiting so wait up to 30 seconds
             self.failures_total += 1
             await asyncio.sleep(random.random() * 30)
@@ -1372,26 +1401,6 @@ class GECloudData(ComponentBase):
         self.requests_total = 0
         self.failures_total = 0
         self.oldest_data_time = None
-
-    def wait_api_started(self, timeout=MAX_START_TIME):
-        """
-        Wait for the API to start with custom timeout
-
-        Args:
-            timeout: Maximum time to wait in seconds
-
-        Returns:
-            bool: True if component started successfully, False if timeout
-        """
-        self.log("GECloudData: Waiting for API to start")
-        count = 0
-        while not self.api_started and count < timeout and not self.api_fatal:
-            time.sleep(1)
-            count += 1
-        if not self.api_started:
-            self.log("Warn: GECloudData: API failed to start in required time")
-            return False
-        return True
 
     async def run(self, seconds, first):
         """
@@ -1463,10 +1472,10 @@ class GECloudData(ComponentBase):
                 del self.ge_url_cache[url]
             else:
                 age = now_utc - stamp
-                if age.seconds > (24 * 60 * 60):
+                if age.total_seconds() > (24 * 60 * 60):
                     del self.ge_url_cache[url]
 
-    def get_ge_url(self, url, headers, now_utc, max_age_minutes=30):
+    async def get_ge_url(self, url, headers, now_utc, max_age_minutes=30):
         """
         Get data from GE Cloud
         """
@@ -1480,18 +1489,18 @@ class GECloudData(ComponentBase):
                 return mdata, url_next
 
         self.log("Fetching {}".format(url))
+        timeout = aiohttp.ClientTimeout(total=30)
         try:
-            r = requests.get(url, headers=headers)
-        except (requests.Timeout, requests.exceptions.ReadTimeout, requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
-            return {}, None
-
-        if r.status_code not in [200, 201]:
-            self.log("Warn: GeCloud: Failed to get data from {} status code {}".format(url, r.status_code))
-            return {}, None
-
-        try:
-            data = r.json()
-        except requests.exceptions.JSONDecodeError as e:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status not in [200, 201]:
+                        self.log("Warn: GeCloud: Failed to get data from {} status code {}".format(url, response.status))
+                        return {}, None
+                    try:
+                        data = await response.json()
+                    except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
+                        return {}, None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             return {}, None
 
         if not data or "data" not in data:
@@ -1509,6 +1518,8 @@ class GECloudData(ComponentBase):
         last_time = None
         for item in darray:
             new_data = {}
+            if "time" not in item or "total" not in item:
+                continue
             this_time = str2time(item["time"])
             # Align this_time to 5 minute intervals
             if this_time:
@@ -1567,7 +1578,7 @@ class GECloudData(ComponentBase):
                     url += "&pageSize=8000"
                 else:
                     url += "?pageSize=8000"
-                darray, url = self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 18 * 60)
+                darray, url = await self.get_ge_url(url, headers, now_utc, 30 if days_prev == 0 else 18 * 60)
                 if darray is None:
                     # If we are less than 8 hours into today then ignore errors for today as data may not be available yet
                     if days_prev == 0:
@@ -1604,3 +1615,98 @@ class GECloudData(ComponentBase):
         Get the GECloudData data
         """
         return self.mdata, self.oldest_data_time
+
+
+class MockBase:  # pragma: no cover
+    """Mock base class for testing"""
+
+    def __init__(self):
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
+        self.prefix = "predbat"
+        self.args = {}
+        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.entities = {}
+        self.config_root = "./temp_gecloud"
+        self.plan_interval_minutes = 30
+
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
+        if raw:
+            return self.entities.get(entity_id, {})
+        else:
+            return self.entities.get(entity_id, {}).get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
+
+    def log(self, message):
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        print(f"ENTITY: {entity_id} = {state}")
+        if attributes:
+            if "options" in attributes:
+                attributes["options"] = "..."
+            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, key, default=None):
+        return default
+
+    def set_arg(self, key, value):
+        state = None
+        if isinstance(value, str) and "." in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and "." in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
+
+
+async def test_gecloud_direct(api_key):  # pragma: no cover
+    """
+    Test the GECloud Direct API
+    """
+
+    print(f"Testing GECloud Direct API with key: {api_key}")
+
+    # Create a mock base object
+    mock_base = MockBase()
+
+    # Create GECloudDirect instanceFoxAPI(mock_base, **arg_dict)
+    arg_dict = {
+        "ge_cloud_direct": True,
+        "api_key": api_key,
+        "automatic": True,
+    }
+    gecloud_direct = GECloudDirect(mock_base, **arg_dict)
+    await gecloud_direct.run(0, True)
+    await gecloud_direct.run(1, False)
+    await gecloud_direct.final()
+
+    print("Test completed")
+
+
+def main():  # pragma: no cover
+    """
+    Main function for command line execution to test Octopus API
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test GECloud Direct API")
+    parser.add_argument("--api-key", required=True, help="GECloud Direct API key")
+
+    args = parser.parse_args()
+
+    # Run the test
+    asyncio.run(test_gecloud_direct(args.api_key))
+
+
+if __name__ == "__main__":
+    main()

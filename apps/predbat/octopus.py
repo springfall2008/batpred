@@ -4,10 +4,11 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
+import asyncio
 import requests
 import re
 from datetime import datetime, timedelta, timezone
-from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
+from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 from component_base import ComponentBase
 import aiohttp
@@ -951,45 +952,52 @@ class OctopusAPI(ComponentBase):
         pages = 0
         while url and pages < 3:
             self.requests_total += 1
-            r = requests.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}, timeout=20)
-            if r.status_code not in [200, 201, 400]:
-                self.failures_total += 1
-                self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
-                return {}
+            timeout = aiohttp.ClientTimeout(total=20)
             try:
-                data = r.json()
-                self.last_success_timestamp = datetime.now(timezone.utc)
-            except requests.exceptions.JSONDecodeError:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url, headers={"accept": "application/json", "user-agent": "predbat/1.0"}) as response:
+                        if response.status not in [200, 201, 400]:
+                            self.failures_total += 1
+                            self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, response.status))
+                            return {}
+                        try:
+                            data = await response.json()
+                            self.last_success_timestamp = datetime.now(timezone.utc)
+                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                            self.failures_total += 1
+                            self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
+                            return {}
+
+                        if response.status == 400:
+                            detail = data.get("detail", "")
+                            if "This tariff has day and night rates" in detail:
+                                self.log("Info: Octopus tariff has day and night rates, fetching both")
+                                mdata = await self.async_get_day_night_rates(url)
+                                if mdata:
+                                    return mdata
+                                else:
+                                    self.failures_total += 1
+                                    self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
+                                    return {}
+                            else:
+                                self.failures_total += 1
+                                self.log("Warn: Error downloading Octopus data from URL {} (400) - {}".format(url, detail))
+                                return {}
+
+                        if "results" in data:
+                            mdata += data["results"]
+                        else:
+                            detail = data.get("detail", "")
+
+                            self.failures_total += 1
+                            self.log("Warn: Error downloading Octopus data from URL {} (No Results) - {}".format(url, detail))
+                            return {}
+                        url = data.get("next", None)
+                        pages += 1
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 self.failures_total += 1
-                self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
+                self.log("Warn: Error downloading Octopus data from URL {} - {}".format(url, e))
                 return {}
-
-            if r.status_code == 400:
-                detail = data.get("detail", "")
-                if "This tariff has day and night rates" in detail:
-                    self.log("Info: Octopus tariff has day and night rates, fetching both")
-                    mdata = await self.async_get_day_night_rates(url)
-                    if mdata:
-                        return mdata
-                    else:
-                        self.failures_total += 1
-                        self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
-                        return {}
-                else:
-                    self.failures_total += 1
-                    self.log("Warn: Error downloading Octopus data from URL {} (400) - {}".format(url, detail))
-                    return {}
-
-            if "results" in data:
-                mdata += data["results"]
-            else:
-                detail = data.get("detail", "")
-
-                self.failures_total += 1
-                self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
-                return {}
-            url = data.get("next", None)
-            pages += 1
 
         return mdata
 
@@ -1033,11 +1041,11 @@ class OctopusAPI(ComponentBase):
             age = datetime.now() - stamp
 
             # Fresh cache (< 30 minutes) - return immediately
-            if age.seconds < (30 * 60):
+            if age.total_seconds() < (30 * 60):
                 return cached_data["data"]
 
             # Stale cache (30-35 minutes) - serve stale while ONE pod refreshes
-            if age.seconds < (35 * 60):
+            if age.total_seconds() < (35 * 60):
                 lock_file = f"{self.urls_cache_path}/{url_hash}.lock"
                 try:
                     # Try to acquire lock atomically (non-blocking)
@@ -1094,7 +1102,7 @@ class OctopusAPI(ComponentBase):
             standing = self.get_octopus_rates_direct(tariff, standingCharge=True)
 
             rates_stamp = []
-            for minute in range(0, 60 * 24 * 2, self.plan_interval_minutes):
+            for minute in range(-24 * 60, 60 * 24 * 2, self.plan_interval_minutes):
                 time_now = self.midnight_utc + timedelta(minutes=minute)
                 rate_value = rates.get(minute, None)
                 if rate_value is not None:
@@ -1177,16 +1185,16 @@ class OctopusAPI(ComponentBase):
             self.log(f"Warn: Octopus API: Failed to extract response json: {e} - {url} - {text}")
             return None
 
-        if ("graphql" in url) and ("errors" in data_as_json) and (ignore_errors == False):
-            msg = f'Warn: Octopus API: Errors in request ({url}): {data_as_json["errors"]}'
-            errors = list(map(lambda error: error["message"], data_as_json["errors"]))
-            self.log(msg)
+        # Check for rate limit errors - these should return None immediately (no retry)
+        if ("graphql" in url) and data_as_json and ("errors" in data_as_json):
+            for error in data_as_json.get("errors", []):
+                error_code = error.get("extensions", {}).get("errorCode")
+                if error_code == "KT-CT-1199":
+                    msg = f'Warn: Octopus API: Rate limit error in request ({url}): {data_as_json["errors"]}'
+                    self.log(msg)
+                    return None
 
-            for error in data_as_json["errors"]:
-                if error["extensions"]["errorCode"] in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
-                    self.log(f"Warn: Octopus API: Token error - {msg} {errors}")
-            return None
-
+        # Return the response as-is - let caller handle other errors (including auth errors that need retry)
         return data_as_json
 
     async def async_refresh_token(self):
@@ -1229,7 +1237,12 @@ class OctopusAPI(ComponentBase):
         """
         Execute a graphql query with automatic token refresh on auth errors
         """
-        await self.async_refresh_token()
+        token = await self.async_refresh_token()
+        if token is None:
+            self.failures_total += 1
+            if returns_data:
+                self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context} - token refresh failed")
+            return None
         try:
             self.requests_total += 1
             client = await self.api.async_create_client_session()
@@ -1245,10 +1258,25 @@ class OctopusAPI(ComponentBase):
                     for error in response_body.get("errors", []):
                         error_code = error.get("extensions", {}).get("errorCode")
                         if error_code in ("KT-CT-1139", "KT-CT-1111", "KT-CT-1143"):
-                            self.log(f"Kraken token invalid (error {error_code}), forcing refresh and retry")
+                            self.log(f"Octopus API: Kraken token invalid (error {error_code}), forcing refresh and retry")
                             self.graphql_token = None
-                            await self.async_refresh_token()
-                            return await self.async_graphql_query(query, request_context, returns_data, ignore_errors, _retry_count=1)
+                            retry_token = await self.async_refresh_token()
+                            if retry_token is None:
+                                self.failures_total += 1
+                                self.log(f"Warn: Octopus API: Failed to refresh token for retry of graphql query {request_context}")
+                                return None
+                            # Token is now refreshed and cached in self.graphql_token
+                            # Retry the query with new token (_retry_count=1 prevents infinite loop)
+                            return await self.async_graphql_query(query, request_context, returns_data=returns_data, ignore_errors=ignore_errors, _retry_count=1)
+
+                # Check for other errors (non-auth)
+                if response_body and "errors" in response_body and not ignore_errors:
+                    msg = f'Warn: Octopus API: Errors in request ({url}): {response_body["errors"]}'
+                    self.log(msg)
+                    self.failures_total += 1
+                    if returns_data:
+                        self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
+                    return None
 
                 if response_body and ("data" in response_body):
                     self.update_success_timestamp()
@@ -1575,11 +1603,16 @@ class Octopus:
         now = datetime.now()
         if url in self.octopus_url_cache:
             stamp = self.octopus_url_cache[url]["stamp"]
+            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
-            if age.seconds < (30 * 60):
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+
+            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
+            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
+                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                 return pdata
+            elif cached_midnight != self.midnight_utc:
+                self.log("Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         try:
             r = requests.get(url)
@@ -1596,6 +1629,7 @@ class Octopus:
         # Return new data
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
+        self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = r.text
         return r.text
 
@@ -1731,11 +1765,15 @@ class Octopus:
         now = datetime.now()
         if url in self.octopus_url_cache:
             stamp = self.octopus_url_cache[url]["stamp"]
+            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
-            if age.seconds < (30 * 60):
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale rates after midnight)
+            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
+                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
                 return pdata
+            elif cached_midnight != self.midnight_utc:
+                self.log("Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
         # Retry up to 3 minutes
         for retry in range(3):
@@ -1756,6 +1794,7 @@ class Octopus:
         # Cache New Octopus data
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
+        self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = pdata
         return pdata
 
@@ -2094,7 +2133,7 @@ class Octopus:
 
                     self.log(
                         "Octopus Intelligent slot at {}-{} assumed price {} amount {} kWh location {} source {} octopus_slot_low_rate {}".format(
-                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), assumed_price, kwh, location, source, octopus_slot_low_rate
+                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                         )
                     )
 
@@ -2255,7 +2294,11 @@ class Octopus:
                         end = event.get("end", None)
                         start_time = str2time(start)  # reformat the saving session start & end time for improved readability
                         end_time = str2time(end)
-                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
+                        octopoints_kwh = event.get("octopoints_per_kwh", None)
+                        if octopoints_kwh is not None:
+                            saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
+                        else:
+                            saving_rate = saving_rate  # Use default if not specified
                         if code:  # Join the new Octopus saving event and send an alert
                             self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
@@ -2272,8 +2315,11 @@ class Octopus:
                 for event in joined_events:
                     start = event.get("start", None)
                     end = event.get("end", None)
-                    saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
-                    if start and end and saving_rate > 0:
+                    octopoints_kwh = event.get("octopoints_per_kwh", None)
+                    if octopoints_kwh is not None:
+                        saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
+                    # If octopoints_per_kwh is None, skip this event as it's a past event only
+                    if start and end and octopoints_kwh is not None and saving_rate > 0:
                         # Save the saving slot?
                         try:
                             start_time = str2time(start)
@@ -2303,3 +2349,114 @@ class Octopus:
                 if state:
                     self.log("Octopus Saving session is active!")
         return octopus_free_slots, octopus_saving_slots
+
+
+class MockBase:  # pragma: no cover
+    """Mock base class for testing"""
+
+    def __init__(self):
+        self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
+        self.prefix = "predbat"
+        self.args = {}
+        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.entities = {}
+        self.config_root = "./temp_octopus"
+        self.plan_interval_minutes = 30
+
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
+        if raw:
+            return self.entities.get(entity_id, {})
+        else:
+            return self.entities.get(entity_id, {}).get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
+
+    def log(self, message):
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        print(f"ENTITY: {entity_id} = {state}")
+        if attributes:
+            if "options" in attributes:
+                attributes["options"] = "..."
+            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, key, default=None):
+        return default
+
+    def set_arg(self, key, value):
+        state = None
+        if isinstance(value, str) and "." in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and "." in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
+
+
+async def test_octopus_api(api_key, account_id):  # pragma: no cover
+    """
+    Test the Octopus API
+    """
+
+    print(f"Testing Octopus API with account: {account_id}")
+
+    # Create a mock base object
+    mock_base = MockBase()
+
+    # Create OctopusAPI instanceFoxAPI(mock_base, **arg_dict)
+    arg_dict = {
+        "key": api_key,
+        "account_id": account_id,
+        "automatic": True,
+    }
+    octopus_api = OctopusAPI(mock_base, **arg_dict)
+    await octopus_api.run(0, True)
+
+    # Fetch data
+    planned_dispatches = octopus_api.get_intelligent_planned_dispatches()
+    completed_dispatches = octopus_api.get_intelligent_completed_dispatches()
+    vehicle = octopus_api.get_intelligent_vehicle()
+    available_events, joined_events = octopus_api.get_saving_session_data()
+
+    print("Planned dispatches: {}".format(planned_dispatches))
+    print("Completed dispatches: {}".format(completed_dispatches))
+    print("Vehicle: {}".format(vehicle))
+    print("Saving session available {}".format(available_events))
+    print("Saving session joined {}".format(joined_events))
+
+    # Test joining a saving session event
+    octopus_api.join_saving_session_event("EVENT_3_210125")
+    await octopus_api.run(1, False)
+    await octopus_api.final()
+
+    print("Test completed")
+
+
+def main():  # pragma: no cover
+    """
+    Main function for command line execution to test Octopus API
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test Octopus API")
+    parser.add_argument("--api-key", required=True, help="Octopus API key")
+    parser.add_argument("--account", required=True, help="Octopus account ID")
+
+    args = parser.parse_args()
+
+    # Run the test
+    asyncio.run(test_octopus_api(args.api_key, args.account))
+
+
+if __name__ == "__main__":
+    main()

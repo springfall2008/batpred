@@ -67,6 +67,12 @@ pred_bat:
     - sensor.sigen_plant_rated_energy_capacity
   battery_temperature:
     - sensor.sigen_inverter_battery_average_cell_temperature
+  battery_min_soc:
+    - 0
+  reserve:
+    - number.sigen_plant_ess_discharge_cut_off_state_of_charge
+  charge_limit:
+    - number.sigen_plant_ess_charge_cut_off_state_of_charge
 
   # Services to control the inverter
   charge_start_service:
@@ -93,11 +99,11 @@ pred_bat:
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
-    - sensor.sigen_plant_max_active_power
+    - sensor.sigen_plant_available_max_active_power
 
   # Set the maximum charge/discharge rate of the battery
   battery_rate_max:
-    - 8000
+    - sensor.sigen_plant_available_max_active_power
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
@@ -227,6 +233,9 @@ pred_bat:
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
   octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
   octopus_saving_session_octopoints_per_penny: 8
+
+  # Enter your Axle VPP API key if you have signed up to the Axle service in the UK
+  # axle_api_key: "xxxxxxx"
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric

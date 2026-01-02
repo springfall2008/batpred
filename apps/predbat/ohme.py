@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 from datetime import timedelta, timezone
-from config import TIME_FORMAT_HA
+from const import TIME_FORMAT_HA
 from component_base import ComponentBase
 
 GOOGLE_API_KEY = "AIzaSyC8ZeZngm33tpOXLpbXeKfwtyZ1WrkbdBY"  # cspell:disable-line
@@ -301,13 +301,13 @@ class OhmeAPI(ComponentBase):
         for slot in slots:
             start = slot.start
             end = slot.end
-            energy = slot.energy
+            slot_energy = slot.energy  # Renamed to avoid collision with session energy variable
             is_completed = False
             if end < datetime.datetime.now().astimezone():
                 is_completed = True
             if start <= datetime.datetime.now().astimezone() <= end:
                 slot_active = True
-            dispatch = {"start": start.strftime(TIME_FORMAT_HA), "end": end.strftime(TIME_FORMAT_HA), "energy": -energy, "location": "AT_HOME"}
+            dispatch = {"start": start.strftime(TIME_FORMAT_HA), "end": end.strftime(TIME_FORMAT_HA), "energy": -slot_energy, "location": "AT_HOME"}
             if is_completed:
                 completed_dispatches.append(dispatch)
             else:

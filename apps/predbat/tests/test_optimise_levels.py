@@ -30,8 +30,35 @@ def run_optimise_levels(
     inverter_loss=1.0,
     best_soc_keep=0.0,
 ):
-    end_record = my_predbat.forecast_minutes
     failed = False
+    my_predbat.load_user_config()
+    my_predbat.fetch_config_options()
+    reset_inverter(my_predbat)
+    my_predbat.forecast_minutes = 24 * 60
+
+    pv_step = {}
+    load_step = {}
+    for minute in range(0, my_predbat.forecast_minutes, 5):
+        pv_step[minute] = pv_amount / (60 / 5)
+        load_step[minute] = load_amount / (60 / 5)
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv_step
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+
+    # Reset state that may have been set by previous tests
+    my_predbat.best_soc_max = 0  # Reset SOC max cap - 0 means no cap
+    my_predbat.best_soc_keep_weight = 0.5  # Reset to default
+    my_predbat.metric_min_improvement = 0.0  # Reset to default
+    my_predbat.metric_min_improvement_export = 0.1  # Reset to default
+    my_predbat.end_record = 48 * 60
+    my_predbat.best_soc_step = 0.25
+    my_predbat.soc_percent = 0
+    my_predbat.num_inverters = 1
+
+    end_record = my_predbat.forecast_minutes
+
     my_predbat.calculate_best_charge = True
     my_predbat.calculate_best_export = True
     my_predbat.soc_max = battery_size
@@ -228,7 +255,8 @@ def run_optimise_levels_tests(my_predbat):
     if failed:
         return failed
 
-    # Discharge
+    # Discharge - create fresh window dictionaries to avoid state contamination
+    charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 10.0}, {"start": my_predbat.minutes_now + 120, "end": my_predbat.minutes_now + 240, "average": 6}]
     export_window_best = [{"start": my_predbat.minutes_now + 240, "end": my_predbat.minutes_now + 300, "average": 7.5}]
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
         "discharge",

@@ -596,19 +596,36 @@ In summary:
 In some cases, you may want to override Predbat's planned behaviour and make a decision yourself. One way to achieve this is to put Predbat into read-only mode using **switch.predbat_set_read_only**.
 When going to read-only mode the inverter will be put back to the default settings and you should then control it yourself using your inverter controls directly.
 
-A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:
+A better alternative in some cases is to tell Predbat what you want it to do using the manual force feature.
 
 You can force the battery to be charged within a single slot by using the **select.predbat_manual_charge** selector.
-Pick the slot you wish to charge in, and Predbat will change the plan to charge in the selected slot.
+Pick the day and time slot you wish to charge in (up to 48 hours in advance), and Predbat will change the plan to charge in the selected slot.
 You can select multiple slots by using the drop-down menu more than once.
 When Predbat updates the plan you will see the slots picked to be charging slots in the current value of this selector,
 and annotated in the [Predbat HTML plan](predbat-plan-card.md#displaying-the-predbat-plan) with an upside down 'F' symbol.
 
 Selected slots will be shown in the in the list in square brackets and you can cancel a force slot by selecting the slot time again.
 
+When you use the manual override features you can select the day and time from the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
+
 The **off** option at the bottom of the list will cancel all selected force charges.
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/aa668cc3-60fc-4956-8619-822f09f601dd)
+![image](images/manual_select.png)
+
+If you use the selector from an automation you can combine multiple time slots together, with times in the format HH:MM.
+Entering the slot day is optional from an automation, and if you do not enter a day then the next slot with the matching time will be chosen.
+
+For example, the following automation action will set Predbat to charge in the next 22:00, 22:30 and 23:00 slots:
+
+```yaml
+action: select.select_option
+target:
+  entity_id:
+    - select.predbat_manual_charge
+data:
+  option: >-
+    22:00,22:30,23:00
+```
 
 All the other **select.predbat_manual_XX** controls operate in the same way.
 
@@ -627,28 +644,28 @@ The **select.predbat_manual_freeze_export** selector is used to force Predbat to
 The **select.predbat_manual_import_rates** selector is used to override the import rates for a slot, the rate selected will be that configured in **input_number.predbat_manual_import_value** (default 0p)
 which can be adjusted prior to making a selection. As with the other selectors the selection can be cleared by selecting the option in square brackets or by using **off**
 
-If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=rate e.g. 12:30:00=29.5
+If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM=rate e.g. 12:30=29.5
 
 The **select.predbat_manual_export_rates** selector is used to override the export rates for a slot,
 the rate selected will be that configured in **input_number.predbat_manual_export_value** (default 0p) which can be adjusted prior to making a selection.
 
-If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=rate e.g. 12:30:00=29.5
+Similar to manual_import_rates, if this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM=rate e.g. 12:30=29.5
 
 The **select.predbat_manual_load_adjust** selector is used to make adjustments to the predicted load for a slot, the adjustment in kWh (which is added to the predicted load) will be that
 configured in **input_number.predbat_manual_load_value** which can be adjusted prior to making a selection (default 0.5kWh).
 
 If this selector is used in an automation you can set the time and rate together by making a selection in the format HH:MM:SS=adjustment e.g. 12:30:00=0.5
 
-The **select.predbat_manual_soc** selector is used to set a target State of Charge (SOC) percentage by a specific time.
+The **select.predbat_manual_soc** selector is used to set a target State of Charge (SoC) percentage by a specific time.
 This is useful when you know you need a certain battery level at a particular time, for example before peak rates start or when you expect higher than normal consumption.
-The SOC target percentage will be that configured in **input_number.predbat_manual_soc_value** (default 100%) which can be adjusted prior to making a selection.
+The SoC target percentage will be that configured in **input_number.predbat_manual_soc_value** (default 100%) which can be adjusted prior to making a selection.
 
 For example, if you want the battery to be at 100% by 05:30, select that time slot. Predbat will plan charging to ensure the battery reaches the target SOC by that time.
-If this selector is used in an automation you can set the time and SOC together by making a selection in the format HH:MM:SS=percentage e.g. 05:30:00=100
+If this selector is used in an automation you can set the time and SoC together by making a selection in the format HH:MM:SS=percentage e.g. 05:30:00=100
 
-The manual SOC target works in conjunction with the weather alert system - if both are active at the same time, the higher SOC target will be used.
+The manual SoC target works in conjunction with the weather alert system - if both are active at the same time, the higher SoC target will be used.
 
-When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time slot expires (they do not repeat).
+When you use the manual override features you can only select times in the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
 
 _NOTE_: once you select a time slot from any of the **select.predbat_manual_XX** selectors the selected time slot is immediately marked on the drop-down and you can then make another change.
 Predbat still has to update the plan which it will be doing so in the background,

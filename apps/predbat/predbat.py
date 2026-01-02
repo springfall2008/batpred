@@ -27,10 +27,10 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.29.14"
+THIS_VERSION = "v8.31.8"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py"]
+PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "unit_test.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -38,27 +38,30 @@ from download import predbat_update_move, predbat_update_download, check_install
 # Only do the self-install/self-update logic if we are NOT compiled.
 if not IS_COMPILED:
     # Sanity check the install and re-download if corrupted
-    if not check_install():
+    passed, modified = check_install(THIS_VERSION)
+    if not passed:
         print("Warn: Predbat files are not installed correctly, trying to download them")
         files = predbat_update_download(THIS_VERSION)
-        ...
+        if files:
+            predbat_update_move(THIS_VERSION, files)
         sys.exit(1)
+    elif modified:
+        print("Warn: Predbat files are installed but have modifications")
     else:
         print("Predbat files are installed correctly for version {}".format(THIS_VERSION))
 else:
     # In compiled mode, we skip the entire self-update logic
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
-from config import (
+from const import (
     TIME_FORMAT,
     PREDICT_STEP,
     RUN_EVERY,
     INVERTER_TEST,
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
-    CONFIG_ITEMS,
-    APPS_SCHEMA,
 )
+from config import APPS_SCHEMA, CONFIG_ITEMS
 from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
@@ -549,6 +552,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.balance_inverters_threshold_discharge = 1.0
         self.load_inday_adjustment = 1.0
         self.set_read_only = True
+        self.set_read_only_axle = False
         self.metric_cloud_coverage = 0.0
         self.future_energy_rates_import = {}
         self.future_energy_rates_export = {}
@@ -580,6 +584,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = []
+        self.axle_sessions = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
@@ -820,12 +825,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             else:
                 cost_total_car = 0
 
-            # Increment total at midnight for next day, don't do if in read-only mode
-            if savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and recompute and not self.set_read_only:
+            # Increment total at 1am once we have today's data stable (cloud data can lag)
+            if self.minutes_now > 60 and savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and recompute and not self.set_read_only:
                 savings_total_predbat += self.savings_today_predbat
                 savings_total_pvbat += self.savings_today_pvbat
                 savings_total_soc = self.savings_today_predbat_soc
                 savings_total_actual += self.savings_today_actual
+                savings_total_last_updated = todays_date
                 cost_total_car += self.cost_yesterday_car
 
             self.dashboard_item(
@@ -838,7 +844,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "pounds": dp2(savings_total_predbat / 100.0),
                     "icon": "mdi:cash-multiple",
                     "start_date": savings_total_start_date,
-                    "last_updated": todays_date,
+                    "last_updated": savings_total_last_updated,
                 },
             )
             self.dashboard_item(
@@ -850,7 +856,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "unit_of_measurement": "kWh",
                     "icon": "mdi:battery-50",
                     "start_date": savings_total_start_date,
-                    "last_updated": todays_date,
+                    "last_updated": savings_total_last_updated,
                 },
             )
             self.dashboard_item(
@@ -863,7 +869,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "pounds": dp2(savings_total_actual / 100.0),
                     "icon": "mdi:cash-multiple",
                     "start_date": savings_total_start_date,
-                    "last_updated": todays_date,
+                    "last_updated": savings_total_last_updated,
                 },
             )
             self.dashboard_item(
@@ -876,7 +882,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     "pounds": dp2(savings_total_pvbat / 100.0),
                     "icon": "mdi:cash-multiple",
                     "start_date": savings_total_start_date,
-                    "last_updated": todays_date,
+                    "last_updated": savings_total_last_updated,
                 },
             )
             if self.num_cars > 0:
@@ -890,7 +896,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                         "pounds": dp2(cost_total_car / 100.0),
                         "icon": "mdi:cash-multiple",
                         "start_date": savings_total_start_date,
-                        "last_updated": todays_date,
+                        "last_updated": savings_total_last_updated,
                     },
                 )
 
@@ -1454,7 +1460,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
             self.log("Error: " + traceback.format_exc())
-            self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+            self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
             raise e
 
         # Run every N minutes aligned to the minute
@@ -1535,7 +1541,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False
@@ -1592,7 +1598,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False
@@ -1613,7 +1619,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
                 raise e
 
     def register_hook(self, hook_name, callback):

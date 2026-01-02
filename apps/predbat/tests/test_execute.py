@@ -161,6 +161,7 @@ def run_execute_test(
     soc_max=10,
     car_charging_from_battery=False,
     read_only=False,
+    set_read_only_axle=False,
     set_soc_enable=True,
     set_charge_window=False,
     set_export_window=False,
@@ -206,6 +207,7 @@ def run_execute_test(
     my_predbat.log("Run scenario {}".format(name))
     failed = False
     my_predbat.set_read_only = read_only
+    my_predbat.set_read_only_axle = set_read_only_axle
     my_predbat.car_charging_slots = [car_slot]
     my_predbat.num_cars = 1
     my_predbat.inverter_hybrid = inverter_hybrid
@@ -1230,6 +1232,10 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(my_predbat, "calibration", in_calibration=True, assert_status="Calibration", assert_charge_time_enable=False, assert_reserve=0, assert_soc_target=100)
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True)
     failed |= run_execute_test(my_predbat, "charge_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, assert_status="Read-Only", reserve=0)
+    failed |= run_execute_test(
+        my_predbat, "charge_axle_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, set_read_only_axle=True, assert_status="Read-Only (Axle)", reserve=0
+    )
+
     failed |= run_execute_test(
         my_predbat,
         "charge3",
@@ -2263,6 +2269,28 @@ def run_execute_tests(my_predbat):
         assert_pause_discharge=True,
         assert_soc_target=100,  # Freeze charge sets target to 100%
         assert_immediate_soc_target=50,  # Current SoC% should be 50%, not 5%
+    )
+    if failed:
+        return failed
+
+    # Test for GitHub issue #3107: Floating point rounding causes freeze charge mismatch
+    # When charge_limit_best is rounded to 0.5 kWh but reserve is 0.51 kWh (5% of 10.149 kWh)
+    # they should both equal 5% and trigger freeze charge, not hold charge
+    charge_limit_best_rounded = [0.5]  # 0.5 kWh is the charge limit rounded down by dp2() from ~0.507 (5% of 10.149 kWh)
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_rounding_issue_3107",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_rounded,  # 0.5 kWh rounds to 5%
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10.048,  # Current SoC at 99%
+        soc_max=10.149,  # Real-world battery size
+        reserve=0.51,  # 5% of 10.149 = 0.50745, rounds to 0.51 with dp3()
+        assert_status="Freeze charging",  # Should be freeze, not "Hold charging"
+        assert_pause_discharge=True,
+        assert_soc_target=100,
+        assert_immediate_soc_target=99,  # Current SoC% = 10.048/10.149 = ~99%
     )
     if failed:
         return failed

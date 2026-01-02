@@ -69,11 +69,17 @@ Can be used to extract the car's current SoC.
     - 'sensor.battery'
 ```
 
-## New Ohme Integration
+## Ohme Direct
+
+Predbat can talk direct to the Ohme cloud service to control your Ohme EV charger.
+
+See [Ohme Direct](apps-yaml.md#ohme-car-charger---direct-integration)
+
+## HA In-Built Ohme Integration
 
 <https://www.home-assistant.io/integrations/ohme>
 
-The in-built Home Assistant Ohme integration can be used with Predbat both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
+The in-built Home Assistant Ohme integration can also be used with Predbat both for the Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
 
 If you are on the Octopus Intelligent GO tariff the integration can be used to map out the cars charging slots into Predbat so that Predbat charges or stops your battery discharging into the car when its charging.
 

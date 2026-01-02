@@ -37,6 +37,7 @@ def compute_metric_test(
     metric_self_sufficiency=0.0,
     carbon_metric=0.0,
     rate_min=1.0,
+    rate_max=99.0,
 ):
     """
     Test the compute metric function
@@ -51,10 +52,11 @@ def compute_metric_test(
     my_predbat.battery_loss_discharge = battery_loss_discharge
     my_predbat.metric_self_sufficiency = metric_self_sufficiency
     my_predbat.rate_min = rate_min
+    my_predbat.rate_max = rate_max
     if not end_record:
         end_record = my_predbat.forecast_minutes
 
-    my_predbat.rate_min_forward = {n: rate_min for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now)}
+    my_predbat.rate_min_forward = {n: rate_min for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now + end_record + 1)}
     if carbon_metric:
         my_predbat.carbon_enable = True
         my_predbat.carbon_metric = carbon_metric
@@ -85,11 +87,41 @@ def compute_metric_test(
     return False
 
 
+def save_state(my_predbat):
+    state_dict = {}
+    save_items = [
+        "metric_battery_value_scaling",
+        "rate_export_min",
+        "iboost_value_scaling",
+        "inverter_loss",
+        "battery_loss",
+        "metric_battery_cycle",
+        "pv_metric10_weight",
+        "battery_loss_discharge",
+        "metric_self_sufficiency",
+        "rate_min",
+        "rate_max",
+        "carbon_enable",
+        "carbon_metric",
+        "rate_min_forward",
+    ]
+    for item in save_items:
+        state_dict[item] = getattr(my_predbat, item)
+    return state_dict
+
+
+def restore_state(my_predbat, state_dict):
+    for item, value in state_dict.items():
+        setattr(my_predbat, item, value)
+
+
 def run_compute_metric_tests(my_predbat):
     """
     Test the compute metric function
     """
     failed = False
+    print("**** Running compute metric tests ****")
+    state_dict = save_state(my_predbat)
     failed |= compute_metric_test(my_predbat, "zero", assert_metric=0)
     failed |= compute_metric_test(my_predbat, "cost", cost=10.0, assert_metric=10)
     failed |= compute_metric_test(my_predbat, "cost_bat", cost=10.0, soc=10, rate_min=5, assert_metric=10 - 5 * 10)
@@ -98,4 +130,9 @@ def run_compute_metric_tests(my_predbat):
     failed |= compute_metric_test(my_predbat, "cost10", cost=10.0, cost10=20, pv_metric10_weight=0.5, assert_metric=10 + 10 * 0.5)
     failed |= compute_metric_test(my_predbat, "cost_carbon", cost=10.0, final_carbon_g=100, carbon_metric=2.0, assert_metric=10 + 100 / 1000 * 2.0)
     failed |= compute_metric_test(my_predbat, "cost_battery_cycle", cost=10.0, battery_cycle=25, metric_battery_cycle=0.1, assert_metric=10 + 25 * 0.1)
+    # Test rate_max capping: rate_min=5 but rate_max=2 should cap it to 2
+    # With inverter_loss=1.0, battery_loss=1.0, metric_battery_cycle=0, the cap is: max(min(5, 2*1*1-0), 0) = max(min(5, 2), 0) = 2
+    # So battery_value = 10 * 1.0 * max(2, 1.0, rate_export_min) = 10 * 2 = 20, metric = 10 - 20 = -10
+    failed |= compute_metric_test(my_predbat, "cost_rate_max", cost=10.0, soc=10, rate_min=5, rate_max=2.0, assert_metric=10 - 2 * 10)
+    restore_state(my_predbat, state_dict)
     return failed

@@ -26,7 +26,7 @@ pred_bat:
 
   # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
   #ha_url: 'http://homeassistant.local:8123'
-  #ha_key: 'xxx'
+  #ha_key: !secret ha_key
 
   # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
   # if it doesn't work or if you have more than one inverter you will need to list both
@@ -67,7 +67,12 @@ pred_bat:
   #
   #ge_cloud_data: False
   #ge_cloud_serial: '{geserial}'
-  #ge_cloud_key: 'xxxx'
+  #ge_cloud_key: !secret ge_cloud_key
+
+  # Fox direct cloud interface
+  #fox_key: !secret fox_key
+  #fox_automatic: True
+
   #
   # Controls/status - must by 1 per inverter
   #
@@ -265,8 +270,16 @@ pred_bat:
 
   # Solcast cloud interface, set this or the local interface below
   #solcast_host: 'https://api.solcast.com.au/'
-  #solcast_api_key: 'xxxx'
+  #solcast_api_key: !secret solcast_api_key
   #solcast_poll_hours: 8
+
+  # Forecast Solar interface, set this or the local interface below
+  #forecast_solar:
+  #- postcode: 'SW1A 1AA'
+  #  kwp: 4.0
+  #  azimuth: 180
+  #  declination: 10
+  #  api_key: !secret forecast_solar_api_key
 
   # Set these to match solcast sensor names if not using the cloud interface
   # The regular expression (re:) makes the solcast bit optional
@@ -275,6 +288,11 @@ pred_bat:
   pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
   pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
   pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+
+  # Ohme EV charger cloud direct integration
+  #ohme_login: !secret ohme_login
+  #ohme_password: !secret ohme_password
+  #ohme_automatic_octopus_intelligent: True
 
   # car_charging_energy defines an incrementing sensor which measures the charge added to your car
   # is used for car_charging_hold feature to filter out car charging from the previous load data
@@ -338,6 +356,12 @@ pred_bat:
   #car_charging_exclusive:
   #  - True
 
+  # Octopus Energy direct integration
+  #octopus_api_key: !secret octopus_api_key
+  #octopus_api_account: !secret octopus_api_account
+  #octopus_automatic: True
+
+  # Or if using bottle cap dave Home Assistant Octopus Energy plugin set the entities here
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
@@ -354,7 +378,11 @@ pred_bat:
   # Set this to False if you use Octopus Intelligent slot for car planning but when on another tariff e.g. Agile
   #octopus_slot_low_rate: False
 
-  # Carbon Intensity data from National grid
+  # Carbon Intensity data direct from National grid
+  #carbon_postcode: 'SW1A 1AA'
+  #carbon_automatic: true
+
+  # Or using Home Assistant sensor
   carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
@@ -368,6 +396,9 @@ pred_bat:
 
   # Alternative scraper from Octopus web site if the above is not working
   # octopus_free_url: 'http://octopus.energy/free-electricity'
+
+  # Enter your Axle VPP API key if you have signed up to the Axle service in the UK
+  # axle_api_key: !secret axle_api_key
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric

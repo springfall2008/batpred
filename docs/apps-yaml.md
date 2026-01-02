@@ -87,6 +87,49 @@ the Predbat internal Solcast rather than the external integration:
 
 ![image](https://github.com/user-attachments/assets/0eda352c-c6fc-459c-abda-5c0de0b2372b)
 
+## Storing secrets
+
+Predbat supports the Home Assistant [secrets mechanism](https://www.home-assistant.io/docs/configuration/secrets/) for storing sensitive information like API keys, passwords, and tokens.
+
+### Using secrets.yaml
+
+Create a `secrets.yaml` file in one of these locations (checked in order, only the first one is read):
+
+1. Path specified in `PREDBAT_SECRETS_FILE` environment variable
+2. `secrets.yaml` in the same directory as your `apps.yaml`
+3. `/config/secrets.yaml` (standard Home Assistant location)
+
+The `secrets.yaml` file contains key-value pairs of your secrets:
+
+```yaml
+octopus_api_key: "sk_live_abc123xyz..."
+solcast_api_key: "def456uvw..."
+```
+
+### Referencing secrets in apps.yaml
+
+Use the `!secret` tag followed by the secret key name in your `apps.yaml`:
+
+```yaml
+pred_bat:
+  module: predbat
+  class: PredBat
+
+  octopus_api_key: !secret octopus_api_key
+  solcast_api_key: !secret solcast_api_key
+```
+
+When Predbat loads, it will automatically replace `!secret octopus_api_key` with the actual value from `secrets.yaml`.
+
+If a secret is referenced in `apps.yaml` but not found in `secrets.yaml`, Predbat will log a warning and the configuration item will be set to `None`.
+
+### Benefits of using secrets
+
+- Keeps sensitive information separate from configuration files
+- Makes it safer to share your `apps.yaml` for troubleshooting
+- All secrets stored in one centralized location
+- Compatible with Home Assistant's secrets system
+
 ## Basics
 
 Basic configuration items
@@ -152,6 +195,8 @@ In future versions of Predbat, AppDaemon will be removed.
   ha_url: 'http://homeassistant.local:8123'
   ha_key: 'xxxxxxxxxxx'
 ```
+
+**NOTE:** It's recommended to store `ha_key` in `secrets.yaml` and reference it as `ha_key: !secret ha_key` - see [Storing secrets](#storing-secrets).
 
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
 This will remove the need for a DNS lookup of the IP address every time Predbat talks to Home Assistant and may improve reliability as a result.
@@ -280,6 +325,163 @@ you will need to wait until you have a few days of history established (at least
   ge_cloud_data: True
 ```
 
+**NOTE:** It's recommended to store `ge_cloud_key` in `secrets.yaml` and reference it as `ge_cloud_key: !secret givenergy_api_key` - see [Storing secrets](#storing-secrets).
+
+### SolaX Cloud Direct
+
+Predbat supports direct communication with the SolaX Cloud API to control SolaX inverters and batteries without requiring local integrations.
+
+To use SolaX Cloud Direct, you need to obtain API credentials (client ID and client secret) from your SolaX Cloud account.
+
+#### Getting your SolaX Cloud API credentials
+
+1. Log in to your SolaX Cloud account at:
+   - EU: <https://www.solaxcloud.com>
+   - US: <https://www.solaxcloud.us>
+   - CN: <https://www.solaxcloud.com.cn>
+2. Navigate to Settings → API Management (or Developer Settings)
+3. Create a new API application or access existing credentials
+4. Copy your **Client ID** and **Client Secret**
+5. Add these to your `apps.yaml` configuration
+
+#### Basic SolaX Cloud configuration
+
+If you set **solax_automatic** to `true`, Predbat will automatically discover your plants, inverters, and batteries, and configure all necessary entities without manual intervention.
+
+```yaml
+  solax_client_id: 'your_client_id_here'
+  solax_client_secret: 'your_client_secret_here'
+  solax_region: 'eu'  # Options: 'eu', 'us', or 'cn'
+  solax_automatic: true
+  solax_enable_controls: true
+```
+
+**NOTE:** It's **strongly recommended** to store `solax_client_id` and `solax_client_secret` in `secrets.yaml` and reference them as:
+
+```yaml
+  solax_client_id: !secret solax_client_id
+  solax_client_secret: !secret solax_client_secret
+```
+
+See [Storing secrets](#storing-secrets) for more information.
+
+#### Region selection
+
+Set **solax_region** based on where your SolaX Cloud account is registered:
+
+- `'eu'` - European region (default) - openapi-eu.solaxcloud.com
+- `'us'` - United States region - openapi-us.solaxcloud.com
+- `'cn'` - China region - openapi.solaxcloud.com
+
+#### Optional configuration options
+
+**solax_plant_id**: If you have multiple plants registered in your SolaX Cloud account but only want Predbat to control specific plants, you can filter by plant ID:
+
+```yaml
+  solax_plant_id: '1618699116555534337'
+```
+
+If not specified, Predbat will control all plants found in your account.
+
+**solax_enable_controls**: Set to `False` to disable automatic inverter control (read-only mode). Useful for monitoring without control:
+
+```yaml
+  solax_enable_controls: False
+```
+
+#### Automatic configuration (solax_automatic: true)
+
+When **solax_automatic** is enabled, Predbat will:
+
+1. Discover all plants with inverters and batteries in your SolaX Cloud account
+2. Automatically configure `num_inverters` based on the number of plants found
+3. Set `inverter_type` to `SolaxCloud` for each plant
+4. Create and configure all required entities including:
+   - Battery power, SOC, capacity, and temperature sensors
+   - Inverter and PV power sensors
+   - Energy totals (yield, charged, discharged, imported, exported, load)
+   - Charge/discharge schedule controls (start/end times, target SOC, rates)
+   - Enable/disable switches for charge and export schedules
+   - Reserve SOC setting
+
+No manual entity configuration is required when using automatic mode.
+
+#### Published entities
+
+When SolaX Cloud is configured, Predbat creates the following entities for each plant (replace `{plant_id}` with your actual plant ID):
+
+**Sensors:**
+
+- `sensor.predbat_solax_{plant_id}_battery_soc` - Battery state of charge (kWh)
+- `sensor.predbat_solax_{plant_id}_battery_capacity` - Battery capacity (kWh)
+- `sensor.predbat_solax_{plant_id}_battery_temperature` - Battery temperature (°C)
+- `sensor.predbat_solax_{plant_id}_battery_max_power` - Battery maximum power (W)
+- `sensor.predbat_solax_{plant_id}_inverter_max_power` - Inverter maximum power (W)
+- `sensor.predbat_solax_{plant_id}_pv_capacity` - PV array capacity (kWp)
+- `sensor.predbat_solax_{plant_id}_total_yield` - Total PV generation (kWh)
+- `sensor.predbat_solax_{plant_id}_total_charged` - Total battery charged (kWh)
+- `sensor.predbat_solax_{plant_id}_total_discharged` - Total battery discharged (kWh)
+- `sensor.predbat_solax_{plant_id}_total_imported` - Total grid import (kWh)
+- `sensor.predbat_solax_{plant_id}_total_exported` - Total grid export (kWh)
+- `sensor.predbat_solax_{plant_id}_total_load` - Total load consumption (kWh, calculated)
+- `sensor.predbat_solax_{plant_id}_total_earnings` - Total earnings from exports
+
+**Control entities:**
+
+- `number.predbat_solax_{plant_id}_setting_reserve` - Battery reserve SOC (%)
+- `select.predbat_solax_{plant_id}_battery_schedule_charge_start_time` - Charge start time
+- `select.predbat_solax_{plant_id}_battery_schedule_charge_end_time` - Charge end time
+- `number.predbat_solax_{plant_id}_battery_schedule_charge_target_soc` - Charge target SOC (%)
+- `number.predbat_solax_{plant_id}_battery_schedule_charge_rate` - Charge rate (W)
+- `switch.predbat_solax_{plant_id}_battery_schedule_charge_enable` - Enable/disable charging
+- `select.predbat_solax_{plant_id}_battery_schedule_export_start_time` - Export start time
+- `select.predbat_solax_{plant_id}_battery_schedule_export_end_time` - Export end time
+- `number.predbat_solax_{plant_id}_battery_schedule_export_target_soc` - Export target SOC (%)
+- `number.predbat_solax_{plant_id}_battery_schedule_export_rate` - Export rate (W)
+- `switch.predbat_solax_{plant_id}_battery_schedule_export_enable` - Enable/disable exporting
+
+#### Manual configuration (solax_automatic: False)
+
+If you disable automatic configuration, you must manually configure inverter entities in `apps.yaml` similar to other inverter types. In this case, set:
+
+```yaml
+  solax_automatic: False
+  num_inverters: 1
+  inverter_type: 'SolaxCloud'
+```
+
+Then manually configure all required entities following the standard Predbat inverter configuration pattern.
+
+#### Multi-inverter / Multi-plant setup
+
+If you have multiple SolaX plants, automatic configuration will handle them automatically. Each plant will be treated as a separate inverter in Predbat's configuration.
+
+#### Supported inverter types
+
+SolaX Cloud API supports various SolaX inverter models including:
+
+- X1 series (single-phase)
+- X3 series (three-phase)
+- X3-Hybrid series
+- Other SolaX cloud-connected inverters
+
+Both residential (business_type=1) and commercial (business_type=4) installations are supported.
+
+#### Troubleshooting
+
+If you experience connection issues:
+
+1. Verify your client ID and client secret are correct
+2. Confirm you're using the correct region setting
+3. Check that your SolaX Cloud account has API access enabled
+4. Review Predbat logs for authentication errors
+5. Test your API credentials using the standalone test:
+
+```bash
+cd /config/appdaemon/apps/predbat
+python3 solax.py --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET --region eu
+```
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
@@ -305,6 +507,7 @@ inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should 
   SFMB: Sofar HYD with solarman modbus
   SIG: SigEnergy Sigenstor
   SK: Sunsynk
+  SolaxCloud: SolaX Cloud API integration
   SX4: Solax Gen4 (Modbus Power Control)
 
 If you have multiple inverters, then set inverter_type to a list of the inverter types.
@@ -543,6 +746,8 @@ or
 
 - **battery_voltage** - Nominal maximum battery voltage (not current battery voltage) - only needed for inverters controlled via Amps and used internally by Predbat to convert Watts to Amps to control the inverter.
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
+Predbat also uses **battery_rate_max** when creating [charge and discharge curves](#battery-chargedischarge-curves), looking for charging or discharging at 95% of the max rate.
+Be careful of setting the rate at a value higher than your inverter can handle for grid charging in order for Predbat to be able to find the historical 'full rate' charging/discharging needed to correctly calculate the curves.
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
@@ -773,6 +978,8 @@ Uncomment the following Solcast cloud interface settings in `apps.yaml` and set 
   solcast_poll_hours: 8
 ```
 
+**NOTE:** It's recommended to store `solcast_api_key` in `secrets.yaml` and reference it as `solcast_api_key: !secret solcast_api_key` - see [Storing secrets](#storing-secrets).
+
 Note that by default the Solcast API will be used to download all sites (up to 2 for hobby accounts), if you want to override this set your sites manually using
 **solcast_sites** as an array of site IDs:
 
@@ -886,8 +1093,13 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
-- **octopus_api_key** - Sets API key to communicate directly with octopus
+- **octopus_api_key** - Sets API key to communicate directly with octopus. *Recommended: store in `secrets.yaml` and use `!secret octopus_api_key`*
 - **octopus_account** - Sets Octopus account number
+- **axle_api_key** - API key to communicate with Axle Energy VPP (Virtual Power Plant) service. *Recommended: store in `secrets.yaml` and use `!secret axle_api_key`*
+- **axle_pence_per_kwh** - Payment rate in pence per kWh for Axle Energy VPP events (default: 100)
+- **axle_automatic** - Optional, whether to use the default entity name **binary_sensor.predbat_axle_event** for axle event details (default True, use the default entity name)
+- **axle_session** - Optional, enables manual override of the Axle event entity name
+- **axle_control** - Optional, whether to switch Predbat to read-only mode during active Axle VPP events (default: False)
 - **plan_interval_minutes** - Sets time duration of the slots used by Predbat for planning
 
 Note that gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)
@@ -1061,6 +1273,8 @@ configured to take Octopus Intelligent car charging slots from Ohme (rather than
   ohme_password: "xxxxxxxxx"
   ohme_automatic_octopus_intelligent: true
 ```
+
+**NOTE:** It's recommended to store `ohme_password` in `secrets.yaml` and reference it as `ohme_password: !secret ohme_password` - see [Storing secrets](#storing-secrets).
 
 ## Watch List - automatically start Predbat execution
 
@@ -1309,8 +1523,13 @@ explains how the curve works and shows how Predbat automatically creates it.
 Setting this option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
 history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually configure the charge curve in `apps.yaml`.
 
-NB: For Predbat to calculate your charging curve it needs to have access to historical Home Assistant data for battery_charge_rate, battery_power and soc_kw.
+NB: For Predbat to calculate your charging curve it needs to have access to historical Home Assistant data for **battery_charge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
 These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
+
+Either **soc_percent** or **soc_kw** from `apps.yaml` can be used to generate the charge curve. If both are defined then **soc_percent** is used in preference.
+
+Predbat will search through the charge history of your inverter, looking for periods of where battery_charge_rate is at least 95% of the maximum inverter battery charge rate, and the battery charges up to 100%.
+From the corresponding battery_power readings, Predbat determines the charge curve. If suitable charge history cannot be found then Predbat will report that it cannot create the charge curve.
 
 If you have a GivEnergy inverter and are using the recommended default [REST mode to control your inverter](#inverter-control-configurations)
 then you will need to uncomment out the following entries in `apps.yaml`:
@@ -1353,8 +1572,13 @@ You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find
 
 Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
 
-In the same way, as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for battery_discharge_rate, battery_power and soc_kw.
+In the same way, as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for **battery_discharge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
 These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
+
+Either **soc_percent** or **soc_kw** from `apps.yaml` can be used to generate the discharge curve. If both are defined then **soc_percent** is used in preference.
+
+Predbat will search through the discharge history of your inverter, looking for periods of where battery_discharge_rate is at least 95% of the maximum inverter battery discharge rate, and the battery discharges down below 20%.
+From the corresponding battery_power readings, Predbat determines the discharge curve. If suitable discharge history cannot be found then Predbat will report that it cannot create the discharge curve.
 
 If you are using REST mode to control your GivEnergy inverter then the following entries in `apps.yaml` will need to be uncommented :
 

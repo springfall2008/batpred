@@ -2,13 +2,13 @@
 
 Home battery prediction and automatic charging for Home Assistant supporting multiple inverters including:
 
-- GivEnergy Hybrid, AC and AIO
+- GivEnergy Hybrid, AC and AIO (Local & Cloud)
 - Solis
-- Solax
+- Solax (Local & Cloud)
 - Sunsynk
 - Huawei
 - SolarEdge
-- Fox
+- Fox (Local & Cloud)
 - Sofar
 - LuxPower
 - Solar Assistant
@@ -30,6 +30,9 @@ No warranty is given, either expressed or implied
 
 For support please raise a GitHub ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106) and
 watch my [YouTube Channel](https://www.youtube.com/@springfall2008)
+
+- Use my referral code for Octopus Energy: <https://share.octopus.energy/jolly-eel-176>
+- Use my referral code for Axle Energy (UK): <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
 
 Some inverters have their own groups e.g.:
 

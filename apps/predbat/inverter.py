@@ -13,7 +13,8 @@ import time
 import pytz
 import requests
 from datetime import datetime, timedelta
-from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
+from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
+from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
 TIME_FORMAT_HMS = "%H:%M:%S"
@@ -447,7 +448,7 @@ class Inverter:
             self.reserve_percent = self.reserve_min
         else:
             self.reserve_percent = self.reserve_percent_current
-        self.reserve = dp2(self.soc_max * self.reserve_percent / 100.0)
+        self.reserve = dp3(self.soc_max * self.reserve_percent / 100.0)
 
         # Max inverter rate override
         if "inverter_limit" in self.base.args:
@@ -531,14 +532,18 @@ class Inverter:
         if "soc_percent" in self.base.args:
             soc_kwh_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
             soc_kwh_percent = True
+            soc_label = "soc_percent"
         else:
             soc_kwh_percent = False
+            soc_label = "soc_kwh"
             soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
 
         if discharge:
             charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
+            curve_label = "empty"
         else:
             charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+            curve_label = "full"
 
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
         battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
@@ -559,7 +564,7 @@ class Inverter:
 
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
-            self.log("Find {} curve with sensors {} and {} and {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
+            self.log("Find {} curve with sensors {}, {}, {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
             if soc_kwh_percent:
                 soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
             else:
@@ -804,12 +809,16 @@ class Inverter:
                     else:
                         self.log("Note: Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(curve_type))
                 else:
-                    self.log("Note: Cannot find battery {} curve (no final curve), one of the required settings for predbat.status, soc_kw, battery_power and {}_rate do not have history, check apps.yaml".format(curve_type, curve_type))
+                    self.log(
+                        "Note: Cannot find battery {} curve (no final curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
+                            curve_type, curve_label, soc_label, curve_type
+                        )
+                    )
             else:
-                self.log("Note: Cannot find battery {} curve (missing history), one of the required settings for predbat.status, soc_kw, battery_power and {}_rate do not have history, check apps.yaml".format(curve_type, curve_type))
-                self.log("Note: Sensor with history data lengths: soc_kwh {}, charge_rate {}, battery_power {}, predbat_status {}".format(len(soc_kwh), len(charge_rate), len(battery_power), len(predbat_status)))
+                self.log("Note: Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(curve_type, soc_label, curve_type))
+                self.log("Note: Sensor with history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
         else:
-            self.log("Note: Cannot find battery {} curve (settings missing), one of the required settings for soc_kw, battery_power and {}_rate are missing from apps.yaml".format(curve_type, curve_type))
+            self.log("Note: Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(curve_type, soc_label, curve_type))
         return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class="None"):
@@ -1047,7 +1056,7 @@ class Inverter:
                         self.base.time_abs_str(self.charge_start_time_minutes),
                         self.base.time_abs_str(self.charge_end_time_minutes),
                         self.current_charge_limit,
-                        self.charge_rate_now * 60.0,
+                        dp2(self.charge_rate_now * 60.0),
                     )
                 )
             else:
@@ -1464,6 +1473,10 @@ class Inverter:
     def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
+        if not entity_id:
+            self.base.log("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value))
+            self.base.record_status("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+            return False
         domain, entity_name = entity_id.split(".")
         current_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
 
@@ -1515,6 +1528,10 @@ class Inverter:
         """
         GivTCP Workaround, keep writing until correct
         """
+        if not entity_id:
+            self.base.log("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value))
+            self.base.record_status("Warn: Inverter {} write_and_poll_option: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
+            return False
         entity_base = entity_id.split(".")[0]
 
         if entity_base not in ["input_select", "select", "time"]:
@@ -2436,7 +2453,7 @@ class Inverter:
                 return True
 
         self.base.log(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
-        self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
+        self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete", had_errors=True)
         return False
 
     def rest_readData(self, api="readData", retry=True):

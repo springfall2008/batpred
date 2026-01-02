@@ -9,9 +9,18 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta, timezone, time
-from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+from functools import lru_cache
+from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+# Helper to make dict hashable for caching
+def charge_curve_to_tuple(d):
+    """Convert dict to tuple for use as cache key"""
+    if not d:
+        return ()
+    return tuple(sorted(d.items()))
 
 
 def get_now_from_cumulative(data, minutes_now, backwards):
@@ -831,36 +840,6 @@ def str2time(str):
     return tdata
 
 
-def get_curve_value(curve, key, default=1.0):
-    """
-    Get a value from a battery power curve dictionary.
-    Supports both integer and string keys for compatibility with YAML configurations.
-
-    Args:
-        curve: Dictionary containing the power curve (e.g., battery_charge_power_curve)
-        key: Integer SOC percentage to look up
-        default: Default value if key not found (default: 1.0)
-
-    Returns:
-        The curve value at the given SOC percentage, or default if not found
-
-    Note:
-        This function handles both integer keys (100, 99, 98) and string keys ("100", "99", "98")
-        to support YAML configurations that require string keys for encryption (e.g., SOPS).
-    """
-    # Try integer key first (most common case)
-    if key in curve:
-        return curve[key]
-
-    # Try string key for YAML configs with string-based keys
-    str_key = str(key)
-    if str_key in curve:
-        return curve[str_key]
-
-    # Return default if neither found
-    return default
-
-
 def calc_percent_limit(charge_limit, soc_max):
     """
     Calculate a charge limit in percent
@@ -942,10 +921,14 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
     return new_limit_best, new_window_best
 
 
-def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve, debug=False):
+@lru_cache(maxsize=8192)
+def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple):
     """
-    Compute true charging rate from SoC and charge rate setting
+    Cached computation of true charging rate from SoC and charge rate setting
     """
+    battery_charge_power_curve = dict(battery_charge_power_curve_tuple) if battery_charge_power_curve_tuple else {}
+    battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
+
     soc_percent = calc_percent_limit(soc, soc_max)
     max_charge_rate = battery_rate_max_charge * get_curve_value(battery_charge_power_curve, soc_percent, 1.0)
 
@@ -953,19 +936,24 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
     max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_charge)
     max_charge_rate = min(max_charge_rate, max_rate_cap)
 
-    if debug:
-        print(
-            "Max charge rate: {} SoC: {} Percent {} Rate in: {} rate out: {} cap: {}".format(
-                max_charge_rate * MINUTE_WATT, soc, soc_percent, charge_rate_setting * MINUTE_WATT, min(charge_rate_setting, max_charge_rate) * MINUTE_WATT, max_rate_cap * MINUTE_WATT
-            )
-        )
     return max(min(charge_rate_setting, max_charge_rate), battery_rate_min)
 
 
-def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
+def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
     """
-    Compute true discharging rate from SoC and charge rate setting
+    Compute true charging rate from SoC and charge rate setting
     """
+    return get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_curve_to_tuple(battery_charge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+
+
+@lru_cache(maxsize=8192)
+def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple):
+    """
+    Cached computation of true discharging rate from SoC and charge rate setting
+    """
+    battery_discharge_power_curve = dict(battery_discharge_power_curve_tuple) if battery_discharge_power_curve_tuple else {}
+    battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
+
     soc_percent = calc_percent_limit(soc, soc_max)
     max_discharge_rate = battery_rate_max_discharge * get_curve_value(battery_discharge_power_curve, soc_percent, 1.0)
     max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_discharge)
@@ -974,18 +962,37 @@ def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_
     return max(min(discharge_rate_setting, max_discharge_rate), battery_rate_min)
 
 
+def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
+    """
+    Compute true discharging rate from SoC and charge rate setting
+    """
+    return get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+
+
+"""
+Get value from curve with integer or string index
+"""
+
+
+def get_curve_value(curve, index, default=1.0):
+    return curve.get(index, default)
+
+
 def find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, max_rate):
     """
     Find the battery temperature cap
     """
     battery_temperature_idx = min(battery_temperature, 20)
     battery_temperature_idx = max(battery_temperature_idx, -20)
-    if battery_temperature_idx in battery_temperature_curve:
-        battery_temperature_adjust = battery_temperature_curve[battery_temperature_idx]
-    elif battery_temperature_idx > 0:
-        battery_temperature_adjust = battery_temperature_curve.get(20, 1.0)
-    else:
-        battery_temperature_adjust = battery_temperature_curve.get(0, 1.0)
+    battery_temperature_idx = int(battery_temperature_idx)  # Convert to int for proper key matching
+    # Try to get the temperature adjustment from the curve (handles both int and string keys)
+    battery_temperature_adjust = get_curve_value(battery_temperature_curve, battery_temperature_idx, None)
+    if battery_temperature_adjust is None:
+        # If not found, try fallback values
+        if battery_temperature_idx > 0:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 20, 1.0)
+        else:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 0, 1.0)
     battery_temperature_rate_cap = soc_max * battery_temperature_adjust / 60.0
 
     return min(battery_temperature_rate_cap, max_rate)
@@ -1019,8 +1026,11 @@ def find_charge_rate(
     if current_charge_rate is None:
         current_charge_rate = max_rate
 
+    battery_temperature_curve_tuple = charge_curve_to_tuple(battery_temperature_curve)
+    battery_charge_power_curve_tuple = charge_curve_to_tuple(battery_charge_power_curve)
+
     # Real achieved max rate
-    max_rate_real = get_charge_rate_curve(soc, max_rate, soc_max, max_rate, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve) * battery_rate_max_scaling
+    max_rate_real = get_charge_rate_curve_cached(soc, max_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
 
     if set_charge_low_power:
         minutes_left = window["end"] - minutes_now - margin
@@ -1076,7 +1086,7 @@ def find_charge_rate(
                 rate_scale_max = 0
                 # Compute over the time period, include the completion time
                 for minute in range(0, minutes_left, PREDICT_STEP):
-                    rate_scale = get_charge_rate_curve(charge_now, rate, soc_max, max_rate, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve)
+                    rate_scale = get_charge_rate_curve_cached(charge_now, rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
                     highest_achievable_rate = max(highest_achievable_rate, rate_scale)
                     rate_scale *= battery_rate_max_scaling
                     rate_scale_max = max(rate_scale_max, rate_scale)
@@ -1103,7 +1113,7 @@ def find_charge_rate(
                     )
                 )
 
-        best_rate_real = get_charge_rate_curve(soc, best_rate, soc_max, max_rate, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve) * battery_rate_max_scaling
+        best_rate_real = get_charge_rate_curve_cached(soc, best_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
         if log_to:
             log_to(
                 "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W, Battery temp {}°C".format(

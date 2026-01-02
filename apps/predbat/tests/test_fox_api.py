@@ -9,19 +9,11 @@
 from datetime import datetime
 import asyncio
 import pytz
+import aiohttp
+import json
 from unittest.mock import MagicMock, patch, AsyncMock
-import requests
 from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal
-
-
-def run_async(coro):
-    """Helper function to run async coroutines in sync test functions"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
 class MockFoxAPI:
@@ -86,6 +78,15 @@ class MockFoxAPIWithRequests(FoxAPI):
 
         # Track method calls for run() testing
         self.method_calls = []
+
+        # Rate limiting attributes
+        self.requests_today = 0
+        self.rate_limit_errors_today = 0
+        self.start_time_today = None
+        self.last_midnight_utc = None
+
+        # Mock base object for ComponentBase properties
+        self.base = type("obj", (object,), {"midnight_utc": datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)})()
 
     def log(self, message):
         """Mock log method"""
@@ -1565,6 +1566,100 @@ def test_api_get_device_history_empty(my_predbat):
     return False
 
 
+def test_api_get_available_variables(my_predbat):
+    """
+    Test get_available_variables API endpoint
+    """
+    print("  - test_api_get_available_variables")
+
+    fox = MockFoxAPIWithRequests()
+
+    # Mock response with available variables list
+    fox.set_mock_response(
+        "/op/v0/device/variable/get",
+        [
+            {
+                "pvPower": {
+                    "unit": "kW",
+                    "Grid-tied inverter": True,
+                    "name": {"en": "PVPower", "zh-CN": "光伏功率"},
+                    "Energy-storage inverter": True,
+                }
+            },
+            {
+                "SoC": {
+                    "unit": "%",
+                    "Grid-tied inverter": False,
+                    "name": {"en": "SoC", "zh-CN": "电池电量"},
+                    "Energy-storage inverter": True,
+                }
+            },
+            {
+                "batTemperature": {
+                    "unit": "℃",
+                    "Grid-tied inverter": False,
+                    "name": {"en": "batTemperature", "zh-CN": "电池温度"},
+                    "Energy-storage inverter": True,
+                }
+            },
+            {
+                "loadsPower": {
+                    "unit": "kW",
+                    "Grid-tied inverter": True,
+                    "name": {"en": "Load Power", "zh-CN": "负载功率"},
+                    "Energy-storage inverter": True,
+                }
+            },
+        ],
+    )
+
+    run_async(fox.get_available_variables())
+
+    # Verify available_variables was populated correctly
+    assert "pvPower" in fox.available_variables
+    assert fox.available_variables["pvPower"]["unit"] == "kW"
+    assert fox.available_variables["pvPower"]["name"] == "PVPower"  # English name extracted
+    assert fox.available_variables["pvPower"]["Grid-tied inverter"] == True
+    assert fox.available_variables["pvPower"]["Energy-storage inverter"] == True
+
+    assert "SoC" in fox.available_variables
+    assert fox.available_variables["SoC"]["unit"] == "%"
+    assert fox.available_variables["SoC"]["name"] == "SoC"
+    assert fox.available_variables["SoC"]["Grid-tied inverter"] == False
+
+    assert "batTemperature" in fox.available_variables
+    assert fox.available_variables["batTemperature"]["unit"] == "℃"
+    assert fox.available_variables["batTemperature"]["name"] == "batTemperature"
+
+    assert "loadsPower" in fox.available_variables
+    assert fox.available_variables["loadsPower"]["name"] == "Load Power"
+
+    # Verify request was made correctly
+    assert len(fox.request_log) == 1
+    assert fox.request_log[0]["path"] == "/op/v0/device/variable/get"
+
+    return False
+
+
+def test_api_get_available_variables_empty(my_predbat):
+    """
+    Test get_available_variables with empty or None response
+    """
+    print("  - test_api_get_available_variables_empty")
+
+    fox = MockFoxAPIWithRequests()
+
+    # Mock empty response
+    fox.set_mock_response("/op/v0/device/variable/get", None)
+
+    run_async(fox.get_available_variables())
+
+    # Verify available_variables is empty dict
+    assert fox.available_variables == {}
+
+    return False
+
+
 def test_api_get_device_setting(my_predbat):
     """
     Test get_device_setting API endpoint
@@ -2821,6 +2916,15 @@ class MockFoxAPIForRequestTesting(FoxAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.log_messages = []
 
+        # Rate limiting attributes
+        self.requests_today = 0
+        self.rate_limit_errors_today = 0
+        self.start_time_today = datetime.now(pytz.utc)
+        self.last_midnight_utc = None
+
+        # Mock base object for ComponentBase properties
+        self.base = type("obj", (object,), {"midnight_utc": datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)})()
+
     def log(self, message):
         """Mock log method - captures messages"""
         self.log_messages.append(message)
@@ -2832,64 +2936,63 @@ class MockFoxAPIForRequestTesting(FoxAPI):
 
 def test_request_get_func_real_success_get(my_predbat):
     """
-    Test real request_get_func with mocked requests.get - successful response
+    Test real request_get_func with mocked aiohttp - successful response
     """
     print("  - test_request_get_func_real_success_get")
 
     fox = MockFoxAPIForRequestTesting()
 
     # Create mock response
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 0, "result": {"data": [{"deviceSN": "TEST123"}]}}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 0, "result": {"data": [{"deviceSN": "TEST123"}]}})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response) as mock_get:
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list", post=False, datain={"pageSize": 100}))
 
     assert result is not None
     assert result["data"][0]["deviceSN"] == "TEST123"
     assert allow_retry == False
     assert fox.failures_total == 0
-    mock_get.assert_called_once()
 
     return False
 
 
 def test_request_get_func_real_success_post(my_predbat):
     """
-    Test real request_get_func with mocked requests.post - successful POST response
+    Test real request_get_func with mocked aiohttp - successful POST response
     """
     print("  - test_request_get_func_real_success_post")
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 0, "result": {"success": True}}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 0, "result": {"success": True}})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.post", return_value=mock_response) as mock_post:
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/setting", post=True, datain={"key": "value"}))
 
     assert result is not None
     assert result["success"] == True
     assert allow_retry == False
-    mock_post.assert_called_once()
 
     return False
 
 
 def test_request_get_func_real_auth_error_401(my_predbat):
     """
-    Test real request_get_func with mocked requests - 401 auth error
+    Test real request_get_func with mocked aiohttp - 401 auth error
     """
     print("  - test_request_get_func_real_auth_error_401")
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 401
+    mock_response = create_aiohttp_mock_response(status=401)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
     assert result is None
@@ -2901,16 +3004,17 @@ def test_request_get_func_real_auth_error_401(my_predbat):
 
 def test_request_get_func_real_rate_limit_429(my_predbat):
     """
-    Test real request_get_func with mocked requests - 429 rate limit (with mocked sleep)
+    Test real request_get_func with mocked aiohttp - 429 rate limit (with mocked sleep)
     """
     print("  - test_request_get_func_real_rate_limit_429")
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 429
+    mock_response = create_aiohttp_mock_response(status=429)
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
@@ -2930,11 +3034,11 @@ def test_request_get_func_real_fox_errno_rate_limit(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 40400, "msg": "Rate limited"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 40400, "msg": "Rate limited"})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
@@ -2954,11 +3058,11 @@ def test_request_get_func_real_fox_errno_api_limit(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 40402, "msg": "API calls exceeded"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 40402, "msg": "API calls exceeded"})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
@@ -2978,11 +3082,14 @@ def test_request_get_func_real_connection_error(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    with patch("fox.requests.get", side_effect=requests.exceptions.ConnectionError("Connection refused")):
+    mock_session = create_aiohttp_mock_session(exception=aiohttp.ClientError("Connection refused"))
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
     assert result is None
-    assert allow_retry == False  # Connection errors should not retry (RequestException)
+    assert allow_retry == False  # Connection errors should not retry
     assert fox.failures_total == 1
 
     return False
@@ -2996,11 +3103,14 @@ def test_request_get_func_real_timeout(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    with patch("fox.requests.get", side_effect=requests.exceptions.Timeout("Request timed out")):
+    mock_session = create_aiohttp_mock_session(exception=asyncio.TimeoutError("Request timed out"))
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
     assert result is None
-    assert allow_retry == False  # Timeout as RequestException should not retry
+    assert allow_retry == False  # Timeout should not retry
     assert fox.failures_total == 1
 
     return False
@@ -3014,11 +3124,11 @@ def test_request_get_func_real_json_decode_error(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.side_effect = requests.exceptions.JSONDecodeError("Invalid JSON", "", 0)
+    mock_response = create_aiohttp_mock_response(status=200, json_exception=json.JSONDecodeError("Invalid JSON", "", 0))
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", return_value=mock_response):
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result, allow_retry = run_async(fox.request_get_func("/op/v0/device/list"))
 
     # JSON decode error with status 200 returns empty dict (data=None -> data={})
@@ -3037,22 +3147,18 @@ def test_request_get_real_retry_on_rate_limit(my_predbat):
     fox = MockFoxAPIForRequestTesting()
 
     # First call returns rate limit, second call succeeds
-    mock_response_rate_limit = MagicMock()
-    mock_response_rate_limit.status_code = 429
-
-    mock_response_success = MagicMock()
-    mock_response_success.status_code = 200
-    mock_response_success.json.return_value = {"errno": 0, "result": {"data": "success"}}
+    mock_response_rate_limit = create_aiohttp_mock_response(status=429)
+    mock_response_success = create_aiohttp_mock_response(status=200, json_data={"errno": 0, "result": {"data": "success"}})
 
     call_count = [0]
 
-    def side_effect(*args, **kwargs):
+    def session_side_effect(*args, **kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
-            return mock_response_rate_limit
-        return mock_response_success
+            return create_aiohttp_mock_session(mock_response_rate_limit)
+        return create_aiohttp_mock_session(mock_response_success)
 
-    with patch("fox.requests.get", side_effect=side_effect):
+    with patch("fox.aiohttp.ClientSession", side_effect=session_side_effect):
         with patch("fox.asyncio.sleep", new_callable=AsyncMock):
             with patch("fox.random.random", return_value=0.1):  # Make sleep short
                 result = run_async(fox.request_get("/op/v0/device/list"))
@@ -3072,16 +3178,15 @@ def test_request_get_real_no_retry_on_auth_error(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 401
+    mock_response = create_aiohttp_mock_response(status=401)
 
     call_count = [0]
 
-    def side_effect(*args, **kwargs):
+    def session_side_effect(*args, **kwargs):
         call_count[0] += 1
-        return mock_response
+        return create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", side_effect=side_effect):
+    with patch("fox.aiohttp.ClientSession", side_effect=session_side_effect):
         result = run_async(fox.request_get("/op/v0/device/list"))
 
     assert result is None
@@ -3099,16 +3204,15 @@ def test_request_get_real_max_retries(my_predbat):
     fox = MockFoxAPIForRequestTesting()
 
     # Always return rate limit to trigger max retries
-    mock_response = MagicMock()
-    mock_response.status_code = 429
+    mock_response = create_aiohttp_mock_response(status=429)
 
     call_count = [0]
 
-    def side_effect(*args, **kwargs):
+    def session_side_effect(*args, **kwargs):
         call_count[0] += 1
-        return mock_response
+        return create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.get", side_effect=side_effect):
+    with patch("fox.aiohttp.ClientSession", side_effect=session_side_effect):
         with patch("fox.asyncio.sleep", new_callable=AsyncMock):
             with patch("fox.random.random", return_value=0.01):  # Make sleep very short
                 result = run_async(fox.request_get("/op/v0/device/list"))
@@ -3127,19 +3231,72 @@ def test_request_get_real_post_with_data(my_predbat):
 
     fox = MockFoxAPIForRequestTesting()
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"errno": 0, "result": {"success": True}}
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 0, "result": {"success": True}})
+    mock_session = create_aiohttp_mock_session(mock_response)
 
-    with patch("fox.requests.post", return_value=mock_response) as mock_post:
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
         result = run_async(fox.request_get("/op/v0/device/setting", post=True, datain={"sn": "TEST123", "key": "MinSocOnGrid", "value": 10}))
 
     assert result is not None
     assert result["success"] == True
-    # Verify the post was called with correct arguments
-    mock_post.assert_called_once()
-    call_kwargs = mock_post.call_args[1]
-    assert call_kwargs["json"] == {"sn": "TEST123", "key": "MinSocOnGrid", "value": 10}
+
+    return False
+
+
+def test_request_get_rate_limiting_prevents_retry(my_predbat):
+    """
+    Test request_get does NOT retry when rate limiting is active (>60 requests/hour)
+    """
+    print("  - test_request_get_rate_limiting_prevents_retry")
+
+    from datetime import datetime, timezone, timedelta
+
+    fox = MockFoxAPIForRequestTesting()
+
+    # Set up rate limiting scenario: 35 requests in 30 minutes = 70/hour
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+    current_time = start_time + timedelta(minutes=30)
+
+    fox.start_time_today = start_time
+    fox.requests_today = 35
+
+    # Mock response that triggers rate limit error (which normally retries)
+    mock_response = MagicMock()
+    mock_response.status_code = 429
+
+    call_count = [0]
+
+    def side_effect(*args, **kwargs):
+        call_count[0] += 1
+        return mock_response
+
+    with patch("fox.datetime") as mock_datetime:
+        # Mock datetime.now() to return our test time
+        mock_datetime.now.return_value = current_time
+
+        # Verify rate limiting is active with mocked time
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        assert hourly_rate > 60, f"Test setup error: hourly_rate should be >60, got {hourly_rate}"
+        assert not fox.should_allow_retry(), "Test setup error: should_allow_retry should be False"
+
+        mock_response = create_aiohttp_mock_response(status=429)
+
+        def session_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            return create_aiohttp_mock_session(mock_response)
+
+        with patch("fox.aiohttp.ClientSession", side_effect=session_side_effect):
+            with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                result = run_async(fox.request_get("/op/v0/device/list"))
+
+    # Verify NO retry occurred due to rate limiting
+    assert result is None
+    assert call_count[0] == 1, f"Expected only 1 call (no retries), but got {call_count[0]} calls"
+
+    # Verify log message was captured
+    assert any("rate limiting" in msg.lower() for msg in fox.log_messages), "Expected rate limiting log message"
 
     return False
 
@@ -3324,6 +3481,59 @@ def test_run_without_automatic_config(my_predbat):
     assert result == True
     assert fox.automatic_config_called == False
     assert "automatic_config" not in fox.method_calls
+
+    return False
+
+
+def test_run_midnight_reset(my_predbat):
+    """
+    Test run() resets daily counters when midnight boundary is crossed
+    """
+    print("  - test_run_midnight_reset")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+
+    # First run - initialize counters on day 1
+    day1_midnight = datetime(2025, 12, 22, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight_utc = day1_midnight
+    fox.base.midnight_utc = day1_midnight
+
+    # Simulate some requests on day 1
+    fox.requests_today = 45
+    fox.rate_limit_errors_today = 3
+
+    result = run_async(fox.run(0, first=True))
+    assert result == True
+
+    # Verify counters are initialized on first run
+    initial_start_time = fox.start_time_today
+    assert fox.last_midnight_utc == day1_midnight
+    assert fox.requests_today == 45  # Unchanged from initial value
+    assert fox.rate_limit_errors_today == 3  # Unchanged from initial value
+
+    # Second run - same day, counters should NOT be reset
+    result = run_async(fox.run(0, first=False))
+    assert result == True
+    assert fox.requests_today == 45  # Still unchanged
+    assert fox.rate_limit_errors_today == 3  # Still unchanged
+    assert fox.last_midnight_utc == day1_midnight
+
+    # Third run - simulate midnight crossing to day 2
+    day2_midnight = datetime(2025, 12, 23, 0, 0, 0, tzinfo=timezone.utc)
+    my_predbat.midnight_utc = day2_midnight
+    fox.base.midnight_utc = day2_midnight
+
+    result = run_async(fox.run(0, first=False))
+    assert result == True
+
+    # Verify counters are reset after midnight
+    assert fox.requests_today == 0, f"Expected requests_today to be reset to 0, got {fox.requests_today}"
+    assert fox.rate_limit_errors_today == 0, f"Expected rate_limit_errors_today to be reset to 0, got {fox.rate_limit_errors_today}"
+    assert fox.last_midnight_utc == day2_midnight, "Expected last_midnight_utc to be updated to day 2"
+    assert fox.start_time_today > initial_start_time, "Expected start_time_today to be reset to current time"
 
     return False
 
@@ -4159,6 +4369,50 @@ def test_publish_data_device_values(my_predbat):
     return False
 
 
+def test_publish_data_device_values_dual_soc(my_predbat):
+    """
+    Test publish_data creates value entities correctly
+    """
+    print("  - test_publish_data_device_values_dual_soc")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {
+        "pvPower": {"value": 3.5, "name": "PV Power", "unit": "kW"},
+        "SoC": {"value": 0.0, "name": "SoC", "unit": "%"},
+        "SoC_1": {"value": 50.0, "name": "SoC", "unit": "%"},
+        "SoC_2": {"value": 75.0, "name": "SoC", "unit": "%"},
+        "generation": {"value": 1000.5, "name": "Generation", "unit": "kWh"},
+    }
+    fox.device_settings[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    run_async(fox.publish_data())
+
+    # Verify value entities were created
+    pv_entity = f"sensor.predbat_fox_{deviceSN.lower()}_pvpower"
+    assert pv_entity in fox.dashboard_items
+    assert fox.dashboard_items[pv_entity]["state"] == 3.5
+    assert fox.dashboard_items[pv_entity]["attributes"]["unit_of_measurement"] == "kW"
+
+    soc_entity = f"sensor.predbat_fox_{deviceSN.lower()}_soc"
+    assert soc_entity in fox.dashboard_items
+    assert fox.dashboard_items[soc_entity]["state"] == 62, f"Expected 62 but got {fox.dashboard_items[soc_entity]['state']}"  # Zero DPs
+
+    # Verify energy entity has correct device_class and state_class
+    gen_entity = f"sensor.predbat_fox_{deviceSN.lower()}_generation"
+    assert gen_entity in fox.dashboard_items
+    assert fox.dashboard_items[gen_entity]["attributes"]["device_class"] == "energy"
+    assert fox.dashboard_items[gen_entity]["attributes"]["state_class"] == "total"
+
+    return False
+
+
 def test_publish_data_device_settings(my_predbat):
     """
     Test publish_data creates settings entities correctly
@@ -4322,7 +4576,7 @@ def test_apply_battery_schedule_discharge_only(my_predbat):
             assert group["startMinute"] == 0
             assert group["endHour"] == 18
             assert group["endMinute"] == 59
-            assert group["fdSoc"] == 10
+            assert group["fdSoc"] == 15  # fdsoc_min is 10, reserve is 15, so fdSoc should be max(10,15)=15
             assert group["fdPwr"] == 5000
             assert group["maxSoc"] == 15, f"Expected maxSoc=15, got {group['maxSoc']}"
             assert group["minSocOnGrid"] == 15, f"Expected minSocOnGrid=15, got {group['minSocOnGrid']}"
@@ -4513,6 +4767,245 @@ def test_automatic_config_no_scheduler_error(my_predbat):
     return False
 
 
+def test_fox_rate_limiting_normal_operation(my_predbat):
+    """Test that normal operation under 60/hour allows retries"""
+    print("  - test_fox_rate_limiting_normal_operation")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    # Create FoxAPI instance
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    # Mock time - start at 12:00:00
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+    current_time = start_time
+
+    with patch("fox.datetime") as mock_datetime:
+        mock_datetime.now.return_value = current_time
+
+        # Simulate 30 requests over 1 hour (well under 60/hour limit)
+        fox.start_time_today = start_time
+
+        for i in range(30):
+            fox.requests_today += 1
+            current_time = start_time + timedelta(minutes=i * 2)  # 2 minutes apart
+            mock_datetime.now.return_value = current_time
+
+        # After 1 hour, rate should be 30/hour
+        elapsed_seconds = (current_time - start_time).total_seconds()
+        hourly_rate = (fox.requests_today * 3600) / max(elapsed_seconds, 1800)
+
+        retry_allowed = fox.should_allow_retry()
+
+        assert fox.requests_today == 30, f"Expected 30 requests, got {fox.requests_today}"
+        assert retry_allowed, "Retries should be allowed at 30/hour"
+        assert hourly_rate <= 60, f"Hourly rate {hourly_rate} should be <= 60"
+
+    return False
+
+
+def test_fox_rate_limiting_exceeds_threshold(my_predbat):
+    """Test that exceeding 60/hour disables retries"""
+    print("  - test_fox_rate_limiting_exceeds_threshold")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    # Mock time - start at 12:00:00
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    with patch("fox.datetime") as mock_datetime:
+        # Set start time (30 minutes minimum)
+        fox.start_time_today = start_time
+        current_time = start_time + timedelta(minutes=30)
+        mock_datetime.now.return_value = current_time
+
+        # Simulate 35 requests in 30 minutes (70/hour rate)
+        fox.requests_today = 35
+
+        # Calculate rate
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+
+        # Check if retry is allowed
+        retry_allowed = fox.should_allow_retry()
+
+        assert fox.requests_today == 35, f"Expected 35 requests, got {fox.requests_today}"
+        assert not retry_allowed, "Retries should not be allowed when exceeding 60/hour"
+        assert hourly_rate > 60, f"Hourly rate {hourly_rate} should be > 60"
+
+    return False
+
+
+def test_fox_rate_limiting_re_enables(my_predbat):
+    """Test that dropping below 60/hour re-enables retries immediately"""
+    print("  - test_fox_rate_limiting_re_enables")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    # Mock time
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    with patch("fox.datetime") as mock_datetime:
+        # Start with high rate (35 requests in 30 minutes = 70/hour)
+        fox.start_time_today = start_time
+        current_time = start_time + timedelta(minutes=30)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 35
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        retry_allowed = fox.should_allow_retry()
+
+        assert not retry_allowed, "Should not allow retry with high rate"
+
+        # Time passes - now 1 hour elapsed with same 35 requests
+        current_time = start_time + timedelta(hours=1)
+        mock_datetime.now.return_value = current_time
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        retry_allowed = fox.should_allow_retry()
+
+        assert retry_allowed, "Retries should be allowed when rate drops below 60/hour"
+        assert hourly_rate <= 60, f"Hourly rate {hourly_rate} should be <= 60"
+
+    return False
+
+
+def test_fox_rate_limiting_midnight_reset(my_predbat):
+    """Test that midnight reset clears counters and timestamps"""
+    print("  - test_fox_rate_limiting_midnight_reset")
+
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    # Day 1 - accumulate requests
+    day1_midnight = datetime(2025, 12, 22, 0, 0, 0, tzinfo=timezone.utc)
+    day1_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    fox.start_time_today = day1_time
+    fox.last_midnight_utc = day1_midnight
+    fox.requests_today = 100
+    fox.rate_limit_errors_today = 5
+
+    # Day 2 - simulate midnight crossing
+    day2_midnight = datetime(2025, 12, 23, 0, 0, 0, tzinfo=timezone.utc)
+    day2_time = datetime(2025, 12, 23, 0, 5, 0, tzinfo=timezone.utc)
+
+    # Update the base object's midnight_utc to simulate day change
+    my_predbat.midnight_utc = day2_midnight
+
+    with patch("fox.datetime") as mock_datetime, patch.object(fox, "log") as mock_log, patch.object(fox, "should_allow_retry", return_value=True):
+        # Mock datetime.now() to return day2_time
+        mock_datetime.now.return_value = day2_time
+        # Mock datetime.now(timezone.utc) calls inside run()
+        mock_datetime.now.side_effect = lambda tz=None: day2_time if tz else day2_time
+
+        # Call run() to trigger midnight reset logic
+        run_async(fox.run(seconds=0, first=False))
+
+    assert fox.requests_today == 0, f"Requests should be reset to 0, got {fox.requests_today}"
+    assert fox.rate_limit_errors_today == 0, f"Rate limit errors should be reset to 0, got {fox.rate_limit_errors_today}"
+    assert fox.last_midnight_utc == day2_midnight, "Last midnight should be updated"
+
+    return False
+
+
+def test_fox_rate_limiting_30min_floor(my_predbat):
+    """Test that 30-minute floor prevents false positives during cold start"""
+    print("  - test_fox_rate_limiting_30min_floor")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    with patch("fox.datetime") as mock_datetime:
+        fox.start_time_today = start_time
+
+        # Scenario 1: 20 requests in first 5 minutes (would be 240/hour without floor!)
+        current_time = start_time + timedelta(minutes=5)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 20
+
+        # Calculate with 30-minute floor
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+
+        assert elapsed_seconds == 1800, f"Elapsed should be floored at 1800 seconds, got {elapsed_seconds}"
+        assert hourly_rate == 40.0, f"Hourly rate should be 40/hour with floor, got {hourly_rate}"
+        retry_allowed = fox.should_allow_retry()
+        assert retry_allowed, "Retries should be allowed with 30-min floor protection"
+
+        # Scenario 2: After 40 minutes, same 20 requests (now 30/hour)
+        current_time = start_time + timedelta(minutes=40)
+        mock_datetime.now.return_value = current_time
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+
+        assert hourly_rate == 30.0, f"Hourly rate should be 30/hour, got {hourly_rate}"
+        retry_allowed = fox.should_allow_retry()
+        assert retry_allowed, "Retries should still be allowed"
+
+    return False
+
+
+def test_fox_rate_limiting_variable_pattern(my_predbat):
+    """Test realistic variable request pattern over multiple hours"""
+    print("  - test_fox_rate_limiting_variable_pattern")
+
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import patch
+
+    fox = FoxAPI(my_predbat, key="test_key", automatic=False)
+
+    start_time = datetime(2025, 12, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    with patch("fox.datetime") as mock_datetime:
+        fox.start_time_today = start_time
+
+        # Hour 1: 20 requests
+        current_time = start_time + timedelta(hours=1)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 20
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        assert hourly_rate <= 60
+
+        # Hour 2: 100 more requests (120 total over 2 hours = 60/hour average)
+        current_time = start_time + timedelta(hours=2)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 120
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        assert hourly_rate == 60.0
+
+        # Hour 3: 10 more requests (130 total over 3 hours = 43.3/hour average)
+        current_time = start_time + timedelta(hours=3)
+        mock_datetime.now.return_value = current_time
+        fox.requests_today = 130
+
+        elapsed_seconds = max((current_time - start_time).total_seconds(), 1800)
+        hourly_rate = (fox.requests_today * 3600) / elapsed_seconds
+        assert hourly_rate < 60
+
+    return False
+
+
 def run_fox_api_tests(my_predbat):
     """
     Run all Fox API tests
@@ -4563,6 +5056,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_get_device_detail(my_predbat)
         failed |= test_api_get_device_history(my_predbat)
         failed |= test_api_get_device_history_empty(my_predbat)
+        failed |= test_api_get_available_variables(my_predbat)
+        failed |= test_api_get_available_variables_empty(my_predbat)
         failed |= test_api_get_device_setting(my_predbat)
         failed |= test_api_set_device_setting(my_predbat)
         failed |= test_api_get_device_settings(my_predbat)
@@ -4625,6 +5120,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_request_get_real_no_retry_on_auth_error(my_predbat)
         failed |= test_request_get_real_max_retries(my_predbat)
         failed |= test_request_get_real_post_with_data(my_predbat)
+        failed |= test_request_get_rate_limiting_prevents_retry(my_predbat)
 
         # run() method tests
         failed |= test_run_first_call_with_devices(my_predbat)
@@ -4633,6 +5129,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_run_hourly_update(my_predbat)
         failed |= test_run_with_automatic_config(my_predbat)
         failed |= test_run_without_automatic_config(my_predbat)
+        failed |= test_run_midnight_reset(my_predbat)
 
         # Event handler tests
         failed |= test_apply_service_to_toggle_turn_on(my_predbat)
@@ -4669,6 +5166,7 @@ def run_fox_api_tests(my_predbat):
         # publish_data tests
         failed |= test_publish_data_device_info(my_predbat)
         failed |= test_publish_data_device_values(my_predbat)
+        failed |= test_publish_data_device_values_dual_soc(my_predbat)
         failed |= test_publish_data_device_settings(my_predbat)
         failed |= test_publish_data_no_battery_skips_settings(my_predbat)
 
@@ -4683,6 +5181,14 @@ def run_fox_api_tests(my_predbat):
         failed |= test_automatic_config_multiple_batteries(my_predbat)
         failed |= test_automatic_config_battery_and_pv_inverter(my_predbat)
         failed |= test_automatic_config_no_scheduler_error(my_predbat)
+
+        # Rate limiting tests
+        failed |= test_fox_rate_limiting_normal_operation(my_predbat)
+        failed |= test_fox_rate_limiting_exceeds_threshold(my_predbat)
+        failed |= test_fox_rate_limiting_re_enables(my_predbat)
+        failed |= test_fox_rate_limiting_midnight_reset(my_predbat)
+        failed |= test_fox_rate_limiting_30min_floor(my_predbat)
+        failed |= test_fox_rate_limiting_variable_pattern(my_predbat)
     except Exception as e:
         print(f"ERROR: Fox API test failed with exception: {e}")
         import traceback

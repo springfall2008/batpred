@@ -3,7 +3,7 @@ import requests
 import json
 import copy
 
-from config import TIME_FORMAT
+from const import TIME_FORMAT
 from utils import dp1, dp2, minute_data
 
 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"

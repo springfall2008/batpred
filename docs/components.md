@@ -2,6 +2,29 @@
 
 This document provides a comprehensive overview of all Predbat components, their purposes, and configuration options.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Component List](#component-list)
+    - [Database Manager (db)](#database-manager-db)
+    - [Home Assistant Interface (ha)](#home-assistant-interface-ha)
+    - [Home Assistant History (ha_history)](#home-assistant-history-ha_history)
+    - [Web Interface (web)](#web-interface-web)
+    - [MCP Server (mcp)](#mcp-server-mcp)
+    - [GivEnergy Cloud Direct (gecloud)](#givenergy-cloud-direct-gecloud)
+    - [GivEnergy Cloud Data (gecloud_data)](#givenergy-cloud-data-gecloud_data)
+    - [Octopus Energy Direct (octopus)](#octopus-energy-direct-octopus)
+    - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
+    - [Ohme Charger (ohme)](#ohme-charger-ohme)
+    - [Fox ESS API (fox)](#fox-ess-api-fox)
+    - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
+    - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
+- [Managing Components](#managing-components)
+    - [Checking Component Status](#checking-component-status)
+    - [Restarting Components](#restarting-components)
+    - [Editing Component Configuration](#editing-component-configuration)
+    - [Component Health](#component-health)
+
 ## Overview
 
 Predbat uses a modular component architecture where each component provides specific functionality such as database management, cloud API integration, web interfaces, and energy provider integrations.
@@ -24,7 +47,7 @@ Stores and manages all historical data for Predbat, including energy usage, sens
 #### Configuration Options (db)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `db_enable` | Boolean | Yes | - | `db_enable` | Set to `true` to enable the database, `false` to disable |
 | `db_days` | Integer | No | 30 | `db_days` | Number of days of historical data to keep in the database |
 
@@ -47,7 +70,7 @@ This component is always enabled and required for Predbat to function.
 #### Configuration Options (ha)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `ha_url` | String | No | `http://supervisor/core` | `ha_url` | Home Assistant API URL (the default is for when using an HA add-on) |
 | `ha_key` | String | No | Auto-detected | `ha_key` | Home Assistant access token (auto-detected when running as add-on) |
 | `db_enable` | Boolean | No | False | `db_enable` | Enable database integration |
@@ -86,12 +109,12 @@ Provides a built-in web server that lets you view and manage Predbat through you
 #### Configuration Options (web)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `port` | Integer | No | 5052 | `web_port` | Port number for the web server |
 
 #### How to access (web)
 
-If you use Predbat is a Home Assistant add on then click 'Open Web UI' from the add-on or add Predbat Web UI to your side bar.
+If you use Predbat as a Home Assistant add on then click 'Open Web UI' from the add-on or add Predbat Web UI to your side bar.
 If you run Predbat outside then you can access it from the port as configured:  `http://homename:5052`
 
 ---
@@ -119,7 +142,7 @@ The MCP server requires a secret key for authentication. Keep this secret secure
 #### Configuration Options (mcp)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `mcp_enable` | Boolean | Yes | False | `mcp_enable` | Set to `true` to enable the MCP server |
 | `mcp_secret` | String | No | `predbat_mcp_secret` | `mcp_secret` | Secret key for authentication - change this! |
 | `mcp_port` | Integer | No | 8199 | `mcp_port` | Port number for the MCP server |
@@ -179,7 +202,7 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 #### Configuration Options (gecloud)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
 | `automatic` | Boolean | No | False | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
@@ -209,7 +232,7 @@ Downloads historical energy data from GivEnergy Cloud including consumption, gen
 #### Configuration Options (gecloud_data)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `ge_cloud_data` | Boolean | Yes | - | `ge_cloud_data` | Set to `true` to enable historical data download |
 | `ge_cloud_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key (same as Cloud Direct) |
 | `ge_cloud_serial` | String | No | Auto-detected | `ge_cloud_serial` | Your inverter serial number (usually auto-detected) |
@@ -241,7 +264,7 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 #### Configuration Options (octopus)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `octopus_api_key` | Your Octopus Energy API key |
 | `account_id` | String | Yes | - | `octopus_api_account` | Your Octopus Energy account number (starts with A-) |
 | `automatic` | Boolean | No | True | `octopus_automatic` | Set to `true` to automatically configure Predbat to use this Component (no need to update apps.yaml) |
@@ -252,6 +275,185 @@ Connects to your Octopus Energy account to automatically download your tariff ra
 2. Go to your account dashboard
 3. Find your API key (usually in Developer settings)
 4. Your account number is shown on your dashboard (format: A-XXXXXXXX)
+
+---
+
+### Axle Energy VPP (axle)
+
+**Can be restarted:** Yes
+
+#### What it does (axle)
+
+Connects to Axle Energy's Virtual Power Plant (VPP) [UK] service to receive and track demand response events.
+When Axle schedules export events, this component will track them and store the history for up to 7 days.
+The component publishes a binary sensor that turns on when an event is currently active.
+
+If configured in Predbat's `apps.yaml` Predbat will control your inverter to export in response to the Axle event and adjusts the export energy rate to account for the extra payment from Axle.
+
+Sign up with my referral code here: <https://vpp.axle.energy/landing/grid?ref=R-VWIICRSA>
+
+*Please note you are not allowed to be on Octoplus at the same time, so contact Octopus if you need to be removed from this scheme.*
+
+Select control my battery for 'Events Only'.
+
+#### When to enable (axle)
+
+- You're enrolled in Axle Energy's VPP program and want Predbat to be aware of the scheduled events and plan for them.
+
+#### Important notes (axle)
+
+- Polls the Axle API every 10 minutes for updates
+- Stores event history for up to 7 days
+- Events are added to history as soon as they start (become active)
+- Binary sensor (default name `binary_sensor.predbat_axle_event`) is `on` when an event is currently active, `off` otherwise
+- Event details and history are available as sensor attributes
+- When **axle_control** is enabled (set to True in `apps.yaml`), Predbat will enter read-only mode during active VPP events (default is False)
+    - Read-only mode prevents Predbat from controlling the inverter while VPP events are running
+    - Status will show as "Read-Only (Axle)" when this feature is active
+
+#### Configuration Options (axle)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `api_key` | String | Yes | - | `axle_api_key` | Your Axle Energy API key from the VPP portal |
+| `pence_per_kwh` | Integer | No | 100 | `axle_pence_per_kwh` | Payment rate in pence per kWh for VPP events |
+| `automatic` | Bool | No | True | `axle_automatic` | When enabled use the default Axle event entity name (**binary_sensor.predbat_axle_event**) |
+| `control` | Bool | No | False | `axle_control` | When enabled puts Predbat into Read-Only mode during Axle events |
+
+#### How to get your API credentials (axle)
+
+1. Log in to your Axle Energy VPP portal at <https://vpp.axle.energy>
+2. Navigate to the Home Assistant integration section
+3. Copy your API key
+4. Paste it into `axle_api_key` in apps.yaml
+
+#### Sensor Attributes (axle)
+
+The binary sensor `binary_sensor.predbat_axle_event` provides the following attributes:
+
+- `event_current`: List containing the current event (if any), with fields:
+    - `start_time`: Event start time (timezone-aware datetime)
+    - `end_time`: Event end time (timezone-aware datetime)
+    - `import_export`: Event type ("import" or "export")
+    - `updated_at`: Last update timestamp
+    - `pence_per_kwh`: Payment rate for this event
+- `event_history`: List of past events (up to 7 days) with the same fields as above
+
+---
+
+### SolaX Cloud API (solax)
+
+**Can be restarted:** Yes
+
+#### What it does (solax)
+
+Connects directly to the SolaX Cloud API to control SolaX inverters and batteries.
+This allows Predbat to automatically set charge/discharge schedules, power limits, target SOC, and read real-time data from your inverter without requiring local Home Assistant integrations.
+
+The component polls your SolaX Cloud account every minute for real-time data and every 30 minutes for device and plant information.
+It publishes comprehensive sensors for battery status, energy totals, and provides full control over charging and discharging schedules.
+
+#### When to enable (solax)
+
+- You have a SolaX inverter (X1, X3, X3-Hybrid, or other cloud-connected models)
+- You want cloud-based control without local integrations
+- You have SolaX Cloud API credentials (client ID and secret)
+- You want automatic battery charge/discharge optimization
+- You want Predbat to read historical energy data directly from SolaX Cloud
+
+#### Important notes (solax)
+
+- Requires valid SolaX Cloud API credentials (client ID and client secret)
+- Supports multiple plants/inverters with automatic discovery when `solax_automatic: true`
+- Region-specific API endpoints: EU, US, or CN
+- Authentication tokens are automatically managed (30-day expiry with auto-refresh)
+- Supports both residential and commercial installations
+- Control commands use time-window based scheduling (similar to GivEnergy)
+- Read-only mode available with `solax_enable_controls: false`
+- Compatible with Predbat's standard optimization algorithms
+
+#### Configuration Options (solax)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `client_id` | String | Yes | - | `solax_client_id` | Your SolaX Cloud API client ID |
+| `client_secret` | String | Yes | - | `solax_client_secret` | Your SolaX Cloud API client secret |
+| `region` | String | No | 'eu' | `solax_region` | API region: 'eu', 'us', or 'cn' |
+| `plant_id` | String | No | None | `solax_plant_id` | Optional: Filter to specific plant ID |
+| `automatic` | Boolean | No | False | `solax_automatic` | Auto-configure all entities and inverters |
+| `enable_controls` | Boolean | No | True | `solax_enable_controls` | Enable inverter control (false for read-only) |
+
+**Security Note:** Store `solax_client_id` and especially `solax_client_secret` in `secrets.yaml`:
+
+```yaml
+solax_client_id: !secret solax_client_id
+solax_client_secret: !secret solax_client_secret
+```
+
+#### How to get your API credentials (solax)
+
+1. Log in to your SolaX Cloud account:
+   - EU: <https://www.solaxcloud.com>
+   - US: <https://www.solaxcloud.us>
+   - CN: <https://www.solaxcloud.com.cn>
+2. Navigate to Settings → API Management (or Developer Settings)
+3. Create a new API application or view existing credentials
+4. Copy your **Client ID** and **Client Secret**
+5. Add to your `secrets.yaml` file
+6. Reference in `apps.yaml` using `!secret` notation
+
+#### Published Entities (solax)
+
+For each plant (replace `{plant_id}` with your actual plant ID), the component creates:
+
+**Battery Sensors:**
+
+- Battery SOC (kWh)
+- Battery capacity (kWh)
+- Battery temperature (°C)
+- Battery max power (W)
+
+**System Sensors:**
+
+- Inverter max power (W)
+- PV capacity (kWp)
+- Total PV yield (kWh)
+- Total battery charged (kWh)
+- Total battery discharged (kWh)
+- Total grid imported (kWh)
+- Total grid exported (kWh)
+- Total load (kWh, calculated)
+- Total earnings (currency)
+
+**Power Sensors (per inverter):**
+
+- Charge/discharge power (W)
+- Grid power (W)
+- PV power (W)
+- AC load power (W)
+
+**Control Entities:**
+
+- Battery reserve SOC (number, %)
+- Charge start/end times (select, HH:MM:SS format)
+- Charge target SOC (number, %)
+- Charge rate (number, W)
+- Charge enable (switch)
+- Export start/end times (select, HH:MM:SS format)
+- Export target SOC (number, %)
+- Export rate (number, W)
+- Export enable (switch)
+
+#### Testing your configuration (solax)
+
+You can test your SolaX Cloud API connection independently:
+
+```bash
+cd /config/appdaemon/apps/predbat
+python3 solax.py --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET --region eu
+```
+
+This will authenticate, fetch all plants, devices, and real-time data, helping diagnose any connection or configuration issues.
 
 ---
 
@@ -277,7 +479,7 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 #### Configuration Options (ohme)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `email` | String | Yes | - | `ohme_login` | Your Ohme account email address |
 | `password` | String | Yes | - | `ohme_password` | Your Ohme account password |
 | `ohme_automatic_octopus_intelligent` | Boolean | No | - | `ohme_automatic_octopus_intelligent` | Set to `true` to automatically sync with Intelligent Octopus |
@@ -305,7 +507,7 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 #### Configuration Options (fox)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
 | `automatic` | Boolean | No | False | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
 
@@ -334,7 +536,7 @@ Monitors weather alert feeds (MeteoAlarm) for severe weather warnings that might
 #### Configuration Options (alert_feed)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `alert_config` | Dictionary | Yes | {} | `alerts` | Alert configuration including URL and filters |
 
 #### Configuration example
@@ -369,7 +571,7 @@ Note: To use the carbon data in Predbat you also have to turn on **switch.predba
 #### Configuration Options (carbon)
 
 | Option | Type | Required | Default | Config Key | Description |
-|--------|------|----------|---------|------------|-------------|
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `postcode` | String | Yes | - | `carbon_postcode` | Your UK postcode for regional carbon intensity data |
 | `automatic` | Boolean | No | False | `carbon_automatic` | Set to `true` to automatically point Predbat to the carbon data |
 
@@ -393,10 +595,18 @@ You can check the status of all components through the web interface:
 
 Most components can be restarted if they encounter problems:
 
-- Use the restart button on the Components page in the web interface
+- Use the 'Restart' button on the Components page in the web interface
 - Or restart Predbat entirely to restart all components
 
 **Note:** Core components (Database Manager, Home Assistant Interface, and Home Assistant History) cannot be restarted individually and require a full Predbat restart.
+
+### Editing Component Configuration
+
+Click the Pencil icon next to a component to change the component configuration, e.g.:
+
+![image](images/web-interface-component-configuration.png)
+
+Once you save the component configuration the changes will be written to `apps.yaml` and Predbat and all components will be restarted.
 
 ### Component Health
 

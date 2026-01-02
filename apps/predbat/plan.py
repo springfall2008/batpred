@@ -12,7 +12,7 @@ import copy
 import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
-from config import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
+from const import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 import time
@@ -397,12 +397,12 @@ class Plan:
                         self.log(
                             "Optimise all for buy/sell price band <= {} metric {} keep {} soc_min {} import {} export {} soc {} windows {} export on {}".format(
                                 loop_price,
-                                dp4(metric),
-                                dp4(metric_keep),
-                                dp4(soc_min),
-                                dp4(import_kwh_battery + import_kwh_house),
-                                dp4(export_kwh),
-                                dp4(soc),
+                                dp2(metric),
+                                dp2(metric_keep),
+                                dp2(soc_min),
+                                dp2(import_kwh_battery + import_kwh_house),
+                                dp2(export_kwh),
+                                dp1(soc),
                                 try_charge_limit,
                                 try_export,
                             )
@@ -411,12 +411,12 @@ class Plan:
                         self.log(
                             "Optimise all for buy/sell price band <= {} metric {} keep {} soc_min {} import {} export {}  soc {} windows {} export off".format(
                                 loop_price,
-                                dp4(metric),
-                                dp4(metric_keep),
-                                dp4(soc_min),
-                                dp4(import_kwh_battery + import_kwh_house),
-                                dp4(export_kwh),
-                                dp4(soc),
+                                dp2(metric),
+                                dp2(metric_keep),
+                                dp2(soc_min),
+                                dp2(import_kwh_battery + import_kwh_house),
+                                dp2(export_kwh),
+                                dp1(soc),
                                 try_charge_limit,
                             )
                         )
@@ -444,16 +444,16 @@ class Plan:
             self.log(
                 "Optimise all charge {} price band {} total simulations {} at cost {} metric {} keep {} cycle {} carbon {} import {} battery_value {} soc_min {} limits {} export {}".format(
                     region_txt,
-                    dp4(best_price),
+                    dp2(best_price),
                     len(tried_list),
-                    dp4(best_cost),
-                    dp4(best_metric),
-                    dp4(best_keep),
-                    dp4(best_cycle),
+                    dp2(best_cost),
+                    dp2(best_metric),
+                    dp2(best_keep),
+                    dp2(best_cycle),
                     dp0(best_carbon),
                     dp2(best_import),
-                    dp4(best_battery_value),
-                    dp4(best_soc_min),
+                    dp2(best_battery_value),
+                    dp1(best_soc_min),
                     best_limits,
                     best_export,
                 )
@@ -604,7 +604,7 @@ class Plan:
                 value = "Chrg/Exp"
             elif charge_window_n >= 0:
                 charge_target = self.charge_limit_best[charge_window_n]
-                if charge_target == self.reserve:
+                if self.is_freeze_charge(charge_target):
                     value = "FrzChrg"
                 else:
                     value = "Chrg"
@@ -1120,9 +1120,8 @@ class Plan:
                 save="best" if publish else None,
                 end_record=self.end_record,
             )
-            # round charge_limit_best (kWh) to 2 decimal places and export_limits_best (percentage) to nearest whole number
-            self.charge_limit_best = [dp2(elem) for elem in self.charge_limit_best]
-            self.export_limits_best = [dp2(elem) for elem in self.export_limits_best]
+            # round charge_limit_best (kWh) to 3 decimal places
+            self.charge_limit_best = [dp3(elem) for elem in self.charge_limit_best]
 
             self.log(
                 "Best charging limit SoC's {}kWh, export {}kWh gives import battery {}kWh, house {}kWh, export {}kWh, metric {}{}, metric10 {}{}".format(
@@ -1428,23 +1427,23 @@ class Plan:
                 self.log(
                     "Sim: SoC {} soc_min {} @ {} window {} metric {} cost {} cost10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} final_carbon_g {} metric_keep {} cycle {} carbon {} import {} export {} battery_value {}".format(
                         try_soc,
-                        dp4(soc_min),
+                        dp1(soc_min),
                         self.time_abs_str(soc_min_minute),
                         window_n,
-                        metric,
-                        cost,
-                        cost10,
-                        soc,
-                        soc10,
-                        final_iboost,
-                        final_iboost10,
-                        final_carbon_g,
-                        metric_keep,
-                        battery_cycle,
-                        final_carbon_g,
-                        import_kwh_battery + import_kwh_house,
-                        export_kwh,
-                        battery_value,
+                        dp2(metric),
+                        dp2(cost),
+                        dp2(cost10),
+                        dp1(soc),
+                        dp1(soc10),
+                        dp2(final_iboost),
+                        dp2(final_iboost10),
+                        dp0(final_carbon_g),
+                        dp2(metric_keep),
+                        dp2(battery_cycle),
+                        dp0(final_carbon_g),
+                        dp2(import_kwh_battery + import_kwh_house),
+                        dp2(export_kwh),
+                        dp2(battery_value),
                     )
                 )
 
@@ -1643,21 +1642,21 @@ class Plan:
                         window_n,
                         self.time_abs_str(start),
                         self.time_abs_str(try_export_window[window_n]["end"]),
-                        dp4(import_kwh_battery + import_kwh_house),
-                        dp4(export_kwh),
-                        dp4(soc_min),
+                        dp2(import_kwh_battery + import_kwh_house),
+                        dp2(export_kwh),
+                        dp1(soc_min),
                         self.time_abs_str(soc_min_minute),
-                        dp4(soc),
-                        dp4(soc10),
-                        dp4(cost),
-                        dp4(cost10),
-                        dp4(metric),
-                        dp4(battery_cycle * self.metric_battery_cycle),
-                        dp4(final_iboost),
-                        dp4(final_iboost10),
-                        dp4(final_carbon_g),
-                        dp4(metric_keep),
-                        battery_value,
+                        dp1(soc),
+                        dp1(soc10),
+                        dp2(cost),
+                        dp2(cost10),
+                        dp2(metric),
+                        dp2(battery_cycle * self.metric_battery_cycle),
+                        dp2(final_iboost),
+                        dp2(final_iboost10),
+                        dp0(final_carbon_g),
+                        dp2(metric_keep),
+                        dp2(battery_value),
                         end_record,
                     )
                 )
@@ -1705,11 +1704,11 @@ class Plan:
                         self.time_abs_str(window["start"]),
                         self.time_abs_str(window["end"]),
                         window["average"],
-                        dp4(best_cost),
-                        dp4(best_metric),
-                        dp4(best_carbon),
-                        dp4(best_import),
-                        dp4(best_keep),
+                        dp2(best_cost),
+                        dp2(best_metric),
+                        dp2(best_carbon),
+                        dp2(best_import),
+                        dp2(best_keep),
                         best_export,
                         best_size,
                         export_limit[window_n],
@@ -1723,11 +1722,11 @@ class Plan:
                         window["average"],
                         best_export,
                         best_size,
-                        dp4(best_cost),
-                        dp4(best_metric),
-                        dp4(best_carbon),
-                        dp4(best_import),
-                        dp4(best_keep),
+                        dp2(best_cost),
+                        dp2(best_metric),
+                        dp2(best_carbon),
+                        dp2(best_import),
+                        dp2(best_keep),
                         window_results,
                     )
                 )

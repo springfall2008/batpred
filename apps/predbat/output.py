@@ -10,7 +10,8 @@
 
 import math
 from datetime import datetime, timedelta
-from config import THIS_VERSION, TIME_FORMAT, PREDICT_STEP
+from config import THIS_VERSION
+from const import TIME_FORMAT, PREDICT_STEP
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state
 from prediction import Prediction
 
@@ -738,7 +739,7 @@ class Output:
         """
         Get the charge type for the given charge limit
         """
-        if charge_limit == self.reserve:
+        if self.is_freeze_charge(charge_limit):
             if current:
                 return "freeze charging"
             else:
@@ -840,9 +841,9 @@ class Output:
             metric_midnight_tomorrow -= metric_midnight_today
 
         if metric_midnight_tomorrow is None:
-            sentence += "- Your estimated bill for today is {}{}\n".format(self.currency_symbols[0], dp2(metric_midnight_today / 100))
+            sentence += "- Your estimated bill for today is {}{:.2f}\n".format(self.currency_symbols[0], dp2(metric_midnight_today / 100))
         else:
-            sentence += "- Your estimated bill for today is {}{} and tomorrow is {}{}\n".format(
+            sentence += "- Your estimated bill for today is {}{:.2f} and tomorrow is {}{:.2f}\n".format(
                 self.currency_symbols[0],
                 dp2(metric_midnight_today / 100),
                 self.currency_symbols[0],
@@ -941,7 +942,10 @@ class Output:
         plan_debug = self.plan_debug
         mode = self.predbat_mode
         if self.set_read_only:
-            mode += " (read only)"
+            if self.set_read_only_axle:
+                mode += " (read only - Axle)"
+            else:
+                mode += " (read only)"
         if self.debug_enable:
             mode += " (debug)"
         html += "<table>"
@@ -1215,7 +1219,7 @@ class Output:
 
                 limit_percent = calc_percent_limit(target, self.soc_max)
                 if limit > 0.0:
-                    if limit == self.reserve:
+                    if self.is_freeze_charge(limit):
                         state = "FrzChrg&rarr;"
                         state_color = "#EEEEEE"
                         raw_state = "FrzChrg"
@@ -1577,7 +1581,7 @@ class Output:
         for minute in range(-24 * 60, self.minutes_now + self.forecast_minutes + 24 * 60, self.plan_interval_minutes):
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
-            rates_time[stamp] = dp2(rates[minute])
+            rates_time[stamp] = dp2(rates.get(minute, 0))
 
         if export:
             self.publish_rates_export()
@@ -1589,7 +1593,7 @@ class Output:
         if export:
             self.dashboard_item(
                 self.prefix + ".rates_export",
-                state=dp2(rates[self.minutes_now]),
+                state=dp2(rates.get(self.minutes_now, 0)),
                 attributes={
                     "min": dp2(self.rate_export_min),
                     "max": dp2(self.rate_export_max),
@@ -1605,7 +1609,7 @@ class Output:
         elif gas:
             self.dashboard_item(
                 self.prefix + ".rates_gas",
-                state=dp2(rates[self.minutes_now]),
+                state=dp2(rates.get(self.minutes_now, 0)),
                 attributes={
                     "min": dp2(self.rate_gas_min),
                     "max": dp2(self.rate_gas_max),
@@ -1620,7 +1624,7 @@ class Output:
         else:
             self.dashboard_item(
                 self.prefix + ".rates",
-                state=dp2(rates[self.minutes_now]),
+                state=dp2(rates.get(self.minutes_now, 0)),
                 attributes={
                     "min": dp2(self.rate_min),
                     "max": dp2(self.rate_max),
@@ -1712,13 +1716,13 @@ class Output:
             hour_load += load_energy
 
             if self.rate_import:
-                hour_cost += self.rate_import[minute] * energy_import
-                hour_cost_import += self.rate_import[minute] * energy_import
-                hour_cost_car += self.rate_import[minute] * energy_car
+                hour_cost += self.rate_import.get(minute, 0) * energy_import
+                hour_cost_import += self.rate_import.get(minute, 0) * energy_import
+                hour_cost_car += self.rate_import.get(minute, 0) * energy_car
 
             if self.rate_export:
-                hour_cost -= self.rate_export[minute] * energy_export
-                hour_cost_export -= self.rate_export[minute] * energy_export
+                hour_cost -= self.rate_export.get(minute, 0) * energy_export
+                hour_cost_export -= self.rate_export.get(minute, 0) * energy_export
 
             if self.carbon_enable:
                 hour_carbon_g += self.carbon_history.get(minute_back, 0) * energy_import
@@ -1770,16 +1774,16 @@ class Output:
             day_import += energy
             day_car += car_energy
             if self.rate_import:
-                day_cost += self.rate_import[minute] * energy
-                day_cost_import += self.rate_import[minute] * energy
-                day_cost_nosc += self.rate_import[minute] * energy
-                day_cost_car += self.rate_import[minute] * car_energy
+                day_cost += self.rate_import.get(minute, 0) * energy
+                day_cost_import += self.rate_import.get(minute, 0) * energy
+                day_cost_nosc += self.rate_import.get(minute, 0) * energy
+                day_cost_car += self.rate_import.get(minute, 0) * car_energy
 
             day_export += energy_export
             if self.rate_export:
-                day_cost -= self.rate_export[minute] * energy_export
-                day_cost_nosc -= self.rate_export[minute] * energy_export
-                day_cost_export -= self.rate_export[minute] * energy_export
+                day_cost -= self.rate_export.get(minute, 0) * energy_export
+                day_cost_nosc -= self.rate_export.get(minute, 0) * energy_export
+                day_cost_export -= self.rate_export.get(minute, 0) * energy_export
 
             if self.carbon_enable:
                 carbon_g += self.carbon_history.get(minute_back, 0) * energy
@@ -2314,8 +2318,12 @@ class Output:
 
         self.current_status = message + extra
         if notify and self.previous_status != message and self.set_status_notify:
-            self.call_notify("Predbat status change to: " + message + extra)
-            self.previous_status = message
+            if self.had_errors and had_errors:
+                # Already in error state, do not notify second error in a single run (spam)
+                pass
+            else:
+                self.call_notify("Predbat status change to: " + message + extra)
+                self.previous_status = message
 
         error_count = self.get_state_wrapper(self.prefix + ".status", attribute="error_count", default=0)
         try:

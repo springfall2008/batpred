@@ -182,9 +182,18 @@ Use --quick argument to skip long tests:
 - Mock HA via `TestHAInterface` class which stores dummy state in `dummy_items` dict
 - Tests must be run from the coverage directory
 - Run all tests: `./run_all`
-- Run named unit tests `./run_all --test test_name`
+- Run named unit tests `./run_all --test test_name --test test_name2`
+- Run tests matching pattern: `./run_all -k axle_`
 - Run specific debug scenarios: `python3 ../apps/predbat/unit_test.py --debug predbat_debug_file.yaml`
 - Performance tests: `./run_all --perf-only`
+
+### Writing tests
+
+- Always add the test to TEST_REGISTRY in unit_test.py
+- Use `TestHAInterface` to mock HA state and services
+- Use assertions to validate expected outcomes
+- Never fix a failing tests if there is a bug in the main code - fix the bug instead
+- Check coverage and add tests for new features/coverage holes as required
 
 **Coverage analysis**:
 

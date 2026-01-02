@@ -7,10 +7,11 @@
 # -----------------------------------------------------------------------------
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 import hashlib
-import requests
+import aiohttp
+import json
 import argparse
 import random
 from component_base import ComponentBase
@@ -216,6 +217,24 @@ class FoxAPI(ComponentBase):
         self.local_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
+        # Rate limiting tracking
+        self.requests_today = 0
+        self.rate_limit_errors_today = 0
+        self.start_time_today = None
+        self.last_midnight_utc = None
+
+    def should_allow_retry(self):
+        """
+        Calculate if retries should be allowed based on current API usage rate.
+        Returns True if rate is <= 60/hour, False otherwise.
+        Uses 30-minute minimum floor to prevent false positives during cold start.
+        """
+        if not self.start_time_today:
+            return True
+
+        elapsed_seconds = max((datetime.now(timezone.utc) - self.start_time_today).total_seconds(), 1800)
+        hourly_rate = (self.requests_today * 3600) / elapsed_seconds
+        return hourly_rate <= 60
 
     def is_alive(self):
         """
@@ -227,6 +246,29 @@ class FoxAPI(ComponentBase):
         """
         Main run loop
         """
+        # Initialize start time on first run
+        if first:
+            self.start_time_today = datetime.now(timezone.utc)
+            self.last_midnight_utc = self.midnight_utc
+
+        # Check for midnight boundary crossing and reset daily counters
+        current_midnight = self.midnight_utc
+        if self.last_midnight_utc is not None and self.last_midnight_utc != current_midnight:
+            # Midnight has passed - reset daily counters
+            self.log(f"Fox: Midnight reset - requests_today: {self.requests_today}, " f"rate_limit_errors_today: {self.rate_limit_errors_today}")
+            self.requests_today = 0
+            self.rate_limit_errors_today = 0
+            self.start_time_today = datetime.now(timezone.utc)
+            self.last_midnight_utc = current_midnight
+
+        # Log API usage statistics
+        if self.start_time_today:
+            elapsed_seconds = max((datetime.now(timezone.utc) - self.start_time_today).total_seconds(), 1800)
+            elapsed_minutes = elapsed_seconds / 60
+            hourly_rate = (self.requests_today * 3600) / elapsed_seconds
+            retry_allowed = self.should_allow_retry()
+            self.log(f"Fox: API usage: {self.requests_today} requests over {elapsed_minutes:.1f} minutes " f"({hourly_rate:.1f}/hour), retry_allowed={retry_allowed}")
+
         if first:
             # Only do these once as battery charging times are ignored with the scheduler
             # and we get the realtime data every 5 minutes
@@ -244,9 +286,6 @@ class FoxAPI(ComponentBase):
                     await self.get_device_history(sn)
                     await self.get_battery_charging_time(sn)
 
-            if self.automatic:
-                await self.automatic_config()
-
         if first or (seconds % (60 * 60) == 0):
             # Regular updates for registers and scheduler data
             for device in self.device_list:
@@ -263,7 +302,12 @@ class FoxAPI(ComponentBase):
                 sn = device.get("deviceSN", None)
                 if sn:
                     await self.get_real_time_data(sn)
+            # Refresh HA entities
             await self.publish_data()
+
+        # Automatic configuration on first run
+        if first and self.automatic:
+            await self.automatic_config()
 
         return True
 
@@ -840,17 +884,6 @@ class FoxAPI(ComponentBase):
                         app="fox",
                     )
 
-    def getMinSocOnGrid(self, deviceSN):
-        """
-        Get the MinSocOnGrid setting for the device
-        """
-        value = self.device_settings.get(deviceSN, {}).get("MinSocOnGrid", {}).get("value", 10)
-        try:
-            value = int(float(value))
-        except ValueError:
-            value = 10
-        return value
-
     async def get_schedule_settings_ha(self, deviceSN):
         """
         Get the current schedule from HA database
@@ -994,53 +1027,71 @@ class FoxAPI(ComponentBase):
         """
         retries = 0
         self.log("Fox: API Requesting {} {} - data {}".format("POST" if post else "GET", path, datain))
+
         while retries < FOX_RETRIES:
             result, allow_retry = await self.request_get_func(path, post=post, datain=datain)
             if result is not None:
                 return result
             if not allow_retry:
                 break
+
+            # Check if rate limiting prevents retry
+            if not self.should_allow_retry():
+                self.log("Fox: Retries disabled due to rate limiting (>60/hour average)")
+                break
+
             retries += 1
             await asyncio.sleep(retries * random.random())
         self.log("Fox: API Response failed after {} retries for {}".format(FOX_RETRIES, path))
         return result
 
     async def request_get_func(self, path, post=False, datain=None):
+        # Track API request
+        self.requests_today += 1
+
         headers = self.get_headers(path)
         url = FOX_DOMAIN + path
         self.log("Fox: API Request: path {} post {} datain {}".format(path, post, datain))
+
+        timeout = aiohttp.ClientTimeout(total=TIMEOUT)
         try:
-            if post:
-                if datain:
-                    response = await asyncio.to_thread(requests.post, url, headers=headers, json=datain, timeout=TIMEOUT)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                if post:
+                    if datain:
+                        async with session.post(url, headers=headers, json=datain) as response:
+                            status_code = response.status
+                            try:
+                                data = await response.json()
+                            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                                self.log("Warn: Fox: Failed to decode response from {} code {}".format(url, status_code))
+                                data = None
+                    else:
+                        async with session.post(url, headers=headers) as response:
+                            status_code = response.status
+                            try:
+                                data = await response.json()
+                            except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                                self.log("Warn: Fox: Failed to decode response from {} code {}".format(url, status_code))
+                                data = None
                 else:
-                    response = await asyncio.to_thread(requests.post, url, headers=headers, timeout=TIMEOUT)
-            else:
-                response = await asyncio.to_thread(requests.get, url, headers=headers, params=datain, timeout=TIMEOUT)
-        except requests.exceptions.RequestException as e:
+                    async with session.get(url, headers=headers, params=datain) as response:
+                        status_code = response.status
+                        try:
+                            data = await response.json()
+                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
+                            self.log("Warn: Fox: Failed to decode response from {} code {}".format(url, status_code))
+                            data = None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: Fox: Exception during request to {url}: {e}")
             self.failures_total += 1
             return None, False
 
-        status_code = response.status_code
         if status_code in [400, 401, 402, 403]:
             self.log("Warn: Fox: Authentication error with status code {} from {}".format(status_code, url))
             self.failures_total += 1
             return None, False
 
-        try:
-            data = response.json()
-        except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Fox: Failed to decode response from {} code {}".format(url, status_code))
-            data = None
-        except (requests.Timeout, requests.exceptions.ReadTimeout):
-            self.log("Warn: Fox: Timeout from {}".format(url))
-            return None, True
-        except (requests.exceptions.RequestException, requests.exceptions.ConnectionError) as e:
-            self.log("Warn: Fox: Could not connect to {}".format(url))
-            return None, True
-
-        if response.status_code in [200, 201]:
+        if status_code in [200, 201]:
             if data is None:
                 data = {}
             errno = data.get("errno", 0)
@@ -1048,7 +1099,8 @@ class FoxAPI(ComponentBase):
             if errno != 0:
                 self.failures_total += 1
                 if errno in [40400, 41200, 41201, 41202, 41203, 41935, 44098]:
-                    # Rate limiting so wait up to 31 seconds
+                    # Rate limiting detected
+                    self.rate_limit_errors_today += 1
                     self.log(f"Info: Fox: Rate limiting or comms issue detected {msg}:{errno}, waiting...")
                     await asyncio.sleep(random.random() * 30 + 1)
                     return None, True
@@ -1078,7 +1130,7 @@ class FoxAPI(ComponentBase):
             return data, False
         else:
             self.failures_total += 1
-            if response.status_code == 429:
+            if status_code == 429:
                 # Rate limiting so wait up to 30 seconds
                 self.log("Info: Fox: Rate limiting detected, waiting...")
                 await asyncio.sleep(random.random() * 30 + 1)
@@ -1127,6 +1179,30 @@ class FoxAPI(ComponentBase):
             reserve_min = int(self.fdsoc_min.get(sn, 10))
             self.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_reserve_min", state=reserve_min, attributes={"friendly_name": f"Fox {sn} Battery Reserve Min", "unit_of_measurement": "%"}, app="fox")
 
+        # If we have soc_x sensors then sum them for total soc and store as _soc so that Predbat gets a single SOC value
+        for sn in self.device_values:
+            soc_total = 0
+            soc_total_count = 0
+            for item_name in self.device_values[sn]:
+                if item_name.lower().startswith("soc_"):
+                    item = self.device_values[sn][item_name]
+                    soc = item.get("value", None)
+                    try:
+                        soc = float(soc)
+                    except ValueError:
+                        soc = None
+                    if soc is not None:
+                        soc_total += soc
+                        soc_total_count += 1
+            if soc_total_count > 0:
+                # Remove the SOC dictionary key (any case) otherwise we might create a duplicate (different case)
+                for key in list(self.device_values[sn].keys()):
+                    if key.lower() == "soc":
+                        del self.device_values[sn][key]
+                # Add total SOC
+                self.device_values[sn]["SoC"] = {"name": "State of Charge Total", "unit": "%", "value": round(soc_total / soc_total_count, 0)}
+
+        # Publish device values
         for sn in self.device_values:
             for item_name in self.device_values[sn]:
                 item = self.device_values[sn][item_name]
@@ -1390,7 +1466,7 @@ class FoxAPI(ComponentBase):
                     )
                 elif direction == "discharge":
                     new_schedule.append(
-                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": soc, "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
+                        {"enable": 1, "startHour": start_hour, "startMinute": start_minute, "endHour": end_hour, "endMinute": end_minute, "workMode": "ForceDischarge", "fdSoc": max(soc, reserve), "maxSoc": reserve, "fdPwr": power, "minSocOnGrid": reserve}
                     )
         new_schedule = validate_schedule(new_schedule, reserve, fdPwr_max)
         self.log("Fox: New schedule for {}: {}".format(serial, new_schedule))
@@ -1467,23 +1543,61 @@ class FoxAPI(ComponentBase):
         self.set_arg("export_limit", [f"number.predbat_fox_{device}_setting_exportlimit" for device in batteries])
         self.set_arg("schedule_write_button", [f"switch.predbat_fox_{device}_battery_schedule_charge_write" for device in batteries])
 
+        if len(batteries):
+            self.set_arg("battery_temperature_history", f"sensor.predbat_fox_{batteries[0]}_battemperature")
 
-class MockBase:
+
+class MockBase:  # pragma: no cover
     """Mock base class for testing"""
 
     def __init__(self):
         self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
         self.prefix = "predbat"
         self.args = {}
+        self.midnight_utc = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.entities = {}
+
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
+        if raw:
+            return self.entities.get(entity_id, {})
+        else:
+            return self.entities.get(entity_id, {}).get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
 
     def log(self, message):
-        print(f"LOG: {message}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
 
-    def dashboard_item(self, *args, **kwargs):
-        print(f"DASHBOARD: {args}, {kwargs}")
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        print(f"ENTITY: {entity_id} = {state}")
+        if attributes:
+            if "options" in attributes:
+                attributes["options"] = "..."
+            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, key, default=None):
+        return default
+
+    def set_arg(self, key, value):
+        state = None
+        if isinstance(value, str) and "." in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and "." in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
 
 
-async def test_fox_api(sn, api_key):
+async def test_fox_api(sn, api_key):  # pragma: no cover
     """
     Run a test
     """
@@ -1494,85 +1608,16 @@ async def test_fox_api(sn, api_key):
 
     # Create FoxAPI instance with a lambda that returns the API key
     arg_dict = {}
-    arg_dict = {"key": api_key, "automatic": False}
+    arg_dict = {"key": api_key, "automatic": True}
     fox_api = FoxAPI(mock_base, **arg_dict)
 
-    if sn is None:
-        device_List = await fox_api.get_device_list()
-        print(f"Device List: {device_List}")
-        if device_List:
-            sn = device_List[0].get("deviceSN", None)
-            print(f"Using first device SN: {sn}")
-    # await fox_api.start()
-    # res = await fox_api.get_device_settings(sn, checkBattery=False)
-    # print(res)
-    # res = await fox_api.get_battery_charging_time(sn)
-    # print(res)
-    # res = await fox_api.get_device_detail(sn)
-    # print(res)
-    # res = await fox_api.get_scheduler(sn, checkBattery=False)
-    # print(res)
-    # return 1
-    # res = await fox_api.compute_schedule(sn)
-    # print(res)
-    # res = await fox_api.publish_data()
-    # res = await fox_api.set_device_setting(sn, "dummy", 42)
-    # print(res)
-
-    # res = await fox_api.get_scheduler(sn)
-    # groups = res.get('groups', [])
-    # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
-    # new_slot = groups[0].copy()
-    new_slot = {}
-    new_slot["enable"] = 1
-    new_slot["workMode"] = "ForceDischarge"
-    new_slot["startHour"] = 11
-    new_slot["startMinute"] = 30
-    new_slot["endHour"] = 12
-    new_slot["endMinute"] = 00
-    new_slot["fdSoc"] = 10
-    new_slot["fdPwr"] = 5000
-    new_slot["minSocOnGrid"] = 10
-    new_slot2 = {}
-    new_slot2["enable"] = 1
-    new_slot2["workMode"] = "ForceCharge"
-    new_slot2["startHour"] = 13
-    new_slot2["startMinute"] = 00
-    new_slot2["endHour"] = 13
-    new_slot2["endMinute"] = 30
-    new_slot2["fdSoc"] = 100
-    new_slot2["fdPwr"] = 8000
-    new_slot2["minSocOnGrid"] = 100
-
-    # minSocOnGrid = 10
-    # fdPwr_max = 5000
-    # new_schedule = [new_slot, new_slot2]
-
-    # new_schedule = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 1, "endMinute": 0, "workMode": "SelfUse", "fdSoc": minSocOnGrid, "maxSoc": minSocOnGrid, "fdPwr": fdPwr_max, "minSocOnGrid": minSocOnGrid}]
-    # new_schedule = validate_schedule(new_schedule, minSocOnGrid, fdPwr_max)
-    # print("Validated schedule")
-    # print(new_schedule)
-    # return 1
-    new_schedule = [
-        {"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 30, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 5000, "minSocOnGrid": 10},
-        {"enable": 1, "startHour": 11, "startMinute": 0, "endHour": 12, "endMinute": 00, "workMode": "ForceDischarge", "fdSoc": 10, "maxSoc": 100, "fdPwr": 5000, "minSocOnGrid": 10},
-    ]
-    new_schedule = validate_schedule(new_schedule, 10, 5000)
-    print("Validated schedule")
-    print(new_schedule)
-
-    print("Sending: {}".format(new_schedule))
-    res = await fox_api.set_scheduler(sn, new_schedule)
-
-    res = await fox_api.get_scheduler(sn, checkBattery=False)
-    print(res)
-    res = await fox_api.compute_schedule(sn)
-    print(res)
-
-    print(res)
+    # Call run() once
+    print("Calling run() once...")
+    await fox_api.run(seconds=0, first=True)
+    print("Run completed successfully")
 
 
-def main():
+def main():  # pragma: no cover
     """
     Main function for command line execution
     """

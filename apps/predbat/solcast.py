@@ -11,11 +11,11 @@
 import hashlib
 import json
 import os
-import requests
+import aiohttp
 import traceback
 import pytz
 from datetime import datetime, timedelta, timezone
-from config import TIME_FORMAT, TIME_FORMAT_SOLCAST
+from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp1, dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
 from component_base import ComponentBase
 
@@ -62,10 +62,10 @@ class SolarAPI(ComponentBase):
         Run the Solar API
         """
         if seconds % (self.plan_interval_minutes * 60) == 0:  # Every plan_interval_minutes
-            self.fetch_pv_forecast()
+            await self.fetch_pv_forecast()
         return True
 
-    def cache_get_url(self, url, params, max_age=8 * 60):
+    async def cache_get_url(self, url, params, max_age=8 * 60):
         # Check if this is a Solcast API call for metrics tracking
         is_solcast_api = "solcast.com" in url.lower() or "api.solcast" in url.lower()
         is_forecast_solar_api = "forecast.solar" in url.lower()
@@ -108,38 +108,42 @@ class SolarAPI(ComponentBase):
         # Perform fetch
         self.log("Fetching {}".format(url))
         try:
-            r = requests.get(url, params=params)
-        except requests.exceptions.ConnectionError as e:
+            timeout = aiohttp.ClientTimeout(total=60)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, params=params) as response:
+                    status_code = response.status
+
+                    if status_code not in [200, 201]:
+                        self.log("Warn: Error downloading data from url {}, code {}".format(url, status_code))
+                        if is_solcast_api:
+                            self.solcast_failures_total += 1
+                        if is_forecast_solar_api:
+                            self.forecast_solar_failures_total += 1
+                        return data
+
+                    try:
+                        data = await response.json()
+                        if is_solcast_api:
+                            self.solcast_last_success_timestamp = datetime.now(timezone.utc)
+                        if is_forecast_solar_api:
+                            self.forecast_solar_last_success_timestamp = datetime.now(timezone.utc)
+                    except (aiohttp.ContentTypeError, Exception) as e:
+                        self.log("Warn: Error downloading data from URL {}, error {} code {}".format(url, e, status_code))
+                        if is_solcast_api:
+                            self.solcast_failures_total += 1
+                        if is_forecast_solar_api:
+                            self.forecast_solar_failures_total += 1
+                        if data:
+                            self.log("Warn: Error downloading data from URL {}, using cached data age {} minutes".format(url, dp1(age_minutes)))
+                        else:
+                            self.log("Warn: Error downloading data from URL {}, no cached data".format(url))
+        except (aiohttp.ClientError, Exception) as e:
             self.log("Warn: Error downloading data from URL {}, error {}".format(url, e))
             if is_solcast_api:
                 self.solcast_failures_total += 1
             if is_forecast_solar_api:
                 self.forecast_solar_failures_total += 1
             return data
-
-        if r.status_code not in [200, 201]:
-            self.log("Warn: Error downloading data from url {}, code {}".format(url, r.status_code))
-            if is_solcast_api:
-                self.solcast_failures_total += 1
-            if is_forecast_solar_api:
-                self.forecast_solar_failures_total += 1
-        else:
-            try:
-                data = r.json()
-                if is_solcast_api:
-                    self.solcast_last_success_timestamp = datetime.now(timezone.utc)
-                if is_forecast_solar_api:
-                    self.forecast_solar_last_success_timestamp = datetime.now(timezone.utc)
-            except requests.exceptions.JSONDecodeError as e:
-                self.log("Warn: Error downloading data from URL {}, error {} code {} data was {}".format(url, e, r.status_code, r.text))
-                if is_solcast_api:
-                    self.solcast_failures_total += 1
-                if is_forecast_solar_api:
-                    self.forecast_solar_failures_total += 1
-                if data:
-                    self.log("Warn: Error downloading data from URL {}, using cached data age {} minutes".format(url, dp1(age_minutes)))
-                else:
-                    self.log("Warn: Error downloading data from URL {}, no cached data".format(url))
 
         # Store data in cache
         if data:
@@ -164,7 +168,7 @@ class SolarAPI(ComponentBase):
 
         return az
 
-    def download_forecast_solar_data(self):
+    async def download_forecast_solar_data(self):
         """
         Download forecast.solar data directly from a URL or return from cache if recent.
         """
@@ -205,7 +209,7 @@ class SolarAPI(ComponentBase):
             max_kwh += kwp * efficiency  # Total kWh for this configuration
 
             if postcode:
-                result = self.cache_get_url("https://api.postcodes.io/postcodes/{}".format(postcode), params={}, max_age=24 * 60 * 30)  # Cache postcode data for 30 days
+                result = await self.cache_get_url("https://api.postcodes.io/postcodes/{}".format(postcode), params={}, max_age=24 * 60 * 30)  # Cache postcode data for 30 days
                 result = result.get("result", {})
                 if "longitude" not in result or "latitude" not in result:
                     self.log("Warn: Postcode {} could not be resolved to latitude and longitude, using default".format(postcode))
@@ -223,7 +227,7 @@ class SolarAPI(ComponentBase):
                 url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp)
                 days_data = config.get("days", 2)
 
-            data = self.cache_get_url(url, params={}, max_age=self.forecast_solar_max_age * 60)
+            data = await self.cache_get_url(url, params={}, max_age=self.forecast_solar_max_age * 60)
             watts = data.get("result", {}).get("watt_hours_period", {})
             info = data.get("message", {}).get("info", {})
             if not watts or not info:
@@ -299,7 +303,7 @@ class SolarAPI(ComponentBase):
         self.log("Forecast solar returned {} data points".format(len(sorted_data)))
         return sorted_data, max_kwh
 
-    def download_solcast_data(self):
+    async def download_solcast_data(self):
         """
         Download solcast data directly from a URL or return from cache if recent.
         """
@@ -343,7 +347,7 @@ class SolarAPI(ComponentBase):
                     sites.append({"resource_id": site})
             else:
                 url = f"{host}/rooftop_sites"
-                data = self.cache_get_url(url, params, max_age=max_age)
+                data = await self.cache_get_url(url, params, max_age=max_age)
                 if not data:
                     self.log("Warn: Solcast sites could not be downloaded, try setting solcast_sites in apps.yaml instead")
                     continue
@@ -356,7 +360,7 @@ class SolarAPI(ComponentBase):
 
                     params = {"format": "json", "api_key": api_key.strip(), "hours": 168}
                     url = f"{host}/rooftop_sites/{resource_id}/forecasts"
-                    data = self.cache_get_url(url, params, max_age=max_age)
+                    data = await self.cache_get_url(url, params, max_age=max_age)
                     if not data:
                         self.log("Warn: Solcast forecast data for site {} could not be downloaded, check your Solcast cloud settings".format(site))
                         continue
@@ -797,7 +801,7 @@ class SolarAPI(ComponentBase):
             attributes={"friendly_name": "PV Forecast minute data", "icon": "mdi:solar-power", "forecast": pv_forecast_pack, "forecast10": pv_forecast_pack10, "unit_of_measurement": "kW", "device_class": "power", "state_class": "measurement"},
         )
 
-    def fetch_pv_forecast(self):
+    async def fetch_pv_forecast(self):
         """
         Fetch the PV Forecast data from Solcast
         either via HA or direct to their cloud
@@ -812,12 +816,12 @@ class SolarAPI(ComponentBase):
 
         if self.forecast_solar:
             self.log("Obtaining solar forecast from Forecast Solar API")
-            pv_forecast_data, max_kwh = self.download_forecast_solar_data()
+            pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
         elif self.solcast_host and self.solcast_api_key:
             self.log("Obtaining solar forecast from Solcast API")
-            pv_forecast_data = self.download_solcast_data()
+            pv_forecast_data = await self.download_solcast_data()
             divide_by = 30.0
         else:
             self.log("Using Solcast integration from inside HA for solar forecast")

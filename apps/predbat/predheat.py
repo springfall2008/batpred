@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 import pytz
 from utils import str2time, dp2, dp3, minute_data
 
-from config import TIME_FORMAT
+from const import TIME_FORMAT
 
 MAX_INCREMENT = 100
 PREDICT_STEP = 5
@@ -210,7 +210,7 @@ class PredHeat:
             except (ValueError, TypeError):
                 history = []
 
-            if history:
+            if history and len(history[0]) > 0:
                 item = history[0][0]
                 try:
                     last_updated_time = str2time(item["last_updated"])
@@ -223,7 +223,7 @@ class PredHeat:
                 else:
                     age_days = min(age_days, age.days)
 
-            if history:
+            if history and len(history[0]) > 0:
                 data_points, _ = minute_data(
                     history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=smoothing, scale=scaling / total_count, clean_increment=incrementing, accumulate=data_points, max_increment=MAX_INCREMENT
                 )
@@ -605,7 +605,7 @@ class PredHeat:
             self.reset()
         except Exception as e:
             self.log("ERROR: Exception raised {}".format(e))
-            self.record_status("ERROR: Exception raised {}".format(e))
+            self.record_status("ERROR: Exception raised {}".format(e), had_errors=True)
             raise e
 
         run_every = self.get_arg("run_every", 5, domain="predheat") * 60
@@ -639,7 +639,7 @@ class PredHeat:
                 self.update_pred(scheduled=False)
             except Exception as e:
                 self.log("ERROR: Exception raised {}".format(e))
-                self.record_status("ERROR: Exception raised {}".format(e))
+                self.record_status("ERROR: Exception raised {}".format(e), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False
@@ -659,7 +659,7 @@ class PredHeat:
                 self.update_pred(scheduled=True)
             except Exception as e:
                 self.log("ERROR: Exception raised {}".format(e))
-                self.record_status("ERROR: Exception raised {}".format(e))
+                self.record_status("ERROR: Exception raised {}".format(e), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False

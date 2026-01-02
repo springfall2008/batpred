@@ -26,6 +26,7 @@ batteri
 batteryb
 beforeunload
 bierner
+brickatius
 calib
 Cantarell
 cexxxx
@@ -118,6 +119,8 @@ gridconsumptionpower
 growatt
 HACS
 hadashboard
+hahistory
+hainterface
 hanres
 HAOS
 hass
@@ -148,6 +151,9 @@ ivtime
 jsyaml
 killall
 kopt
+Kostal
+kostalplenticore
+kostalplenticoreg
 Krakenflex
 kvar
 kvarh
@@ -164,6 +170,7 @@ markdownlint
 matplotlib
 maximise
 maxsoc
+mbuhansen
 mdlrc
 measurand
 measurands
@@ -185,12 +192,14 @@ mogons
 monokai
 Mosquitto
 mpan
+mppt
 mprn
 mqtt
 mult
 myenergi
 mypy
 nattribute
+ncalls
 nearr
 njpwerner
 nocharge
@@ -204,6 +213,7 @@ octoplus
 octopoints
 Ohme
 ohmepy
+onblur
 onchange
 oncharge
 oninput
@@ -215,8 +225,10 @@ pdata
 pdetails
 perc
 percnt
+PeterHaban
 pitem
 pkwh
+Plenticore
 postdata
 powercontrolmode
 powerline
@@ -243,6 +255,7 @@ recp
 Redownload
 regionid
 regname
+remainings
 remotecontrol
 resetmidnight
 resultid
@@ -254,7 +267,9 @@ rstart
 rtype
 ruamel
 saverestore
+scalarstring
 searr
+securetoken
 Segoe
 selectattr
 Selfrun
@@ -266,12 +281,15 @@ sigen
 sigenergy
 sigenstor
 Slee
+snakeviz
 socb
+socketloop
 socs
 sofar
 SolarEdge
 solarman
 Solax
+solaxcloud
 solaxmodbus
 Solcast
 soliscloud
@@ -315,12 +333,14 @@ useid
 userinterface
 varh
 venv
+Victron
 visibilitychange
 Wallbox
 weblink
 welink
 workmode
 writeonly
+wrongsha
 xaxis
 xaxistooltip
 xlabel

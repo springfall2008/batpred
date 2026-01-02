@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-import requests
+import aiohttp
 import re
 from datetime import datetime
 from utils import str2time, dp1
@@ -36,11 +36,21 @@ class AlertFeed(ComponentBase):
         """
         Main run loop
         """
-        if first or (seconds % (60 * 30) == 0):
-            # Download alerts
-            self.alert_xml = self.download_alert_data(self.alert_url)
-        else:
-            self.update_success_timestamp()
+        try:
+            if first or (seconds % (60 * 30) == 0):
+                # Download alerts
+                alert_xml = await self.download_alert_data(self.alert_url)
+                if alert_xml is not None:
+                    self.alert_xml = alert_xml
+            else:
+                if self.alert_xml is not None:
+                    self.update_success_timestamp()
+                else:
+                    return False
+        except Exception as e:
+            self.log("Warn: AlertFeed: Exception in run loop: {}".format(e))
+            return False
+
         return True
 
     def process_alerts(self, minutes_now, midnight_utc, testing=False):
@@ -213,7 +223,7 @@ class AlertFeed(ComponentBase):
             result.append(alert)
         return result
 
-    def download_alert_data(self, url):
+    async def download_alert_data(self, url):
         """
         Download octopus free session data directly from a URL
         """
@@ -228,19 +238,27 @@ class AlertFeed(ComponentBase):
                 self.update_success_timestamp()
                 return pdata
 
-        r = requests.get(url)
-        if r.status_code not in [200, 201]:
-            self.log("Warn: AlertFeed: Error downloading alert data from URL {}, code {}".format(url, r.status_code))
+        try:
+            timeout = aiohttp.ClientTimeout(total=60)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    status_code = response.status
+                    if status_code not in [200, 201]:
+                        self.log("Warn: AlertFeed: Error downloading alert data from URL {}, code {}".format(url, status_code))
+                        return None
+
+                    text = await response.text()
+                    self.log("AlertFeed: Downloaded alert data from {} size {} bytes".format(url, len(text)))
+
+                    # Return new data
+                    self.alert_cache[url] = {}
+                    self.alert_cache[url]["stamp"] = now
+                    self.alert_cache[url]["data"] = text
+                    self.update_success_timestamp()
+                    return text
+        except (aiohttp.ClientError, Exception) as e:
+            self.log("Warn: AlertFeed: Exception downloading alert data from URL {}: {}".format(url, e))
             return None
-
-        self.log("AlertFeed: Downloaded alert data from {} size {} bytes".format(url, len(r.text)))
-
-        # Return new data
-        self.alert_cache[url] = {}
-        self.alert_cache[url]["stamp"] = now
-        self.alert_cache[url]["data"] = r.text
-        self.update_success_timestamp()
-        return r.text
 
     def parse_alert_data(self, xml):
         """

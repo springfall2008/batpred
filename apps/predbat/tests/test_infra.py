@@ -11,7 +11,94 @@
 from datetime import datetime, timedelta
 from prediction import wrapped_run_prediction_single, Prediction
 from matplotlib import pyplot as plt
+import asyncio
 import numpy as np
+from unittest.mock import MagicMock
+
+
+def run_async(coro):
+    """Helper function to run async coroutines in sync test functions"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
+def create_aiohttp_mock_response(status=200, json_data=None, json_exception=None):
+    """Create a mock aiohttp response object"""
+    mock_response = MagicMock()
+    mock_response.status = status
+
+    if json_exception:
+        # If a JSON exception is explicitly provided
+        async def raise_json_exception():
+            raise json_exception
+
+        mock_response.json = raise_json_exception
+    elif json_data is not None:
+        # If JSON data is provided
+        async def return_json():
+            return json_data
+
+        mock_response.json = return_json
+    else:
+        # Default: return empty dict
+        async def return_empty_json():
+            return {}
+
+        mock_response.json = return_empty_json
+
+    # Setup async context manager
+    async def aenter(self):
+        return mock_response
+
+    async def aexit(self, *args):
+        pass
+
+    mock_response.__aenter__ = aenter
+    mock_response.__aexit__ = aexit
+    return mock_response
+
+
+def create_aiohttp_mock_session(mock_response=None, exception=None):
+    """Helper to create a mock aiohttp ClientSession"""
+    mock_session = MagicMock()
+
+    if exception:
+        # Raise exception when trying to perform request
+        mock_session.get = MagicMock(side_effect=exception)
+        mock_session.post = MagicMock(side_effect=exception)
+    else:
+        if mock_response is None:
+            mock_response = create_aiohttp_mock_response()
+
+        mock_context = MagicMock()
+
+        async def aenter(*args, **kwargs):
+            return mock_response
+
+        async def aexit(*args):
+            return None
+
+        mock_context.__aenter__ = aenter
+        mock_context.__aexit__ = aexit
+
+        # Setup both GET and POST methods
+        mock_session.get = MagicMock(return_value=mock_context)
+        mock_session.post = MagicMock(return_value=mock_context)
+
+    async def session_aenter(*args):
+        return mock_session
+
+    async def session_aexit(*args):
+        return None
+
+    mock_session.__aenter__ = session_aenter
+    mock_session.__aexit__ = session_aexit
+
+    return mock_session
 
 
 class DummyInverter:
@@ -144,6 +231,173 @@ class TestInverter:
         pass
 
 
+class MockConfigProvider:
+    """
+    Mock configuration provider for testing fetch_config_options.
+    Provides a reusable way to mock get_arg() calls with test configuration.
+    """
+
+    def __init__(self):
+        self.config = self.get_default_config()
+
+    def get_default_config(self):
+        """
+        Return default test configuration values
+        """
+        return {
+            "debug_enable": True,
+            "plan_debug": False,
+            "forecast_hours": 48,
+            "num_cars": 2,
+            "calculate_plan_every": 10,
+            "calculate_savings_max_charge_slots": 2,
+            "holiday_days_left": 0,
+            "load_forecast_only": False,
+            "days_previous": [7, 14],
+            "days_previous_weight": [1.0, 0.5],
+            "metric_min_improvement": 0.1,
+            "metric_min_improvement_export": 0.2,
+            "metric_min_improvement_swap": 0.3,
+            "metric_min_improvement_plan": 0.4,
+            "metric_min_improvement_export_freeze": 0.5,
+            "metric_battery_cycle": 0.6,
+            "metric_self_sufficiency": 0.7,
+            "metric_future_rate_offset_import": 0.8,
+            "metric_future_rate_offset_export": 0.9,
+            "metric_inday_adjust_damping": 1.0,
+            "metric_pv_calibration_enable": True,
+            "metric_dynamic_load_adjust": 0.5,
+            "rate_low_threshold": 0.75,
+            "rate_high_threshold": 1.25,
+            "inverter_soc_reset": False,
+            "metric_battery_value_scaling": 1.0,
+            "notify_devices": ["notify"],
+            "pv_scaling": 1.0,
+            "pv_metric10_weight": 0.5,
+            "load_scaling": 1.0,
+            "load_scaling10": 1.0,
+            "charge_scaling10": 1.0,
+            "load_scaling_saving": 0.8,
+            "load_scaling_free": 0.9,
+            "battery_rate_max_scaling": 1.0,
+            "battery_rate_max_scaling_discharge": 1.0,
+            "metric_cloud_enable": False,
+            "metric_load_divergence_enable": True,
+            "battery_capacity_nominal": 10.0,
+            "battery_loss": 0.05,
+            "battery_loss_discharge": 0.05,
+            "inverter_loss": 0.05,
+            "inverter_hybrid": False,
+            "base_load": 100,
+            "import_export_scaling": 1.0,
+            "best_soc_min": 0.0,
+            "best_soc_max": 10.0,
+            "best_soc_keep": 1.0,
+            "best_soc_keep_weight": 1.0,
+            "inverter_set_charge_before": True,
+            "octopus_intelligent_charging": False,
+            "octopus_intelligent_ignore_unplugged": False,
+            "octopus_intelligent_consider_full": False,
+            "car_charging_planned": "no",
+            "car_charging_now": "no",
+            "car_charging_plan_smart": False,
+            "car_charging_plan_max_price": 0.0,
+            "car_charging_plan_time": "07:00:00",
+            "car_charging_battery_size": 100.0,
+            "car_charging_rate": 7400,
+            "car_charging_limit": 100.0,
+            "car_charging_exclusive": False,
+            "car_charging_from_battery": False,
+            "car_charging_planned_response": ["yes", "on", "enable", "true"],
+            "car_charging_now_response": ["yes", "on", "enable", "true"],
+            "combine_rate_threshold": 1.0,
+            "combine_export_slots": True,
+            "combine_charge_slots": True,
+            "set_read_only": False,
+            "axle_control": False,
+            "set_reserve_enable": True,
+            "set_export_freeze": True,
+            "set_charge_freeze": True,
+            "set_charge_low_power": False,
+            "set_export_low_power": False,
+            "charge_low_power_margin": 10,
+            "set_status_notify": False,
+            "set_inverter_notify": False,
+            "set_export_freeze_only": False,
+            "set_discharge_during_charge": True,
+            "set_freeze_export_during_demand": False,
+            "mode": "Control charge & discharge",
+            "calculate_export_oncharge": True,
+            "calculate_second_pass": True,
+            "calculate_inday_adjustment": True,
+            "calculate_tweak_plan": True,
+            "calculate_import_low_export": True,
+            "calculate_export_high_import": True,
+            "balance_inverters_enable": False,
+            "balance_inverters_charge": True,
+            "balance_inverters_discharge": True,
+            "balance_inverters_crosscharge": True,
+            "balance_inverters_threshold_charge": 1.0,
+            "balance_inverters_threshold_discharge": 1.0,
+            "load_filter_modal": True,
+            "carbon_enable": False,
+            "carbon_metric": 0,
+            "iboost_enable": False,
+            "iboost_gas": 4.0,
+            "iboost_gas_export": 4.0,
+            "iboost_smart": False,
+            "iboost_smart_min_length": 60,
+            "iboost_on_export": False,
+            "iboost_prevent_discharge": False,
+            "iboost_solar": False,
+            "iboost_solar_excess": 1.0,
+            "iboost_rate_threshold": 10.0,
+            "iboost_rate_threshold_export": 10.0,
+            "iboost_charging": False,
+            "iboost_gas_scale": 1.0,
+            "iboost_max_energy": 3.0,
+            "iboost_max_power": 3000,
+            "iboost_min_power": 500,
+            "iboost_min_soc": 0.0,
+            "iboost_today": 0.0,
+            "iboost_value_scaling": 1.0,
+            "iboost_energy_subtract": False,
+            "car_charging_hold": True,
+            "car_charging_manual_soc": False,
+            "car_charging_threshold": 60.0,
+            "car_charging_energy_scale": 1.0,
+            "forecast_plan_hours": 8,
+            "inverter_clock_skew_start": 0,
+            "inverter_clock_skew_end": 0,
+            "inverter_clock_skew_discharge_start": 0,
+            "inverter_clock_skew_discharge_end": 0,
+            "set_window_minutes": 0,
+            # Car charging config for each car (postfix _0, _1, etc.)
+            "car_charging_rate_0": 7400,
+            "car_charging_rate_1": 7400,
+            "car_charging_battery_size_0": 100.0,
+            "car_charging_battery_size_1": 100.0,
+            "car_charging_limit_0": 100.0,
+            "car_charging_limit_1": 100.0,
+            "car_charging_plan_time_0": "07:00:00",
+            "car_charging_plan_time_1": "07:00:00",
+            "car_charging_plan_smart_0": False,
+            "car_charging_plan_smart_1": False,
+            "car_charging_plan_max_price_0": 0.0,
+            "car_charging_plan_max_price_1": 0.0,
+            "car_charging_exclusive_0": False,
+            "car_charging_exclusive_1": False,
+            "car_charging_from_battery_0": False,
+            "car_charging_from_battery_1": False,
+        }
+
+    def get_arg(self, key, default=None, index=None, indirect=True):
+        """
+        Mock get_arg method that returns values from config dict
+        """
+        return self.config.get(key, default)
+
+
 def reset_rates(my_predbat, ir, xr):
     my_predbat.combine_charge_slots = True
     for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now):
@@ -233,6 +487,20 @@ def reset_inverter(my_predbat):
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True
     my_predbat.car_charging_soc_next = [None for car_n in range(4)]
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.export_window_best = []
+    my_predbat.charge_limit_percent_best = []
+    my_predbat.manual_charge_times = []
+    my_predbat.manual_demand_times = []
+    my_predbat.manual_export_times = []
+    my_predbat.manual_freeze_charge_times = []
+    my_predbat.manual_freeze_export_times = []
+    my_predbat.set_charge_window = True
+    my_predbat.set_export_window = True
+    my_predbat.set_charge_freeze = True
+    my_predbat.set_export_freeze = True
 
 
 def plot(name, prediction):

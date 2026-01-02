@@ -27,6 +27,7 @@ class DatabaseManager(ComponentBase):
         self.return_event = threading.Event()
         self.api_started = False
         self.last_success_timestamp = None
+        self.last_commit_time = datetime.now(timezone.utc)
 
     def bridge_event(self, loop):
         """
@@ -78,18 +79,23 @@ class DatabaseManager(ComponentBase):
                     state = self.db_engine._get_state_db(info["entity_id"])
                     self.queue_results[queue_id] = state
                     self.return_event.set()  # Notify that the result is ready
-                elif command == "stop":
-                    self.api_stop = True
-                    self.log("db_manager: stopping")
 
+                # Commit if the queue is empty and at least 5 seconds have passed since last commit
+                if not self.db_queue:
+                    now = datetime.now(timezone.utc)
+                    if self.last_commit_time is None or (now - self.last_commit_time).total_seconds() >= 5.0:
+                        if hasattr(self.db_engine, "_commit_db"):
+                            self.db_engine._commit_db()
+                            self.last_commit_time = now
                 self.last_success_timestamp = datetime.now(timezone.utc)
 
             except Exception as e:
                 self.log(f"Error in database thread: {e}")
                 self.log("Error: " + traceback.format_exc())
 
+        self.db_engine._commit_db()
         self.db_engine._close()
-        self.log("db_manager: Stopped")
+        self.log("db_manager: Stopped cleanly")
         self.api_started = False
 
     def send_via_ipc(self, command, info, expect_response=False):
@@ -122,9 +128,10 @@ class DatabaseManager(ComponentBase):
         """
         Close the database connection
         """
-        self.api_stop = True
-        self.send_via_ipc("stop", {}, expect_response=False)
         self.api_started = False
+        self.api_stop = True
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.send_via_ipc, "stop", {}, False)
         self.log("db_manager: stop command sent")
 
     def get_state_db(self, entity_id):
