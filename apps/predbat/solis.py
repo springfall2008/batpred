@@ -751,7 +751,7 @@ class SolisAPI(ComponentBase):
         self.set_arg("load_power", [f"sensor.predbat_solis_{device}_load_power" for device in devices])
         self.set_arg("pv_power", [f"sensor.predbat_solis_{device}_pv_power" for device in devices])
         self.set_arg("battery_voltage", [f"sensor.predbat_solis_{device}_battery_voltage" for device in devices])
-        self.set_arg("battery_temperature", [f"sensor.predbat_solis_{device}_battery_temperature" for device in devices])
+        #self.set_arg("battery_temperature", [f"sensor.predbat_solis_{device}_battery_temperature" for device in devices])
         
         # Battery capacity and limits from cached details
         self.set_arg("soc_max", [f"sensor.predbat_solis_{device}_xxxx" for device in devices])
@@ -1087,8 +1087,8 @@ class SolisAPI(ComponentBase):
             
             # Load Power (from detail)
             entity_id = f"sensor.{prefix}_solis_{inverter_sn}_load_power"
-            load_power = detail.get("loadPower")
-            load_power_unit = detail.get("loadPowerStr", "kW")
+            load_power = detail.get("familyLoadPower")
+            load_power_unit = detail.get("familyLoadPowerStr", "kW")
             self.dashboard_item(
                 entity_id,
                 state=load_power,
@@ -1104,8 +1104,8 @@ class SolisAPI(ComponentBase):
             
             # Grid Power (from detail)
             entity_id = f"sensor.{prefix}_solis_{inverter_sn}_grid_power"
-            grid_power = detail.get("pSum")
-            grid_power_unit = detail.get("pSumStr", "kW")
+            grid_power = detail.get("psum")
+            grid_power_unit = detail.get("psumStr", "kW")
             self.dashboard_item(
                 entity_id,
                 state=grid_power,
@@ -2278,7 +2278,7 @@ class SolisAPI(ComponentBase):
         try:
             detail = await self.get_inverter_detail(sn)
             self.inverter_details[sn] = detail
-            self.log(f"Solis API: Loaded details for inverter {sn}")
+            self.log(f"Solis API: Loaded details for inverter {sn} - {detail}")
             
             # Extract parallel battery count (format: "2.0" means 3 batteries total)
             parallel_battery = detail.get("parallelBattery", "0")
