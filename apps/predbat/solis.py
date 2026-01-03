@@ -225,11 +225,21 @@ SOLIS_CID_MAP = {
     499: {"name": "max_export_power", "unit": "W", "device_class": "power", "state_class": None},
 }
 
-# Storage mode mappings (static fallback)
+# Storage mode mappings
 SOLIS_STORAGE_MODES = {
-    "Self-Use Mode": "1",
-    "Feed-In Priority": "2",
-    "Off-Grid Mode": "3",
+    "Self-Use - No Grid Charging": 1,
+    "Timed Charge/Discharge - No Grid Charging": 3,
+    "Backup/Reserve - No Grid Charging": 17,
+    "Self-Use - No Timed Charge/Discharge": 33,
+    "Self-Use": 35,
+    "Off-Grid Mode": 37,
+    "Battery Awaken": 41,
+    "Battery Awaken + Timed Charge/Discharge": 43,
+    "Backup/Reserve - No Timed Charge/Discharge": 49,
+    "Backup/Reserve": 51,
+    "Feed-in priority - No Grid Charging": 64,
+    "Feed-in priority - No Timed Charge/Discharge": 96,
+    "Feed-in priority": 98,
 }
 
 # Inverter status codes
@@ -281,6 +291,7 @@ class SolisAPI(ComponentBase):
         self.base_url = base_url
         self.automatic = automatic
         self.session = None
+        self.nominal_voltage = 48  # Default nominal battery voltage
         
         # Convert inverter_sn to list
         if inverter_sn is None:
@@ -550,7 +561,6 @@ class SolisAPI(ComponentBase):
         self.set_arg("battery_power", [f"sensor.predbat_solis_{device}_battery_power" for device in devices])
         self.set_arg("grid_power", [f"sensor.predbat_solis_{device}_grid_power" for device in devices])
         self.set_arg("battery_voltage", [f"sensor.predbat_solis_{device}_battery_voltage" for device in devices])
-        self.set_arg("battery_current", [f"sensor.predbat_solis_{device}_battery_current" for device in devices])
         self.set_arg("battery_temperature", [f"sensor.predbat_solis_{device}_battery_temperature" for device in devices])
         
         # Battery capacity and limits from cached details
@@ -558,22 +568,21 @@ class SolisAPI(ComponentBase):
         
         # Reserve and limits
         self.set_arg("reserve", [f"sensor.predbat_solis_{device}_reserve_soc" for device in devices])
+        self.set_arg("battery_min_soc", [f"sensor.predbat_solis_{device}_over_discharge_soc" for device in devices])
         
         # Charge/discharge controls - using slot 1 for Predbat primary control
         self.set_arg("charge_start_time", [f"select.predbat_solis_{device}_charge_slot1_time" for device in devices])
         self.set_arg("charge_end_time", [f"select.predbat_solis_{device}_charge_slot1_time" for device in devices])  # Same selector, parsed
         self.set_arg("charge_limit", [f"sensor.predbat_solis_{device}_charge_slot1_soc" for device in devices])
-        self.set_arg("charge_rate", [f"sensor.predbat_solis_{device}_charge_slot1_current" for device in devices])
+        self.set_arg("charge_rate", [f"sensor.predbat_solis_{device}_charge_slot1_power" for device in devices])
         self.set_arg("scheduled_charge_enable", [f"sensor.predbat_solis_{device}_charge_slot1_enable" for device in devices])
         
         self.set_arg("discharge_start_time", [f"select.predbat_solis_{device}_discharge_slot1_time" for device in devices])
         self.set_arg("discharge_end_time", [f"select.predbat_solis_{device}_discharge_slot1_time" for device in devices])
         self.set_arg("discharge_target_soc", [f"sensor.predbat_solis_{device}_discharge_slot1_soc" for device in devices])
-        self.set_arg("discharge_rate", [f"sensor.predbat_solis_{device}_discharge_slot1_current" for device in devices])
+        self.set_arg("discharge_rate", [f"sensor.predbat_solis_{device}_discharge_slot1_power" for device in devices])
         self.set_arg("scheduled_discharge_enable", [f"sensor.predbat_solis_{device}_discharge_slot1_enable" for device in devices])
-        
-        # Storage mode
-        self.set_arg("inverter_mode", [f"select.predbat_solis_{device}_storage_mode" for device in devices])
+        self.set_arg("battery_rate_max", [f"sensor.predbat_solis_{device}_max_charge_power" for device in devices])
         
         self.log("Solis API: Automatic configuration complete")
     
@@ -604,6 +613,7 @@ class SolisAPI(ComponentBase):
         # Calculate max charge current
         max_charge = 100  # Default fallback
         max_charge_current_str = values.get(SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT)
+        voltage = values.get(SOLIS_CID_BATTERY_VOLTAGE)
         if max_charge_current_str:
             try:
                 per_battery_max = float(max_charge_current_str)
@@ -622,6 +632,7 @@ class SolisAPI(ComponentBase):
             except (ValueError, TypeError):
                 pass
         self.max_discharge_current[inverter_sn] = max_discharge
+        self.max_discharge_rate[inverter_sn] = max_discharge * self.nominal_voltage # Approximate power in W
         
         self.log(f"Solis API: Calculated max currents for {inverter_sn}: charge={max_charge}A, discharge={max_discharge}A")
     
@@ -639,6 +650,9 @@ class SolisAPI(ComponentBase):
             for slot in range(2, 7):
                 cid = SOLIS_CID_DISCHARGE_ENABLE_BASE + (slot - 1)
                 await self.write_cid(inverter_sn, cid, "0")
+            
+            # Set max charge SOC to 100%
+            await self.write_cid(inverter_sn, SOLIS_CID_BATTERY_MAX_CHARGE_SOC, "100", field_description="max charge SOC to 100%")
             
             self.log(f"Solis API: Successfully reset slots for {inverter_sn}")
         
@@ -849,24 +863,34 @@ class SolisAPI(ComponentBase):
                     app="solis"
                 )
                 
-                # Current limit number
-                entity_id = f"number.{prefix}_solis_{inverter_sn}_charge_slot{slot_num}_current"
+                # Current limit number (displayed as power in watts)
+                entity_id = f"number.{prefix}_solis_{inverter_sn}_charge_slot{slot_num}_power"
                 current_cid = SOLIS_CID_CHARGE_CURRENT[slot_num - 1]
-                current_value = values.get(current_cid, None)
+                current_value_amps = values.get(current_cid, None)
                 
-                # Use pre-calculated max current
-                max_current = self.max_charge_current.get(inverter_sn, 100)
+                # Convert amps to watts for display
+                current_value_watts = None
+                if current_value_amps is not None:
+                    try:
+                        current_value_watts = int(float(current_value_amps) * self.nominal_voltage)
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Use pre-calculated max current (convert to watts)
+                max_current_amps = self.max_charge_current.get(inverter_sn, 100)
+                max_power_watts = int(max_current_amps * self.nominal_voltage)
                 
                 self.dashboard_item(
                     entity_id,
-                    state=current_value,
+                    state=current_value_watts,
                     attributes={
-                        "friendly_name": f"Solis {inverter_name} Charge Slot {slot_num} Current",
-                        "unit_of_measurement": "A",
+                        "friendly_name": f"Solis {inverter_name} Charge Slot {slot_num} Power",
+                        "unit_of_measurement": "W",
                         "min": 0,
-                        "max": max_current,
-                        "step": 1,
-                        "icon": "mdi:current-ac",
+                        "max": max_power_watts,
+                        "step": self.nominal_voltage,
+                        "device_class": "power",
+                        "icon": "mdi:flash",
                     },
                     app="solis"
                 )
@@ -933,24 +957,34 @@ class SolisAPI(ComponentBase):
                     app="solis"
                 )
                 
-                # Current limit number
-                entity_id = f"number.{prefix}_solis_{inverter_sn}_discharge_slot{slot_num}_current"
+                # Current limit number (displayed as power in watts)
+                entity_id = f"number.{prefix}_solis_{inverter_sn}_discharge_slot{slot_num}_power"
                 current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot_num - 1]
-                current_value = values.get(current_cid, None)
+                current_value_amps = values.get(current_cid, None)
                 
-                # Use pre-calculated max current
-                max_current = self.max_discharge_current.get(inverter_sn, 100)
+                # Convert amps to watts for display
+                current_value_watts = None
+                if current_value_amps is not None:
+                    try:
+                        current_value_watts = int(float(current_value_amps) * self.nominal_voltage)
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Use pre-calculated max current (convert to watts)
+                max_current_amps = self.max_discharge_current.get(inverter_sn, 100)
+                max_power_watts = int(max_current_amps * self.nominal_voltage)
                 
                 self.dashboard_item(
                     entity_id,
-                    state=current_value,
+                    state=current_value_watts,
                     attributes={
-                        "friendly_name": f"Solis {inverter_name} Discharge Slot {slot_num} Current",
-                        "unit_of_measurement": "A",
+                        "friendly_name": f"Solis {inverter_name} Discharge Slot {slot_num} Power",
+                        "unit_of_measurement": "W",
                         "min": 0,
-                        "max": max_current,
-                        "step": 1,
-                        "icon": "mdi:current-ac",
+                        "max": max_power_watts,
+                        "step": self.nominal_voltage,
+                        "device_class": "power",
+                        "icon": "mdi:flash",
                     },
                     app="solis"
                 )
@@ -1057,36 +1091,54 @@ class SolisAPI(ComponentBase):
                     app="solis"
                 )
             
-            # Battery max current numbers (editable)
-            entity_id = f"number.{prefix}_solis_{inverter_sn}_max_charge_current"
-            max_charge_current_value = values.get(SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, None)
+            # Battery max current numbers (displayed as power in watts)
+            entity_id = f"number.{prefix}_solis_{inverter_sn}_max_charge_power"
+            max_charge_current_amps = values.get(SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, None)
+            
+            # Convert amps to watts for display
+            max_charge_power_watts = None
+            if max_charge_current_amps is not None:
+                try:
+                    max_charge_power_watts = int(float(max_charge_current_amps) * self.nominal_voltage)
+                except (ValueError, TypeError):
+                    pass
+            
             self.dashboard_item(
                 entity_id,
-                state=max_charge_current_value,
+                state=max_charge_power_watts,
                 attributes={
-                    "friendly_name": f"Solis {inverter_name} Battery Max Charge Current",
-                    "unit_of_measurement": "A",
+                    "friendly_name": f"Solis {inverter_name} Battery Max Charge Power",
+                    "unit_of_measurement": "W",
                     "min": 0,
-                    "max": 1000,
-                    "step": 1,
-                    "device_class": "current",
+                    "max": int(1000 * self.nominal_voltage),
+                    "step": self.nominal_voltage,
+                    "device_class": "power",
                     "icon": "mdi:battery-arrow-down-outline",
                 },
                 app="solis"
             )
             
-            entity_id = f"number.{prefix}_solis_{inverter_sn}_max_discharge_current"
-            max_discharge_current_value = values.get(SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, None)
+            entity_id = f"number.{prefix}_solis_{inverter_sn}_max_discharge_power"
+            max_discharge_current_amps = values.get(SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, None)
+            
+            # Convert amps to watts for display
+            max_discharge_power_watts = None
+            if max_discharge_current_amps is not None:
+                try:
+                    max_discharge_power_watts = int(float(max_discharge_current_amps) * self.nominal_voltage)
+                except (ValueError, TypeError):
+                    pass
+            
             self.dashboard_item(
                 entity_id,
-                state=max_discharge_current_value,
+                state=max_discharge_power_watts,
                 attributes={
-                    "friendly_name": f"Solis {inverter_name} Battery Max Discharge Current",
-                    "unit_of_measurement": "A",
+                    "friendly_name": f"Solis {inverter_name} Battery Max Discharge Power",
+                    "unit_of_measurement": "W",
                     "min": 0,
-                    "max": 1000,
-                    "step": 1,
-                    "device_class": "current",
+                    "max": int(1000 * self.nominal_voltage),
+                    "step": self.nominal_voltage,
+                    "device_class": "power",
                     "icon": "mdi:battery-arrow-up-outline",
                 },
                 app="solis"
@@ -1440,10 +1492,10 @@ class SolisAPI(ComponentBase):
                 await self.publish_entities()
                 return
             
-            # Handle charge slot current
-            if field.startswith("charge_slot") and field.endswith("_current"):
+            # Handle charge slot power (user provides watts, convert to amps)
+            if field.startswith("charge_slot") and field.endswith("_power"):
                 # Extract slot number
-                slot_match = field.replace("charge_slot", "").replace("_current", "")
+                slot_match = field.replace("charge_slot", "").replace("_power", "")
                 try:
                     slot_num = int(slot_match)
                 except (ValueError, IndexError):
@@ -1456,8 +1508,12 @@ class SolisAPI(ComponentBase):
                 # Get current CID for this slot
                 current_cid = SOLIS_CID_CHARGE_CURRENT[slot_num - 1]
                 
+                # Convert watts to amps for inverter
+                amps = int(value / self.nominal_voltage)
+                amps_str = str(amps)
+                
                 # Write to inverter
-                await self.write_cid(inverter_sn, current_cid, value_str, field_description=f"charge slot {slot_num} current to {value_str}A")
+                await self.write_cid(inverter_sn, current_cid, amps_str, field_description=f"charge slot {slot_num} power to {value_str}W ({amps}A)")
                 
                 # Re-publish entities
                 await self.publish_entities()
@@ -1486,10 +1542,10 @@ class SolisAPI(ComponentBase):
                 await self.publish_entities()
                 return
             
-            # Handle discharge slot current
-            if field.startswith("discharge_slot") and field.endswith("_current"):
+            # Handle discharge slot power (user provides watts, convert to amps)
+            if field.startswith("discharge_slot") and field.endswith("_power"):
                 # Extract slot number
-                slot_match = field.replace("discharge_slot", "").replace("_current", "")
+                slot_match = field.replace("discharge_slot", "").replace("_power", "")
                 try:
                     slot_num = int(slot_match)
                 except (ValueError, IndexError):
@@ -1502,8 +1558,12 @@ class SolisAPI(ComponentBase):
                 # Get current CID for this slot
                 current_cid = SOLIS_CID_DISCHARGE_CURRENT[slot_num - 1]
                 
+                # Convert watts to amps for inverter
+                amps = int(value / self.nominal_voltage)
+                amps_str = str(amps)
+                
                 # Write to inverter
-                await self.write_cid(inverter_sn, current_cid, value_str, field_description=f"discharge slot {slot_num} current to {value_str}A")
+                await self.write_cid(inverter_sn, current_cid, amps_str, field_description=f"discharge slot {slot_num} power to {value_str}W ({amps}A)")
                 
                 # Re-publish entities
                 await self.publish_entities()
@@ -1527,16 +1587,20 @@ class SolisAPI(ComponentBase):
                 await self.publish_entities()
                 return
             
-            # Handle battery max currents
-            if field in ["max_charge_current", "max_discharge_current"]:
+            # Handle battery max power (user provides watts, convert to amps)
+            if field in ["max_charge_power", "max_discharge_power"]:
                 cid_map = {
-                    "max_charge_current": SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT,
-                    "max_discharge_current": SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT,
+                    "max_charge_power": SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT,
+                    "max_discharge_power": SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT,
                 }
                 cid = cid_map[field]
                 
+                # Convert watts to amps for inverter
+                amps = int(value / self.nominal_voltage)
+                amps_str = str(amps)
+                
                 # Write to inverter
-                await self.write_cid(inverter_sn, cid, value_str, field_description=f"{field} to {value_str}A")
+                await self.write_cid(inverter_sn, cid, amps_str, field_description=f"{field} to {value_str}W ({amps}A)")
                 
                 # Re-calculate max currents after change
                 self._calculate_max_currents(inverter_sn)
@@ -1772,7 +1836,29 @@ class SolisAPI(ComponentBase):
         
         except Exception as e:
             self.log(f"Error: Solis API switch_event failed for {entity_id}: {e}")
-    
+
+    async def fetch_inverter_details(self, sn):
+        try:
+            detail = await self.get_inverter_detail(sn)
+            self.inverter_details[sn] = detail
+            self.log(f"Solis API: Loaded details for inverter {sn}")
+            
+            # Extract parallel battery count (format: "2.0" means 3 batteries total)
+            parallel_battery = detail.get("parallelBattery", "0")
+            try:
+                self.parallel_battery_count[sn] = int(float(parallel_battery)) + 1
+            except (ValueError, TypeError):
+                self.parallel_battery_count[sn] = 1
+            
+            # Extract storage modes if available in detail response
+            # TODO: Check if API provides storage mode options in detail
+            self.storage_modes[sn] = SOLIS_STORAGE_MODES
+            return True
+        
+        except Exception as e:
+            self.log(f"Warn: Solis API failed to load details for {sn}: {e}") 
+            return False    
+
     # ==================== Component Lifecycle ====================
 
     async def run(self, seconds, first):
@@ -1811,24 +1897,7 @@ class SolisAPI(ComponentBase):
                         
             # Get inverter details for all inverters
             for sn in self.inverter_sn:
-                try:
-                    detail = await self.get_inverter_detail(sn)
-                    self.inverter_details[sn] = detail
-                    self.log(f"Solis API: Loaded details for inverter {sn}")
-                    
-                    # Extract parallel battery count (format: "2.0" means 3 batteries total)
-                    parallel_battery = detail.get("parallelBattery", "0")
-                    try:
-                        self.parallel_battery_count[sn] = int(float(parallel_battery)) + 1
-                    except (ValueError, TypeError):
-                        self.parallel_battery_count[sn] = 1
-                    
-                    # Extract storage modes if available in detail response
-                    # TODO: Check if API provides storage mode options in detail
-                    self.storage_modes[sn] = SOLIS_STORAGE_MODES
-                
-                except Exception as e:
-                    self.log(f"Warn: Solis API failed to load details for {sn}: {e}")
+                await self.fetch_inverter_details(sn)
             
             # Reset unused slots once
             for sn in self.inverter_sn:
@@ -1849,6 +1918,9 @@ class SolisAPI(ComponentBase):
                 success = await self.poll_inverter_data(sn, SOLIS_CID_FREQUENT)
                 if not success:
                     poll_success = False
+                success =  await self.fetch_inverter_details(sn) # Get inverter details for all inverters
+                if not success:
+                    poll_success = False                
             
             # Only update last_updated_time if all polls succeeded
             if poll_success:
