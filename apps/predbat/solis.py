@@ -351,7 +351,7 @@ class SolisAPI(ComponentBase):
                 self.log(f"Warn: Solis API retry {attempt} after {elapsed_time:.1f}s: {str(err)}")
                 
                 await asyncio.sleep(delay)
-                delay = min(delay * 2, max_retry_time - elapsed_time)  # Exponential backoff
+                delay = min(delay * 1.5, max_retry_time - elapsed_time)  # Exponential backoff
     
     async def read_cid(self, inverter_sn, cid):
         """Read single CID value"""
@@ -724,16 +724,19 @@ class SolisAPI(ComponentBase):
         
         result = {}
 
-        global_charge_soc = self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, "0")
-        global_discharge_soc = self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, "0")
+        global_charge_soc = self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_FORCE_CHARGE_SOC)
+        global_discharge_soc = self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC)
+        self.log("Solis API: Decode time windows, global_charge_soc={}, global_discharge_soc={}".format(global_charge_soc, global_discharge_soc))  # Debug log
         try:
             global_charge_soc = float(global_charge_soc)
-        except ValueError:
+        except (ValueError, TypeError):
             global_charge_soc = 100.0
         try:
             global_discharge_soc = float(global_discharge_soc)
-        except ValueError:
+        except (ValueError, TypeError):
             global_discharge_soc = 10.0
+
+        self.log("Solis API: Decode time windows, global_charge_soc={}, global_discharge_soc={}".format(global_charge_soc, global_discharge_soc))  # Debug log
         
         if fields_length == 18:
             # Variant 1: 6 fields per slot (charge_current, discharge_current, charge_start, charge_end, discharge_start, discharge_end)
