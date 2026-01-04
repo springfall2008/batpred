@@ -220,7 +220,7 @@ def predbat_update_download(version):
             expected_sha = file_info.get("sha")
             local_filepath = os.path.join(this_path, filename)
             download_filepath = os.path.join(this_path, filename + "." + tag)
-            
+
             # Check if local file exists and has matching SHA
             skip_download = False
             if expected_sha and os.path.exists(local_filepath):
@@ -237,14 +237,14 @@ def predbat_update_download(version):
                     except Exception as e:
                         print("Warn: Failed to copy local file {}: {}".format(filename, e))
                         skip_download = False
-            
+
             if not skip_download:
                 if not download_predbat_file_from_github(tag, filename, download_filepath):
                     print("Error: Failed to download {}".format(filename))
                     return None
-            
+
             downloaded_files.append(filename)
-        
+
         if skipped_files:
             print("\nSkipped downloading {} file(s) (already up to date): {}".format(len(skipped_files), ", ".join(skipped_files)))
 
