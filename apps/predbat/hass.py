@@ -51,7 +51,7 @@ async def main():
         return
 
     #
-    #   Adding addtional root to monitor
+    #   Adding additional root to monitor
     #
 
     # List of root directories to search
