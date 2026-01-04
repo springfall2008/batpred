@@ -2040,6 +2040,7 @@ APPS_SCHEMA = {
     "solis_inverter_sn": {"type": "string|string_list", "empty": False},
     "solis_automatic": {"type": "boolean"},
     "solis_base_url": {"type": "string", "empty": False},
+    "solis_control_enable": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor", "sensor_type": "boolean|action"},
     "octopus_ready_time": {"type": "sensor", "sensor_type": "string"},
     "octopus_charge_limit": {"type": "sensor", "sensor_type": "float"},

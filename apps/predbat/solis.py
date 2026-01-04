@@ -984,7 +984,6 @@ class SolisAPI(ComponentBase):
         async def list_operation():
             payload = {"pageSize": "100"}
             data = await self._execute_request(SOLIS_INVERTER_LIST_ENDPOINT, payload)
-            print(data)
 
             if data is None or "page" not in data:
                 raise SolisAPIError("Inverter list failed: missing 'data.page' field")
@@ -1222,10 +1221,6 @@ class SolisAPI(ComponentBase):
                 },
                 app="solis"
             )
-
-            # detail contains: maxChargePowerW which can be used for battery_rate_max
-            max_charge_power_detail = detail.get("maxChargePowerW")
-            print("Max Charge Power from detail:", max_charge_power_detail)
 
             # PV Energy Total
             entity_id = f"sensor.{prefix}_solis_{inverter_sn}_pv_energy_total"
