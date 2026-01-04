@@ -252,6 +252,7 @@ COMPONENT_LIST = {
             "inverter_sn": {"required": False, "config": "solis_inverter_sn"},
             "automatic": {"required": False, "config": "solis_automatic", "default": False},
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
+            "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
         },
         "phase": 1,
         "can_restart": True,
