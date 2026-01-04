@@ -517,7 +517,7 @@ class SolisAPI(ComponentBase):
 
 
         for slot in slots_to_check:
-            slot_data = self.charge_discharge_time_windows[inverter_sn].get(slot)
+            slot_data = self.charge_discharge_time_windows.get(inverter_sn, {}).get(slot)
             if not slot_data:
                 continue
             slot_data["charge_start_time"] = "00:00"
@@ -533,7 +533,6 @@ class SolisAPI(ComponentBase):
 
         Args:
             inverter_sn: Inverter serial number
-            slot_num: Specific slot to update (1-6), or None to update all slots
 
         Returns: True if write succeeded or no changes needed, False on error
         """
@@ -1096,6 +1095,7 @@ class SolisAPI(ComponentBase):
                 per_battery_max = float(max_charge_current_str)
                 max_charge = int(per_battery_max * battery_count)
             except (ValueError, TypeError):
+                # On error the default 100A will be used
                 pass
         self.max_charge_current[inverter_sn] = max_charge
 
@@ -1107,6 +1107,7 @@ class SolisAPI(ComponentBase):
                 per_battery_max = float(max_discharge_current_str)
                 max_discharge = int(per_battery_max * battery_count)
             except (ValueError, TypeError):
+                # On error the default 100A will be used
                 pass
         self.max_discharge_current[inverter_sn] = max_discharge
 
@@ -1140,7 +1141,7 @@ class SolisAPI(ComponentBase):
                         if metadata["unit"] in ["%", "W", "A", "V", "°C"]:
                             value = float(value_str)
                     except (ValueError, TypeError):
-                        pass
+                        self.log("Warn: Failed to convert value for {} CID {}: {}".format(inverter_sn, cid, value_str))
 
                 # Build attributes
                 attributes = {
@@ -1469,7 +1470,7 @@ class SolisAPI(ComponentBase):
                         try:
                             current_value_watts = int(float(current_value_amps) * self.nominal_voltage)
                         except (ValueError, TypeError):
-                            pass
+                            self.log("Warn: Failed to convert charge current to watts for {} slot {}: {}".format(inverter_sn, slot_num, current_value_amps))  # Debug log
 
                     # Use pre-calculated max current (convert to watts)
                     max_current_amps = self.max_charge_current.get(inverter_sn, 100)
@@ -1580,7 +1581,7 @@ class SolisAPI(ComponentBase):
                         try:
                             current_value_watts = int(float(current_value_amps) * self.nominal_voltage)
                         except (ValueError, TypeError):
-                            pass
+                            self.log("Warn: Failed to convert discharge current to watts for {} slot {}: {}".format(inverter_sn, slot_num, current_value_amps))  # Debug log
 
                     # Use pre-calculated max current (convert to watts)
                     max_current_amps = self.max_discharge_current.get(inverter_sn, 100)
@@ -1610,7 +1611,7 @@ class SolisAPI(ComponentBase):
                 try:
                     storage_mode_int = int(mode_value)
                 except (ValueError, TypeError):
-                    pass
+                    self.log("Warn: Failed to convert storage mode to int for {}: {}".format(inverter_sn, mode_value))  # Debug log
 
             # Use dynamic storage modes if available, otherwise static
             mode_options = list(self.storage_modes.get(inverter_sn, SOLIS_STORAGE_MODES).keys())
@@ -1714,7 +1715,7 @@ class SolisAPI(ComponentBase):
                 try:
                     max_charge_power_watts = int(float(max_charge_current_amps) * self.nominal_voltage)
                 except (ValueError, TypeError):
-                    pass
+                    self.log("Warn: Failed to convert max charge current to watts for {}: {}".format(inverter_sn, max_charge_current_amps))  # Debug log
 
             self.dashboard_item(
                 entity_id,
@@ -1740,7 +1741,7 @@ class SolisAPI(ComponentBase):
                 try:
                     max_discharge_power_watts = int(float(max_discharge_current_amps) * self.nominal_voltage)
                 except (ValueError, TypeError):
-                    pass
+                    self.log("Warn: Failed to convert max discharge current to watts for {}: {}".format(inverter_sn, max_discharge_current_amps))  # Debug log
 
             self.dashboard_item(
                 entity_id,
@@ -1826,7 +1827,7 @@ class SolisAPI(ComponentBase):
                         app="solis"
                     )
                 except (ValueError, TypeError):
-                    pass
+                    self.log("Warn: Failed to convert battery capacity for {}: {}".format(inverter_sn, battery_capacity_ah))  # Debug log
 
     # ==================== Control Methods ====================
 
@@ -2071,7 +2072,6 @@ class SolisAPI(ComponentBase):
 
                 # Convert watts to amps for inverter
                 amps = int(value / self.nominal_voltage)
-                amps_str = str(amps)
 
                 # Update charge_discharge_time_windows cache
                 if inverter_sn not in self.charge_discharge_time_windows:
@@ -2129,7 +2129,6 @@ class SolisAPI(ComponentBase):
 
                 # Convert watts to amps for inverter
                 amps = int(value / self.nominal_voltage)
-                amps_str = str(amps)
 
                 # Update charge_discharge_time_windows cache
                 if inverter_sn not in self.charge_discharge_time_windows:
@@ -2468,6 +2467,7 @@ class SolisAPI(ComponentBase):
 
     async def run(self, seconds, first):
         """Main run cycle called every 5 seconds"""
+        poll_success = True
 
         # One-time startup configuration
         if first:
@@ -2496,6 +2496,7 @@ class SolisAPI(ComponentBase):
                         self.log("Warn: Solis API: No inverters found after filtering")
                 else:
                     self.log("Warn: Solis API: No inverters discovered")
+                    poll_success = False
 
             except Exception as e:
                 self.log(f"Error: Solis API: Inverter discovery failed: {e}")
@@ -2515,19 +2516,14 @@ class SolisAPI(ComponentBase):
             else:
                 self.log("Error: Solis API: No inverters to manage after discovery")
                 self.api_started = False
-                return  # Stop further processing if no inverters
+                return False # Stop further processing if no inverters
 
         # Frequent polling (every 5 minutes)
         if first or (seconds % 300 == 0):
-            poll_success = True
             for sn in self.inverter_sn:
                 success =  await self.fetch_inverter_details(sn) # Get inverter details for all inverters
                 if not success:
                     poll_success = False
-
-            # Only update last_updated_time if all polls succeeded
-            if poll_success:
-                self.last_updated_time = self.base.now_utc
 
         # Infrequent polling (every 60 minutes)
         if first or (seconds % 3600 == 0):
@@ -2574,6 +2570,11 @@ class SolisAPI(ComponentBase):
         # Auto-configure Predbat if enabled
         if first and self.automatic and self.inverter_sn:
             await self.automatic_config()
+
+        # Return status
+        if poll_success:
+            self.update_success_timestamp()
+        return poll_success
 
 
     async def final(self):
