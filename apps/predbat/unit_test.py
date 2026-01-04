@@ -90,6 +90,7 @@ from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_carbon import test_carbon
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
+from tests.test_component_base import test_component_base_all
 
 
 # Mock the components and plugin system
@@ -228,6 +229,8 @@ def main():
         ("carbon", test_carbon, "Carbon Intensity API comprehensive tests (fetch, cache, publish, config)", False),
         # Ohme EV charger API unit tests
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
+        # ComponentBase lifecycle tests
+        ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
