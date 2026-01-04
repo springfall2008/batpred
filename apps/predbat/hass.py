@@ -50,9 +50,9 @@ async def main():
         await p_han.stop_all()
         return
 
-#
-#   Adding addtional root to monitor 
-#
+    #
+    #   Adding addtional root to monitor
+    #
 
     # List of root directories to search
     roots = [".", "/addon"]
