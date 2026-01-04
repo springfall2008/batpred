@@ -50,12 +50,23 @@ async def main():
         await p_han.stop_all()
         return
 
+#
+#   Adding addtional root to monitor 
+#
+
+    # List of root directories to search
+    roots = [".", "/addon"]
+
     # Find all .py files in the directory hierarchy
     py_files = []
-    for root, dirs, files in os.walk("."):
-        for file in files:
-            if (file.endswith(".py") or file == "apps.yaml") and not file.startswith("."):
-                py_files.append(os.path.join(root, file))
+
+    # Directories to walk through
+    for root_dir in roots:
+        for root, dirs, files in os.walk(root_dir):
+            for file in files:
+                if (file.endswith(".py") or file == "apps.yaml") and not file.startswith("."):
+                    py_files.append(os.path.join(root, file))
+
     print("Watching {} for changes".format(py_files))
 
     # Runtime loop
