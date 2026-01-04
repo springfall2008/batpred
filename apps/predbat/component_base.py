@@ -171,7 +171,7 @@ class ComponentBase(ABC):
                     # After startup, run every 60 seconds
                     if seconds % 60 == 0:
                         should_run = True
-                
+
                 if should_run:
                     if await self.run(seconds, first):
                         if not self.api_started:
