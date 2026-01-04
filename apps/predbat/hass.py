@@ -59,13 +59,17 @@ async def main():
 
     # Find all .py files in the directory hierarchy
     py_files = []
+    seen_files = set()
 
     # Directories to walk through
     for root_dir in roots:
         for root, dirs, files in os.walk(root_dir):
             for file in files:
                 if (file.endswith(".py") or file == "apps.yaml") and not file.startswith("."):
-                    py_files.append(os.path.join(root, file))
+                    full_path = os.path.abspath(os.path.join(root, file))
+                    if full_path not in seen_files:
+                        py_files.append(full_path)
+                        seen_files.add(full_path)
 
     print("Watching {} for changes".format(py_files))
 
