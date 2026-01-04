@@ -58,6 +58,8 @@ def test_download(my_predbat):
         ("update_move_empty", _test_predbat_update_move_empty_files, "Move files empty list"),
         ("update_move_none", _test_predbat_update_move_none_files, "Move files none list"),
         ("update_move_invalid_version", _test_predbat_update_move_invalid_version, "Move files invalid version"),
+        ("update_download_skip_matching", _test_predbat_update_download_skip_matching_sha, "Update download skips files with matching SHA"),
+        ("update_download_skip_mixed", _test_predbat_update_download_skip_mixed, "Update download skips some files, downloads others"),
     ]
 
     print("\n" + "=" * 70)
@@ -539,6 +541,124 @@ def _test_predbat_update_move_invalid_version(my_predbat):
                 # Should still return True and call os.system
                 assert result is True
                 assert mock_system.called
+
+    finally:
+        shutil.rmtree(temp_dir)
+    return 0
+
+
+def _test_predbat_update_download_skip_matching_sha(my_predbat):
+    """
+    Test download skips files when local SHA matches remote SHA
+    """
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        # Create local file with known content
+        local_file = os.path.join(temp_dir, "predbat.py")
+        test_content = "print('existing file')\n"
+        with open(local_file, "w") as f:
+            f.write(test_content)
+
+        # Compute its SHA
+        local_sha = compute_file_sha1(local_file)
+
+        # Mock GitHub API with file that has matching SHA
+        mock_files = [{"name": "predbat.py", "size": len(test_content), "sha": local_sha, "type": "file"}]
+
+        download_called = False
+
+        def mock_download(tag, filename, output_path):
+            nonlocal download_called
+            download_called = True
+            return "downloaded content"
+
+        with patch("download.os.path.dirname", return_value=temp_dir):
+            with patch("download.get_github_directory_listing", return_value=mock_files):
+                with patch("download.download_predbat_file_from_github", side_effect=mock_download):
+                    result = predbat_update_download("v8.30.8")
+
+                    # Verify download was skipped (not called)
+                    assert download_called is False, "download_predbat_file_from_github should not be called when SHA matches"
+
+                    # Verify file list still includes the file
+                    assert result is not None
+                    assert "predbat.py" in result
+                    assert "manifest.yaml" in result
+
+                    # Verify staged file exists (copied from local)
+                    staged_file = os.path.join(temp_dir, "predbat.py.v8.30.8")
+                    assert os.path.exists(staged_file), "Staged file should exist after copy"
+                    with open(staged_file, "r") as f:
+                        staged_content = f.read()
+                    assert staged_content == test_content, "Staged file should match local file"
+
+    finally:
+        shutil.rmtree(temp_dir)
+    return 0
+
+
+def _test_predbat_update_download_skip_mixed(my_predbat):
+    """
+    Test download skips files with matching SHA but downloads files with mismatched SHA
+    """
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        # Create two local files
+        file1 = os.path.join(temp_dir, "predbat.py")
+        file1_content = "print('file1')\n"
+        with open(file1, "w") as f:
+            f.write(file1_content)
+
+        file2 = os.path.join(temp_dir, "config.py")
+        file2_content = "print('file2 old')\n"
+        with open(file2, "w") as f:
+            f.write(file2_content)
+
+        # Compute SHAs
+        file1_sha = compute_file_sha1(file1)
+        file2_sha_wrong = "abc123different"  # Different SHA to force download
+
+        # Mock GitHub API with two files - one matching, one different
+        mock_files = [{"name": "predbat.py", "size": len(file1_content), "sha": file1_sha, "type": "file"}, {"name": "config.py", "size": 100, "sha": file2_sha_wrong, "type": "file"}]
+
+        download_calls = []
+
+        def mock_download(tag, filename, output_path):
+            download_calls.append(filename)
+            with open(output_path, "w") as f:
+                f.write("downloaded content for {}\n".format(filename))
+            return "downloaded content"
+
+        with patch("download.os.path.dirname", return_value=temp_dir):
+            with patch("download.get_github_directory_listing", return_value=mock_files):
+                with patch("download.download_predbat_file_from_github", side_effect=mock_download):
+                    result = predbat_update_download("v8.30.8")
+
+                    # Verify only config.py was downloaded (not predbat.py)
+                    assert len(download_calls) == 1, "Should download only 1 file"
+                    assert "config.py" in download_calls, "Should download config.py"
+                    assert "predbat.py" not in download_calls, "Should NOT download predbat.py (SHA matches)"
+
+                    # Verify both files in result
+                    assert result is not None
+                    assert "predbat.py" in result
+                    assert "config.py" in result
+
+                    # Verify predbat.py was copied (not downloaded)
+                    staged_file1 = os.path.join(temp_dir, "predbat.py.v8.30.8")
+                    assert os.path.exists(staged_file1)
+                    with open(staged_file1, "r") as f:
+                        content = f.read()
+                    assert content == file1_content, "Staged predbat.py should be copied from local"
+
+                    # Verify config.py was downloaded (new content)
+                    staged_file2 = os.path.join(temp_dir, "config.py.v8.30.8")
+                    assert os.path.exists(staged_file2)
+                    with open(staged_file2, "r") as f:
+                        content = f.read()
+                    assert content == "downloaded content for config.py\n", "Staged config.py should be downloaded"
 
     finally:
         shutil.rmtree(temp_dir)
