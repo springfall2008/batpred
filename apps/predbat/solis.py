@@ -36,6 +36,7 @@ SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC = 158
 SOLIS_CID_BATTERY_FORCE_CHARGE_SOC = 160
 SOLIS_CID_BATTERY_RECOVERY_SOC = 7229
 SOLIS_CID_BATTERY_MAX_CHARGE_SOC = 7963
+SOLIS_CID_BATTERY_CAPACITY = 172
 
 # Power control CIDs
 SOLIS_CID_POWER_LIMIT = 15
@@ -104,6 +105,7 @@ SOLIS_CID_INFREQUENT = [
     SOLIS_CID_POWER_LIMIT,
     SOLIS_CID_MAX_OUTPUT_POWER,
     SOLIS_CID_MAX_EXPORT_POWER,
+    SOLIS_CID_BATTERY_CAPACITY,
 ]
 
 SOLIS_CID_LIST_TOU_V2 = [
@@ -754,7 +756,7 @@ class SolisAPI(ComponentBase):
         #self.set_arg("battery_temperature", [f"sensor.predbat_solis_{device}_battery_temperature" for device in devices])
         
         # Battery capacity and limits from cached details
-        self.set_arg("soc_max", [f"sensor.predbat_solis_{device}_xxxx" for device in devices])
+        self.set_arg("soc_max", [f"sensor.predbat_solis_{device}_battery_capacity" for device in devices])
         
         # Reserve and limits
         self.set_arg("reserve", [f"number.predbat_solis_{device}_reserve_soc" for device in devices])
@@ -1548,6 +1550,27 @@ class SolisAPI(ComponentBase):
                 },
                 app="solis"
             )
+
+            battery_capacity_ah = values.get(SOLIS_CID_BATTERY_CAPACITY, None)
+            if battery_capacity_ah is not None:
+                try:
+                    battery_capacity_ah = float(battery_capacity_ah)
+                    battery_capacity_kWh = battery_capacity_ah * self.nominal_voltage / 1000.0
+                    entity_id = f"sensor.{prefix}_solis_{inverter_sn}_battery_capacity"
+                    self.dashboard_item(
+                        entity_id,
+                        state=round(battery_capacity_kWh, 2),
+                        attributes={
+                            "friendly_name": f"Solis {inverter_name} Battery Capacity",
+                            "unit_of_measurement": "kWh",
+                            "device_class": "energy",
+                            "state_class": "measurement",
+                            "icon": "mdi:battery",
+                        },
+                        app="solis"
+                    )
+                except (ValueError, TypeError):
+                    pass
     
     # ==================== Control Methods ====================
     

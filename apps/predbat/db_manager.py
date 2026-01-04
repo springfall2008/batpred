@@ -93,7 +93,8 @@ class DatabaseManager(ComponentBase):
                 self.log(f"Error in database thread: {e}")
                 self.log("Error: " + traceback.format_exc())
 
-        self.db_engine._commit_db()
+        if hasattr(self.db_engine, "_commit_db"):
+            self.db_engine._commit_db()
         self.db_engine._close()
         self.log("db_manager: Stopped cleanly")
         self.api_started = False
