@@ -308,7 +308,7 @@ class HAInterface(ComponentBase):
         while not self.api_stop:
             self.ws_sync_event.wait(timeout=1.0)
             self.ws_sync_event.clear()
-            if self.ws_event_loop and self.ws_async_event:
+            if self.ws_event_loop and self.ws_async_event and not loop.is_closed():
                 loop.call_soon_threadsafe(self.ws_async_event.set)
 
     def call_service_websocket_command(self, domain, service, data):
