@@ -524,7 +524,7 @@ class Inverter:
 
     def find_battery_size(self):
         """
-        Giving SOC Percent and battery power figure out the approximate battery size in kWh
+        Given SOC Percent and battery power figure out the approximate battery size in kWh
         """
         soc_percent_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
