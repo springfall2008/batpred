@@ -32,7 +32,6 @@ class AxleAPI(ComponentBase):
             "pence_per_kwh": None,
         }
         self.updated_at: None  # Last updated moved out to separate attribute to not pollute triggering on change of current_event
-        self.new_axle_event = False  # Used to indicate if this is a newly detected Axle event, and thus send a notification alert
 
     def load_event_history(self):
         """
@@ -218,14 +217,26 @@ class AxleAPI(ComponentBase):
             }
             self.updated_at = (updated_at.strftime(TIME_FORMAT) if updated_at else None,)
 
+            # Get the sensor entity_id from configuration
+            entity_id = self.get_arg("axle_session", indirect=False)
+            current_start_time = None  # start end end of any current Axle event
+            current_end_time = None
+            if entity_id:
+                # Fetch current event(s)
+                event_current = self.get_state_wrapper(entity_id=entity_id, attribute="event_current")
+                if event_current and isinstance(event_current, list):
+                    current_start_time = event_current[0]['start_time']
+                    current_end_time = event_current[0]['end_time']
+
             if start_time and end_time:
+                # An Axle event is planned
+
                 # Add to history once event has started (active or past events)
                 self.add_event_to_history(self.current_event)
 
-                # send alert notification if this is a new Axle event
-                if not self.new_axle_event:
+                # send alert if this is a new Axle event
+                if (start_time.strftime(TIME_FORMAT) != current_start_time) or (end_time.strftime(TIME_FORMAT) != current_end_time):
                     self.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), self.pence_per_kwh))
-                    self.new_axle_event = True
 
             self.cleanup_event_history()
             self.publish_axle_event()
@@ -257,8 +268,6 @@ class AxleAPI(ComponentBase):
         event_current = []
         if start_time_str and end_time_str:
             event_current = [self.current_event.copy()]
-        else:
-            self.new_axle_event = False  # no event, any new events should be alerted upon
 
         # Publish binary sensor with current event and history
         self.dashboard_item(
