@@ -53,6 +53,10 @@ class MockAxleAPI(AxleAPI):
         """Mock log method"""
         self.log_messages.append(message)
 
+    def call_notify(self, message):
+        """Mock notify method"""
+        self.log_messages.append("Alert: " + message)
+
     def dashboard_item(self, entity_id, state, attributes, app=None):
         """Mock dashboard_item - tracks calls and stores in state"""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes, "app": app}
