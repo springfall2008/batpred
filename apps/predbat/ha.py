@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import os
-from datetime import timedelta, datetime, timezone
+from datetime import timedelta, datetime
 import asyncio
 from aiohttp import ClientSession, WSMsgType
 import json
@@ -289,7 +289,7 @@ class HAInterface(ComponentBase):
             self.api_started = True
             while not self.api_stop:
                 if seconds % 60 == 0:
-                    self.last_success_timestamp = datetime.now(timezone.utc)
+                    self.update_success_timestamp()
                 await asyncio.sleep(5)
                 seconds += 5
         self.api_started = False
@@ -308,7 +308,7 @@ class HAInterface(ComponentBase):
         while not self.api_stop:
             self.ws_sync_event.wait(timeout=1.0)
             self.ws_sync_event.clear()
-            if self.ws_event_loop and self.ws_async_event:
+            if self.ws_event_loop and self.ws_async_event and not loop.is_closed():
                 loop.call_soon_threadsafe(self.ws_async_event.set)
 
     def call_service_websocket_command(self, domain, service, data):
@@ -434,14 +434,19 @@ class HAInterface(ComponentBase):
                                                     entity_id = new_state.get("entity_id", None)
                                                     if entity_id:
                                                         self.update_state_item(new_state, entity_id)
+                                                        # Only trigger on value change or you get too many updates
+                                                        if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
+                                                            await self.base.trigger_watch_list(entity_id, event_data.get("attribute", None), event_data.get("old_state", None), new_state)
+                                                        error_count = 0  # Reset error count on successful result
+                                                        self.update_success_timestamp()
                                                     else:
                                                         self.log("Warn: Web Socket state_changed event has no entity_id {}".format(new_state))
-                                                    # Only trigger on value change or you get too many updates
-                                                    if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
-                                                        await self.base.trigger_watch_list(new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state)
+                                                        error_count += 1
                                             elif event_type == "call_service":
                                                 service_data = event_info.get("data", {})
                                                 await self.base.trigger_callback(service_data)
+                                                error_count = 0  # Reset error count on successful result
+                                                self.update_success_timestamp()
                                             else:
                                                 self.log("Info: Web Socket unknown message {}".format(data))
                                         elif message_type == "result":
@@ -460,6 +465,10 @@ class HAInterface(ComponentBase):
                                             success = data.get("success", False)
                                             if not success:
                                                 self.log("Warn: Web Socket result failed {}".format(data))
+                                                error_count += 1
+                                            else:
+                                                self.update_success_timestamp()
+                                                error_count = 0  # Reset error count on successful result
                                         elif message_type == "auth_required":
                                             pass
                                         elif message_type == "auth_ok":
@@ -467,6 +476,7 @@ class HAInterface(ComponentBase):
                                         elif message_type == "auth_invalid":
                                             self.log("Warn: Web Socket auth failed, check your ha_key setting")
                                             self.websocket_active = False
+                                            error_count += 1
                                             raise Exception("Web Socket auth failed")
                                         else:
                                             self.log("Info: Web Socket unknown message {}".format(data))
@@ -505,9 +515,12 @@ class HAInterface(ComponentBase):
                                         self.ws_pending_requests[sid] = {"event": event, "result_holder": result_holder, "timestamp": time.time()}
 
                                     sid += 1
+                                    self.update_success_timestamp()
+                                    error_count = 0  # Reset error count on successful result
                                 except Exception as e:
                                     # Failed to send - notify caller immediately
                                     self.log("Warn: Failed to send service call {}/{}: {}".format(domain, service, e))
+                                    error_count += 1
                                     result_holder["error"] = "send_failed: {}".format(e)
                                     result_holder["success"] = False
                                     event.set()
@@ -532,6 +545,7 @@ class HAInterface(ComponentBase):
                                         req_info["result_holder"]["success"] = False
                                         req_info["event"].set()
                                         self.log("Warn: Service call timeout for request id {}".format(req_id))
+                                        error_count += 1
 
                 except Exception as e:
                     self.log("Error: Web Socket exception in startup: {}".format(e))
