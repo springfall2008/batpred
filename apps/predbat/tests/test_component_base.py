@@ -49,6 +49,7 @@ class MockBase:
         """Mock notify method"""
         self.log_messages.append("Alert: " + message)
 
+
 class TestComponent(ComponentBase):
     """Test component implementation"""
 
