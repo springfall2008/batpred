@@ -512,16 +512,23 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
 
 #### Important notes (Solis)
 
-**IMPORTANT:** Currently the Solis Cloud integration cannot determine your battery size. You **must** set `soc_max` in `apps.yaml` manually with your battery capacity in kWh.
+**IMPORTANT:** The Solis Cloud integration cannot automatically determine your battery size from the inverter. You have two options:
 
-For example:
+1. **Manual configuration (recommended):** Set `soc_max` in `apps.yaml` manually with your battery capacity in kWh:
 
 ```yaml
   soc_max:
     - 13.5
 ```
 
-Replace `13.5` with your actual battery capacity in kWh. This setting is critical for Predbat to correctly calculate battery charge levels and optimization plans.
+Replace `13.5` with your actual battery capacity in kWh.
+
+2. **Automatic detection:** Leave `soc_max` unset or set to 0, and Predbat will attempt to automatically determine battery size by analyzing historical charging data. This requires:
+   - At least several days of historical data from `soc_percent` and `battery_power` sensors
+   - Charging periods with at least 15% SoC change
+   - May take time to collect sufficient data
+
+Manual configuration is recommended as it's immediate and more reliable.
 
 #### Automatic configuration (solis_automatic: True)
 
@@ -855,7 +862,7 @@ or
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
 Predbat also uses **battery_rate_max** when creating [charge and discharge curves](#battery-chargedischarge-curves), looking for charging or discharging at 95% of the max rate.
 Be careful of setting the rate at a value higher than your inverter can handle for grid charging in order for Predbat to be able to find the historical 'full rate' charging/discharging needed to correctly calculate the curves.
-- **soc_max** - Entity name for the maximum charge level for the battery in kWh
+- **soc_max** - Entity name for the maximum charge level for the battery in kWh. If not set or set to 0, Predbat will attempt to automatically determine the battery size by analyzing historical charging data from `soc_percent` and `battery_power` sensors. This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).

@@ -128,27 +128,6 @@ SOLIS_CID_LIST_TOU_V2 = [
     # Discharge slot 1-6 currents (non-sequential!)
     *SOLIS_CID_DISCHARGE_CURRENT,
 ]
-
-# CID metadata mapping
-SOLIS_CID_MAP = {
-    # Storage mode and battery limits
-    636: {"name": "storage_mode", "unit": None, "device_class": None, "state_class": None},
-    157: {"name": "reserve_soc", "unit": "%", "device_class": "battery", "state_class": None},
-    158: {"name": "over_discharge_soc", "unit": "%", "device_class": "battery", "state_class": None},
-    160: {"name": "force_charge_soc", "unit": "%", "device_class": "battery", "state_class": None},
-    7229: {"name": "recovery_soc", "unit": "%", "device_class": "battery", "state_class": None},
-    7963: {"name": "max_charge_soc", "unit": "%", "device_class": "battery", "state_class": None},
-
-    # Battery max currents
-    7224: {"name": "max_charge_current", "unit": "A", "device_class": "current", "state_class": None},
-    7226: {"name": "max_discharge_current", "unit": "A", "device_class": "current", "state_class": None},
-
-    # Power controls
-    15: {"name": "power_limit", "unit": "%", "device_class": None, "state_class": None},
-    376: {"name": "max_output_power", "unit": "%", "device_class": None, "state_class": None},
-    499: {"name": "max_export_power", "unit": "W", "device_class": "power", "state_class": None},
-}
-
 # Storage mode mappings
 SOLIS_STORAGE_MODES = {
     "Self-Use - No Grid Charging": 1,
@@ -664,8 +643,10 @@ class SolisAPI(ComponentBase):
                     if slot_data:
                         charge_start_time = slot_data.get("charge_start_time", "00:00")
                         charge_end_time = slot_data.get("charge_end_time", "00:00")
+                        charge_enable = slot_data.get("charge_enable", 0)
                         discharge_start_time = slot_data.get("discharge_start_time", "00:00")
                         discharge_end_time = slot_data.get("discharge_end_time", "00:00")
+                        discharge_enable = slot_data.get("discharge_enable", 0)
 
                         # Get the charge/discharge current set by Predbat
                         if slot == 1:
@@ -673,7 +654,7 @@ class SolisAPI(ComponentBase):
                             discharge_current = slot_data.get("discharge_current", discharge_current)
 
                         # Check if we're in a charge slot
-                        if charge_start_time != charge_end_time:  # Slot is enabled
+                        if charge_enable and charge_start_time != charge_end_time:  # Slot is enabled
                             if charge_start_time <= charge_end_time:
                                 # Normal time range (e.g., 02:00 to 05:00)
                                 if charge_start_time <= current_time <= charge_end_time:
@@ -684,7 +665,7 @@ class SolisAPI(ComponentBase):
                                     in_charge_slot = slot
 
                         # Check if we're in a discharge slot
-                        if discharge_start_time != discharge_end_time:  # Slot is enabled
+                        if discharge_enable and discharge_start_time != discharge_end_time:  # Slot is enabled
                             if discharge_start_time <= discharge_end_time:
                                 # Normal time range
                                 if discharge_start_time <= current_time <= discharge_end_time:
@@ -1067,6 +1048,7 @@ class SolisAPI(ComponentBase):
         self.set_arg("scheduled_discharge_enable", [f"switch.predbat_solis_{device}_discharge_slot1_enable" for device in devices])
         self.set_arg("battery_rate_max", [f"number.predbat_solis_{device}_max_charge_power" for device in devices])
         self.set_arg("inverter_limit", [f"sensor.predbat_solis_{device}_inverter_size" for device in devices])
+        self.set_arg("export_limit", [f"number.predbat_solis_{device}_max_export_power" for device in devices])
 
         self.log("Solis API: Automatic configuration complete")
 
@@ -1188,37 +1170,6 @@ class SolisAPI(ComponentBase):
 
             # Get cached values for this inverter
             values = self.cached_values.get(inverter_sn, {})
-
-            # Publish live data sensors
-            for cid, value_str in values.items():
-                if cid not in SOLIS_CID_MAP:
-                    continue
-
-                metadata = SOLIS_CID_MAP[cid]
-                field_name = metadata["name"]
-                entity_id = f"sensor.{prefix}_solis_{inverter_sn}_{field_name}"
-
-                # Convert value if numeric
-                value = value_str
-                if value is not None:
-                    try:
-                        if metadata["unit"] in ["%", "W", "A", "V", "°C"]:
-                            value = float(value_str)
-                    except (ValueError, TypeError):
-                        self.log("Warn: Failed to convert value for {} CID {}: {}".format(inverter_sn, cid, value_str))
-
-                # Build attributes
-                attributes = {
-                    "friendly_name": f"Solis {inverter_name} {field_name.replace('_', ' ').title()}",
-                }
-                if metadata["unit"]:
-                    attributes["unit_of_measurement"] = metadata["unit"]
-                if metadata["device_class"]:
-                    attributes["device_class"] = metadata["device_class"]
-                if metadata["state_class"]:
-                    attributes["state_class"] = metadata["state_class"]
-
-                self.dashboard_item(entity_id, state=value, attributes=attributes, app="solis")
 
             # Inverter size
             power = detail.get("power")
@@ -1886,6 +1837,13 @@ class SolisAPI(ComponentBase):
 
             entity_id = f"number.{prefix}_solis_{inverter_sn}_max_export_power"
             max_export_power_value = values.get(SOLIS_CID_MAX_EXPORT_POWER, None)
+            try:
+                max_export_power = float(max_export_power_value)
+            except (ValueError, TypeError):
+                max_export_power = 0.0
+            if max_export_power == 0.0:
+                max_export_power_value = 99999  # Use large number to indicate no limit
+                
             self.dashboard_item(
                 entity_id,
                 state=max_export_power_value,

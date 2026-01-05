@@ -620,10 +620,12 @@ async def test_write_time_windows_v1_slot_detection():
             "charge_end_time": "05:00",
             "charge_soc": 95,
             "charge_current": 50,
+            "charge_enable": 1,
             "discharge_start_time": "16:00",
             "discharge_end_time": "19:00",
             "discharge_soc": 15,
             "discharge_current": 30,
+            "discharge_enable": 1,
             "field_length": 18,
         },
         2: {
