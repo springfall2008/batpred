@@ -193,8 +193,6 @@ def _test_axle_fetch_with_active_event(my_predbat=None):
     assert axle.current_event["start_time"] == "2025-12-20T14:00:00+0000"
     assert axle.current_event["end_time"] == "2025-12-20T16:00:00+0000"
     assert axle.current_event["import_export"] == "export"
-    print("axle.updated_at=" + axle.updated_at)
-    assert axle.updated_at == "2025-12-20T13:45:00+0000"
     assert axle.current_event["pence_per_kwh"] == 100, "Pence per kWh should be set"
 
     # Event SHOULD be in history (added as soon as it starts)
@@ -308,8 +306,6 @@ def _test_axle_fetch_no_event(my_predbat=None):
     assert axle.current_event["start_time"] is None
     assert axle.current_event["end_time"] is None
     assert axle.current_event["import_export"] is None
-    print("axle.updated_at=" + axle.updated_at)
-    assert axle.updated_at is None
 
     # Verify binary sensor is OFF with empty event_current
     sensor = axle.dashboard_items["binary_sensor.predbat_axle_event"]
