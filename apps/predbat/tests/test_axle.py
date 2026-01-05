@@ -37,9 +37,9 @@ class MockAxleAPI(AxleAPI):
             "start_time": None,
             "end_time": None,
             "import_export": None,
-            "updated_at": None,
             "pence_per_kwh": None,
         }
+        self.updated_at: None
         self.history_loaded = False
         self._now_utc = datetime.now(timezone.utc)
         self._state_store = {}  # Mock state storage
@@ -189,7 +189,7 @@ def _test_axle_fetch_with_active_event(my_predbat=None):
     assert axle.current_event["start_time"] == "2025-12-20T14:00:00+0000"
     assert axle.current_event["end_time"] == "2025-12-20T16:00:00+0000"
     assert axle.current_event["import_export"] == "export"
-    assert axle.current_event["updated_at"] == "2025-12-20T13:45:00+0000"
+    assert axle.updated_at == "2025-12-20T13:45:00+0000"
     assert axle.current_event["pence_per_kwh"] == 100, "Pence per kWh should be set"
 
     # Event SHOULD be in history (added as soon as it starts)
@@ -303,7 +303,7 @@ def _test_axle_fetch_no_event(my_predbat=None):
     assert axle.current_event["start_time"] is None
     assert axle.current_event["end_time"] is None
     assert axle.current_event["import_export"] is None
-    assert axle.current_event["updated_at"] is None
+    assert axle.updated_at is None
 
     # Verify binary sensor is OFF with empty event_current
     sensor = axle.dashboard_items["binary_sensor.predbat_axle_event"]
@@ -541,13 +541,11 @@ def _test_axle_history_loading(my_predbat=None):
         "start_time": datetime(2025, 12, 19, 14, 0, 0, tzinfo=timezone.utc),
         "end_time": datetime(2025, 12, 19, 16, 0, 0, tzinfo=timezone.utc),
         "import_export": "import",
-        "updated_at": datetime(2025, 12, 19, 13, 45, 0, tzinfo=timezone.utc),
     }
     future_event = {
         "start_time": datetime(2025, 12, 21, 14, 0, 0, tzinfo=timezone.utc),
         "end_time": datetime(2025, 12, 21, 16, 0, 0, tzinfo=timezone.utc),
         "import_export": "export",
-        "updated_at": datetime(2025, 12, 20, 13, 45, 0, tzinfo=timezone.utc),
     }
 
     # Store in mock state
@@ -628,7 +626,6 @@ def _test_axle_fetch_sessions(my_predbat=None):
         "start_time": "2025-12-20T14:00:00+0000",
         "end_time": "2025-12-20T16:00:00+0000",
         "import_export": "export",
-        "updated_at": "2025-12-20T13:45:00+0000",
         "pence_per_kwh": 100,
     }
 
@@ -636,7 +633,6 @@ def _test_axle_fetch_sessions(my_predbat=None):
         "start_time": "2025-12-19T10:00:00+0000",
         "end_time": "2025-12-19T12:00:00+0000",
         "import_export": "import",
-        "updated_at": "2025-12-19T09:45:00+0000",
         "pence_per_kwh": 100,
     }
 
@@ -644,7 +640,6 @@ def _test_axle_fetch_sessions(my_predbat=None):
         "start_time": "2025-12-18T14:00:00+0000",
         "end_time": "2025-12-18T16:00:00+0000",
         "import_export": "export",
-        "updated_at": "2025-12-18T13:45:00+0000",
         "pence_per_kwh": 100,
     }
 
