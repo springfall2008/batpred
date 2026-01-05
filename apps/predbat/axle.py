@@ -32,6 +32,7 @@ class AxleAPI(ComponentBase):
             "pence_per_kwh": None,
         }
         self.updated_at: None  # Last updated moved out to separate attribute to not pollute triggering on change of current_event
+        self.new_axle_event = False  # Used to indicate if this is a newly detected Axle event, and thus send a notification alert
 
     def load_event_history(self):
         """
@@ -217,9 +218,14 @@ class AxleAPI(ComponentBase):
             }
             self.updated_at = updated_at.strftime(TIME_FORMAT) if updated_at else None,
 
-            # Add to history if event has started (active or past events)
             if start_time and end_time:
+                # Add to history once event has started (active or past events)
                 self.add_event_to_history(self.current_event)
+
+                # send alert notification if this is a new Axle event
+                if not self.new_axle_event:
+                    self.base.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), self.pence_per_kwh))
+                    self.new_axle_event = True
 
             self.cleanup_event_history()
             self.publish_axle_event()
@@ -251,6 +257,8 @@ class AxleAPI(ComponentBase):
         event_current = []
         if start_time_str and end_time_str:
             event_current = [self.current_event.copy()]
+        else:
+            self.new_axle_event = False  # no event, any new events should be alerted upon
 
         # Publish binary sensor with current event and history
         self.dashboard_item(
@@ -321,7 +329,7 @@ def fetch_axle_sessions(base):
 
 def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
     """
-    Load octopus saving session slot
+    Load Axle VPP session slot
     """
 
     for axle_session in axle_sessions:
@@ -339,14 +347,14 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
             except (ValueError, TypeError):
                 start_time = None
                 end_time = None
-                base.log("Warn: Unable to decode Axle saving session start/end time")
+                base.log("Warn: Unable to decode Axle VPP session start/end time")
         if start_time and end_time:
             start_minutes = minutes_to_time(start_time, base.midnight_utc)
             end_minutes = min(minutes_to_time(end_time, base.midnight_utc), base.forecast_minutes)
 
         if start_minutes is not None and end_minutes is not None and start_minutes < (base.forecast_minutes + base.minutes_now):
             if (export and import_export == "export") or (not export and import_export == "import"):
-                base.log("Setting Axle saving session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
+                base.log("Setting Axle VPP session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
                 for minute in range(start_minutes, end_minutes):
                     if export:
                         if minute in base.rate_export:

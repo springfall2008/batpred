@@ -308,7 +308,8 @@ Select control my battery for 'Events Only'.
 - Stores event history for up to 7 days
 - Events are added to history as soon as they start (become active)
 - Binary sensor (default name `binary_sensor.predbat_axle_event`) is `on` when an event is currently active, `off` otherwise
-- Event details and history are available as sensor attributes ('event_current' and 'event_history')
+- Current event details and event history are available as sensor attributes ('event_current' and 'event_history')
+- Alert notification sent when Predbat adds a new Axle VPP event to the Predbat plan
 - When **axle_control** is enabled (set to True in `apps.yaml`), Predbat will enter read-only mode during active VPP events (default is False)
     - Read-only mode prevents Predbat from controlling the inverter while VPP events are running
     - Status will show as "Read-Only (Axle)" when this feature is active
