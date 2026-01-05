@@ -706,6 +706,10 @@ def _test_axle_load_slot_export(my_predbat=None):
         def log(self, message):
             print(f"  [LOG] {message}")
 
+        def call_notify(self, message):
+            """Mock notify method"""
+            self.log_messages.append("Alert: " + message)
+
         def time_abs_str(self, minutes):
             return f"{minutes//60:02d}:{minutes%60:02d}"
 

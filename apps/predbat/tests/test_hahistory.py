@@ -68,6 +68,9 @@ class MockBase:
         """Log messages for test verification"""
         self.log_messages.append(message)
 
+    def call_notify(self, message):
+        """Mock notify method"""
+        self.log_messages.append("Alert: " + message)
 
 def create_mock_history(entity_id, days=30, step_minutes=5, start_time=None):
     """Create realistic history data for an entity"""

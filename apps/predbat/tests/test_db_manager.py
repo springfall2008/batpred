@@ -45,6 +45,9 @@ class MockBase:
         self.log_messages.append(message)
         print(f"[TEST LOG] {message}")
 
+    def call_notify(self, message):
+        """Mock notify method"""
+        self.log_messages.append("Alert: " + message)
 
 class MockDatabaseManager(DatabaseManager):
     """Mock DatabaseManager that bypasses ComponentBase"""
