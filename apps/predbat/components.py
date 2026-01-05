@@ -353,8 +353,9 @@ class Components:
         await self.stop(only=only)
         self.log("Waiting 10 seconds before restarting component(s)")
         await asyncio.sleep(10)
-        self.log("Starting component(s) again")
-        self.initialize(only=only)
+        self.log(f"Starting component(s) {only} again")
+        self.initialize(only=only, phase=0)
+        self.initialize(only=only, phase=1)
         self.start(only=only)
 
     """
