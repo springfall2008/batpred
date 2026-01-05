@@ -45,6 +45,7 @@ class ComponentBase(ABC):
         """
         self.base = base
         self.log = base.log
+        self.call_notify = base.call_notify
         self.api_started = False
         self.api_stop = False
         self.last_success_timestamp = None
