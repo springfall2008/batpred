@@ -1066,6 +1066,7 @@ class SolisAPI(ComponentBase):
         self.set_arg("discharge_rate", [f"number.predbat_solis_{device}_discharge_slot1_power" for device in devices])
         self.set_arg("scheduled_discharge_enable", [f"switch.predbat_solis_{device}_discharge_slot1_enable" for device in devices])
         self.set_arg("battery_rate_max", [f"number.predbat_solis_{device}_max_charge_power" for device in devices])
+        self.set_arg("inverter_limit", [f"sensor.predbat_solis_{device}_inverter_size" for device in devices])
 
         self.log("Solis API: Automatic configuration complete")
 
@@ -1218,6 +1219,23 @@ class SolisAPI(ComponentBase):
                     attributes["state_class"] = metadata["state_class"]
 
                 self.dashboard_item(entity_id, state=value, attributes=attributes, app="solis")
+
+            # Inverter size
+            power = detail.get("power")
+            powerStr = detail.get("powerStr", "kW")
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_inverter_size"
+            self.dashboard_item(
+                entity_id,
+                state=power,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Inverter Size",
+                    "unit_of_measurement": powerStr,
+                    "device_class": "power",
+                    "state_class": "measurement",
+                    "icon": "mdi:solar-power",
+                },
+                app="solis"
+            )
 
             # Publish sensors from inverter detail API (not CID-based)
             # Total Load Energy

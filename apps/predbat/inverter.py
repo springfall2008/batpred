@@ -663,6 +663,7 @@ class Inverter:
                                 estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh
                                 estimated_battery_size = dp2(estimated_battery_size)
                                 estimate_battery_sizes.append(estimated_battery_size)
+
             # Average the estimated battery sizes
             if len(estimate_battery_sizes) > 0:
                 average_battery_size = sum(estimate_battery_sizes) / len(estimate_battery_sizes)
