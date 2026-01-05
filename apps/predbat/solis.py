@@ -1111,7 +1111,7 @@ class SolisAPI(ComponentBase):
 
     async def fetch_entity_data(self, sn):
         """
-        This use to fetch HA data for the charge/discharge windows directly frome Home Assistant using get_state_wrapper()
+        This use to fetch HA data for the charge/discharge windows directly from Home Assistant using get_state_wrapper()
         It is the opposite of publish_entities() (but only for the time windows)
         It is needed as we don't re-read the actual values from Solis API all the time and Predbat is in control of the time windows
 
