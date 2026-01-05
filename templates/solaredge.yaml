@@ -33,9 +33,11 @@ pred_bat:
   #
   # Sensors, currently more than one can be specified and they will be summed up automatically
   # however if you have two inverters only set one of them as they will both read the same.
+  # The Home Assistant entities might have a slightly different naming format - some might
+  # begin with sensor.solaredge_i1_m1... (for PV panels) or sensor.solaredge_i1_b1... (for battery)
   #
   load_today:
-    - sensor.solaredge_i1_ac_energy_kwh
+    - sensor.solar_house_consumption_kwh
   import_today:
     - sensor.solaredge_m1_imported_kwh
   export_today:
@@ -59,6 +61,8 @@ pred_bat:
     - number.solaredge_i1_storage_discharge_limit
   battery_power:
     - sensor.solaredge_b1_dc_power
+  battery_power_invert:
+    - True
   pv_power:
     - sensor.solar_panel_production_w # This is a custom template sensor - see SolarEdge section of 'Inverter Setup' for details
   load_power:

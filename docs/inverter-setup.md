@@ -1089,6 +1089,13 @@ sensor:
     method: left
     unit_prefix: k
     name: solar_panel_production_kwh
+
+sensor:
+  - platform: integration
+    source: sensor.solar_house_consumption_w
+    method: left
+    unit_prefix: k
+    name: solar_house_consumption_kwh
 ```
 
 If you have multiple batteries connected to your SolarEdge inverter and are using the SolarEdge Modbus Multi integration, this enumerates the multiple batteries as b1, b2, b3, etc with separate entities per battery.
