@@ -216,7 +216,7 @@ class AxleAPI(ComponentBase):
                 "import_export": import_export,
                 "pence_per_kwh": self.pence_per_kwh,
             }
-            self.updated_at = updated_at.strftime(TIME_FORMAT) if updated_at else None,
+            self.updated_at = (updated_at.strftime(TIME_FORMAT) if updated_at else None,)
 
             if start_time and end_time:
                 # Add to history once event has started (active or past events)
