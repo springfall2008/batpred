@@ -177,7 +177,7 @@ class ComponentBase(ABC):
                         if not self.api_started:
                             self.api_started = True
                             self.log(f"{self.__class__.__name__}: Started")
-                            first = False  # Clear first flag once started
+                        first = False  # Clear first flag once started
                     else:
                         self.count_errors += 1
                         self.non_fatal_error_occurred()

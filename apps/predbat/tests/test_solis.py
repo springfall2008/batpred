@@ -120,6 +120,182 @@ class MockSolisAPI(SolisAPI):
     # Note: encode_time_windows and set_storage_mode are NOT mocked - use real implementation from SolisAPI
 
 
+async def test_fetch_entity_data():
+    """Test fetch_entity_data fetches values from HA entities and updates cache"""
+    print("\n=== Test: fetch_entity_data ===")
+
+    api = MockSolisAPI()
+    inverter_sn = "010262229130043"
+    api.inverter_sn = [inverter_sn]
+    api.nominal_voltage = 48.4
+    api.max_charge_current[inverter_sn] = 62
+    api.max_discharge_current[inverter_sn] = 62
+
+    # Pre-populate time windows with some slots (simulating decode_time_windows output)
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 0,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 10,
+            "discharge_current": 0,
+        },
+        2: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 0,
+        },
+    }
+
+    # Mock HA entity states - simulate what publish_entities would have created
+    # Charge slot 1
+    api.dashboard_items[f"switch.predbat_solis_{inverter_sn}_charge_slot1_enable"] = {"state": "on", "attributes": {}}
+    api.dashboard_items[f"select.predbat_solis_{inverter_sn}_charge_slot1_start_time"] = {"state": "02:30:00", "attributes": {}}
+    api.dashboard_items[f"select.predbat_solis_{inverter_sn}_charge_slot1_end_time"] = {"state": "05:30:00", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_charge_slot1_soc"] = {"state": "95", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_charge_slot1_power"] = {"state": "3000", "attributes": {}}  # 3000W = ~62A at 48.4V
+
+    # Discharge slot 1
+    api.dashboard_items[f"switch.predbat_solis_{inverter_sn}_discharge_slot1_enable"] = {"state": "off", "attributes": {}}
+    api.dashboard_items[f"select.predbat_solis_{inverter_sn}_discharge_slot1_start_time"] = {"state": "16:00:00", "attributes": {}}
+    api.dashboard_items[f"select.predbat_solis_{inverter_sn}_discharge_slot1_end_time"] = {"state": "19:00:00", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_discharge_slot1_soc"] = {"state": "20", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_discharge_slot1_power"] = {"state": "2400", "attributes": {}}  # 2400W = ~49A at 48.4V
+
+    # Charge slot 2 - partial data
+    api.dashboard_items[f"switch.predbat_solis_{inverter_sn}_charge_slot2_enable"] = {"state": "off", "attributes": {}}
+    api.dashboard_items[f"select.predbat_solis_{inverter_sn}_charge_slot2_start_time"] = {"state": "00:00:00", "attributes": {}}
+    # No end_time entity exists (None return case)
+
+    # Call fetch_entity_data
+    await api.fetch_entity_data(inverter_sn)
+
+    # Verify charge slot 1 values were fetched
+    slot1 = api.charge_discharge_time_windows[inverter_sn][1]
+    assert slot1["charge_enable"] == 1, f"Expected charge_enable=1, got {slot1['charge_enable']}"
+    assert slot1["charge_start_time"] == "02:30", f"Expected charge_start_time='02:30', got {slot1['charge_start_time']}"
+    assert slot1["charge_end_time"] == "05:30", f"Expected charge_end_time='05:30', got {slot1['charge_end_time']}"
+    assert slot1["charge_soc"] == 95, f"Expected charge_soc=95, got {slot1['charge_soc']}"
+    # Power converted to amps: 3000W / 48.4V = 61.98A, clamped to max 62A
+    expected_charge_current = int(3000 / 48.4)  # ~61A
+    assert slot1["charge_current"] == expected_charge_current, f"Expected charge_current={expected_charge_current}, got {slot1['charge_current']}"
+
+    # Verify discharge slot 1 values were fetched
+    assert slot1["discharge_enable"] == 0, f"Expected discharge_enable=0, got {slot1['discharge_enable']}"
+    assert slot1["discharge_start_time"] == "16:00", f"Expected discharge_start_time='16:00', got {slot1['discharge_start_time']}"
+    assert slot1["discharge_end_time"] == "19:00", f"Expected discharge_end_time='19:00', got {slot1['discharge_end_time']}"
+    assert slot1["discharge_soc"] == 20, f"Expected discharge_soc=20, got {slot1['discharge_soc']}"
+    # Power converted to amps: 2400W / 48.4V = 49.58A
+    expected_discharge_current = int(2400 / 48.4)  # ~49A
+    assert slot1["discharge_current"] == expected_discharge_current, f"Expected discharge_current={expected_discharge_current}, got {slot1['discharge_current']}"
+
+    # Verify slot 2 values (only enable and start_time were available)
+    slot2 = api.charge_discharge_time_windows[inverter_sn][2]
+    assert slot2["charge_enable"] == 0, f"Expected charge_enable=0 for slot 2, got {slot2['charge_enable']}"
+    assert slot2["charge_start_time"] == "00:00", f"Expected charge_start_time='00:00' for slot 2, got {slot2['charge_start_time']}"
+    # end_time should be unchanged (original value) since entity didn't exist
+    assert slot2["charge_end_time"] == "00:00", f"Expected charge_end_time unchanged for slot 2"
+
+    print("PASSED: fetch_entity_data correctly fetches and converts HA entity states")
+    return False
+
+
+async def test_fetch_entity_data_power_clamping():
+    """Test fetch_entity_data clamps power to max current limits"""
+    print("\n=== Test: fetch_entity_data power clamping ===")
+
+    api = MockSolisAPI()
+    inverter_sn = "TEST12345"
+    api.inverter_sn = [inverter_sn]
+    api.nominal_voltage = 48.0  # Simplified voltage
+    api.max_charge_current[inverter_sn] = 50  # Max 50A
+    api.max_discharge_current[inverter_sn] = 40  # Max 40A
+
+    # Pre-populate time window
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 0,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 10,
+            "discharge_current": 0,
+        }
+    }
+
+    # Set power values that would exceed max current when converted
+    # Charge: 4800W / 48V = 100A, but max is 50A
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_charge_slot1_power"] = {"state": "4800", "attributes": {}}
+    # Discharge: 3000W / 48V = 62.5A, but max is 40A
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_discharge_slot1_power"] = {"state": "3000", "attributes": {}}
+
+    # Call fetch_entity_data
+    await api.fetch_entity_data(inverter_sn)
+
+    # Verify values were clamped to max
+    slot1 = api.charge_discharge_time_windows[inverter_sn][1]
+    assert slot1["charge_current"] == 50, f"Expected charge_current clamped to 50A, got {slot1['charge_current']}"
+    assert slot1["discharge_current"] == 40, f"Expected discharge_current clamped to 40A, got {slot1['discharge_current']}"
+
+    print("PASSED: fetch_entity_data correctly clamps power to max current limits")
+    return False
+
+
+async def test_fetch_entity_data_invalid_values():
+    """Test fetch_entity_data handles invalid/non-numeric values gracefully"""
+    print("\n=== Test: fetch_entity_data invalid values ===")
+
+    api = MockSolisAPI()
+    inverter_sn = "BAD_DATA"
+    api.inverter_sn = [inverter_sn]
+    api.nominal_voltage = 48.4
+    api.max_charge_current[inverter_sn] = 62
+    api.max_discharge_current[inverter_sn] = 62
+
+    # Pre-populate time window with initial values
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 0,
+            "discharge_soc": 10,
+            "discharge_current": 0,
+        }
+    }
+
+    # Set invalid values
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_charge_slot1_soc"] = {"state": "not_a_number", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_charge_slot1_power"] = {"state": "invalid", "attributes": {}}
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_discharge_slot1_soc"] = {"state": None, "attributes": {}}  # None state
+    api.dashboard_items[f"number.predbat_solis_{inverter_sn}_discharge_slot1_power"] = {"state": "", "attributes": {}}  # Empty string
+
+    # Call fetch_entity_data - should not crash
+    await api.fetch_entity_data(inverter_sn)
+
+    # Verify original values are unchanged (exception caught and passed)
+    slot1 = api.charge_discharge_time_windows[inverter_sn][1]
+    assert slot1["charge_soc"] == 100, f"Expected charge_soc unchanged at 100, got {slot1['charge_soc']}"
+    assert slot1["charge_current"] == 0, f"Expected charge_current unchanged at 0, got {slot1['charge_current']}"
+    assert slot1["discharge_soc"] == 10, f"Expected discharge_soc unchanged at 10, got {slot1['discharge_soc']}"
+    assert slot1["discharge_current"] == 0, f"Expected discharge_current unchanged at 0, got {slot1['discharge_current']}"
+
+    print("PASSED: fetch_entity_data handles invalid values gracefully")
+    return False
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -166,6 +342,9 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_set_storage_mode_if_needed_changes())
         failed |= asyncio.run(test_set_storage_mode_if_needed_no_changes())
         failed |= asyncio.run(test_set_storage_mode_if_needed_all_modes())
+        failed |= asyncio.run(test_fetch_entity_data())
+        failed |= asyncio.run(test_fetch_entity_data_power_clamping())
+        failed |= asyncio.run(test_fetch_entity_data_invalid_values())
 
     except Exception as e:
         print(f"Error running Solis tests: {e}")
@@ -322,10 +501,10 @@ async def test_write_time_windows_v1_mode():
     assert "," in encoded_value, "Encoded value should contain commas"
     assert "00:00" in encoded_value, "Encoded value should contain time values"
 
-    # Verify storage mode was set to Self-Use (non-zero charge current)
+    # Verify storage mode was set to Self-Use - No Timed Charge/Discharge (outside of charge slots)
     storage_mode_calls = api.set_storage_mode_calls
     assert len(storage_mode_calls) == 1, f"Expected 1 storage mode call, got {len(storage_mode_calls)}"
-    assert storage_mode_calls[0]["mode"] == "Self-Use", "Storage mode should be Self-Use for non-zero charge current"
+    assert storage_mode_calls[0]["mode"] == "Self-Use - No Timed Charge/Discharge", "Storage mode should be Self-Use - No Timed Charge/Discharge when outside charge slots"
 
     print("PASSED: V1 mode writes CID 103 and sets storage mode")
     return False
@@ -441,10 +620,12 @@ async def test_write_time_windows_v1_slot_detection():
             "charge_end_time": "05:00",
             "charge_soc": 95,
             "charge_current": 50,
+            "charge_enable": 1,
             "discharge_start_time": "16:00",
             "discharge_end_time": "19:00",
             "discharge_soc": 15,
             "discharge_current": 30,
+            "discharge_enable": 1,
             "field_length": 18,
         },
         2: {
@@ -881,7 +1062,7 @@ async def test_publish_entities():
     # Check charge slot 1 controls
     assert f"switch.{prefix}_solis_{inverter_sn}_charge_slot1_enable" in api.dashboard_items, "Charge slot 1 enable switch should be published"
     charge_enable = api.dashboard_items[f"switch.{prefix}_solis_{inverter_sn}_charge_slot1_enable"]
-    assert charge_enable["state"] == "1", "Charge slot 1 should be enabled"
+    assert charge_enable["state"] == "on", "Charge slot 1 should be enabled"
 
     assert f"select.{prefix}_solis_{inverter_sn}_charge_slot1_start_time" in api.dashboard_items, "Charge slot 1 start time should be published"
     charge_start = api.dashboard_items[f"select.{prefix}_solis_{inverter_sn}_charge_slot1_start_time"]
@@ -901,7 +1082,7 @@ async def test_publish_entities():
     # Check discharge slot 1 controls
     assert f"switch.{prefix}_solis_{inverter_sn}_discharge_slot1_enable" in api.dashboard_items, "Discharge slot 1 enable switch should be published"
     discharge_enable = api.dashboard_items[f"switch.{prefix}_solis_{inverter_sn}_discharge_slot1_enable"]
-    assert discharge_enable["state"] == "1", "Discharge slot 1 should be enabled"
+    assert discharge_enable["state"] == "on", "Discharge slot 1 should be enabled"
 
     # Check storage mode selector
     assert f"select.{prefix}_solis_{inverter_sn}_storage_mode" in api.dashboard_items, "Storage mode selector should be published"
@@ -933,7 +1114,7 @@ async def test_publish_entities():
     # Check that slot 2 entities are also published (even if disabled)
     assert f"switch.{prefix}_solis_{inverter_sn}_charge_slot2_enable" in api.dashboard_items, "Charge slot 2 should be published"
     charge2_enable = api.dashboard_items[f"switch.{prefix}_solis_{inverter_sn}_charge_slot2_enable"]
-    assert charge2_enable["state"] == "0", "Charge slot 2 should be disabled"
+    assert charge2_enable["state"] == "off", "Charge slot 2 should be disabled"
 
     # Check detail API sensors
     assert f"sensor.{prefix}_solis_{inverter_sn}_pv_power" in api.dashboard_items, "PV power should be published"

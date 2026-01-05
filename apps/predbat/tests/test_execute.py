@@ -79,6 +79,9 @@ class ActiveTestInverter:
         self.reserve_percent_current = 0
         self.battery_temperature = 20
 
+    def find_battery_size(self):
+        return self.soc_max * 0.90
+
     def update_status(self, minutes_now):
         pass
 

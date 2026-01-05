@@ -341,21 +341,19 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
                 base.log("Warn: Unable to decode Axle saving session start/end time")
         if start_time and end_time:
             start_minutes = minutes_to_time(start_time, base.midnight_utc)
-            end_minutes = min(minutes_to_time(end_time, base.midnight_utc), base.forecast_minutes)
+            end_minutes = min(minutes_to_time(end_time, base.midnight_utc), base.forecast_minutes + base.minutes_now)
 
         if start_minutes is not None and end_minutes is not None and start_minutes < (base.forecast_minutes + base.minutes_now):
             if (export and import_export == "export") or (not export and import_export == "import"):
                 base.log("Setting Axle saving session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        if minute in base.rate_export:
-                            base.rate_export[minute] += pence_per_kwh
-                            rate_replicate[minute] = "saving"
+                        base.rate_export[minute] = base.rate_export.get(minute, 0) + pence_per_kwh
+                        rate_replicate[minute] = "saving"
                     else:
-                        if minute in base.rate_import:
-                            base.rate_import[minute] += pence_per_kwh
-                            base.load_scaling_dynamic[minute] = base.load_scaling_saving
-                            rate_replicate[minute] = "saving"
+                        base.rate_import[minute] = base.rate_import.get(minute, 0) + pence_per_kwh
+                        base.load_scaling_dynamic[minute] = base.load_scaling_saving
+                        rate_replicate[minute] = "saving"
 
 
 def fetch_axle_active(base):

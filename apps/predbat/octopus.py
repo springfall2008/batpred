@@ -1917,7 +1917,7 @@ class Octopus:
                 end_minutes = start_minutes + 30
             elif start and end:
                 start_minutes = minutes_to_time(start, self.midnight_utc)
-                end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
+                end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes + self.minutes_now)
 
             if start_minutes < (self.forecast_minutes + self.minutes_now):
                 self.log("Setting Octopus saving session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
