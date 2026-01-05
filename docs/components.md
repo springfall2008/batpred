@@ -534,8 +534,8 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 - **EXPERIMENTAL**: This is a new integration and may have issues
 - Requires Solis Cloud account with API access
 - **Battery size configuration**: The Solis Cloud integration cannot automatically determine your battery size from the inverter. You can either:
-  - Manually set `soc_max` in `apps.yaml` with your battery capacity in kWh (recommended), or
-  - Leave `soc_max` unset and allow Predbat to automatically detect battery size from historical charging data (requires several days of data)
+    - Manually set `soc_max` in `apps.yaml` with your battery capacity in kWh (recommended), or
+    - Leave `soc_max` unset and allow Predbat to automatically detect battery size from historical charging data (requires several days of data)
 - Supports both V1 (older firmware) and V2 (newer firmware) time window formats
 - Automatic configuration available - sets up all required Predbat sensors automatically
 

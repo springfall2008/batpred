@@ -1843,7 +1843,7 @@ class SolisAPI(ComponentBase):
                 max_export_power = 0.0
             if max_export_power == 0.0:
                 max_export_power_value = 99999  # Use large number to indicate no limit
-                
+
             self.dashboard_item(
                 entity_id,
                 state=max_export_power_value,
