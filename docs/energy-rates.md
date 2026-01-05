@@ -492,7 +492,7 @@ The following configuration options for the Axle VPP can be set in `apps.yaml`:
 - **axle_control** - Optional, when set to True will set Predbat into Read-Only mode for the duration of the Axle session so Axle can control your inverter. The Predbat status will show "Read-Only (Axle)" when this is active in an Axle session.
 Defaults to False so Predbat will control export of your inverter according to the Axle event details.
 
-To use the Axle VPP service only **axle_api_key** is required to be configured in `apps.yaml`.
+To use the Axle VPP service only **axle_api_key** is required to be configured in `apps.yaml`, the other configuration options are optional.
 
 ## Grid Carbon intensity
 

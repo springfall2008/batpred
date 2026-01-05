@@ -25,13 +25,13 @@ class AxleAPI(ComponentBase):
         self.automatic = automatic
         self.failures_total = 0
         self.event_history = []  # List of past events
-        self.current_event = {
+        self.current_event = {  # Current event
             "start_time": None,
             "end_time": None,
             "import_export": None,
-            "updated_at": None,
             "pence_per_kwh": None,
         }
+        self.updated_at: None  # Last updated moved out to separate attribute to not pollute triggering on change of current_event
 
     def load_event_history(self):
         """
@@ -213,9 +213,9 @@ class AxleAPI(ComponentBase):
                 "start_time": start_time.strftime(TIME_FORMAT) if start_time else None,
                 "end_time": end_time.strftime(TIME_FORMAT) if end_time else None,
                 "import_export": import_export,
-                "updated_at": updated_at.strftime(TIME_FORMAT) if updated_at else None,
                 "pence_per_kwh": self.pence_per_kwh,
             }
+            self.updated_at = updated_at.strftime(TIME_FORMAT) if updated_at else None,
 
             # Add to history if event has started (active or past events)
             if start_time and end_time:
@@ -262,6 +262,7 @@ class AxleAPI(ComponentBase):
                 "icon": "mdi:transmission-tower",
                 "event_current": event_current,
                 "event_history": self.event_history,
+                "updated_at": self.updated_at,
             },
         )
 
