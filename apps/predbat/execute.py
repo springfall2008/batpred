@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import timedelta
-from config import MINUTE_WATT
+from const import MINUTE_WATT
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from inverter import Inverter
 import time

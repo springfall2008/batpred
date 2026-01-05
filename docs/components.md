@@ -17,6 +17,8 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
+    - [Solax Cloud API (Solax)](#solax-cloud-api-solax)
+    - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
 - [Managing Components](#managing-components)
@@ -341,6 +343,122 @@ The binary sensor `binary_sensor.predbat_axle_event` provides the following attr
 
 ---
 
+### SolaX Cloud API (solax)
+
+**Can be restarted:** Yes
+
+#### What it does (solax)
+
+Connects directly to the SolaX Cloud API to control SolaX inverters and batteries.
+This allows Predbat to automatically set charge/discharge schedules, power limits, target SOC, and read real-time data from your inverter without requiring local Home Assistant integrations.
+
+The component polls your SolaX Cloud account every minute for real-time data and every 30 minutes for device and plant information.
+It publishes comprehensive sensors for battery status, energy totals, and provides full control over charging and discharging schedules.
+
+#### When to enable (solax)
+
+- You have a SolaX inverter (X1, X3, X3-Hybrid, or other cloud-connected models)
+- You want cloud-based control without local integrations
+- You have SolaX Cloud API credentials (client ID and secret)
+- You want automatic battery charge/discharge optimization
+- You want Predbat to read historical energy data directly from SolaX Cloud
+
+#### Important notes (solax)
+
+- Requires valid SolaX Cloud API credentials (client ID and client secret)
+- Supports multiple plants/inverters with automatic discovery when `solax_automatic: true`
+- Region-specific API endpoints: EU, US, or CN
+- Authentication tokens are automatically managed (30-day expiry with auto-refresh)
+- Supports both residential and commercial installations
+- Control commands use time-window based scheduling (similar to GivEnergy)
+- Read-only mode available with `solax_enable_controls: false`
+- Compatible with Predbat's standard optimization algorithms
+
+#### Configuration Options (solax)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `client_id` | String | Yes | - | `solax_client_id` | Your SolaX Cloud API client ID |
+| `client_secret` | String | Yes | - | `solax_client_secret` | Your SolaX Cloud API client secret |
+| `region` | String | No | 'eu' | `solax_region` | API region: 'eu', 'us', or 'cn' |
+| `plant_id` | String | No | None | `solax_plant_id` | Optional: Filter to specific plant ID |
+| `automatic` | Boolean | No | False | `solax_automatic` | Auto-configure all entities and inverters |
+| `enable_controls` | Boolean | No | True | `solax_enable_controls` | Enable inverter control (false for read-only) |
+
+**Security Note:** Store `solax_client_id` and especially `solax_client_secret` in `secrets.yaml`:
+
+```yaml
+solax_client_id: !secret solax_client_id
+solax_client_secret: !secret solax_client_secret
+```
+
+#### How to get your API credentials (solax)
+
+1. Log in to your SolaX Cloud account:
+   - EU: <https://www.solaxcloud.com>
+   - US: <https://www.solaxcloud.us>
+   - CN: <https://www.solaxcloud.com.cn>
+2. Navigate to Settings → API Management (or Developer Settings)
+3. Create a new API application or view existing credentials
+4. Copy your **Client ID** and **Client Secret**
+5. Add to your `secrets.yaml` file
+6. Reference in `apps.yaml` using `!secret` notation
+
+#### Published Entities (solax)
+
+For each plant (replace `{plant_id}` with your actual plant ID), the component creates:
+
+**Battery Sensors:**
+
+- Battery SOC (kWh)
+- Battery capacity (kWh)
+- Battery temperature (°C)
+- Battery max power (W)
+
+**System Sensors:**
+
+- Inverter max power (W)
+- PV capacity (kWp)
+- Total PV yield (kWh)
+- Total battery charged (kWh)
+- Total battery discharged (kWh)
+- Total grid imported (kWh)
+- Total grid exported (kWh)
+- Total load (kWh, calculated)
+- Total earnings (currency)
+
+**Power Sensors (per inverter):**
+
+- Charge/discharge power (W)
+- Grid power (W)
+- PV power (W)
+- AC load power (W)
+
+**Control Entities:**
+
+- Battery reserve SOC (number, %)
+- Charge start/end times (select, HH:MM:SS format)
+- Charge target SOC (number, %)
+- Charge rate (number, W)
+- Charge enable (switch)
+- Export start/end times (select, HH:MM:SS format)
+- Export target SOC (number, %)
+- Export rate (number, W)
+- Export enable (switch)
+
+#### Testing your configuration (solax)
+
+You can test your SolaX Cloud API connection independently:
+
+```bash
+cd /config/appdaemon/apps/predbat
+python3 solax.py --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET --region eu
+```
+
+This will authenticate, fetch all plants, devices, and real-time data, helping diagnose any connection or configuration issues.
+
+---
+
 ### Ohme Charger (ohme)
 
 **Can be restarted:** Yes
@@ -394,6 +512,41 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
 | `automatic` | Boolean | No | False | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
+
+---
+
+### Solis Cloud API (solis)
+
+**Can be restarted:** Yes
+
+#### What it does (solis)
+
+Integrates with Solis inverters for monitoring and controlling Solis battery systems via the Solis Cloud API. Provides direct control of charge/discharge schedules, storage modes, and battery parameters.
+
+#### When to enable (solis)
+
+- You have a Solis hybrid inverter with battery storage
+- You want direct API control of your Solis system
+- You have your Solis Cloud API credentials
+
+#### Important notes (solis)
+
+- **EXPERIMENTAL**: This is a new integration and may have issues
+- Requires Solis Cloud account with API access
+- **IMPORTANT**: Currently the Solis Cloud integration cannot determine your battery size. You **must** set `soc_max` in `apps.yaml` manually with your battery capacity in kWh
+- Supports both V1 (older firmware) and V2 (newer firmware) time window formats
+- Automatic configuration available - sets up all required Predbat sensors automatically
+
+#### Configuration Options (solis)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `api_key` | String | Yes | - | `solis_api_key` | Your Solis Cloud API Key (KeyId) |
+| `api_secret` | String | Yes | - | `solis_api_secret` | Your Solis Cloud API Secret (KeySecret) |
+| `inverter_sn` | String/List | No | - | `solis_inverter_sn` | Inverter serial number(s) - Leave unset to see all. Single string or list of strings for multiple inverters |
+| `automatic` | Boolean | No | False | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
+| `base_url` | String | No | Auto-detected | `solis_base_url` | Solis Cloud API base URL (automatically selects correct region) |
+| `control_enable` | Boolean | No | True | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
 
 ---
 

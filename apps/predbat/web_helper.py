@@ -2223,6 +2223,40 @@ def get_dashboard_collapsible_js():
     """
     text = """
 <script>
+function saveSectionState() {
+    const allSections = document.querySelectorAll('.dashboard-section-content');
+    const state = {};
+    allSections.forEach(section => {
+        state[section.id] = section.classList.contains('collapsed');
+    });
+    sessionStorage.setItem('dashboardSectionState', JSON.stringify(state));
+}
+
+function restoreSectionState() {
+    const stateStr = sessionStorage.getItem('dashboardSectionState');
+    if (!stateStr) return;
+
+    try {
+        const state = JSON.parse(stateStr);
+        Object.keys(state).forEach(sectionId => {
+            const section = document.getElementById(sectionId);
+            const icon = document.getElementById('icon-' + sectionId);
+            if (section && icon) {
+                if (state[sectionId]) {
+                    section.classList.add('collapsed');
+                    icon.textContent = '+';
+                } else {
+                    section.classList.remove('collapsed');
+                    icon.textContent = '−';
+                }
+            }
+        });
+        updateExpandAllButton();
+    } catch (e) {
+        console.error('Error restoring section state:', e);
+    }
+}
+
 function updateExpandAllButton() {
     const allSections = document.querySelectorAll('.dashboard-section-content');
     const btn = document.getElementById('expandAllBtn');
@@ -2244,7 +2278,8 @@ function toggleDashboardSection(sectionId) {
         icon.textContent = '+';
     }
 
-    // Update the expand all button text based on current state
+    // Save state and update the expand all button text
+    saveSectionState();
     updateExpandAllButton();
 }
 
@@ -2267,7 +2302,11 @@ function toggleAllSections() {
     });
 
     btn.textContent = allExpanded ? 'Expand All' : 'Collapse All';
+    saveSectionState();
 }
+
+// Restore state when page loads
+document.addEventListener('DOMContentLoaded', restoreSectionState);
 </script>
 """
     return text
@@ -2332,7 +2371,7 @@ def get_dashboard_css():
 
 .dashboard-section-content {
     transition: max-height 0.3s ease, opacity 0.3s ease;
-    overflow: hidden;
+    overflow-y: auto;
     padding-bottom: 20px;
 }
 
@@ -2342,7 +2381,7 @@ def get_dashboard_css():
 }
 
 .dashboard-section-content:not(.collapsed) {
-    max-height: 10000px;
+    max-height: 50000px;
     opacity: 1;
 }
 
@@ -4974,7 +5013,7 @@ document.getElementById('editorForm').addEventListener('submit', function(e) {
     try {
         // Only validate if content exists and isn't empty
         if (content && content.trim()) {
-            jsyaml.load(content);
+            jsyaml.load(content, { schema: CUSTOM_SCHEMA });
         }
     } catch (e) {
         console.log('YAML validation error during form submit:', e.message);
@@ -5089,7 +5128,18 @@ function updateButtonStates(saveButton, revertButton, content, hasError = false)
     }
 }
 
-// Custom YAML linter using js-yaml
+// Define custom YAML types for Home Assistant/Predbat tags
+const SECRET_TYPE = new jsyaml.Type('!secret', {
+    kind: 'scalar',
+    construct: function(data) {
+        return '***SECRET***'; // Placeholder value for secrets
+    }
+});
+
+// Create a custom schema that includes the !secret tag
+const CUSTOM_SCHEMA = jsyaml.DEFAULT_SCHEMA.extend([SECRET_TYPE]);
+
+// Custom YAML linter using js-yaml with custom schema
 CodeMirror.registerHelper("lint", "yaml", function(text) {
     const found = [];
     if (!text.trim()) {
@@ -5097,7 +5147,7 @@ CodeMirror.registerHelper("lint", "yaml", function(text) {
     }
 
     try {
-        jsyaml.load(text);
+        jsyaml.load(text, { schema: CUSTOM_SCHEMA });
     } catch (e) {
         // Convert js-yaml error to CodeMirror lint format
         const line = e.mark && e.mark.line ? e.mark.line : 0;
@@ -5175,7 +5225,7 @@ function initializeCodeMirror() {
         try {
             // Parse YAML to check for errors
             if (content.trim()) {
-                jsyaml.load(content);
+                jsyaml.load(content, { schema: CUSTOM_SCHEMA });
             }
         } catch (e) {
             isValid = false;
@@ -5213,7 +5263,7 @@ function initializeCodeMirror() {
             try {
                 const content = editor.getValue();
                 if (content && content.trim()) {
-                    jsyaml.load(content);
+                    jsyaml.load(content, { schema: CUSTOM_SCHEMA });
                 }
             } catch (e) {
                 console.log('Manual YAML validation error during lint event:', e.message);
@@ -5260,7 +5310,7 @@ function initializeCodeMirror() {
                     // Only validate if we have content
                     if (content && content.trim()) {
                         try {
-                            jsyaml.load(content);
+                            jsyaml.load(content, { schema: CUSTOM_SCHEMA });
                         } catch (e) {
                             isValidYaml = false;
                             console.log('YAML validation error in initialization:', e.message);
@@ -5345,7 +5395,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 let isValid = true;
                 if (content && content.trim()) {
                     try {
-                        jsyaml.load(content);
+                        jsyaml.load(content, { schema: CUSTOM_SCHEMA });
                     } catch (e) {
                         isValid = false;
                         console.log('YAML validation error in DOMContentLoaded final check:', e.message);

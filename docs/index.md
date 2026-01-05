@@ -2,13 +2,13 @@
 
 Home battery prediction and automatic charging for Home Assistant supporting multiple inverters including:
 
-- GivEnergy Hybrid, AC and AIO
+- GivEnergy Hybrid, AC and AIO (Local & Cloud)
 - Solis
-- Solax
+- Solax (Local & Cloud)
 - Sunsynk
 - Huawei
 - SolarEdge
-- Fox
+- Fox (Local & Cloud)
 - Sofar
 - LuxPower
 - Solar Assistant

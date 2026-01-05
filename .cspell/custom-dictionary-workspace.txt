@@ -192,12 +192,14 @@ mogons
 monokai
 Mosquitto
 mpan
+mppt
 mprn
 mqtt
 mult
 myenergi
 mypy
 nattribute
+ncalls
 nearr
 njpwerner
 nocharge
@@ -253,6 +255,7 @@ recp
 Redownload
 regionid
 regname
+remainings
 remotecontrol
 resetmidnight
 resultid
@@ -278,6 +281,7 @@ sigen
 sigenergy
 sigenstor
 Slee
+snakeviz
 socb
 socketloop
 socs
@@ -285,6 +289,7 @@ sofar
 SolarEdge
 solarman
 Solax
+solaxcloud
 solaxmodbus
 Solcast
 soliscloud
@@ -344,4 +349,5 @@ xticks
 yaxis
 yaxistooltip
 ylabel
+yuanzhi
 zappi

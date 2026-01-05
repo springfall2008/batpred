@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from utils import dp2, dp4
-from config import PREDICT_STEP
+from const import PREDICT_STEP
 
 
 def add_incrementing_sensor_total(data):

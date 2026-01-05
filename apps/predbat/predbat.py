@@ -27,10 +27,10 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.31.0"
+THIS_VERSION = "v8.31.9"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "unit_test.py"]
+PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -53,16 +53,15 @@ else:
     # In compiled mode, we skip the entire self-update logic
     print("Running in compiled mode; skipping local file checks and auto-update.")
 
-from config import (
+from const import (
     TIME_FORMAT,
     PREDICT_STEP,
     RUN_EVERY,
     INVERTER_TEST,
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
-    CONFIG_ITEMS,
-    APPS_SCHEMA,
 )
+from config import APPS_SCHEMA, CONFIG_ITEMS
 from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
@@ -1461,7 +1460,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
             self.log("Error: " + traceback.format_exc())
-            self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+            self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
             raise e
 
         # Run every N minutes aligned to the minute
@@ -1542,7 +1541,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False
@@ -1599,7 +1598,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
                 raise e
             finally:
                 self.prediction_started = False
@@ -1620,7 +1619,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
                 raise e
 
     def register_hook(self, hook_name, callback):

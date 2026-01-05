@@ -286,9 +286,6 @@ class FoxAPI(ComponentBase):
                     await self.get_device_history(sn)
                     await self.get_battery_charging_time(sn)
 
-            if self.automatic:
-                await self.automatic_config()
-
         if first or (seconds % (60 * 60) == 0):
             # Regular updates for registers and scheduler data
             for device in self.device_list:
@@ -305,7 +302,12 @@ class FoxAPI(ComponentBase):
                 sn = device.get("deviceSN", None)
                 if sn:
                     await self.get_real_time_data(sn)
+            # Refresh HA entities
             await self.publish_data()
+
+        # Automatic configuration on first run
+        if first and self.automatic:
+            await self.automatic_config()
 
         return True
 
@@ -1177,6 +1179,30 @@ class FoxAPI(ComponentBase):
             reserve_min = int(self.fdsoc_min.get(sn, 10))
             self.dashboard_item(entity_name_sensor + "_" + sn.lower() + "_battery_reserve_min", state=reserve_min, attributes={"friendly_name": f"Fox {sn} Battery Reserve Min", "unit_of_measurement": "%"}, app="fox")
 
+        # If we have soc_x sensors then sum them for total soc and store as _soc so that Predbat gets a single SOC value
+        for sn in self.device_values:
+            soc_total = 0
+            soc_total_count = 0
+            for item_name in self.device_values[sn]:
+                if item_name.lower().startswith("soc_"):
+                    item = self.device_values[sn][item_name]
+                    soc = item.get("value", None)
+                    try:
+                        soc = float(soc)
+                    except ValueError:
+                        soc = None
+                    if soc is not None:
+                        soc_total += soc
+                        soc_total_count += 1
+            if soc_total_count > 0:
+                # Remove the SOC dictionary key (any case) otherwise we might create a duplicate (different case)
+                for key in list(self.device_values[sn].keys()):
+                    if key.lower() == "soc":
+                        del self.device_values[sn][key]
+                # Add total SOC
+                self.device_values[sn]["SoC"] = {"name": "State of Charge Total", "unit": "%", "value": round(soc_total / soc_total_count, 0)}
+
+        # Publish device values
         for sn in self.device_values:
             for item_name in self.device_values[sn]:
                 item = self.device_values[sn][item_name]
@@ -1526,14 +1552,49 @@ class MockBase:  # pragma: no cover
 
     def __init__(self):
         self.local_tz = datetime.now().astimezone().tzinfo
+        self.now_utc = datetime.now(self.local_tz)
         self.prefix = "predbat"
         self.args = {}
+        self.midnight_utc = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
+        self.entities = {}
+
+    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
+        if raw:
+            return self.entities.get(entity_id, {})
+        else:
+            return self.entities.get(entity_id, {}).get("state", default)
+
+    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
+        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
 
     def log(self, message):
-        print(f"LOG: {message}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
 
-    def dashboard_item(self, *args, **kwargs):
-        print(f"DASHBOARD: {args}, {kwargs}")
+    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
+        print(f"ENTITY: {entity_id} = {state}")
+        if attributes:
+            if "options" in attributes:
+                attributes["options"] = "..."
+            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
+        self.set_state_wrapper(entity_id, state, attributes)
+
+    def get_arg(self, key, default=None):
+        return default
+
+    def set_arg(self, key, value):
+        state = None
+        if isinstance(value, str) and "." in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and "." in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_fox_api(sn, api_key):  # pragma: no cover
@@ -1547,85 +1608,13 @@ async def test_fox_api(sn, api_key):  # pragma: no cover
 
     # Create FoxAPI instance with a lambda that returns the API key
     arg_dict = {}
-    arg_dict = {"key": api_key, "automatic": False}
+    arg_dict = {"key": api_key, "automatic": True}
     fox_api = FoxAPI(mock_base, **arg_dict)
 
-    if sn is None:
-        device_List = await fox_api.get_device_list()
-        print(f"Device List: {device_List}")
-        if device_List:
-            sn = device_List[0].get("deviceSN", None)
-            print(f"Using first device SN: {sn}")
-
-    res = await fox_api.get_scheduler(sn, checkBattery=False)
-    print(res)
-    return 0
-
-    # await fox_api.start()
-    # res = await fox_api.get_device_settings(sn, checkBattery=False)
-    # print(res)
-    # res = await fox_api.get_battery_charging_time(sn)
-    # print(res)
-    # res = await fox_api.get_device_detail(sn)
-    # print(res)
-    # res = await fox_api.get_scheduler(sn, checkBattery=False)
-    # print(res)
-    # return 1
-    # res = await fox_api.compute_schedule(sn)
-    # print(res)
-    # res = await fox_api.publish_data()
-    # res = await fox_api.set_device_setting(sn, "dummy", 42)
-    # print(res)
-
-    # res = await fox_api.get_scheduler(sn)
-    # groups = res.get('groups', [])
-    # {'endHour': 0, 'fdPwr': 0, 'minSocOnGrid': 10, 'workMode': 'Invalid', 'fdSoc': 10, 'enable': 0, 'startHour': 0, 'maxSoc': 100, 'startMinute': 0, 'endMinute': 0},
-    # new_slot = groups[0].copy()
-    new_slot = {}
-    new_slot["enable"] = 1
-    new_slot["workMode"] = "ForceDischarge"
-    new_slot["startHour"] = 11
-    new_slot["startMinute"] = 30
-    new_slot["endHour"] = 12
-    new_slot["endMinute"] = 00
-    new_slot["fdSoc"] = 10
-    new_slot["fdPwr"] = 5000
-    new_slot["minSocOnGrid"] = 10
-    new_slot2 = {}
-    new_slot2["enable"] = 1
-    new_slot2["workMode"] = "ForceCharge"
-    new_slot2["startHour"] = 13
-    new_slot2["startMinute"] = 00
-    new_slot2["endHour"] = 13
-    new_slot2["endMinute"] = 30
-    new_slot2["fdSoc"] = 100
-    new_slot2["fdPwr"] = 8000
-    new_slot2["minSocOnGrid"] = 100
-
-    # minSocOnGrid = 10
-    # fdPwr_max = 5000
-    # new_schedule = [new_slot, new_slot2]
-
-    # new_schedule = [{"enable": 1, "startHour": 0, "startMinute": 0, "endHour": 1, "endMinute": 0, "workMode": "SelfUse", "fdSoc": minSocOnGrid, "maxSoc": minSocOnGrid, "fdPwr": fdPwr_max, "minSocOnGrid": minSocOnGrid}]
-    # new_schedule = validate_schedule(new_schedule, minSocOnGrid, fdPwr_max)
-    # print("Validated schedule")
-    # print(new_schedule)
-    # return 1
-    new_schedule = [
-        {"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 30, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 5000, "minSocOnGrid": 10},
-        {"enable": 1, "startHour": 11, "startMinute": 0, "endHour": 12, "endMinute": 00, "workMode": "ForceDischarge", "fdSoc": 10, "maxSoc": 100, "fdPwr": 5000, "minSocOnGrid": 10},
-    ]
-    new_schedule = validate_schedule(new_schedule, 10, 5000)
-    print("Validated schedule")
-    print(new_schedule)
-
-    print("Sending: {}".format(new_schedule))
-    res = await fox_api.set_scheduler(sn, new_schedule)
-
-    # res = await fox_api.get_scheduler(sn, checkBattery=False)
-    # print(res)
-    # res = await fox_api.compute_schedule(sn)
-    # print(res)
+    # Call run() once
+    print("Calling run() once...")
+    await fox_api.run(seconds=0, first=True)
+    print("Run completed successfully")
 
 
 def main():  # pragma: no cover

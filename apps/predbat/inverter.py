@@ -13,7 +13,8 @@ import time
 import pytz
 import requests
 from datetime import datetime, timedelta
-from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
+from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
+from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
 TIME_FORMAT_HMS = "%H:%M:%S"
@@ -2452,7 +2453,7 @@ class Inverter:
                 return True
 
         self.base.log(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
-        self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
+        self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete", had_errors=True)
         return False
 
     def rest_readData(self, api="readData", retry=True):

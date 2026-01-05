@@ -44,7 +44,7 @@ from web_helper import (
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string, history_attribute, prune_today
-from config import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
+from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 import urllib.parse
 from component_base import ComponentBase

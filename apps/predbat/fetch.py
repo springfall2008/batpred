@@ -11,7 +11,7 @@
 
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
-from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
+from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
@@ -1031,6 +1031,9 @@ class Fetch:
         """
         minute = -24 * 60
         rate_last = 0
+        rate_first = 0
+        rate_first_valid = False
+        rate_last_valid = False  # Track if we've seen any real rates yet
         adjusted_rates = {}
         replicated_rates = {}
 
@@ -1049,11 +1052,14 @@ class Fetch:
                 if rate_io and (minute_mod in rate_io) and rate_io[minute_mod]:
                     # Dont replicate Intelligent rates into the next day as it will be different
                     rate_offset = self.rate_max
+                    using_last = False
                 elif minute_mod in rates:
                     rate_offset = rates[minute_mod]
+                    using_last = False
                 else:
                     # Missing rate within 24 hours - fill with dummy last rate
                     rate_offset = rate_last
+                    using_last = True
 
                 # Only offset once not every day
                 futurerate_adjust_import = self.get_arg("futurerate_adjust_import", False)
@@ -1062,9 +1068,11 @@ class Fetch:
                     if is_import and futurerate_adjust_import and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
                         rate_offset = self.future_energy_rates_import[minute]
                         adjust_type = "future"
+                        using_last = False
                     elif (not is_import) and (not is_gas) and futurerate_adjust_export and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
                         rate_offset = max(self.future_energy_rates_export[minute], 0)
                         adjust_type = "future"
+                        using_last = False
                     elif is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
                         if self.metric_future_rate_offset_import:
@@ -1076,11 +1084,19 @@ class Fetch:
 
                     adjusted_rates[minute] = True
 
-                rates[minute] = rate_offset
-                replicated_rates[minute] = adjust_type
+                # Don't add rates if we haven't seen any real rates yet
+                # This prevents filling negative minutes with invalid fallback values
+                if rate_last_valid or not using_last:
+                    rates[minute] = rate_offset
+                    replicated_rates[minute] = adjust_type
             else:
                 rate_last = rates[minute]
+                rate_last_valid = True
+                if not rate_first_valid:
+                    rate_first = rate_last
+                    rate_first_valid = True
             minute += 1
+
         return rates, replicated_rates
 
     def find_charge_window(self, rates, minute, threshold_rate, find_high, alt_rates={}):
@@ -1653,6 +1669,35 @@ class Fetch:
 
         return carbon_data, carbon_history
 
+    def validate_curve(self, curve, curve_name):
+        """
+        Validate a power or temperature curve dictionary
+        Ensures all keys are integers and all values are floats
+
+        Args:
+            curve: Dictionary to validate
+            curve_name: Name of the curve for logging
+
+        Returns:
+            Validated dictionary with integer keys and float values
+        """
+        if not isinstance(curve, dict):
+            self.log("Warn: {} is incorrectly configured - ignoring".format(curve_name))
+            self.record_status("{} is incorrectly configured - ignoring".format(curve_name), had_errors=True)
+            return {}
+
+        validated_curve = {}
+        for key in curve:
+            try:
+                int_key = int(key)
+                value = float(curve[key])
+                validated_curve[int_key] = value
+            except (ValueError, TypeError):
+                self.log("Warn: {} has bad key/value for key {} - ignoring".format(curve_name, key))
+                self.record_status("{} has bad key/value for key {} - ignoring".format(curve_name, key), had_errors=True)
+
+        return validated_curve
+
     def fetch_config_options(self):
         """
         Fetch all the configuration options
@@ -1744,51 +1789,20 @@ class Fetch:
             self.battery_charge_power_curve_auto = True
         else:
             self.battery_charge_power_curve_auto = False
-            self.battery_charge_power_curve = self.args.get("battery_charge_power_curve", {})
-            # Check power curve is a dictionary
-            if not isinstance(self.battery_charge_power_curve, dict):
-                self.battery_charge_power_curve = {}
-                self.log("Warn: battery_charge_power_curve is incorrectly configured - ignoring")
-                self.record_status("battery_charge_power_curve is incorrectly configured - ignoring", had_errors=True)
-
-        self.battery_charge_power_curve_default = self.args.get("battery_charge_power_curve_default", {})
-        if not isinstance(self.battery_charge_power_curve_default, dict):
-            self.battery_charge_power_curve_default = {}
-            self.log("Warn: battery_charge_power_curve_default is incorrectly configured - ignoring")
-            self.record_status("battery_charge_power_curve_default is incorrectly configured - ignoring", had_errors=True)
+            self.battery_charge_power_curve = self.validate_curve(self.args.get("battery_charge_power_curve", {}), "battery_charge_power_curve")
+        self.battery_charge_power_curve_default = self.validate_curve(self.args.get("battery_charge_power_curve_default", {}), "battery_charge_power_curve_default")
 
         # Discharge curve
         if self.args.get("battery_discharge_power_curve", "") == "auto":
             self.battery_discharge_power_curve_auto = True
         else:
             self.battery_discharge_power_curve_auto = False
-            self.battery_discharge_power_curve = self.args.get("battery_discharge_power_curve", {})
-            # Check power curve is a dictionary
-            if not isinstance(self.battery_discharge_power_curve, dict):
-                self.battery_discharge_power_curve = {}
-                self.log("Warn: battery_discharge_power_curve is incorrectly configured - ignoring")
-                self.record_status("battery_discharge_power_curve is incorrectly configured - ignoring", had_errors=True)
+            self.battery_discharge_power_curve = self.validate_curve(self.args.get("battery_discharge_power_curve", {}), "battery_discharge_power_curve")
+        self.battery_discharge_power_curve_default = self.validate_curve(self.args.get("battery_discharge_power_curve_default", {}), "battery_discharge_power_curve_default")
 
-        self.battery_discharge_power_curve_default = self.args.get("battery_discharge_power_curve_default", {})
-        if not isinstance(self.battery_discharge_power_curve_default, dict):
-            self.battery_discharge_power_curve_default = {}
-            self.log("Warn: battery_discharge_power_curve_default is incorrectly configured - ignoring")
-            self.record_status("battery_discharge_power_curve_default is incorrectly configured - ignoring", had_errors=True)
-
-        # Temperature curve charge
-        self.battery_temperature_charge_curve = self.args.get("battery_temperature_charge_curve", {})
-        if not isinstance(self.battery_temperature_charge_curve, dict):
-            self.log("Data is {}".format(self.battery_temperature_charge_curve))
-            self.battery_temperature_charge_curve = {}
-            self.log("Warn: battery_temperature_charge_curve is incorrectly configured - ignoring")
-            self.record_status("battery_temperature_charge_curve is incorrectly configured - ignoring", had_errors=True)
-
-        # Temperature curve discharge
-        self.battery_temperature_discharge_curve = self.args.get("battery_temperature_discharge_curve", {})
-        if not isinstance(self.battery_temperature_discharge_curve, dict):
-            self.battery_temperature_discharge_curve = {}
-            self.log("Warn: battery_temperature_discharge_curve is incorrectly configured - ignoring")
-            self.record_status("battery_temperature_discharge_curve is incorrectly configured - ignoring", had_errors=True)
+        # Temperature curve charge/discharge
+        self.battery_temperature_charge_curve = self.validate_curve(self.args.get("battery_temperature_charge_curve", {}), "battery_temperature_charge_curve")
+        self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_margin = 0.0

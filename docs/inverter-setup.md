@@ -43,6 +43,8 @@ Steps vary for each inverter, for some there are no additional steps, but for ot
    | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) | [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
    | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
    | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)<BR>in Modbus Power Control Mode | [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
+   | [Solax Cloud](#solax-cloud) | Predbat | [solax_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solax_cloud.yaml) |
+   | [Solis Cloud](#solis-cloud) | Predbat | [solis_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_cloud.yaml) |
    | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
@@ -205,11 +207,25 @@ Replace the **pv_today** and **pv_power** entries in `apps.yaml` with the approp
 
 ## Fox Cloud
 
-**Experimental**
-
 - Predbat now has a built-in Fox cloud integration. Today it requires a battery that supports the scheduler mode to function.
 
-Try the template for auto-integration.
+See the components documentation for details [Components - Fox cloud](components.md#fox-ess-api-fox)
+
+## Solax Cloud
+
+**Experimental**
+
+- Predbat now has a built-in Solax cloud integration.
+
+See the components documentation for details [Components - Solax cloud](components.md#solax-cloud-api-solax)
+
+## Solis Cloud
+
+**Experimental**
+
+- Predbat now has a built-in Solis cloud integration.
+
+See the components documentation for details [Components - Solis cloud](components.md#solis-cloud-api-solax)
 
 ## Growatt with Solar Assistant
 

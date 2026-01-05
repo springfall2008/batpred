@@ -8,42 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import datetime, timedelta
 from predbat import THIS_VERSION
-
-
-TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
-TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
-TIME_FORMAT_SOLCAST = "%Y-%m-%dT%H:%M:%S.%f0%z"  # 2024-05-31T18:00:00.0000000Z
-TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
-TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
-PREDICT_STEP = 5
-RUN_EVERY = 5
-CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
-TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
-TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
-TIME_FORMAT_DAILY = "%Y-%m-%d"
-TIMEOUT = 60 * 5
-CONFIG_REFRESH_PERIOD = 60 * 8
-INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
-INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
-
-# 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
-MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
-MINUTE_WATT = 60 * 1000
-
-INVERTER_TEST = False  # Run inverter control self test
-
-# Create an array of times in the day in 5-minute intervals
-BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
-OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]
-
-# Inverter modes
-PREDBAT_MODE_OPTIONS = ["Monitor", "Control SOC only", "Control charge", "Control charge & discharge"]
-PREDBAT_MODE_MONITOR = 0
-PREDBAT_MODE_CONTROL_SOC = 1
-PREDBAT_MODE_CONTROL_CHARGE = 2
-PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
+from const import OPTIONS_TIME, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE
 
 # Predbat update options
 PREDBAT_UPDATE_OPTIONS = [f"{THIS_VERSION} Loading..."]
@@ -1883,6 +1849,62 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
+    "SolaxCloud": {
+        "name": "SolaxCloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "output_charge_control": "power",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": True,
+        "has_timed_pause": False,
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_fox_inverter_mode": False,
+        "time_button_press": False,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "has_idle_time": False,
+        "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
+    "SolisCloud": {
+        "name": "SolisCloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "output_charge_control": "power",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": False,
+        "has_timed_pause": False,
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_fox_inverter_mode": False,
+        "time_button_press": False,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "has_idle_time": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
 }
 
 # Control modes for Solax inverters
@@ -2013,6 +2035,12 @@ APPS_SCHEMA = {
     "axle_pence_per_kwh": {"type": "float"},
     "axle_automatic": {"type": "boolean"},
     "axle_control": {"type": "boolean"},
+    "solis_api_key": {"type": "string", "empty": False},
+    "solis_api_secret": {"type": "string", "empty": False},
+    "solis_inverter_sn": {"type": "string|string_list", "empty": False},
+    "solis_automatic": {"type": "boolean"},
+    "solis_base_url": {"type": "string", "empty": False},
+    "solis_control_enable": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor", "sensor_type": "boolean|action"},
     "octopus_ready_time": {"type": "sensor", "sensor_type": "string"},
     "octopus_charge_limit": {"type": "sensor", "sensor_type": "float"},

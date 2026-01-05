@@ -15,13 +15,13 @@ import json
 import yaml
 import re
 import copy
-from config import (
+from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
-    THIS_VERSION,
-    CONFIG_API_OVERRIDE,
     PREDBAT_MODE_MONITOR,
 )
+from config import CONFIG_API_OVERRIDE
+from predbat import THIS_VERSION
 
 DEBUG_EXCLUDE_LIST = [
     "pool",
@@ -123,7 +123,6 @@ class UserInterface:
                 except KeyError:
                     if not quiet:
                         self.log("Warn: can not resolve {} value {}".format(arg, value))
-                        self.record_status("Warn: can not resolve {} value {}".format(arg, value), had_errors=True)
                     value = default
 
         # Resolve join list by name
@@ -1136,12 +1135,12 @@ class UserInterface:
         Selection on manual times dropdown
         """
         item = self.config_index.get(config_item)
-        manual_rate = item.get("manual_rate", False)
         if not item:
             return
         if not value:
             # Ignore null selections
             return
+        manual_rate = item.get("manual_rate", False)
         if value.startswith("+"):
             # Ignore selections which are just the current value
             return
@@ -1346,8 +1345,9 @@ class UserInterface:
         values_list = []
         for minute, rate in rate_overrides:
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
-            if minute_str not in exclude:
-                values_list.append(minute_str + "=" + str(rate))
+            minute_rate_str = minute_str + "=" + str(rate)
+            if minute_rate_str not in exclude and minute_rate_str not in values_list:
+                values_list.append(minute_rate_str)
         values = ",".join(values_list)
         if values:
             values = "+" + values
@@ -1413,7 +1413,7 @@ class UserInterface:
         values_list = []
         for minute in time_overrides:
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%a %H:%M")
-            if minute_str not in exclude:
+            if minute_str not in exclude and minute_str not in values_list:
                 values_list.append(minute_str)
         values = ",".join(values_list)
         if values:

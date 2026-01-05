@@ -15,6 +15,8 @@ from ohme import OhmeAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
 from axle import AxleAPI
+from solax import SolaxAPI
+from solis import SolisAPI
 from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
@@ -224,6 +226,36 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "config": "axle_automatic", "default": True},
         },
         "phase": 1,
+    },
+    "solax": {
+        "class": SolaxAPI,
+        "name": "SolaX Cloud API",
+        "event_filter": "predbat_solax_",
+        "args": {
+            "client_id": {"required": True, "config": "solax_client_id"},
+            "client_secret": {"required": True, "config": "solax_client_secret"},
+            "plant_id": {"required": False, "config": "solax_plant_id"},
+            "region": {"required": False, "config": "solax_region", "default": "eu"},
+            "automatic": {"required": False, "config": "solax_automatic", "default": False},
+            "enable_controls": {"required": False, "config": "solax_enable_controls", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
+    "solis": {
+        "class": SolisAPI,
+        "name": "Solis Cloud API",
+        "event_filter": "predbat_solis_",
+        "args": {
+            "api_key": {"required": True, "config": "solis_api_key"},
+            "api_secret": {"required": True, "config": "solis_api_secret"},
+            "inverter_sn": {"required": False, "config": "solis_inverter_sn"},
+            "automatic": {"required": False, "config": "solis_automatic", "default": False},
+            "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
+            "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
     },
 }
 
