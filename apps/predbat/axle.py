@@ -225,8 +225,8 @@ class AxleAPI(ComponentBase):
                 # Fetch current event(s)
                 event_current = self.get_state_wrapper(entity_id=entity_id, attribute="event_current")
                 if event_current and isinstance(event_current, list):
-                    current_start_time = event_current[0]['start_time']
-                    current_end_time = event_current[0]['end_time']
+                    current_start_time = event_current[0]["start_time"]
+                    current_end_time = event_current[0]["end_time"]
 
             if start_time and end_time:
                 # An Axle event is planned
