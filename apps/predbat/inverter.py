@@ -350,7 +350,7 @@ class Inverter:
                 ivtime = idetails["Invertor_Time"]
         else:
             self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id, required_unit="°C")
-            self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.battery_scaling
+            self.soc_max = self.base.get_arg("soc_max", default=0.0, index=self.id) * self.battery_scaling
             self.nominal_capacity = self.soc_max
 
             if self.inverter_type in ["GE", "GEC", "GEE"]:
@@ -364,11 +364,16 @@ class Inverter:
 
         # Battery cannot be zero size
         if self.soc_max <= 0:
-            self.log("Warn: Battery size was not set, attempting to find it..")
-            self.soc_max = self.find_battery_size()
-            if self.soc_max <= 0:
+            self.log("Note: Battery size was not set, attempting to find it..")
+            found_size = self.find_battery_size()
+            if not found_size or found_size <= 0:
                 self.log("Warn: Unable to determine battery size, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size")
                 self.soc_max = 8.0
+            else:
+                # Store found battery size so we don't keep having to fetch it
+                self.soc_max = found_size * self.battery_scaling
+                self.base.set_arg("soc_max", found_size, index=self.id)
+            self.nominal_capacity = self.soc_max
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
@@ -604,6 +609,15 @@ class Inverter:
                         start_soc = soc_percent.get(charge_start_minute, 0)
                         end_soc = soc_percent.get(charge_end_minute, 0)
 
+                        self.log(
+                            "Charge start {} soc {} end {} soc {}".format(
+                                charge_start_minute,
+                                start_soc,
+                                charge_end_minute,
+                                end_soc,
+                            )
+                        )
+
                         # Clip to 20-80% range and align to percentage boundaries
                         # to avoid partial energy from transition minutes
                         # A "transition minute" is one where the SoC changed from the previous minute
@@ -618,7 +632,7 @@ class Inverter:
                             curr_soc = int(soc_percent.get(m, 0))
                             prev_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc == prev_soc:
+                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != prev_soc:
                                 clipped_start_minute = m
                                 found_start = True
                                 break
@@ -631,9 +645,9 @@ class Inverter:
                         found_end = False
                         for m in range(charge_end_minute, charge_start_minute + 1):
                             curr_soc = int(soc_percent.get(m, 0))
-                            next_soc = int(soc_percent.get(m - 1, 0))  # m-1 is newer
+                            next_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no upcoming transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc == next_soc:
+                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != next_soc:
                                 clipped_end_minute = m
                                 found_end = True
                                 break
@@ -650,6 +664,16 @@ class Inverter:
                         clipped_end_soc = int(soc_percent.get(clipped_end_minute, 0))
                         percent_change = clipped_end_soc - clipped_start_soc
 
+                        self.log(
+                            "Charging clipped start at {} percent {} end {} percent {}, percent change {}".format(
+                                clipped_start_minute,
+                                clipped_start_soc,
+                                clipped_end_minute,
+                                clipped_end_soc,
+                                percent_change,
+                            )
+                        )
+
                         if percent_change > 15:  # Need at least 15% change for a meaningful estimate
                             # Calculate energy added during this period (using clipped range)
                             power_added = 0.0
@@ -658,6 +682,8 @@ class Inverter:
                                 minute_power = -battery_power.get(power_minute, 0)
                                 power_added += minute_power / 60.0  # W to Wh
                                 sample_count += 1
+
+                            self.log("  Power added over {} samples is {} Wh".format(sample_count, power_added))
 
                             if power_added > 0:
                                 estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh
