@@ -1014,7 +1014,7 @@ class SolisAPI(ComponentBase):
 
         # Battery and inverter entities
         self.set_arg("soc_percent", [f"sensor.predbat_solis_{device}_battery_soc" for device in devices])
-        self.arg_arg("battery_scaling", [f"sensor.predbat_solis_{device}_battery_soh" for device in devices])
+        self.set_arg("battery_scaling", [f"sensor.predbat_solis_{device}_battery_soh" for device in devices])
         self.set_arg("battery_power", [f"sensor.predbat_solis_{device}_battery_power" for device in devices])
         self.set_arg("battery_power_invert", [f"True" for device in devices])
         self.set_arg("grid_power", [f"sensor.predbat_solis_{device}_grid_power" for device in devices])
