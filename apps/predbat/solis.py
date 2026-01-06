@@ -1032,7 +1032,7 @@ class SolisAPI(ComponentBase):
 
         # Reserve and limits
         self.set_arg("reserve", [f"number.predbat_solis_{device}_reserve_soc" for device in devices])
-        self.set_arg("battery_min_soc", [f"sensor.predbat_solis_{device}_over_discharge_soc" for device in devices])
+        self.set_arg("battery_min_soc", [f"number.predbat_solis_{device}_over_discharge_soc" for device in devices])
 
         # Charge/discharge controls - using slot 1 for Predbat primary control
         self.set_arg("charge_start_time", [f"select.predbat_solis_{device}_charge_slot1_start_time" for device in devices])
