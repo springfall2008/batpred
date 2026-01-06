@@ -6722,14 +6722,14 @@ setTimeout(function() {
 <a href='./entity'>Entities</a>
 <a href='./charts'>Charts</a>
 <a href='./compare'>Compare</a>
+<a href='./log'>Log</a>
 <a href='./config'>Config</a>
 <a href='./apps'>Apps"""
         + config_warning
         + """</a>
-<a href='./browse'>Browse</a>
 <a href='./components'>Components</a>
 <a href='./apps_editor'>Editor</a>
-<a href='./log'>Log</a>
+<a href='./browse'>Browse</a>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
 <div class="dark-mode-toggle">
     """
