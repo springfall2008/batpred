@@ -219,8 +219,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         if not units:
             return state
 
-        units = str(units).strip().lower()
-        required_unit = str(required_unit).strip().lower()
+        units = str(units).strip()
+        required_unit = str(required_unit).strip()
 
         try:
             state = float(state)
@@ -232,20 +232,42 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             units, required_unit = required_unit, units
 
         if isinstance(state, float) and units and required_unit and units != required_unit:
-            if units.startswith("k") and not required_unit.startswith("k"):
+            units_lhs = units[0]
+            if units_lhs == "K":
+                units_lhs = "k"
+            if units_lhs not in ["k", "M", "m"]:
+                units_lhs = ""
+
+            required_lhs = required_unit[0]
+            if required_lhs not in ["k", "M", "m"]:
+                required_lhs = ""
+            if required_lhs == "K":
+                required_lhs = "k"
+
+            if units_lhs == "M" and required_lhs == "k":
+                # Convert MW to kW
+                state *= 1000.0
+                units = "k" + units[1:]
+            elif units_lhs == "k" and required_lhs == "M":
+                # Convert kW to MW
+                state /= 1000.0
+                units = "M" + units[1:]
+            elif units_lhs == "k" and required_lhs == "":
                 # Convert kWh to Wh
                 state *= 1000.0
                 units = units[1:]  # Remove 'k' from units
-            elif not units.startswith("k") and required_unit.startswith("k"):
+            elif units_lhs == "" and required_lhs == "k":
                 # Convert Wh to kWh
                 state /= 1000.0
-                required_unit = required_unit[1:]  # Remove 'k' from units
-            elif units.startswith("m") and not required_unit.startswith("m"):
+                units = "k" + units  # Add 'k' to units
+            elif units_lhs == "m" and required_lhs == "":
                 # Convert mW to W
                 state /= 1000.0
-            elif not units.startswith("m") and required_unit.startswith("m"):
+                units = units[1:]  # Remove 'm' from units
+            elif units_lhs == "" and required_lhs == "m":
                 # Convert W to mW
                 state *= 1000.0
+                units = "m" + units  # Add 'm' to units
 
             if units != required_unit:
                 self.log("Warn: unit_conversion - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))

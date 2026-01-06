@@ -1193,12 +1193,20 @@ class SolisAPI(ComponentBase):
             # Total Load Energy
             entity_id = f"sensor.{prefix}_solis_{inverter_sn}_total_load_energy"
             total_load = detail.get("homeLoadTotalEnergy")
+            total_load_units = detail.get("homeLoadTotalEnergyStr", "kWh")
+            try:
+                total_load = float(total_load)
+                if total_load_units == 'MWh':
+                    total_load *= 1000.0
+                    total_load_units = 'kWh'
+            except (ValueError, TypeError):
+                pass
             self.dashboard_item(
                 entity_id,
                 state=total_load,
                 attributes={
                     "friendly_name": f"Solis {inverter_name} Total Load Energy",
-                    "unit_of_measurement": "kWh",
+                    "unit_of_measurement": total_load_units,
                     "device_class": "energy",
                     "state_class": "total_increasing",
                     "icon": "mdi:home-lightning-bolt",
