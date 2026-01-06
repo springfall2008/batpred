@@ -559,12 +559,10 @@ No manual entity configuration is required when using automatic mode.
 If you disable automatic configuration, you must manually configure inverter entities in `apps.yaml` similar to other inverter types. In this case, set:
 
 ```yaml
-  modules:
-    solis:
-      api_key: !secret solis_api_key
-      api_secret: !secret solis_api_secret
-      automatic: False
-
+  solis_api_key: !secret solis_api_key
+  solis_api_secret: !secret solis_api_secret
+  solis_automatic: False
+  solis_control_enable: True
   num_inverters: 1
   inverter_type: 'SolisCloud'
   soc_max:
