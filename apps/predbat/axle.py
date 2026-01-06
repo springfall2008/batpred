@@ -316,6 +316,7 @@ def fetch_axle_sessions(base):
     Returns a list of all events (current + history)
     """
     axle_events = []
+    axle_events_deduplicated = []
 
     # Get the sensor entity_id from configuration
     entity_id = base.get_arg("axle_session", indirect=False)
@@ -331,9 +332,14 @@ def fetch_axle_sessions(base):
             axle_events.extend(event_history)
 
         if axle_events:
-            base.log("Axle API: Fetched {} total events from sensor {}".format(len(axle_events), entity_id))
+            # deduplicate events, which occurs when a current event starts and its immediately written to the history
+            for i in range(len(axle_events)):
+                if axle_events[i] not in axle_events[i + 1:]:
+                    axle_events_deduplicated.append(axle_events[i])
 
-    return axle_events
+            base.log("Axle API: Fetched {} total events from sensor {}".format(len(axle_events_deduplicated), entity_id))
+
+    return axle_events_deduplicated
 
 
 def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
