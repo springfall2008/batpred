@@ -1194,17 +1194,13 @@ class SolisAPI(ComponentBase):
             entity_id = f"sensor.{prefix}_solis_{inverter_sn}_total_load_energy"
             total_load = detail.get("homeLoadTotalEnergy")
             total_load_units = detail.get("homeLoadTotalEnergyStr", "kWh")
-            if total_load_units == 'MWh':
-                try:
-                    total_load = float(total_load) * 1000.0
+            try:
+                total_load = float(total_load)
+                if total_load_units == 'MWh':
+                    total_load *= 1000.0
                     total_load_units = 'kWh'
-                except (ValueError, TypeError):
-                    pass
-            else:
-                try:
-                    total_load = float(total_load)
-                except (ValueError, TypeError):
-                    pass
+            except (ValueError, TypeError):
+                pass
             self.dashboard_item(
                 entity_id,
                 state=total_load,
