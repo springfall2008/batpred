@@ -666,7 +666,7 @@ class Inverter:
 
                         self.log(
                             "Charging clipped start at {} percent {} end {} percent {}, percent change {}".format(
-                                charge_start_minute,
+                                clipped_start_minute,
                                 clipped_start_soc,
                                 clipped_end_minute,
                                 clipped_end_soc,
