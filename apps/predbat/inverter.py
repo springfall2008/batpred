@@ -609,6 +609,15 @@ class Inverter:
                         start_soc = soc_percent.get(charge_start_minute, 0)
                         end_soc = soc_percent.get(charge_end_minute, 0)
 
+                        self.log(
+                            "Charge start {} soc {} end {} soc {}".format(
+                                charge_start_minute,
+                                start_soc,
+                                charge_end_minute,
+                                end_soc,
+                            )
+                        )
+
                         # Clip to 20-80% range and align to percentage boundaries
                         # to avoid partial energy from transition minutes
                         # A "transition minute" is one where the SoC changed from the previous minute
@@ -623,7 +632,7 @@ class Inverter:
                             curr_soc = int(soc_percent.get(m, 0))
                             prev_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc == prev_soc:
+                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != prev_soc:
                                 clipped_start_minute = m
                                 found_start = True
                                 break
@@ -636,9 +645,9 @@ class Inverter:
                         found_end = False
                         for m in range(charge_end_minute, charge_start_minute + 1):
                             curr_soc = int(soc_percent.get(m, 0))
-                            next_soc = int(soc_percent.get(m - 1, 0))  # m-1 is newer
+                            next_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
                             # Check if this is a stable minute (no upcoming transition) and within range
-                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc == next_soc:
+                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != next_soc:
                                 clipped_end_minute = m
                                 found_end = True
                                 break
@@ -655,6 +664,16 @@ class Inverter:
                         clipped_end_soc = int(soc_percent.get(clipped_end_minute, 0))
                         percent_change = clipped_end_soc - clipped_start_soc
 
+                        self.log(
+                            "Charging clipped start at {} percent {} end {} percent {}, percent change {}".format(
+                                charge_start_minute,
+                                clipped_start_soc,
+                                clipped_end_minute,
+                                clipped_end_soc,
+                                percent_change,
+                            )
+                        )
+
                         if percent_change > 15:  # Need at least 15% change for a meaningful estimate
                             # Calculate energy added during this period (using clipped range)
                             power_added = 0.0
@@ -663,6 +682,8 @@ class Inverter:
                                 minute_power = -battery_power.get(power_minute, 0)
                                 power_added += minute_power / 60.0  # W to Wh
                                 sample_count += 1
+
+                            self.log("  Power added over {} samples is {} Wh".format(sample_count, power_added))
 
                             if power_added > 0:
                                 estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh

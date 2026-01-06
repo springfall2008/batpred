@@ -1014,6 +1014,7 @@ class SolisAPI(ComponentBase):
 
         # Battery and inverter entities
         self.set_arg("soc_percent", [f"sensor.predbat_solis_{device}_battery_soc" for device in devices])
+        self.arg_arg("battery_scaling", [f"sensor.predbat_solis_{device}_battery_soh" for device in devices])
         self.set_arg("battery_power", [f"sensor.predbat_solis_{device}_battery_power" for device in devices])
         self.set_arg("battery_power_invert", [f"True" for device in devices])
         self.set_arg("grid_power", [f"sensor.predbat_solis_{device}_grid_power" for device in devices])
@@ -1235,6 +1236,26 @@ class SolisAPI(ComponentBase):
                     "device_class": "energy",
                     "state_class": "total_increasing",
                     "icon": "mdi:transmission-tower-import",
+                },
+                app="solis"
+            )
+
+            # Battery state of health
+            battery_soh = detail.get("batteryHealthSoh")
+            try:
+                battery_soh = float(battery_soh) / 100.0
+            except (ValueError, TypeError):
+                battery_soh = None
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_battery_soh"
+            self.dashboard_item(
+                entity_id,
+                state=battery_soh,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Battery State of Health",
+                    "unit_of_measurement": "*",
+                    "device_class": "battery",
+                    "state_class": "measurement",
+                    "icon": "mdi:battery-heart",
                 },
                 app="solis"
             )
