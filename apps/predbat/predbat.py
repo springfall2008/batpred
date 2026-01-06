@@ -246,6 +246,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             elif not units.startswith("m") and required_unit.startswith("m"):
                 # Convert W to mW
                 state *= 1000.0
+            elif units.startswith("M") and required_unit.startswith("k"):
+                # Convert MW to kW
+                state *= 1000.0
+            elif units.startswith("k") and required_unit.startswith("M"):
+                # Convert kW to MW
+                state /= 1000.0
 
             if units != required_unit:
                 self.log("Warn: unit_conversion - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
