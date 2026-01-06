@@ -31,6 +31,7 @@ class MockGECloudDirect(GECloudDirect):
         self.dashboard_items = {}
         self.log_messages = []
         self.config_args = {}
+        self.prefix = "predbat"  # Add prefix attribute for entity naming
 
         # Initialize instance variables that GECloudDirect expects
         self.requests_total = 0

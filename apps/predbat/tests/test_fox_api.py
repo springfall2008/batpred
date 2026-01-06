@@ -44,6 +44,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.key = "test_api_key"
         self.automatic = False
         self.failures_total = 0
+        self.prefix = "predbat"  # Add default prefix
         self.device_list = []
         self.device_detail = {}
         self.device_power_generation = {}
@@ -4767,6 +4768,32 @@ def test_automatic_config_no_scheduler_error(my_predbat):
     return False
 
 
+def test_automatic_config_custom_prefix(my_predbat):
+    """
+    Test automatic_config with custom prefix
+    """
+    print("  - test_automatic_config_custom_prefix")
+
+    fox = MockFoxAPIWithRequests()
+    fox.prefix = "custom_prefix"  # Set custom prefix
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    run_async(fox.automatic_config())
+
+    # Verify entity mappings use custom prefix
+    sn_lower = deviceSN.lower()
+    assert fox.args_set.get("soc_percent") == [f"sensor.custom_prefix_fox_{sn_lower}_soc"], f"Expected custom_prefix, got {fox.args_set.get('soc_percent')}"
+    assert fox.args_set.get("battery_power") == [f"sensor.custom_prefix_fox_{sn_lower}_invbatpower"]
+    assert fox.args_set.get("charge_start_time") == [f"select.custom_prefix_fox_{sn_lower}_battery_schedule_charge_start_time"]
+    assert fox.args_set.get("inverter_mode") == [f"select.custom_prefix_fox_{sn_lower}_setting_workmode"]
+    assert fox.args_set.get("battery_temperature_history") == f"sensor.custom_prefix_fox_{sn_lower}_battemperature"
+
+    return False
+
+
 def test_fox_rate_limiting_normal_operation(my_predbat):
     """Test that normal operation under 60/hour allows retries"""
     print("  - test_fox_rate_limiting_normal_operation")
@@ -5181,6 +5208,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_automatic_config_multiple_batteries(my_predbat)
         failed |= test_automatic_config_battery_and_pv_inverter(my_predbat)
         failed |= test_automatic_config_no_scheduler_error(my_predbat)
+        failed |= test_automatic_config_custom_prefix(my_predbat)
 
         # Rate limiting tests
         failed |= test_fox_rate_limiting_normal_operation(my_predbat)
