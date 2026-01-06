@@ -442,5 +442,57 @@ def test_minute_data(my_predbat):
             print("ERROR: kW to W conversion test failed - expected 2500 W at minute 45, got {}".format(result_data[45]))
             failed = True
 
+    # Test 23: kW to MW unit conversion (lines 404-405)
+    print("Test 23: kW to MW unit conversion")
+    history_kw_to_mw = [
+        {"state": "5000.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "kW"}},
+    ]
+    kw_to_mw_result, ignore_io = minute_data(history=history_kw_to_mw, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="MW")
+    if len(kw_to_mw_result) == 0:
+        print("ERROR: kW to MW conversion test failed - no data returned")
+        failed = True
+    elif kw_to_mw_result.get(0) != 5.0:
+        print(f"ERROR: kW to MW conversion test failed - expected 5.0, got {kw_to_mw_result.get(0)}")
+        failed = True
+
+    # Test 24: kWh to MWh unit conversion (lines 404-405)
+    print("Test 24: kWh to MWh unit conversion")
+    history_kwh_to_mwh = [
+        {"state": "3500.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "kWh"}},
+    ]
+    kwh_to_mwh_result, ignore_io = minute_data(history=history_kwh_to_mwh, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="MWh")
+    if len(kwh_to_mwh_result) == 0:
+        print("ERROR: kWh to MWh conversion test failed - no data returned")
+        failed = True
+    elif kwh_to_mwh_result.get(0) != 3.5:
+        print(f"ERROR: kWh to MWh conversion test failed - expected 3.5, got {kwh_to_mwh_result.get(0)}")
+        failed = True
+
+    # Test 25: MW to kW unit conversion (lines 406-407)
+    print("Test 25: MW to kW unit conversion")
+    history_mw_to_kw = [
+        {"state": "2.5", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "MW"}},
+    ]
+    mw_to_kw_result, ignore_io = minute_data(history=history_mw_to_kw, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="kW")
+    if len(mw_to_kw_result) == 0:
+        print("ERROR: MW to kW conversion test failed - no data returned")
+        failed = True
+    elif mw_to_kw_result.get(0) != 2500.0:
+        print(f"ERROR: MW to kW conversion test failed - expected 2500.0, got {mw_to_kw_result.get(0)}")
+        failed = True
+
+    # Test 26: MWh to kWh unit conversion (lines 406-407)
+    print("Test 26: MWh to kWh unit conversion")
+    history_mwh_to_kwh = [
+        {"state": "1.25", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "MWh"}},
+    ]
+    mwh_to_kwh_result, ignore_io = minute_data(history=history_mwh_to_kwh, days=1, now=now, state_key="state", last_updated_key="last_updated", backwards=True, required_unit="kWh")
+    if len(mwh_to_kwh_result) == 0:
+        print("ERROR: MWh to kWh conversion test failed - no data returned")
+        failed = True
+    elif mwh_to_kwh_result.get(0) != 1250.0:
+        print(f"ERROR: MWh to kWh conversion test failed - expected 1250.0, got {mwh_to_kwh_result.get(0)}")
+        failed = True
+
     print("**** minute_data tests completed ****")
     return failed
