@@ -27,7 +27,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.31.10"
+THIS_VERSION = "v8.31.11"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py"]
@@ -60,6 +60,7 @@ from const import (
     INVERTER_TEST,
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
+    INVERTER_QUICK_UPDATE_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 from prediction import reset_prediction_globals
@@ -645,6 +646,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.inverter_can_charge_during_export = True
         self.octopus_last_joined_try = None
         self.calculate_savings_max_charge_slots = 1
+        self.inverter_data_last_fetch = None
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -1531,6 +1533,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         self.check_entity_refresh()
         if self.update_pending and not self.prediction_started:
+            # Full update required
             self.update_pending = False
             self.prediction_started = True
             self.load_user_config()
@@ -1546,6 +1549,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             finally:
                 self.prediction_started = False
             self.prediction_started = False
+        elif not self.prediction_started:
+            time_now = datetime.now()
+            if self.inverter_data_last_fetch:
+                tdiff = time_now - self.inverter_data_last_fetch
+                if tdiff.total_seconds() >= INVERTER_QUICK_UPDATE_SECONDS:
+                    # Perform quick update of inverter data for the dashboard only
+                    self.prediction_started = True
+                    self.quick_inverter_data_update()
+                    self.prediction_started = False
 
     def check_entity_refresh(self):
         """

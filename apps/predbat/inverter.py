@@ -1038,10 +1038,6 @@ class Inverter:
             None
         """
 
-        # If it's not a GE inverter then turn Quiet off
-        if self.inverter_type != "GE":
-            quiet = False
-
         self.battery_power = 0
         self.pv_power = 0
         self.load_power = 0

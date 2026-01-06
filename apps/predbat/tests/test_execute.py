@@ -82,7 +82,7 @@ class ActiveTestInverter:
     def find_battery_size(self):
         return self.soc_max * 0.90
 
-    def update_status(self, minutes_now):
+    def update_status(self, minutes_now, quiet=False):
         pass
 
     def find_charge_curve(self, discharge=False):
