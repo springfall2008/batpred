@@ -218,12 +218,12 @@ class AxleAPI(ComponentBase):
             self.updated_at = (updated_at.strftime(TIME_FORMAT) if updated_at else None,)
 
             # Get the sensor entity_id from configuration
-            entity_id = self.get_arg("axle_session", indirect=False)
+            sensor_id = "binary_sensor." + self.prefix + "_axle_event"
             current_start_time = None  # start and end of any current Axle event
             current_end_time = None
-            if entity_id:
+            if sensor_id:
                 # Fetch current event(s)
-                event_current = self.get_state_wrapper(entity_id=entity_id, attribute="event_current")
+                event_current = self.get_state_wrapper(entity_id=sensor_id, attribute="event_current")
                 if event_current and isinstance(event_current, list):
                     current_start_time = event_current[0]["start_time"]
                     current_end_time = event_current[0]["end_time"]

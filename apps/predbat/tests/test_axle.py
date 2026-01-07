@@ -106,6 +106,7 @@ def test_axle(my_predbat=None):
     sub_tests = [
         ("initialization", _test_axle_initialization, "Axle API initialization"),
         ("active_event", _test_axle_fetch_with_active_event, "Fetch with active event"),
+        ("duplicate_event", _test_axle_duplicate_event_detection, "Duplicate event detection"),
         ("future_event", _test_axle_fetch_with_future_event, "Fetch with future event"),
         ("past_event", _test_axle_fetch_with_past_event, "Fetch with past event"),
         ("no_event", _test_axle_fetch_no_event, "Fetch with no event"),
@@ -216,6 +217,110 @@ def _test_axle_fetch_with_active_event(my_predbat=None):
     assert axle.failures_total == 0, "No failures should be recorded"
 
     print("  ✓ Active event fetched and published correctly")
+    return False
+
+
+def _test_axle_duplicate_event_detection(my_predbat=None):
+    """Test duplicate event detection - should not trigger alert for same event"""
+    print("Test: Axle API duplicate event detection")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+
+    # Set current time
+    now = datetime(2025, 12, 20, 14, 30, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Pre-populate state with existing event in sensor
+    sensor_id = "binary_sensor.predbat_axle_event"
+    existing_event = {
+        "start_time": "2025-12-20T14:00:00+0000",
+        "end_time": "2025-12-20T16:00:00+0000",
+        "import_export": "export",
+        "pence_per_kwh": 100,
+    }
+    axle._state_store[sensor_id] = {
+        "state": "on",
+        "attributes": {
+            "event_current": [existing_event],
+            "event_history": [existing_event],
+        },
+    }
+
+    # Test 1: Fetch the SAME event (duplicate) - should NOT trigger alert
+    print("  Test 1: Same event (duplicate)")
+    json_data = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        run_async(axle.fetch_axle_event())
+
+    # Check that NO alert was sent for duplicate event
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 0, "Should NOT send alert for duplicate event"
+    print("    ✓ No alert sent for duplicate event")
+
+    # Reset log messages
+    axle.log_messages = []
+
+    # Test 2: Fetch a DIFFERENT event - should trigger alert
+    print("  Test 2: Different event (new)")
+    json_data_new = {"start_time": "2025-12-20T18:00:00Z", "end_time": "2025-12-20T20:00:00Z", "import_export": "import", "updated_at": "2025-12-20T17:45:00Z"}
+    mock_response_new = create_aiohttp_mock_response(status=200, json_data=json_data_new)
+    mock_session_new = create_aiohttp_mock_session(mock_response=mock_response_new)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session_new):
+        run_async(axle.fetch_axle_event())
+
+    # Check that alert WAS sent for new event
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 1, "Should send alert for new/different event"
+    assert "18:00" in alert_messages[0], "Alert should contain new event time"
+    assert "20:00" in alert_messages[0], "Alert should contain new event end time"
+    print("    ✓ Alert sent for new/different event")
+
+    # Test 3: Fetch event with different end time - should trigger alert
+    print("  Test 3: Same start but different end time")
+    axle.log_messages = []
+    json_data_diff_end = {"start_time": "2025-12-20T18:00:00Z", "end_time": "2025-12-20T21:00:00Z", "import_export": "import", "updated_at": "2025-12-20T17:50:00Z"}
+    mock_response_diff = create_aiohttp_mock_response(status=200, json_data=json_data_diff_end)
+    mock_session_diff = create_aiohttp_mock_session(mock_response=mock_response_diff)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session_diff):
+        run_async(axle.fetch_axle_event())
+
+    # Check that alert WAS sent for modified event
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 1, "Should send alert for event with different end time"
+    assert "21:00" in alert_messages[0], "Alert should contain updated end time"
+    print("    ✓ Alert sent for event with different end time")
+
+    # Test 4: No current_event in sensor (empty state) - should trigger alert for new event
+    print("  Test 4: Empty sensor state (first event)")
+    axle.log_messages = []
+    axle._state_store[sensor_id] = {
+        "state": "off",
+        "attributes": {
+            "event_current": [],
+            "event_history": [],
+        },
+    }
+
+    json_data_first = {"start_time": "2025-12-20T22:00:00Z", "end_time": "2025-12-20T23:00:00Z", "import_export": "export", "updated_at": "2025-12-20T21:45:00Z"}
+    mock_response_first = create_aiohttp_mock_response(status=200, json_data=json_data_first)
+    mock_session_first = create_aiohttp_mock_session(mock_response=mock_response_first)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session_first):
+        run_async(axle.fetch_axle_event())
+
+    # Check that alert WAS sent for first event
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 1, "Should send alert for first event when sensor is empty"
+    assert "22:00" in alert_messages[0], "Alert should contain first event time"
+    print("    ✓ Alert sent for first event when sensor empty")
+
+    print("  ✓ All duplicate event detection tests passed")
     return False
 
 
