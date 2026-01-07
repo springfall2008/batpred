@@ -332,7 +332,7 @@ def fetch_axle_sessions(base):
             axle_events.extend(event_history)
 
         if axle_events:
-            # deduplicate events, which occurs when a current event starts and its immediately written to the history
+            # deduplicate events, which occurs when a current event starts and it's immediately written to the history
             for i in range(len(axle_events)):
                 if axle_events[i] not in axle_events[i + 1 :]:
                     axle_events_deduplicated.append(axle_events[i])
