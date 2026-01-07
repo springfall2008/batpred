@@ -97,7 +97,8 @@ class Inverter:
                     else:
                         self.log("Warn: Calling restart service {}".format(service))
                         self.base.call_service_wrapper(service)
-                    self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
+                    if self.base.get_arg("set_system_notify"):
+                        self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     self.sleep(15)
             raise Exception("Auto-restart triggered")
         else:

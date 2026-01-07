@@ -2308,7 +2308,8 @@ class Octopus:
                             else:
                                 # Join via octopus event (Bottle Cap Dave)
                                 self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
-                            self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                            if self.get_arg("set_event_notify"):
+                                self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             self.octopus_last_joined_try = self.now_utc
 
             if joined_events:

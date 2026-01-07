@@ -588,7 +588,8 @@ class UserInterface:
                 if (item["value"] != item.get("default", None)) and item.get("restore", True):
                     self.log("Restore setting: {} = {} (was {})".format(item["name"], item["default"], item["value"]))
                     await self.async_expose_config(item["name"], item["default"], event=True)
-            await self.async_call_notify("Predbat settings restored from default")
+            if self.get_arg("set_system_notify"):
+                await self.async_call_notify("Predbat settings restored from default")
         else:
             filepath = os.path.join(self.save_restore_dir, filename)
             if os.path.exists(filepath):
@@ -602,7 +603,8 @@ class UserInterface:
                         if current and (current["value"] != item["value"]) and current.get("restore", True):
                             self.log("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                             await self.async_expose_config(item["name"], item["value"], event=True)
-                await self.async_call_notify("Predbat settings restored from {}".format(filename))
+                if self.get_arg("set_system_notify"):
+                    await self.async_call_notify("Predbat settings restored from {}".format(filename))
         await self.async_expose_config("saverestore", None)
 
     def load_current_config(self):
@@ -673,7 +675,8 @@ class UserInterface:
         with open(filepath, "w") as file:
             yaml.dump(self.CONFIG_ITEMS, file)
         self.log("Saved Predbat settings to {}".format(filepath_p))
-        await self.async_call_notify("Predbat settings saved to {}".format(filename))
+        if self.get_arg("set_system_notify"):
+            await self.async_call_notify("Predbat settings saved to {}".format(filename))
 
     def read_debug_yaml(self, filename):
         """

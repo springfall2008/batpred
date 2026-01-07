@@ -916,7 +916,7 @@ def test_inverter_update(
     return failed
 
 
-def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expected, active=False):
+def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expected, active=False, set_system_notify=None, expect_notify=False):
     print("**** Running Test: {} ****".format(test_name))
     failed = 0
     ha.service_store_enable = True
@@ -924,6 +924,10 @@ def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expe
     my_predbat.restart_active = active
 
     my_predbat.args["auto_restart"] = service
+
+    # Set notification config if specified
+    if set_system_notify is not None:
+        my_predbat.expose_config("set_system_notify", set_system_notify, quiet=True)
 
     failed = 1 if not active else 0
     try:
@@ -935,8 +939,26 @@ def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expe
             failed = 1
 
     result = ha.get_service_store()
-    if json.dumps(expected) != json.dumps(result):
-        print("ERROR: Auto-restart service should be {} got {}".format(expected, result))
+
+    # Check for notification if expected
+    notify_found = False
+    for call in result:
+        if call[0].startswith("notify"):
+            notify_found = True
+            break
+
+    if expect_notify and not notify_found:
+        print("ERROR: Expected notification but none was sent")
+        failed = 1
+    elif not expect_notify and notify_found:
+        print("ERROR: Did not expect notification but one was sent")
+        failed = 1
+
+    # Filter out notifications when checking expected service calls
+    result_filtered = [call for call in result if not call[0].startswith("notify")]
+
+    if json.dumps(expected) != json.dumps(result_filtered):
+        print("ERROR: Auto-restart service should be {} got {}".format(expected, result_filtered))
         failed = 1
     return failed
 
@@ -1660,14 +1682,13 @@ charge_start_service:
         inv,
         dummy_items,
         service={"command": "service", "service": "restart_service", "addon": "adds"},
-        expected=[["restart_service", {"addon": "adds"}], ["notify/notify", {"message": "Auto-restart service restart_service called due to: Crashed"}]],
+        expected=[["restart_service", {"addon": "adds"}]],
+        expect_notify=True,
     )
     if failed:
         return failed
 
-    failed |= test_auto_restart(
-        "auto_restart2", my_predbat, ha, inv, dummy_items, service=[{"command": "service", "service": "restart_service"}], expected=[["restart_service", {}], ["notify/notify", {"message": "Auto-restart service restart_service called due to: Crashed"}]]
-    )
+    failed |= test_auto_restart("auto_restart2", my_predbat, ha, inv, dummy_items, service=[{"command": "service", "service": "restart_service"}], expected=[["restart_service", {}]], expect_notify=True)
     if failed:
         return failed
 
@@ -1691,7 +1712,8 @@ charge_start_service:
         inv,
         dummy_items,
         service={"command": "service", "service": "restart_service", "entity_id": "switch.restart"},
-        expected=[["restart_service", {"entity_id": "switch.restart"}], ["notify/notify", {"message": "Auto-restart service restart_service called due to: Crashed"}]],
+        expected=[["restart_service", {"entity_id": "switch.restart"}]],
+        expect_notify=True,
     )
     if failed:
         return failed
@@ -1711,6 +1733,48 @@ charge_start_service:
     if os.path.exists("tmp1234"):
         print("ERROR: File should be deleted")
         failed = True
+
+    # Test notification config for auto_restart
+    failed |= test_auto_restart(
+        "auto_restart_notify_default",
+        my_predbat,
+        ha,
+        inv,
+        dummy_items,
+        service={"command": "service", "service": "restart_service"},
+        expected=[["restart_service", {}]],
+        expect_notify=True,
+    )
+    if failed:
+        return failed
+
+    failed |= test_auto_restart(
+        "auto_restart_notify_enabled",
+        my_predbat,
+        ha,
+        inv,
+        dummy_items,
+        service={"command": "service", "service": "restart_service"},
+        expected=[["restart_service", {}]],
+        set_system_notify=True,
+        expect_notify=True,
+    )
+    if failed:
+        return failed
+
+    failed |= test_auto_restart(
+        "auto_restart_notify_disabled",
+        my_predbat,
+        ha,
+        inv,
+        dummy_items,
+        service={"command": "service", "service": "restart_service"},
+        expected=[["restart_service", {}]],
+        set_system_notify=False,
+        expect_notify=False,
+    )
+    if failed:
+        return failed
 
     failed |= test_inverter_self_test("self_test1", my_predbat)
     return failed

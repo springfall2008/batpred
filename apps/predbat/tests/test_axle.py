@@ -13,6 +13,7 @@ from axle import AxleAPI
 from unittest.mock import patch
 from datetime import datetime, timezone, timedelta
 from const import TIME_FORMAT
+from config import CONFIG_ITEMS
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session, run_async
 
 
@@ -72,8 +73,16 @@ class MockAxleAPI(AxleAPI):
         return self._state_store[entity_id]["state"]
 
     def get_arg(self, arg, default=None, indirect=False):
-        """Mock get_arg - retrieves from config_args"""
-        return self.config_args.get(arg, default)
+        """Mock get_arg - retrieves from config_args with CONFIG_ITEMS defaults"""
+        if arg in self.config_args:
+            return self.config_args[arg]
+
+        # Look up default from CONFIG_ITEMS like the real get_arg does
+        for item in CONFIG_ITEMS:
+            if item.get("name") == arg:
+                return item.get("default", default)
+
+        return default
 
     def update_success_timestamp(self):
         """Mock update_success_timestamp"""
@@ -107,6 +116,7 @@ def test_axle(my_predbat=None):
         ("initialization", _test_axle_initialization, "Axle API initialization"),
         ("active_event", _test_axle_fetch_with_active_event, "Fetch with active event"),
         ("duplicate_event", _test_axle_duplicate_event_detection, "Duplicate event detection"),
+        ("notify_config", _test_axle_fetch_with_notify_config, "Notification config control"),
         ("future_event", _test_axle_fetch_with_future_event, "Fetch with future event"),
         ("past_event", _test_axle_fetch_with_past_event, "Fetch with past event"),
         ("no_event", _test_axle_fetch_no_event, "Fetch with no event"),
@@ -321,6 +331,68 @@ def _test_axle_duplicate_event_detection(my_predbat=None):
     print("    ✓ Alert sent for first event when sensor empty")
 
     print("  ✓ All duplicate event detection tests passed")
+    return False
+
+
+def _test_axle_fetch_with_notify_config(my_predbat=None):
+    """Test set_event_notify configuration option controls notifications"""
+    print("Test: Axle API fetch with notification config")
+
+    # Test 1: set_event_notify enabled (default) - should send notification
+    print("  Test 1: Notifications enabled (set_event_notify=True)")
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle.config_args = {"set_event_notify": True}
+
+    # Set current time during event
+    now = datetime(2025, 12, 20, 18, 30, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    # Mock API response with active event
+    json_data = {"start_time": "2025-12-20T18:00:00Z", "end_time": "2025-12-20T20:00:00Z", "import_export": "import", "updated_at": "2025-12-20T17:50:00Z"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
+
+    # Clear logs and fetch event
+    axle.log_messages.clear()
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        run_async(axle.fetch_axle_event())
+
+    # Verify notification was sent
+    alert_messages = [msg for msg in axle.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages) == 1, "Should send notification when set_event_notify=True"
+    assert "18:00" in alert_messages[0], "Notification should contain event time"
+    print("    ✓ Notification sent when enabled")
+
+    # Test 2: set_event_notify disabled - should NOT send notification
+    print("  Test 2: Notifications disabled (set_event_notify=False)")
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle2.config_args = {"set_event_notify": False}
+    axle2._now_utc = now
+
+    # Same event data
+    mock_response2 = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session2 = create_aiohttp_mock_session(mock_response=mock_response2)
+
+    # Clear logs and fetch event
+    axle2.log_messages.clear()
+    with patch("aiohttp.ClientSession", return_value=mock_session2):
+        run_async(axle2.fetch_axle_event())
+
+    # Verify NO notification was sent
+    alert_messages2 = [msg for msg in axle2.log_messages if msg.startswith("Alert:")]
+    assert len(alert_messages2) == 0, "Should NOT send notification when set_event_notify=False"
+    print("    ✓ Notification blocked when disabled")
+
+    # Verify event data was still processed correctly
+    assert axle2.current_event["start_time"] == "2025-12-20T18:00:00+0000"
+    assert axle2.current_event["import_export"] == "import"
+    sensor2 = axle2.dashboard_items["binary_sensor.predbat_axle_event"]
+    assert sensor2["state"] == "on", "Sensor should be ON even without notification"
+    print("    ✓ Event data processed correctly without notification")
+
+    print("  ✓ Notification config tests passed")
     return False
 
 

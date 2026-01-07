@@ -236,7 +236,8 @@ class AxleAPI(ComponentBase):
 
                 # send alert if this is a new Axle event
                 if (start_time.strftime(TIME_FORMAT) != current_start_time) or (end_time.strftime(TIME_FORMAT) != current_end_time):
-                    self.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), self.pence_per_kwh))
+                    if self.get_arg("set_event_notify"):
+                        self.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), self.pence_per_kwh))
 
             self.cleanup_event_history()
             self.publish_axle_event()

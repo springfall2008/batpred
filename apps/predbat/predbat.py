@@ -1055,7 +1055,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.pool = None
 
             # Notify that we are about to update
-            self.call_notify("Predbat: update to: {}".format(version))
+            if self.get_arg("set_system_notify"):
+                self.call_notify("Predbat: update to: {}".format(version))
 
             # Perform the update
             self.log("Perform the update.....")
