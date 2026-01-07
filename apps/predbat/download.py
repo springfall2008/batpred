@@ -212,14 +212,41 @@ def predbat_update_download(version):
             print("Error: Failed to get file list from GitHub")
             return None
 
-        # Download all files
+        # Download all files (skip if local file has matching SHA)
         downloaded_files = []
+        skipped_files = []
         for file_info in file_list:
             filename = file_info["name"]
-            if not download_predbat_file_from_github(tag, filename, os.path.join(this_path, filename + "." + tag)):
-                print("Error: Failed to download {}".format(filename))
-                return None
+            expected_sha = file_info.get("sha")
+            local_filepath = os.path.join(this_path, filename)
+            download_filepath = os.path.join(this_path, filename + "." + tag)
+
+            # Check if local file exists and has matching SHA
+            skip_download = False
+            if expected_sha and os.path.exists(local_filepath):
+                local_sha = compute_file_sha1(local_filepath)
+                if local_sha == expected_sha:
+                    print("Skipping {}: local file matches remote SHA ({})".format(filename, expected_sha[:8]))
+                    # Copy local file to download location so move operation works
+                    try:
+                        with open(local_filepath, "rb") as src:
+                            with open(download_filepath, "wb") as dst:
+                                dst.write(src.read())
+                        skip_download = True
+                        skipped_files.append(filename)
+                    except Exception as e:
+                        print("Warn: Failed to copy local file {}: {}".format(filename, e))
+                        skip_download = False
+
+            if not skip_download:
+                if not download_predbat_file_from_github(tag, filename, download_filepath):
+                    print("Error: Failed to download {}".format(filename))
+                    return None
+
             downloaded_files.append(filename)
+
+        if skipped_files:
+            print("\nSkipped downloading {} file(s) (already up to date): {}".format(len(skipped_files), ", ".join(skipped_files)))
 
         # Sort files alphabetically
         file_list_sorted = sorted(file_list, key=lambda x: x["name"])

@@ -16,6 +16,7 @@ from octopus import OctopusAPI
 from carbon import CarbonAPI
 from axle import AxleAPI
 from solax import SolaxAPI
+from solis import SolisAPI
 from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
@@ -241,6 +242,21 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "solis": {
+        "class": SolisAPI,
+        "name": "Solis Cloud API",
+        "event_filter": "predbat_solis_",
+        "args": {
+            "api_key": {"required": True, "config": "solis_api_key"},
+            "api_secret": {"required": True, "config": "solis_api_secret"},
+            "inverter_sn": {"required": False, "config": "solis_inverter_sn"},
+            "automatic": {"required": False, "config": "solis_automatic", "default": False},
+            "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
+            "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
 }
 
 
@@ -337,8 +353,9 @@ class Components:
         await self.stop(only=only)
         self.log("Waiting 10 seconds before restarting component(s)")
         await asyncio.sleep(10)
-        self.log("Starting component(s) again")
-        self.initialize(only=only)
+        self.log(f"Starting component(s) {only} again")
+        self.initialize(only=only, phase=0)
+        self.initialize(only=only, phase=1)
         self.start(only=only)
 
     """

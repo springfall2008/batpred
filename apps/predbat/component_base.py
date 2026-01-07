@@ -45,6 +45,7 @@ class ComponentBase(ABC):
         """
         self.base = base
         self.log = base.log
+        self.call_notify = base.call_notify
         self.api_started = False
         self.api_stop = False
         self.last_success_timestamp = None
@@ -154,17 +155,34 @@ class ComponentBase(ABC):
         """
         seconds = 0
         first = True
+        next_retry = 0  # When to next attempt self.run() during startup backoff
+        backoff_interval = 60  # Start with 60 seconds between attempts
+        max_backoff = 128 * 60  # Maximum 128 minutes between attempts
         while not self.api_stop and not self.fatal_error:
             try:
-                if first or seconds % 60 == 0:
+                # Check if it's time to run
+                should_run = False
+                if first:
+                    # During startup, only run when we've reached the next retry time
+                    if seconds >= next_retry:
+                        should_run = True
+                        backoff_interval = min(backoff_interval * 2, max_backoff)
+                        next_retry = seconds + backoff_interval
+                else:
+                    # After startup, run every 60 seconds
+                    if seconds % 60 == 0:
+                        should_run = True
+
+                if should_run:
                     if await self.run(seconds, first):
                         if not self.api_started:
                             self.api_started = True
                             self.log(f"{self.__class__.__name__}: Started")
+                            first = False  # Clear first flag once started
                     else:
                         self.count_errors += 1
                         self.non_fatal_error_occurred()
-                first = False
+                        self.log("Warn: " + f"{self.__class__.__name__}: run() returned False")
             except Exception as e:
                 self.log(f"Error: {self.__class__.__name__}: {e}")
                 self.log("Error: " + traceback.format_exc())

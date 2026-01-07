@@ -27,10 +27,10 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.31.8"
+THIS_VERSION = "v8.31.12"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "unit_test.py"]
+PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -60,6 +60,7 @@ from const import (
     INVERTER_TEST,
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
+    INVERTER_QUICK_UPDATE_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 from prediction import reset_prediction_globals
@@ -218,8 +219,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         if not units:
             return state
 
-        units = str(units).strip().lower()
-        required_unit = str(required_unit).strip().lower()
+        units = str(units).strip()
+        required_unit = str(required_unit).strip()
 
         try:
             state = float(state)
@@ -231,20 +232,42 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             units, required_unit = required_unit, units
 
         if isinstance(state, float) and units and required_unit and units != required_unit:
-            if units.startswith("k") and not required_unit.startswith("k"):
+            units_lhs = units[0]
+            if units_lhs == "K":
+                units_lhs = "k"
+            if units_lhs not in ["k", "M", "m"]:
+                units_lhs = ""
+
+            required_lhs = required_unit[0]
+            if required_lhs not in ["k", "M", "m"]:
+                required_lhs = ""
+            if required_lhs == "K":
+                required_lhs = "k"
+
+            if units_lhs == "M" and required_lhs == "k":
+                # Convert MW to kW
+                state *= 1000.0
+                units = "k" + units[1:]
+            elif units_lhs == "k" and required_lhs == "M":
+                # Convert kW to MW
+                state /= 1000.0
+                units = "M" + units[1:]
+            elif units_lhs == "k" and required_lhs == "":
                 # Convert kWh to Wh
                 state *= 1000.0
                 units = units[1:]  # Remove 'k' from units
-            elif not units.startswith("k") and required_unit.startswith("k"):
+            elif units_lhs == "" and required_lhs == "k":
                 # Convert Wh to kWh
                 state /= 1000.0
-                required_unit = required_unit[1:]  # Remove 'k' from units
-            elif units.startswith("m") and not required_unit.startswith("m"):
+                units = "k" + units  # Add 'k' to units
+            elif units_lhs == "m" and required_lhs == "":
                 # Convert mW to W
                 state /= 1000.0
-            elif not units.startswith("m") and required_unit.startswith("m"):
+                units = units[1:]  # Remove 'm' from units
+            elif units_lhs == "" and required_lhs == "m":
                 # Convert W to mW
                 state *= 1000.0
+                units = "m" + units  # Add 'm' to units
 
             if units != required_unit:
                 self.log("Warn: unit_conversion - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
@@ -645,6 +668,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.inverter_can_charge_during_export = True
         self.octopus_last_joined_try = None
         self.calculate_savings_max_charge_slots = 1
+        self.inverter_data_last_fetch = None
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -1531,6 +1555,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         self.check_entity_refresh()
         if self.update_pending and not self.prediction_started:
+            # Full update required
             self.update_pending = False
             self.prediction_started = True
             self.load_user_config()
@@ -1546,6 +1571,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             finally:
                 self.prediction_started = False
             self.prediction_started = False
+        elif not self.prediction_started:
+            time_now = datetime.now()
+            if self.inverter_data_last_fetch:
+                tdiff = time_now - self.inverter_data_last_fetch
+                if tdiff.total_seconds() >= INVERTER_QUICK_UPDATE_SECONDS:
+                    # Perform quick update of inverter data for the dashboard only
+                    self.prediction_started = True
+                    self.quick_inverter_data_update()
+                    self.prediction_started = False
 
     def check_entity_refresh(self):
         """

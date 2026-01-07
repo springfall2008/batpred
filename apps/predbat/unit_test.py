@@ -29,6 +29,7 @@ from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_find_charge_curve import run_find_charge_curve_tests
+from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_car_charging_smart import run_car_charging_smart_tests
@@ -91,6 +92,8 @@ from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_carbon import test_carbon
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
+from tests.test_component_base import test_component_base_all
+from tests.test_solis import run_solis_tests
 
 
 # Mock the components and plugin system
@@ -190,6 +193,7 @@ def main():
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
+        ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", test_energydataservice, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
         ("saving_session_null", test_saving_session_null_octopoints, "Saving session null octopoints test (issue #3079)", False),
@@ -230,6 +234,10 @@ def main():
         ("carbon", test_carbon, "Carbon Intensity API comprehensive tests (fetch, cache, publish, config)", False),
         # Ohme EV charger API unit tests
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
+        # ComponentBase lifecycle tests
+        ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
+        # Solis Cloud API unit tests
+        ("solis", run_solis_tests, "Solis Cloud API tests (V1/V2 time window writes, change detection)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),

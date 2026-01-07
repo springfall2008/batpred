@@ -140,7 +140,7 @@ class UserInterface:
                 value = self.get_state_wrapper(entity_id=value, default=default, required_unit=required_unit)
         return value
 
-    def set_arg(self, arg, value):
+    def set_arg(self, arg, value, index=None):
         """
         Argument setter that can use HA state as well as fixed values
         Parameters:
@@ -153,7 +153,14 @@ class UserInterface:
             if arg in self.args:
                 del self.args[arg]
         else:
-            self.args[arg] = value
+            if index is not None:
+                if arg not in self.args:
+                    self.args[arg] = []
+                while len(self.args[arg]) <= index:
+                    self.args[arg].append(None)
+                self.args[arg][index] = value
+            else:
+                self.args[arg] = value
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """

@@ -17,6 +17,8 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
+    - [Solax Cloud API (Solax)](#solax-cloud-api-solax)
+    - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
 - [Managing Components](#managing-components)
@@ -306,7 +308,8 @@ Select control my battery for 'Events Only'.
 - Stores event history for up to 7 days
 - Events are added to history as soon as they start (become active)
 - Binary sensor (default name `binary_sensor.predbat_axle_event`) is `on` when an event is currently active, `off` otherwise
-- Event details and history are available as sensor attributes
+- Current event details and event history are available as sensor attributes ('event_current' and 'event_history')
+- Alert notification sent when Predbat adds a new Axle VPP event to the Predbat plan
 - When **axle_control** is enabled (set to True in `apps.yaml`), Predbat will enter read-only mode during active VPP events (default is False)
     - Read-only mode prevents Predbat from controlling the inverter while VPP events are running
     - Status will show as "Read-Only (Axle)" when this feature is active
@@ -510,6 +513,43 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `key` | String | Yes | - | `fox_key` | Your Fox ESS API key |
 | `automatic` | Boolean | No | False | `fox_automatic` | Set to `true` to automatically configured Predbat to use the Fox inverter (no manual apps.yaml updates required) |
+
+---
+
+### Solis Cloud API (solis)
+
+**Can be restarted:** Yes
+
+#### What it does (solis)
+
+Integrates with Solis inverters for monitoring and controlling Solis battery systems via the Solis Cloud API. Provides direct control of charge/discharge schedules, storage modes, and battery parameters.
+
+#### When to enable (solis)
+
+- You have a Solis hybrid inverter with battery storage
+- You want direct API control of your Solis system
+- You have your Solis Cloud API credentials
+
+#### Important notes (solis)
+
+- **EXPERIMENTAL**: This is a new integration and may have issues
+- Requires Solis Cloud account with API access
+- **Battery size configuration**: The Solis Cloud integration cannot automatically determine your battery size from the inverter. You can either:
+    - Manually set `soc_max` in `apps.yaml` with your battery capacity in kWh (recommended), or
+    - Leave `soc_max` unset and allow Predbat to automatically detect battery size from historical charging data (requires several days of data)
+- Supports both V1 (older firmware) and V2 (newer firmware) time window formats
+- Automatic configuration available - sets up all required Predbat sensors automatically
+
+#### Configuration Options (solis)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `api_key` | String | Yes | - | `solis_api_key` | Your Solis Cloud API Key (KeyId) |
+| `api_secret` | String | Yes | - | `solis_api_secret` | Your Solis Cloud API Secret (KeySecret) |
+| `inverter_sn` | String/List | No | - | `solis_inverter_sn` | Inverter serial number(s) - Leave unset to see all. Single string or list of strings for multiple inverters |
+| `automatic` | Boolean | No | False | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
+| `base_url` | String | No | Auto-detected | `solis_base_url` | Solis Cloud API base URL (automatically selects correct region) |
+| `control_enable` | Boolean | No | True | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
 
 ---
 

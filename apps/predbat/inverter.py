@@ -350,7 +350,7 @@ class Inverter:
                 ivtime = idetails["Invertor_Time"]
         else:
             self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id, required_unit="°C")
-            self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.battery_scaling
+            self.soc_max = self.base.get_arg("soc_max", default=0.0, index=self.id) * self.battery_scaling
             self.nominal_capacity = self.soc_max
 
             if self.inverter_type in ["GE", "GEC", "GEE"]:
@@ -364,8 +364,16 @@ class Inverter:
 
         # Battery cannot be zero size
         if self.soc_max <= 0:
-            self.base.log("Error: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
-            raise ValueError
+            self.log("Note: Battery size was not set, attempting to find it..")
+            found_size = self.find_battery_size()
+            if not found_size or found_size <= 0:
+                self.log("Warn: Unable to determine battery size, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size")
+                self.soc_max = 8.0
+            else:
+                # Store found battery size so we don't keep having to fetch it
+                self.soc_max = found_size * self.battery_scaling
+                self.base.set_arg("soc_max", found_size, index=self.id)
+            self.nominal_capacity = self.soc_max
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
@@ -518,6 +526,184 @@ class Inverter:
             self.create_missing_arg("idle_end_time", "00:00:00")
             self.base.args["idle_start_time"][id] = self.create_entity("idle_start_time", "00:00:00")
             self.base.args["idle_end_time"][id] = self.create_entity("idle_end_time", "00:00:00")
+
+    def find_battery_size(self):
+        """
+        Given SOC Percent and battery power figure out the approximate battery size in kWh
+        """
+        soc_percent_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
+        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
+        battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
+        max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
+
+        if soc_percent_sensor and battery_power_sensor:
+            soc_percent_data = self.base.get_history_wrapper(entity_id=soc_percent_sensor, days=self.base.max_days_previous, required=False)
+            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous, required=False)
+
+            if not soc_percent_data or not battery_power_data:
+                self.log("Warn: Unable to estimate battery size - no history data available")
+                return None
+
+            soc_percent, _ = minute_data(
+                soc_percent_data[0],
+                self.base.max_days_previous,
+                self.base.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=self.battery_scaling,
+                required_unit="%",
+            )
+            battery_power, _ = minute_data(
+                battery_power_data[0],
+                self.base.max_days_previous,
+                self.base.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=1.0,
+                required_unit="W",
+            )
+            if battery_power_invert:
+                # Invert the battery power if required
+                for minute in battery_power:
+                    battery_power[minute] = -battery_power[minute]
+            min_len = min(len(soc_percent), len(battery_power))
+            self.log("Find battery size has {} days of data, max days {}".format(min_len / 60 / 24.0, self.base.max_days_previous))
+
+            estimate_battery_sizes = []
+
+            # Find continuous charging periods and calculate battery size from energy/SoC relationship
+            # Data is indexed backwards: minute 0 = now, minute N = N minutes ago
+            max_power_threshold = max_power * 0.9
+
+            # Scan backwards through time to find charging periods
+            in_charge = False
+            charge_start_minute = None  # Higher minute = older = start of charge
+
+            for minute in range(min_len - 1, -1, -1):
+                power = battery_power.get(minute, 0)
+                is_charging = power < -max_power_threshold
+
+                if is_charging and not in_charge:
+                    # Start of a charging period (going forward in real time, backwards in minute index)
+                    in_charge = True
+                    charge_start_minute = minute
+
+                elif not is_charging and in_charge:
+                    # End of a charging period
+                    charge_end_minute = minute + 1  # Previous minute was still charging
+                    in_charge = False
+
+                    if charge_start_minute is not None and charge_end_minute < charge_start_minute:
+                        # We have a valid charge period (start_minute > end_minute because of backwards indexing)
+                        # charge_start_minute is OLDER (beginning of charge, lower SoC)
+                        # charge_end_minute is NEWER (end of charge, higher SoC)
+
+                        start_soc = soc_percent.get(charge_start_minute, 0)
+                        end_soc = soc_percent.get(charge_end_minute, 0)
+
+                        self.log(
+                            "Charge start {} soc {} end {} soc {}".format(
+                                charge_start_minute,
+                                start_soc,
+                                charge_end_minute,
+                                end_soc,
+                            )
+                        )
+
+                        # Clip to 20-80% range and align to percentage boundaries
+                        # to avoid partial energy from transition minutes
+                        # A "transition minute" is one where the SoC changed from the previous minute
+                        # We want to start AFTER a transition and end BEFORE a transition
+                        clipped_start_minute = charge_start_minute
+                        clipped_end_minute = charge_end_minute
+
+                        # Find first stable minute ≥20% (where SoC didn't just change)
+                        # Search forward in real time (decreasing minute index)
+                        found_start = False
+                        for m in range(charge_start_minute, charge_end_minute - 1, -1):
+                            curr_soc = int(soc_percent.get(m, 0))
+                            prev_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
+                            # Check if this is a stable minute (no transition) and within range
+                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != prev_soc:
+                                clipped_start_minute = m
+                                found_start = True
+                                break
+                        if not found_start:
+                            # No stable minute found in 20-80% range, skip this period
+                            continue
+
+                        # Find last stable minute ≤80% (where SoC won't change next minute)
+                        # Search backward in real time (increasing minute index)
+                        found_end = False
+                        for m in range(charge_end_minute, charge_start_minute + 1):
+                            curr_soc = int(soc_percent.get(m, 0))
+                            next_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
+                            # Check if this is a stable minute (no upcoming transition) and within range
+                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != next_soc:
+                                clipped_end_minute = m
+                                found_end = True
+                                break
+                        if not found_end:
+                            # No stable minute found in 20-80% range, skip this period
+                            continue
+
+                        # Validate the clipped range is still valid
+                        if clipped_start_minute <= clipped_end_minute:
+                            continue  # Invalid range after clipping
+
+                        # Get the clipped SoC values (as integers for consistent percentage)
+                        clipped_start_soc = int(soc_percent.get(clipped_start_minute, 0))
+                        clipped_end_soc = int(soc_percent.get(clipped_end_minute, 0))
+                        percent_change = clipped_end_soc - clipped_start_soc
+
+                        self.log(
+                            "Charging clipped start at {} percent {} end {} percent {}, percent change {}".format(
+                                clipped_start_minute,
+                                clipped_start_soc,
+                                clipped_end_minute,
+                                clipped_end_soc,
+                                percent_change,
+                            )
+                        )
+
+                        if percent_change > 15:  # Need at least 15% change for a meaningful estimate
+                            # Calculate energy added during this period (using clipped range)
+                            power_added = 0.0
+                            sample_count = 0
+                            for power_minute in range(clipped_start_minute, clipped_end_minute - 1, -1):
+                                minute_power = -battery_power.get(power_minute, 0)
+                                power_added += minute_power / 60.0  # W to Wh
+                                sample_count += 1
+
+                            self.log("  Power added over {} samples is {} Wh".format(sample_count, power_added))
+
+                            if power_added > 0:
+                                estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh
+                                estimated_battery_size = dp2(estimated_battery_size)
+                                estimate_battery_sizes.append(estimated_battery_size)
+
+            # Average the estimated battery sizes
+            if len(estimate_battery_sizes) > 0:
+                average_battery_size = sum(estimate_battery_sizes) / len(estimate_battery_sizes)
+                average_battery_size = dp2(average_battery_size)
+                # Add in charging loss factor, assume the inverter loss is not counted in the charge rate sensor (as it's AC side)
+                average_battery_size *= self.base.battery_loss * self.base.inverter_loss
+                self.log("Estimated battery size is {} kWh from {} samples (assumed charging loss factor {})".format(average_battery_size, len(estimate_battery_sizes), self.base.battery_loss * self.base.inverter_loss))
+                return average_battery_size
+            else:
+                self.log("Warn: Unable to find any suitable charge periods to estimate battery size")
+                return None
+        else:
+            self.log("Warn: Unable to estimate battery size from soc_percent and battery_power data")
+        return None
 
     def find_charge_curve(self, discharge):
         """
@@ -877,10 +1063,6 @@ class Inverter:
             ----------                         ----          -----
             None
         """
-
-        # If it's not a GE inverter then turn Quiet off
-        if self.inverter_type != "GE":
-            quiet = False
 
         self.battery_power = 0
         self.pv_power = 0

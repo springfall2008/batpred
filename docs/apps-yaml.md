@@ -456,7 +456,7 @@ Then manually configure all required entities following the standard Predbat inv
 
 If you have multiple SolaX plants, automatic configuration will handle them automatically. Each plant will be treated as a separate inverter in Predbat's configuration.
 
-#### Supported inverter types
+#### Supported inverter types (SolaX cloud)
 
 SolaX Cloud API supports various SolaX inverter models including:
 
@@ -467,7 +467,7 @@ SolaX Cloud API supports various SolaX inverter models including:
 
 Both residential (business_type=1) and commercial (business_type=4) installations are supported.
 
-#### Troubleshooting
+#### Troubleshooting (SolaX cloud)
 
 If you experience connection issues:
 
@@ -481,6 +481,117 @@ If you experience connection issues:
 cd /config/appdaemon/apps/predbat
 python3 solax.py --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET --region eu
 ```
+
+### Solis Cloud API
+
+**EXPERIMENTAL:** This is a new integration and may have issues.
+
+Predbat includes support for Solis inverters via the Solis Cloud API, allowing direct cloud-based monitoring and control of Solis hybrid inverters with battery storage.
+
+#### Configuration (solis)
+
+Add the following to your `apps.yaml` to configure the Solis Cloud integration:
+
+```yaml
+  solis_api_key: !secret solis_api_key
+  solis_api_secret: !secret solis_api_secret
+  solis_automatic: True
+  solis_control_enable: True
+```
+
+**Configuration options:**
+
+- `solis_api_key` - Your Solis Cloud API Key (KeyId) - obtain from Solis Cloud portal
+- `solis_api_secret` - Your Solis Cloud API Secret (KeySecret) - obtain from Solis Cloud portal
+- `solis_inverter_sn` - Default is all inverters on your account unless set. Can be a single string or a list for multiple inverters.
+- `solis_automatic` - Set to `True` to automatically configure Predbat entities (recommended, default: `False`)
+- `solis_base_url` - Solis Cloud API base URL (optional, auto-detects region)
+- `solis_control_enable` - Enable/disable control commands (default: `True`, set to `False` for monitoring only)
+
+**NOTE:** It's strongly recommended to store `api_key` and `api_secret` in `secrets.yaml` and reference them as `!secret solis_api_key` - see [Storing secrets](#storing-secrets).
+
+#### Important notes (Solis)
+
+**IMPORTANT:** The Solis Cloud integration cannot automatically determine your battery size from the inverter. You have two options:
+
+1. **Manual configuration (recommended):** Set `soc_max` in `apps.yaml` manually with your battery capacity in kWh:
+
+```yaml
+  soc_max:
+    - 13.5
+```
+
+Replace `13.5` with your actual battery capacity in kWh.
+
+2. **Automatic detection:** Leave `soc_max` unset or set to 0, and Predbat will attempt to automatically determine battery size by analyzing historical charging data. This requires:
+   - At least several days of historical data from `soc_percent` and `battery_power` sensors
+   - Charging periods with at least 15% SoC change
+   - May take time to collect sufficient data
+
+Manual configuration is recommended as it's immediate and more reliable.
+
+#### Automatic configuration (solis_automatic: True)
+
+When `automatic: True` (recommended), Predbat will automatically create and configure the following entities for each inverter:
+
+**Sensors:**
+
+- Battery SOC, capacity, voltage, current, power, and temperature
+- PV power and total energy
+- Grid power and import/export energy
+- Load power and consumption
+- Inverter status and product model
+
+**Control entities:**
+
+- Reserve SOC setting
+- Charge/discharge slot times (6 slots supported)
+- Charge/discharge target SOC per slot
+- Charge/discharge power rates
+- Charge/discharge enable switches per slot
+- Storage mode selection
+- Battery protection settings
+
+No manual entity configuration is required when using automatic mode.
+
+#### Manual configuration (solis_automatic: False)
+
+If you disable automatic configuration, you must manually configure inverter entities in `apps.yaml` similar to other inverter types. In this case, set:
+
+```yaml
+  solis_api_key: !secret solis_api_key
+  solis_api_secret: !secret solis_api_secret
+  solis_automatic: False
+  solis_control_enable: True
+  num_inverters: 1
+  inverter_type: 'SolisCloud'
+  soc_max:
+    - 13.5
+```
+
+Then manually configure all required entities following the standard Predbat inverter configuration pattern.
+
+#### Supported inverter types (Solis Cloud)
+
+The Solis Cloud API supports various Solis hybrid inverter models with battery storage, including:
+
+- RHI series (single-phase hybrid)
+- RAI series (three-phase hybrid)
+- S5 series hybrid inverters
+- Other Solis cloud-connected hybrid inverters
+
+Both V1 (older firmware) and V2 (newer firmware) time window formats are automatically detected and supported.
+
+#### Troubleshooting (Solis Cloud)
+
+If you experience connection issues:
+
+1. Verify your API key and secret are correct
+2. Check your inverter serial number is exact (no spaces or extra characters)
+3. Confirm your Solis Cloud account has API access enabled
+4. Review Predbat logs for authentication errors
+5. Ensure `soc_max` is set correctly in `apps.yaml` (battery capacity in kWh)
+6. Check that `control_enable` is set appropriately for your needs
 
 ### num_inverters
 
@@ -507,7 +618,8 @@ inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should 
   SFMB: Sofar HYD with solarman modbus
   SIG: SigEnergy Sigenstor
   SK: Sunsynk
-  SolaxCloud: SolaX Cloud API integration
+  SolaxCloud: SolaX Cloud API integration (EXPERIMENTAL)
+  SolisCloud: Solis Cloud API integration (EXPERIMENTAL)
   SX4: Solax Gen4 (Modbus Power Control)
 
 If you have multiple inverters, then set inverter_type to a list of the inverter types.
@@ -748,7 +860,9 @@ or
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
 Predbat also uses **battery_rate_max** when creating [charge and discharge curves](#battery-chargedischarge-curves), looking for charging or discharging at 95% of the max rate.
 Be careful of setting the rate at a value higher than your inverter can handle for grid charging in order for Predbat to be able to find the historical 'full rate' charging/discharging needed to correctly calculate the curves.
-- **soc_max** - Entity name for the maximum charge level for the battery in kWh
+- **soc_max** - Entity name for the maximum charge level for the battery in kWh.
+If not set or set to 0, Predbat will attempt to automatically determine the battery size by analyzing historical charging data from `soc_percent` and `battery_power` sensors.
+This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
@@ -1263,7 +1377,7 @@ SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for
 
 An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
 
-## Ohme car charger - direct integration
+## Ohme car charger direct integration
 
 Predbat can talk directly to the Ohme charger by setting your login details. When **ohme_automatic_octopus_intelligent** is set then Predbat is automatically
 configured to take Octopus Intelligent car charging slots from Ohme (rather than from Octopus Intelligent directly).
@@ -1505,6 +1619,7 @@ If the battery has not recently been fully charged or fully discharged then Pred
 - **battery_charge_power_curve** - This optional configuration item enables you to model in Predbat a tail-off in charging at high SoC%.
 
 Enter the charging curve as a series of steps of % of max charge rate for each SoC percentage.
+The percentage steps can either be expressed as an integer number (e.g. 97) or as a string (e.g. "97"); the Percent symbol is not required (see example curve below).
 
 The default is 1.0 (full power) charge to 100%.
 

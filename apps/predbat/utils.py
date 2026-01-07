@@ -401,6 +401,10 @@ def minute_data(
                         state = state / 1000.0
                     elif required_unit in ["W", "Wh", "g", "g/kWh"] and unit in ["kW", "kWh", "kg", "kg/kWh"]:
                         state = state * 1000.0
+                    elif required_unit in ["MW", "MWh"] and unit in ["kW", "kWh"]:
+                        state = state / 1000.0
+                    elif required_unit in ["kW", "kWh"] and unit in ["MW", "MWh"]:
+                        state = state * 1000.0
                     else:
                         # Ignore data in wrong units if we can't converter
                         continue
