@@ -48,6 +48,10 @@ class MockBase:
         """Mock log - silent"""
         pass
 
+    def call_notify(self, message):
+        """Mock notify method"""
+        self.log_messages.append("Alert: " + message)
+
     def dashboard_item(self, entity_id, state, attributes, app=None):
         """Track dashboard_item calls"""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}

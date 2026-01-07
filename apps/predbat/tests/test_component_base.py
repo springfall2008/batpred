@@ -45,6 +45,10 @@ class MockBase:
         self.log_messages.append(message)
         print(message)
 
+    def call_notify(self, message):
+        """Mock notify method"""
+        self.log_messages.append("Alert: " + message)
+
 
 class TestComponent(ComponentBase):
     """Test component implementation"""

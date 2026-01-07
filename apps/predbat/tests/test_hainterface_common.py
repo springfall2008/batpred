@@ -104,6 +104,10 @@ class MockBase:
         """Log messages for test verification"""
         self.log_messages.append(message)
 
+    def call_notify(self, message):
+        """Mock notify method"""
+        self.log_messages.append("Alert: " + message)
+
     async def trigger_callback(self, service_data):
         """Mock trigger_callback - tracks calls"""
         self.callback_calls.append(service_data)

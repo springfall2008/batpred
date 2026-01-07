@@ -1377,7 +1377,7 @@ SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for
 
 An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
 
-## Ohme car charger - direct integration
+## Ohme car charger direct integration
 
 Predbat can talk directly to the Ohme charger by setting your login details. When **ohme_automatic_octopus_intelligent** is set then Predbat is automatically
 configured to take Octopus Intelligent car charging slots from Ohme (rather than from Octopus Intelligent directly).
@@ -1619,6 +1619,7 @@ If the battery has not recently been fully charged or fully discharged then Pred
 - **battery_charge_power_curve** - This optional configuration item enables you to model in Predbat a tail-off in charging at high SoC%.
 
 Enter the charging curve as a series of steps of % of max charge rate for each SoC percentage.
+The percentage steps can either be expressed as an integer number (e.g. 97) or as a string (e.g. "97"); the Percent symbol is not required (see example curve below).
 
 The default is 1.0 (full power) charge to 100%.
 
