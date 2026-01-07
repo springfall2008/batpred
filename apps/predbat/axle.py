@@ -219,7 +219,7 @@ class AxleAPI(ComponentBase):
 
             # Get the sensor entity_id from configuration
             entity_id = self.get_arg("axle_session", indirect=False)
-            current_start_time = None  # start end end of any current Axle event
+            current_start_time = None  # start and end of any current Axle event
             current_end_time = None
             if entity_id:
                 # Fetch current event(s)
