@@ -346,12 +346,19 @@ you can specify a cost per kg of CO2 used to weight the selection of plans. Valu
 
 _Note: Carbon footprint tracking can only be turned on if `apps.yaml` is configured to point to the correct CO2 cost sensor_
 
+## Notifications
+
+Predbat can send mobile notifications for various events. You can control which types of notifications are sent using the following switches.
+Set the list of [devices to notify](apps-yaml.md#notify_devices) in `apps.yaml`.
+
+| Switch | Default | Controls |
+|--------|---------|----------|
+| **switch.predbat_set_status_notify** | On | Notifications when Predbat operational status changes (e.g. Idle, Charging, Exporting) |
+| **switch.predbat_set_inverter_notify** | Off | Notifications when inverter settings are changed (e.g. charge/discharge rates, reserve levels, time windows) |
+| **switch.predbat_set_event_notify** | On | Notifications for energy market events (e.g. Octopus Saving Sessions joined, Axle VPP events scheduled) |
+| **switch.predbat_set_system_notify** | On | Notifications for system events (e.g. auto-restart service, software updates, settings save/restore) |
+
 ## Inverter control options
-
-**switch.predbat_set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Export etc). Set the list of [devices to notify](apps-yaml.md#notify_devices) in `apps.yaml`. On by default.
-
-**switch.predbat_set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off).
-Off by default.
 
 **switch.predbat_set_charge_low_power** Enables low-power charging mode where the max charge rate will be automatically determined by Predbat to be the
 lowest possible rate to meet the charge target. This is only really effective for charge windows longer than a single slot.

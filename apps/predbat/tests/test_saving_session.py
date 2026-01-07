@@ -227,3 +227,140 @@ friendly_name: Octopus Intelligent Saving Sessions
 
     print("PASS: Null octopoints_per_kwh handled correctly - no TypeError raised, events ignored")
     return failed
+
+
+def test_saving_session_notify_config(my_predbat):
+    """
+    Test that set_event_notify configuration controls Octopus saving session notifications
+    """
+    print("Test saving session notification configuration")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    session_binary = f"""
+state: off
+current_joined_event_start: null
+current_joined_event_end: null
+current_joined_event_duration_in_minutes: null
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:leaf
+friendly_name: Octoplus Saving Session
+"""
+
+    session_sensor = f"""
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
+event_types: octopus_energy_all_octoplus_saving_sessions
+event_type: octopus_energy_all_octoplus_saving_sessions
+account_id: A-4DD6C5EE
+available_events:
+    - id: 9999
+      start: '{date_today}T18:30:00+{tz_offset}:00'
+      end: '{date_today}T19:30:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 500
+      code: TEST123
+joined_events: []
+friendly_name: Octoplus Saving Session Events
+"""
+
+    # Test 1: Notifications enabled (default)
+    print("  Test 1: Notifications enabled (set_event_notify not set, should default to True)")
+    ha.dummy_items.clear()
+    ha.dummy_items["binary_sensor.octopus_energy_test_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+    ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_events"] = yaml.safe_load(session_sensor)
+    ha.dummy_items["sensor.octopus_free_session"] = {}
+    my_predbat.args["octopus_saving_session"] = "binary_sensor.octopus_energy_test_octoplus_saving_sessions"
+    my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+    if "octopus_free_url" in my_predbat.args:
+        del my_predbat.args["octopus_free_url"]
+    my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+    # Don't set set_event_notify - should default to True
+    if "set_event_notify" in my_predbat.args:
+        del my_predbat.args["set_event_notify"]
+    # Reset the last joined try timer so it will attempt to join
+    my_predbat.octopus_last_joined_try = None
+
+    ha.service_store_enable = True
+    ha.service_store = []
+    octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    # Should have notification service call
+    notify_calls = [svc for svc in service_result if svc[0] == "notify/notify"]
+    if len(notify_calls) != 1:
+        print(f"ERROR: Expected 1 notification call with default set_event_notify, got {len(notify_calls)}")
+        print(f"  Service calls: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Notification sent when set_event_notify defaults to True")
+
+    # Test 2: Notifications explicitly enabled
+    print("  Test 2: Notifications explicitly enabled (set_event_notify=True)")
+    ha.dummy_items.clear()
+    ha.dummy_items["binary_sensor.octopus_energy_test_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+    ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_events"] = yaml.safe_load(session_sensor)
+    ha.dummy_items["sensor.octopus_free_session"] = {}
+    my_predbat.args["set_event_notify"] = True
+    # Reset the last joined try timer so it will attempt to join
+    my_predbat.octopus_last_joined_try = None
+
+    ha.service_store_enable = True
+    ha.service_store = []
+    octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    # Should have notification service call
+    notify_calls = [svc for svc in service_result if svc[0] == "notify/notify"]
+    if len(notify_calls) != 1:
+        print(f"ERROR: Expected 1 notification call with set_event_notify=True, got {len(notify_calls)}")
+        print(f"  Service calls: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Notification sent when set_event_notify=True")
+
+    # Test 3: Notifications disabled
+    print("  Test 3: Notifications disabled (set_event_notify=False)")
+    ha.dummy_items.clear()
+    ha.dummy_items["binary_sensor.octopus_energy_test_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+    ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_events"] = yaml.safe_load(session_sensor)
+    ha.dummy_items["sensor.octopus_free_session"] = {}
+    # Update config_index to set the value to False
+    my_predbat.expose_config("set_event_notify", False, quiet=True)
+    # Reset the last joined try timer so it will attempt to join
+    my_predbat.octopus_last_joined_try = None
+
+    ha.service_store_enable = True
+    ha.service_store = []
+    octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    # Should NOT have notification service call
+    notify_calls = [svc for svc in service_result if svc[0] == "notify/notify"]
+    if len(notify_calls) != 0:
+        print(f"ERROR: Expected 0 notification calls with set_event_notify=False, got {len(notify_calls)}")
+        print(f"  Service calls: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Notification blocked when set_event_notify=False")
+
+    # Verify that the saving session was still joined (only notification blocked, not the join)
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join service call even with notifications disabled, got {len(join_calls)}")
+        failed = True
+    else:
+        print("  PASS: Saving session still joined when notifications disabled")
+
+    if not failed:
+        print("PASS: All notification configuration tests passed")
+
+    return failed

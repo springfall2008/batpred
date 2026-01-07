@@ -815,6 +815,18 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "set_event_notify",
+        "friendly_name": "Set Event Notify",
+        "type": "switch",
+        "default": True,
+    },
+    {
+        "name": "set_system_notify",
+        "friendly_name": "Set System Notify",
+        "type": "switch",
+        "default": True,
+    },
+    {
         "name": "set_charge_freeze",
         "friendly_name": "Set Charge Freeze",
         "type": "switch",

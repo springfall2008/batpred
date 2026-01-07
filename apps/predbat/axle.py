@@ -218,12 +218,12 @@ class AxleAPI(ComponentBase):
             self.updated_at = (updated_at.strftime(TIME_FORMAT) if updated_at else None,)
 
             # Get the sensor entity_id from configuration
-            entity_id = self.get_arg("axle_session", indirect=False)
+            sensor_id = "binary_sensor." + self.prefix + "_axle_event"
             current_start_time = None  # start and end of any current Axle event
             current_end_time = None
-            if entity_id:
+            if sensor_id:
                 # Fetch current event(s)
-                event_current = self.get_state_wrapper(entity_id=entity_id, attribute="event_current")
+                event_current = self.get_state_wrapper(entity_id=sensor_id, attribute="event_current")
                 if event_current and isinstance(event_current, list):
                     current_start_time = event_current[0]["start_time"]
                     current_end_time = event_current[0]["end_time"]
@@ -236,7 +236,8 @@ class AxleAPI(ComponentBase):
 
                 # send alert if this is a new Axle event
                 if (start_time.strftime(TIME_FORMAT) != current_start_time) or (end_time.strftime(TIME_FORMAT) != current_end_time):
-                    self.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), self.pence_per_kwh))
+                    if self.get_arg("set_event_notify"):
+                        self.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), self.pence_per_kwh))
 
             self.cleanup_event_history()
             self.publish_axle_event()
