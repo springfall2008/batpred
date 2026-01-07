@@ -39,7 +39,7 @@ class MockAxleAPI(AxleAPI):
             "import_export": None,
             "pence_per_kwh": None,
         }
-        self.updated_at: None
+        self.updated_at = None
         self.history_loaded = False
         self._now_utc = datetime.now(timezone.utc)
         self._state_store = {}  # Mock state storage
