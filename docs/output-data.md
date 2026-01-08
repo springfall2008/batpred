@@ -634,8 +634,13 @@ See [editing configuration files within Home Assistant](install.md#editing-confi
 
 ## Automated monitoring that Predbat and GivTCP are running OK
 
-With GivTCP and Predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
-you may find these automations useful to monitor that GivTCP and Predbat are running OK, and if not, to raise an alert on your mobile device running the Home Assistant Companion app.
+With Predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
+you may find these automations useful to monitor that everything is running OK, and if not, to try restarting the failing add-on, and raise an alert on your mobile device running the Home Assistant Companion app.
+
+Two monitors are provided, one for Predbat and one for GivTCP (for GivEnergy inverters).  Both monitors are written on the basis that Predbat/GivTCP are running as add-on's within the Home Assistant Supervisor.
+If you are running Predbat within Docker then the automation won't work as written.
+
+The GivTCP monitor is for use with a GivEnergy inverter, if you have a different inverter type then you may be able to use the GivTCP monitor as a basis for developing a similar inverter-specific error detection automation for your inverter.
 
 To create a new automation:
 
@@ -774,7 +779,7 @@ NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' wit
 
 This automation will raise an alert if Predbat's status turns to *Error* for more than 5 minutes.
 
-In normal operation, Predbat will automatically run and update its forecast every 5 minutes. If the automation detects that Predbat has not done this for 20 minutes,
+In normal operation, Predbat will automatically run and update its plan and forecast every 5 minutes. If the automation detects that Predbat has not done this for 20 minutes,
 then an alert will be raised and the automation will restart the Predbat add-on to try to resolve a 'hung Predbat' issue.
 
 In the same way for the GivTCP and Mosquitto add-ons above, the last trigger requires you to enable a binary sensor that detects that the Predbat/AppDaemon add-on is running.
