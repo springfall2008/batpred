@@ -45,8 +45,9 @@ class MockBase:
         self.arg_errors = []
 
     def log(self, message):
-        """Mock log - silent"""
-        pass
+        """Mock log - print for debugging"""
+        if "DEBUG:" in str(message):
+            print(message)
 
     def call_notify(self, message):
         """Mock notify method"""
@@ -981,7 +982,9 @@ def test_publish_pv_stats(my_predbat):
             {"period_start": "2025-06-16T12:00:00+0000", "pv_estimate": 2.5, "pv_estimate10": 2.0, "pv_estimate90": 3.0},
         ]
 
+        print(f"DEBUG: Before publish_pv_stats, midnight_utc={test_api.solar.midnight_utc}")
         test_api.solar.publish_pv_stats(pv_forecast_data, divide_by=1.0, period=30)
+        print(f"DEBUG: After publish_pv_stats, dashboard_items keys={list(test_api.dashboard_items.keys())}")
 
         # Verify today's entity was published
         today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
@@ -1076,6 +1079,59 @@ def test_publish_pv_stats_remaining_calculation(my_predbat):
             # Remaining should not exceed total
             if remaining > total:
                 print(f"ERROR: Remaining ({remaining}) should not exceed total ({total})")
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_publish_pv_stats_missing_day_zero(my_predbat):
+    """
+    Test publish_pv_stats handles missing day 0 forecast data without KeyError.
+    This regression test ensures the fix for the KeyError on line 559.
+    """
+    print("  - test_publish_pv_stats_missing_day_zero")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        # Create forecast data that starts on day 1 (tomorrow), skipping day 0 (today)
+        # This can happen if today's forecast data is stale or missing
+        pv_forecast_data = [
+            {"period_start": "2025-06-16T06:00:00+0000", "pv_estimate": 0.5, "pv_estimate10": 0.3, "pv_estimate90": 0.7},
+            {"period_start": "2025-06-16T12:00:00+0000", "pv_estimate": 2.0, "pv_estimate10": 1.5, "pv_estimate90": 2.5},
+            {"period_start": "2025-06-17T12:00:00+0000", "pv_estimate": 1.5, "pv_estimate10": 1.0, "pv_estimate90": 2.0},
+        ]
+
+        # This should not raise KeyError
+        test_api.solar.publish_pv_stats(pv_forecast_data, divide_by=1.0, period=30)
+
+        # Verify today's entity was published with zero values
+        today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
+        if today_entity not in test_api.dashboard_items:
+            print(f"ERROR: Expected {today_entity} to be published even with no data")
+            failed = True
+        else:
+            today_item = test_api.dashboard_items[today_entity]
+            total = today_item["attributes"].get("total", -1)
+            # Today should have 0 kWh since no forecast data exists for day 0
+            if total != 0:
+                print(f"ERROR: Expected today total to be 0 (no data), got {total}")
+                failed = True
+
+        # Verify tomorrow's entity was published with actual data
+        tomorrow_entity = f"sensor.{test_api.mock_base.prefix}_pv_tomorrow"
+        if tomorrow_entity not in test_api.dashboard_items:
+            print(f"ERROR: Expected {tomorrow_entity} to be published")
+            failed = True
+        else:
+            tomorrow_item = test_api.dashboard_items[tomorrow_entity]
+            total_tomorrow = tomorrow_item["attributes"].get("total", 0)
+            expected_tomorrow = 2.5  # Sum of day 1 data
+            if abs(total_tomorrow - expected_tomorrow) > 0.1:
+                print(f"ERROR: Expected tomorrow total ~{expected_tomorrow}, got {total_tomorrow}")
                 failed = True
 
     finally:
@@ -1365,6 +1421,7 @@ def run_solcast_tests(my_predbat):
     # Publish stats tests
     failed |= test_publish_pv_stats(my_predbat)
     failed |= test_publish_pv_stats_remaining_calculation(my_predbat)
+    failed |= test_publish_pv_stats_missing_day_zero(my_predbat)
 
     # Pack and store tests
     failed |= test_pack_and_store_forecast(my_predbat)
