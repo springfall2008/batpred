@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from futurerate import FutureRate
-from utils import dp2
 
 
 def run_nordpool_test(my_predbat):
@@ -103,7 +102,7 @@ def run_nordpool_test(my_predbat):
             if rate_diff > max_diff:
                 max_diff = rate_diff
                 max_diff_minute = minute
-            #print("Import: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, dp2(rate_diff)))
+            # print("Import: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, dp2(rate_diff)))
     if max_diff > 20:
         print("ERROR: Rate import data difference too high (max diff {}) minute {}".format(max_diff, my_predbat.time_abs_str(max_diff_minute)))
         failed = True

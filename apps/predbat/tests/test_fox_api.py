@@ -4807,7 +4807,7 @@ def test_automatic_config_export_limit_all_devices(my_predbat):
     fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
     fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
     fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
-    
+
     # Both devices have exportlimit setting
     fox.device_settings[deviceSN1] = {"exportLimit": {"value": 5000}}
     fox.device_settings[deviceSN2] = {"exportLimit": {"value": 3000}}
@@ -4836,7 +4836,7 @@ def test_automatic_config_export_limit_some_devices(my_predbat):
     fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
     fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
     fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
-    
+
     # Only device 1 has exportlimit setting
     fox.device_settings[deviceSN1] = {"exportLimit": {"value": 5000}}
     fox.device_settings[deviceSN2] = {}  # No exportLimit
@@ -4865,7 +4865,7 @@ def test_automatic_config_export_limit_no_devices(my_predbat):
     fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
     fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
     fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
-    
+
     # Neither device has exportlimit setting
     fox.device_settings[deviceSN1] = {}
     fox.device_settings[deviceSN2] = {}
@@ -4892,7 +4892,7 @@ def test_automatic_config_export_limit_case_insensitive(my_predbat):
 
     fox.device_list = [{"deviceSN": deviceSN}]
     fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
-    
+
     # Setting key with different case - should be detected because code uses setting.lower()
     fox.device_settings[deviceSN] = {"ExportLimit": {"value": 5000}}
 
