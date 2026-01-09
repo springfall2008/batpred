@@ -707,8 +707,10 @@ class Execute:
         self.inverter_data_last_fetch = datetime.now()
         found_first = False
 
-        if create:
+        # Create inverters list if needed
+        if create or (not self.inverters) or (len(self.inverters) != self.num_inverters):
             self.inverters = []
+            create = True
 
         # For each inverter get the details
         for id in range(self.num_inverters):

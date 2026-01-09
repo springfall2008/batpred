@@ -750,6 +750,10 @@ def compute_window_minutes(start_time, end_time, minutes_now):
     Returns:
         Tuple of (start_minute, end_minute) adjusted for midnight spanning and current time
     """
+    if start_time is None or end_time is None:
+        # Invalid time, return 0,0
+        return 0, 0
+
     start_minute = start_time.hour * 60 + start_time.minute
     end_minute = end_time.hour * 60 + end_time.minute
 

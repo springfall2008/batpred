@@ -127,6 +127,7 @@ class Inverter:
         self.current_charge_limit = 0.0
         self.soc_kw = 0
         self.soc_percent = 0
+        self.soc_max = None
         self.rest_data = None
         self.inverter_limit = 7500.0 / MINUTE_WATT
         self.export_limit = 99999.0 / MINUTE_WATT
@@ -364,7 +365,7 @@ class Inverter:
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
         # Battery cannot be zero size
-        if self.soc_max <= 0:
+        if not self.soc_max or self.soc_max <= 0:
             self.log("Note: Battery size was not set, attempting to find it..")
             found_size = self.find_battery_size()
             if not found_size or found_size <= 0:
