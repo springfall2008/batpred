@@ -860,7 +860,7 @@ class HAInterface(ComponentBase):
         except requests.exceptions.ConnectionError as e:
             if not silent:
                 self.log("Warn: Connection error from {}: {}".format(url, e))
-                self.api_errors += 1
+            self.api_errors += 1
             data = None
 
         if self.api_errors >= 10:
