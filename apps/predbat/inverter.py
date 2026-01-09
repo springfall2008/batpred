@@ -365,7 +365,7 @@ class Inverter:
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
         # Battery cannot be zero size
-        if not self.soc_max:
+        if not self.soc_max or self.soc_max <= 0:
             self.log("Note: Battery size was not set, attempting to find it..")
             found_size = self.find_battery_size()
             if not found_size or found_size <= 0:
