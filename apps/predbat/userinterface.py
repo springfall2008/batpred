@@ -43,7 +43,7 @@ DEBUG_EXCLUDE_LIST = [
     "futurerate_url_cache",
     "github_url_cache",
     "octopus_url_cache",
-    "secrets"
+    "secrets",
 ]
 
 
