@@ -215,7 +215,7 @@ class AxleAPI(ComponentBase):
                 "import_export": import_export,
                 "pence_per_kwh": self.pence_per_kwh,
             }
-            self.updated_at = (updated_at.strftime(TIME_FORMAT) if updated_at else None,)
+            self.updated_at = updated_at.strftime(TIME_FORMAT) if updated_at else None
 
             # Get the sensor entity_id from configuration
             sensor_id = "binary_sensor." + self.prefix + "_axle_event"
