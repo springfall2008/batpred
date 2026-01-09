@@ -1271,6 +1271,10 @@ class SolisAPI(ComponentBase):
             # Battery Capacity SOC (from detail API, not live CID)
             entity_id = f"sensor.{prefix}_solis_{inverter_sn}_battery_soc"
             battery_soc = detail.get("batteryCapacitySoc")
+            try:
+                battery_soc = float(battery_soc)
+            except (ValueError, TypeError):
+                pass
             self.dashboard_item(
                 entity_id,
                 state=battery_soc,

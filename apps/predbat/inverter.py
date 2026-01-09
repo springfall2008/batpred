@@ -128,8 +128,8 @@ class Inverter:
         self.soc_kw = 0
         self.soc_percent = 0
         self.rest_data = None
-        self.inverter_limit = 7500.0
-        self.export_limit = 99999.0
+        self.inverter_limit = 7500.0 / MINUTE_WATT
+        self.export_limit = 99999.0 / MINUTE_WATT
         self.inverter_time = None
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
@@ -344,7 +344,7 @@ class Inverter:
 
             # Max invertor rate
             if "Invertor_Max_Inv_Rate" in idetails:
-                self.inverter_limit = idetails["Invertor_Max_Inv_Rate"]
+                self.inverter_limit = idetails["Invertor_Max_Inv_Rate"] / MINUTE_WATT
 
             # Inverter time
             if "Invertor_Time" in idetails:
@@ -461,9 +461,9 @@ class Inverter:
 
         # Max inverter rate override
         if "inverter_limit" in self.base.args:
-            self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit, index=self.id, required_unit="W") / MINUTE_WATT
+            self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:
-            self.export_limit = self.base.get_arg("export_limit", self.inverter_limit, index=self.id, required_unit="W") / MINUTE_WATT
+            self.export_limit = self.base.get_arg("export_limit", self.export_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
 
         # Log inverter details
         if not quiet:

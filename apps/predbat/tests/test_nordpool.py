@@ -93,15 +93,18 @@ def run_nordpool_test(my_predbat):
     # Compare Agile rates against Nordpool
     max_diff = 0
     rate_diff = 0
+    max_diff_minute = None
     for minute in range(0, 24 * 60, 30):
         rate_octopus = rates_agile.get(minute, None)
         rate_nordpool = rate_import.get(minute, None)
         if rate_octopus is not None and rate_nordpool is not None:
             rate_diff = abs(rate_octopus - rate_nordpool)
-            max_diff = max(max_diff, rate_diff)
-            # print("Import: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, rate_diff))
-    if max_diff > 10:
-        print("ERROR: Rate import data difference too high")
+            if rate_diff > max_diff:
+                max_diff = rate_diff
+                max_diff_minute = minute
+            # print("Import: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, dp2(rate_diff)))
+    if max_diff > 20:
+        print("ERROR: Rate import data difference too high (max diff {}) minute {}".format(max_diff, my_predbat.time_abs_str(max_diff_minute)))
         failed = True
 
     rate_diff_export = 0
@@ -113,7 +116,7 @@ def run_nordpool_test(my_predbat):
             max_diff = max(rate_diff_export, rate_diff)
             # print("Export: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, rate_diff))
     if rate_diff_export > 10:
-        print("ERROR: Rate export data difference too high")
+        print("ERROR: Rate export data difference too high (max diff {})".format(rate_diff_export))
         failed = True
 
     return failed

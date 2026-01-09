@@ -1109,7 +1109,7 @@ class FoxAPI(ComponentBase):
                     self.log(f"Warn: Fox: Has run out of API calls for today {msg}:{errno}, sleeping...")
                     await asyncio.sleep(5 * 60)
                     return None, False
-                elif errno in [44096]:
+                elif errno in [44096, 42015]:
                     # Unsupported function code
                     self.log(f"Warn: Fox: Unsupported function code {msg}:{errno} from {url}")
                     return None, False
@@ -1482,6 +1482,7 @@ class FoxAPI(ComponentBase):
 
         batteries = []
         pvs = []
+        hasExportLimit = {}
         for device in self.device_list:
             sn = device.get("deviceSN", None)
             detail = self.device_detail.get(sn, {})
@@ -1495,6 +1496,11 @@ class FoxAPI(ComponentBase):
                 # Check if this battery inverter also has PV
                 if hasPV:
                     pvs.append(sn.lower())
+
+        for sn in self.device_settings:
+            for setting in self.device_settings[sn]:
+                if setting.lower() == "exportlimit":
+                    hasExportLimit[sn.lower()] = True
 
         # Find any PV inverters without batteries when the battery doesn't see the PV
         if len(pvs) < len(batteries):
@@ -1540,8 +1546,8 @@ class FoxAPI(ComponentBase):
         self.set_arg("discharge_rate", [f"number.{self.prefix}_fox_{device}_battery_schedule_discharge_power" for device in batteries])
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_fox_{device}_battemperature" for device in batteries])
         self.set_arg("inverter_limit", [f"sensor.{self.prefix}_fox_{device}_inverter_capacity" for device in batteries])
-        self.set_arg("export_limit", [f"number.{self.prefix}_fox_{device}_setting_exportlimit" for device in batteries])
         self.set_arg("schedule_write_button", [f"switch.{self.prefix}_fox_{device}_battery_schedule_charge_write" for device in batteries])
+        self.set_arg("export_limit", [f"number.{self.prefix}_fox_{device}_setting_exportlimit" if hasExportLimit.get(device, False) else 99999 for device in batteries])
 
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_fox_{batteries[0]}_battemperature")
