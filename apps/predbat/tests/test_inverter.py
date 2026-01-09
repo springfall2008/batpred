@@ -630,6 +630,12 @@ def test_inverter_rest_template(
     dummy_rest = DummyRestAPI()
     my_predbat.args["givtcp_rest"] = "dummy"
 
+    # Remove inverter_limit and export_limit from config to test REST data parsing
+    if "inverter_limit" in my_predbat.args:
+        del my_predbat.args["inverter_limit"]
+    if "export_limit" in my_predbat.args:
+        del my_predbat.args["export_limit"]
+
     dummy_rest.rest_data = {}
     with open(filename, "r") as file:
         dummy_rest.rest_data = json.load(file)
@@ -652,6 +658,10 @@ def test_inverter_rest_template(
         failed = True
     if assert_inverter_limit != inv.inverter_limit * MINUTE_WATT:
         print("ERROR: Inverter limit should be {} got {}".format(assert_inverter_limit, inv.inverter_limit * MINUTE_WATT))
+        failed = True
+    # Verify export_limit defaults correctly from REST data when config unset (should be 99999.0 / MINUTE_WATT = 1.66665)
+    if inv.export_limit * MINUTE_WATT < 99999.0:
+        print("ERROR: Export limit should default to 99999 W (1.66665 kW/min) when unset, got {} W ({} kW/min)".format(inv.export_limit * MINUTE_WATT, inv.export_limit))
         failed = True
     if assert_battery_rate_max != inv.battery_rate_max_raw:
         print("ERROR: Battery rate max should be {} got {}".format(assert_battery_rate_max, inv.battery_rate_max_raw))
