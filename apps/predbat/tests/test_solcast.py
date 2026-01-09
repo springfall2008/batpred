@@ -982,9 +982,7 @@ def test_publish_pv_stats(my_predbat):
             {"period_start": "2025-06-16T12:00:00+0000", "pv_estimate": 2.5, "pv_estimate10": 2.0, "pv_estimate90": 3.0},
         ]
 
-        print(f"DEBUG: Before publish_pv_stats, midnight_utc={test_api.solar.midnight_utc}")
         test_api.solar.publish_pv_stats(pv_forecast_data, divide_by=1.0, period=30)
-        print(f"DEBUG: After publish_pv_stats, dashboard_items keys={list(test_api.dashboard_items.keys())}")
 
         # Verify today's entity was published
         today_entity = f"sensor.{test_api.mock_base.prefix}_pv_today"
