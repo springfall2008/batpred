@@ -1090,7 +1090,8 @@ def test_publish_pv_stats_remaining_calculation(my_predbat):
 def test_publish_pv_stats_missing_day_zero(my_predbat):
     """
     Test publish_pv_stats handles missing day 0 forecast data without KeyError.
-    This regression test ensures the fix for the KeyError on line 559.
+    This regression test ensures the fix for the KeyError when accessing total_day[0]
+    when day 0 has no forecast data.
     """
     print("  - test_publish_pv_stats_missing_day_zero")
     failed = False
