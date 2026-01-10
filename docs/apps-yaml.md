@@ -1609,12 +1609,20 @@ as the slug-id (Home Assistant add-on identifier) is different between GivTCP v2
 
 Some batteries tail off their charge rate at high SoC% or their discharge rate at low SoC%, and these optional configuration items enable you to model this tail-off in Predbat.
 Note that the charge/discharge curves *only* affect the accuracy of the charging/discharging model Predbat applies in the forward battery plan,
-Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve.
+Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve so not having these curves only has an impact on plan accuracy.
 
 If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in `apps.yaml`,
 or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant.
 
-If the battery has not recently been fully charged or fully discharged then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
+If the battery has not recently been fully charged or fully discharged *at a charge/discharge rate that is at least 95% of your maximum charge/discharge rate* then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
+For some inverters you may not be able to practically charge/discharge at full rates so you'll keep getting the curve warning every time Predbat starts. Simply create dummy curves to stop this warning, e.g:
+
+```yaml
+  battery_charge_power_curve:
+    100 : 1.0
+  battery_discharge_power_curve:
+    1 : 1.0
+```
 
 - **battery_charge_power_curve** - This optional configuration item enables you to model in Predbat a tail-off in charging at high SoC%.
 
