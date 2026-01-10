@@ -43,6 +43,7 @@ DEBUG_EXCLUDE_LIST = [
     "futurerate_url_cache",
     "github_url_cache",
     "octopus_url_cache",
+    "secrets",
 ]
 
 
@@ -733,7 +734,7 @@ class UserInterface:
                         # Remove keys from args
                         debug[key] = copy.deepcopy(self.__dict__[key])
                         for sub_key in debug[key]:
-                            if "_key" in sub_key:
+                            if ("_key" in sub_key.lower()) or ("password" in sub_key.lower()):
                                 debug[key][sub_key] = "xxx"
                     else:
                         debug[key] = self.__dict__[key]

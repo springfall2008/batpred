@@ -128,6 +128,8 @@ class Plan:
         lowest_price_export = None
         highest_price_charge_level = None
         lowest_price_export_level = None
+        real_highest_price_charge = None
+        real_lowest_price_export = None
 
         for price in price_set:
             links = price_links[price]
@@ -137,9 +139,13 @@ class Plan:
                 if typ == "c":
                     if (highest_price_charge_level is None) or (price < highest_price_charge_level):
                         highest_price_charge_level = price
+                    if real_highest_price_charge is None or price > real_highest_price_charge:
+                        real_highest_price_charge = price
                 elif typ == "d":
                     if (lowest_price_export_level is None) or (price > lowest_price_export_level):
                         lowest_price_export_level = price
+                    if real_lowest_price_export is None or price < real_lowest_price_export:
+                        real_lowest_price_export = price
 
         for price in price_set:
             links = price_links[price]
@@ -147,6 +153,8 @@ class Plan:
                 window_n = window_index[key]["id"]
                 typ = window_index[key]["type"]
                 if typ == "c":
+                    if price == real_highest_price_charge:
+                        continue
                     if charge_limit[window_n] > self.reserve:
                         if highest_price_charge is None:
                             highest_price_charge = charge_window[window_n]["average"]
@@ -157,6 +165,8 @@ class Plan:
                         else:
                             highest_price_charge_level = max(highest_price_charge_level, price)
                 elif typ == "d":
+                    if price == real_lowest_price_export:
+                        continue
                     if export_limits[window_n] < 99.0:
                         if lowest_price_export is None:
                             lowest_price_export = export_window[window_n]["average"]

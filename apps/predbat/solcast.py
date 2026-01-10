@@ -469,9 +469,7 @@ class SolarAPI(ComponentBase):
         total_day90 = {}
         total_dayCL = {}
         days = 0
-
-        days = min(days, 7)
-        for day in range(days):
+        for day in range(7):
             total_day[day] = 0
             total_day10[day] = 0
             total_day90[day] = 0
@@ -504,7 +502,7 @@ class SolarAPI(ComponentBase):
                     total_day90[day] = 0
                     total_dayCL[day] = 0
                     forecast_day[day] = []
-                    days = max(days, day + 1)
+                days = max(days, day + 1)
 
                 pv_estimate = entry.get("pv_estimate", 0)
                 pv_estimate10 = entry.get("pv_estimate10", pv_estimate)

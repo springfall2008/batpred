@@ -29,8 +29,8 @@ class FutureRate:
         Calibrate nordpool data
         """
         if is_import:
-            best_diff_multiply = 2.0
-            best_diff_add_peak = 7
+            best_diff_multiply = 2.2
+            best_diff_add_peak = 12.0
             best_diff_add_all = 0
             mult_range = [x / 100 for x in range(180, 240, 2)]
         else:
