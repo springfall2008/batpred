@@ -670,7 +670,7 @@ The SoC target percentage will be that configured in **input_number.predbat_manu
 For example, if you want the battery to be at 100% by 05:30, select that time slot. Predbat will plan charging to ensure the battery reaches the target SOC by that time.
 If this selector is used in an automation you can set the time and SoC together by making a selection in the format HH:MM:SS=percentage e.g. 05:30:00=100
 
-The manual SoC target works in conjunction with the weather alert system - if both are active at the same time, the higher SoC target will be used.
+The manual SoC target works in conjunction with the [weather alert system](apps-yaml.md#weather-alert-system) - if both are active at the same time, the higher SoC target will be used.
 
 When you use the manual override features you can only select times in the next 48 hours, the overrides will be removed once their time slot expires (they do not repeat).
 

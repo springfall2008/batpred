@@ -1817,23 +1817,11 @@ gaps in the curve above 20 will use 20 degrees, and gaps below 0 will use 0 degr
     0: 0.00
 ```
 
-## Alert System
+## Weather Alert System
 
 Predbat can take data directly from the Meteo-Alarm feed and use it to trigger keeping your battery charged so you have power in the event of a power cut.
 
-Please look at their web site for more details. The `apps.yaml` must be configured to select the URL for your country.
-
-The event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax.
-Any unset values are ignored.
-
-Your location (from Home Assistant) is used to filter alerts that apply only to your area. If this does not work or if you want to change the location,
-you can also set **latitude** and **longitude** in the alerts section of the `apps.yaml`.
-
-Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
-This works by using a much stronger version of best_soc_keep but only for that time period.
-
-Your Predbat status will also have [Alert] in it during the alert time period and the triangle alert symbol will show on your HTML plan for the time period
-of the alert.
+Please look at the [Meteo Alarm](https://meteoalarm.org/) for more details. The `apps.yaml` must be configured to select the URL for your country and the events you want Predbat to retain your battery level for.``
 
 ```yaml
   # Alert feeds - customise to your country, the alert types, severity and keep value
@@ -1845,6 +1833,21 @@ of the alert.
     certainty: "Possible|Likely|Expected"
     keep: 40
 ```
+
+The event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax. Any unset values are ignored.
+
+Your location (from Home Assistant) is used to filter alerts that apply only to your area. If this does not work or if you want to change the location,
+you can also set **latitude** and **longitude** in the alerts section of the `apps.yaml`.
+
+Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
+This works by using a much stronger version of best_soc_keep but only for that time period.
+
+Your Predbat status will also have [Alert] in it during the alert time period and the triangle alert symbol will show on your HTML plan for the time period of the alert.
+
+Predbat records details of any weather alerts in the entity **sensor.predbat_alertfeed_status** which has a state value of the textual description of the alert.  The entity has two attributes:
+
+- **keep** - set to the SoC keep percentage figure specified in `apps.yaml` (or the default 100) during the alert time period so can be used in an automation trigger if you want to take additional actions in Home Assistant
+- **alerts** - set to a list of dictionaries of details of any current or future alert events that match your alert criteria in `apps.yaml`.  Each list entry contains event severity, certainty, urgency, area, time period, title, etc.
 
 ![image](https://github.com/user-attachments/assets/4d1e0a59-c6f8-4fb1-9c89-51aedfa77755)
 
