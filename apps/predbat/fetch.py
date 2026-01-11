@@ -359,10 +359,11 @@ class Fetch:
         for entity_id in entity_ids:
             try:
                 history = self.get_history_wrapper(entity_id=entity_id, days=self.max_days_previous)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
+                self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
 
-            if history:
+            if history and len(history) > 0:
                 import_today, _ = minute_data(
                     history[0],
                     self.max_days_previous,
@@ -377,9 +378,12 @@ class Fetch:
                     required_unit=required_unit,
                 )
             else:
-                self.log("Error: Unable to fetch history for {}".format(entity_id))
-                self.record_status("Error: Unable to fetch history from {}".format(entity_id), had_errors=True)
-                raise ValueError
+                if history is None:
+                    # Only record as a failure if it was None (not just empty but failure)
+                    self.log("Warn: Failure to fetch history for {}".format(entity_id))
+                    self.record_status("Warn: Failure to fetch history from {}".format(entity_id), had_errors=True)
+                else:
+                    self.log("Warn: Unable to fetch history for {}".format(entity_id))
 
         return import_today
 
@@ -425,9 +429,12 @@ class Fetch:
                     interpolate=interpolate,
                 )
             else:
-                self.log("Error: Unable to fetch history for {}".format(entity_id))
-                self.record_status("Error: Unable to fetch history from {}".format(entity_id), had_errors=True)
-                raise ValueError
+                if history is None:
+                    # Only record as a failure if it was None (not just empty but failure)
+                    self.log("Warn: Failure to fetch history for {}".format(entity_id))
+                    self.record_status("Warn: Failure to fetch history from {}".format(entity_id), had_errors=True)
+                else:
+                    self.log("Warn: Unable to fetch history for {}".format(entity_id))
 
         if age_days is None:
             age_days = 0
