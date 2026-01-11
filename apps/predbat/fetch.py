@@ -429,9 +429,12 @@ class Fetch:
                     interpolate=interpolate,
                 )
             else:
-                self.log("Error: Unable to fetch history for {}".format(entity_id))
-                self.record_status("Error: Unable to fetch history from {}".format(entity_id), had_errors=True)
-                raise ValueError
+                if history is None:
+                    # Only record as a failure if it was None (not just empty but failure)
+                    self.log("Warn: Failure to fetch history for {}".format(entity_id))
+                    self.record_status("Warn: Failure to fetch history from {}".format(entity_id), had_errors=True)
+                else:
+                    self.log("Warn: Unable to fetch history for {}".format(entity_id))
 
         if age_days is None:
             age_days = 0
