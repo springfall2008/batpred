@@ -394,11 +394,8 @@ class HAInterface(ComponentBase):
                         await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "call_service"})
                         sid += 1
 
-                        # Get service list
-                        # await websocket.send_json({"id": sid, "type": "get_services"})
-                        # sid += 1
-
-                        # Fire events to say we have registered services
+                        # Fire events to say we have registered services, this will be repeated later after startup
+                        # To make sure we don't miss any events due to them not being active yet.
                         for item in self.base.SERVICE_REGISTER_LIST:
                             await websocket.send_json({"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}})
                             sid += 1
@@ -508,7 +505,10 @@ class HAInterface(ComponentBase):
 
                                 # Send command with current sid
                                 try:
-                                    await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+                                    if domain == "fire_event":
+                                        await websocket.send_json({"id": sid, "type": domain, "event_type": service, "event_data": {"service": service_data["event_service"], "domain": service_data["event_domain"]}})
+                                    else:
+                                        await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
 
                                     # Track pending request (only if send succeeded)
                                     with self.ws_pending_lock:
@@ -519,7 +519,7 @@ class HAInterface(ComponentBase):
                                     error_count = 0  # Reset error count on successful result
                                 except Exception as e:
                                     # Failed to send - notify caller immediately
-                                    self.log("Warn: Failed to send service call {}/{}: {}".format(domain, service, e))
+                                    self.log("Warn: Failed to send service call {}/{}: exception: {}".format(domain, service, e))
                                     error_count += 1
                                     result_holder["error"] = "send_failed: {}".format(e)
                                     result_holder["success"] = False
