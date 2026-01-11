@@ -845,7 +845,7 @@ class GECloudDirect(ComponentBase):
                 self.api_fatal = True
                 return False
 
-        if first or (seconds % 60 == 0):
+        if first or (seconds % 120 == 0):
             for device in self.device_list:
                 self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
                 await self.publish_status(device, self.status[device])
