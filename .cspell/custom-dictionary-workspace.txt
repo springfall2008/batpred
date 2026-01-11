@@ -140,9 +140,9 @@ idag
 idetails
 iflux
 inday
-interp
 INTELLI
 intelligentdevice
+interp
 invbatpower
 invname
 isoformat
