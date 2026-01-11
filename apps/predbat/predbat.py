@@ -734,16 +734,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.fetch_config_options()
         sensor_force_replan = self.fetch_sensor_data()
 
+        # Check if any sensor changes require a replan
+        if sensor_force_replan:
+            self.log("Sensor changes require a replan, will recompute the plan")
+            recompute = True
+
+        # Fetch inverter data
+        self.fetch_inverter_data()
+
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
             self.log("Error: Import rates are all zero, not able to compute a plan")
             self.record_status("Error: Import rates are all zero, not able to compute a plan", had_errors=True)
             return
 
-        if sensor_force_replan:
-            self.log("Sensor changes require a replan, will recompute the plan")
-            recompute = True
-        self.fetch_inverter_data()
         if self.dynamic_load():
             self.log("Dynamic load adjustment changed, will recompute the plan")
             recompute = True
