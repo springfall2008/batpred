@@ -142,6 +142,7 @@ iflux
 inday
 INTELLI
 intelligentdevice
+interp
 invbatpower
 invname
 isoformat

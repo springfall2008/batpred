@@ -656,8 +656,11 @@ class HAInterface(ComponentBase):
             return
 
         entities = self.db_manager.get_all_entities_db()
-        for entity_name in entities:
-            self.update_state_db(entity_name)
+        if entities:
+            for entity_name in entities:
+                self.update_state_db(entity_name)
+        else:
+            self.log("Warn: Failed to update state data from DB")
 
     def update_states(self):
         """
