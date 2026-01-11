@@ -1504,6 +1504,51 @@ class Fetch:
         if print:
             self.log("Gas rates: min {}{}, max {}{}, average {}{}".format(self.rate_gas_min, curr, self.rate_gas_max, curr, self.rate_gas_average, curr))
 
+    def validate_rate_coverage(self, rates, rate_name, required_minutes=None):
+        """
+        Check if we have rate data for the required forecast period.
+
+        This validation ensures we don't make battery control decisions based on
+        missing rate data. When rate data is unavailable (e.g., due to API failures
+        or network issues), the rate dictionary will have gaps. Using default values
+        of 0 for missing rates could lead to incorrect optimization decisions like
+        unnecessary battery exports.
+
+        Args:
+            rates: Dictionary mapping minute offsets to rate values
+            rate_name: Human-readable name for logging (e.g., "Import rates")
+            required_minutes: Number of minutes of coverage required (defaults to forecast_minutes)
+
+        Returns:
+            tuple: (is_valid, coverage_percent, missing_count)
+                - is_valid: True if coverage meets minimum threshold (95%)
+                - coverage_percent: Percentage of required minutes that have rate data
+                - missing_count: Number of minutes without rate data
+        """
+        if required_minutes is None:
+            required_minutes = self.forecast_minutes
+
+        if not rates or required_minutes <= 0:
+            return False, 0.0, required_minutes
+
+        covered = 0
+        missing = 0
+
+        for minute in range(self.minutes_now, self.minutes_now + required_minutes):
+            if minute in rates and rates[minute] is not None:
+                covered += 1
+            else:
+                missing += 1
+
+        coverage = (covered / required_minutes) * 100 if required_minutes > 0 else 0
+        # Require 95% coverage minimum to allow for minor gaps during rate transitions
+        is_valid = coverage >= 95
+
+        if not is_valid:
+            self.log("Warn: {} coverage only {:.1f}% - missing {} of {} minutes".format(rate_name, coverage, missing, required_minutes))
+
+        return is_valid, coverage, missing
+
     def get_car_charging_planned(self):
         """
         Get the car attributes

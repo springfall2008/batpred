@@ -812,6 +812,18 @@ class Plan:
             else:
                 break
 
+        # Validate rate coverage before making any battery control decisions
+        # This prevents incorrect optimization when rate data is missing (e.g., API failures)
+        import_valid, import_coverage, import_missing = self.validate_rate_coverage(self.rate_import, "Import rates")
+        export_valid, export_coverage, export_missing = self.validate_rate_coverage(self.rate_export, "Export rates")
+
+        if not import_valid or not export_valid:
+            self.log("Warn: Insufficient rate data coverage - Import: {:.1f}%, Export: {:.1f}%".format(import_coverage, export_coverage))
+            self.log("Warn: Skipping plan recalculation to avoid incorrect battery control")
+            self.record_status("Rate data unavailable - safe mode", debug=True)
+            # Keep existing plan valid if we had one, don't modify battery settings
+            return
+
         # Recompute?
         if recompute:
             # Obtain previous plan data for comparison
