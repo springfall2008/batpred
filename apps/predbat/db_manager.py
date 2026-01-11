@@ -14,7 +14,9 @@ import traceback
 import threading
 from db_engine import DatabaseEngine, TIME_FORMAT_DB
 from component_base import ComponentBase
+
 IPC_TIMEOUT = 60.0  # Seconds to wait for IPC response
+
 
 class DatabaseManager(ComponentBase):
     def initialize(self, db_enable, db_days):
