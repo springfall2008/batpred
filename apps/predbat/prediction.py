@@ -1081,7 +1081,8 @@ class Prediction:
             minute += step
             if early_out_cost and metric > early_out_cost:
                 # Early out if cost already too high
-                self.log("Note: Early out at minute %s with metric %s exceeding early out cost %s" % (minute, metric, early_out_cost))
+                #self.log("Note: Early out at minute %s with metric %s exceeding early out cost %s" % (minute, metric, early_out_cost))
+                cache = False
                 break
 
         hours_left = minute_left / 60.0
