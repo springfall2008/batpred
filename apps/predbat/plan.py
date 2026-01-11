@@ -206,6 +206,7 @@ class Plan:
         quiet=False,
         best_metric=9999999,
         best_cost=0,
+        best_cost10=0,
         best_keep=0,
         best_soc_min=None,
         best_cycle=0,
@@ -247,7 +248,7 @@ class Plan:
                 worst_level_score = max(worst_level_score, levels_score[price])
             level_score_range = abs(worst_level_score - best_level_score)
 
-        best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(best_limits, charge_window, export_window, export_limits, end_record=end_record)
+        best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export, best_cost10 = self.run_prediction_metric(best_limits, charge_window, export_window, export_limits, end_record=end_record)
 
         if region_start:
             region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
@@ -318,6 +319,8 @@ class Plan:
             charge_freeze_options = [True, False] if self.set_charge_freeze else [False]
             export_freeze_options = [True, False] if self.set_export_freeze else [False]
             min_freeze_percent = calc_percent_limit(self.best_soc_min, self.soc_max)
+            early_out_cost = best_cost * 1.1 # 10% worse than best cost so far
+            early_out_cost10 = best_cost10 * 1.1 # 10% worse than best cost so far
             for max_charge_slots in [48, 32, 24, 16, 12, 8, 6, 5, 4, 3, 2, 1]:
                 for max_export_slots in [48, 32, 24, 16, 12, 8, 6, 5, 4, 3, 2, 1]:
                     for try_charge_freeze in charge_freeze_options:
@@ -376,8 +379,8 @@ class Plan:
                             tried_list[try_hash] = True
 
                             pred_item = {}
-                            pred_item["handle"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, False, end_record=end_record, step=step)
-                            pred_item["handle10"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, True, end_record=end_record, step=step)
+                            pred_item["handle"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, False, end_record=end_record, step=step, early_out_cost=early_out_cost)
+                            pred_item["handle10"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, True, end_record=end_record, step=step, early_out_cost=early_out_cost10)
                             pred_item["charge_limit"] = try_charge_limit
                             pred_item["export_limit"] = try_export
                             pred_item["loop_price"] = loop_price
@@ -446,6 +449,7 @@ class Plan:
                     best_carbon = final_carbon_g
                     best_soc_min = soc_min
                     best_cost = cost
+                    best_cost10 = cost10
                     best_import = import_kwh_battery + import_kwh_house
                     best_battery_value = battery_value
                     best_all_n = all_n.copy()
@@ -472,7 +476,7 @@ class Plan:
         # Perform charge limit levelling on best_all_n
         if best_all_n:
             best_all_n.sort()
-            metric, battery_value, cost, keep, cycle, carbon, import_this, export_this = self.run_prediction_metric(best_limits, charge_window, export_window, best_export_limits, end_record=end_record)
+            metric, battery_value, cost, keep, cycle, carbon, import_this, export_this, cost10 = self.run_prediction_metric(best_limits, charge_window, export_window, best_export_limits, end_record=end_record)
             best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
                 0, record_charge_windows, best_limits, charge_window, export_window, best_export_limits, all_n=best_all_n, end_record=end_record
             )
@@ -482,7 +486,7 @@ class Plan:
                 best_limits[window_n] = best_soc
                 try_charge_limit[window_n] = best_soc
 
-            metric, battery_value, cost, keep, cycle, carbon, import_this, export_this = self.run_prediction_metric(best_limits, charge_window, export_window, best_export_limits, end_record=end_record)
+            metric, battery_value, cost, keep, cycle, carbon, import_this, export_this, cost10 = self.run_prediction_metric(best_limits, charge_window, export_window, best_export_limits, end_record=end_record)
 
         return (
             best_limits,
@@ -497,18 +501,19 @@ class Plan:
             best_battery_value,
             tried_list,
             levels_score,
+            best_cost10,
         )
 
-    def launch_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step=PREDICT_STEP):
+    def launch_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step=PREDICT_STEP, early_out_cost=None):
         """
         Launch a thread to run a prediction
         """
         charge_limit = copy.deepcopy(charge_limit)
         export_limits = copy.deepcopy(export_limits)
         if self.pool and self.pool._state == "RUN":
-            han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, export_window, export_limits, pv10, end_record, step))
+            han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, export_window, export_limits, pv10, end_record, step, early_out_cost))
         else:
-            han = DummyThread(self.prediction.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step))
+            han = DummyThread(self.prediction.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step, early_out_cost))
         return han
 
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
@@ -753,7 +758,7 @@ class Plan:
             save=save,
         )
         metric, battery_value = self.compute_metric(self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
-        return metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh_battery + import_kwh_house, export_kwh
+        return metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh_battery + import_kwh_house, export_kwh, cost10
 
     def in_charge_window(self, charge_window, minute_abs):
         """
@@ -1032,10 +1037,10 @@ class Plan:
 
             # Plan comparison
             if charge_window_best_prev is not None and not debug_mode:
-                metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh = self.run_prediction_metric(
+                metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh, cost10 = self.run_prediction_metric(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                 )
-                metric_prev, battery_value_prev, cost_prev, metric_keep_prev, battery_cycle_prev, final_carbon_g_prev, import_kwh_prev, export_kwh_prev = self.run_prediction_metric(
+                metric_prev, battery_value_prev, cost_prev, metric_keep_prev, battery_cycle_prev, final_carbon_g_prev, import_kwh_prev, export_kwh_prev, cost10_prev = self.run_prediction_metric(
                     charge_limit_best_prev, charge_window_best_prev, export_window_best_prev, export_limits_best_prev, end_record=self.end_record
                 )
 
@@ -2308,7 +2313,7 @@ class Plan:
                 html_data, json_data = self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, publish=False)
                 open(name + "_10.html", "w").write(html_data)
 
-            best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
+            best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export, best_cost10 = self.run_prediction_metric(
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record, save="best" if name else "yesterday"
             )
 
@@ -2321,7 +2326,7 @@ class Plan:
                 print("Wrote plan to {} - metric {} cost {} battery_value {} keep {} import {} (self {})".format(name, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency))
 
             if test:
-                best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
+                best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export, best_cost10 = self.run_prediction_metric(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record, save="test"
                 )
 
@@ -2339,7 +2344,7 @@ class Plan:
         if self.calculate_best_export and record_export_windows >= 2:
             swapped = True
             while swapped:
-                selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export = self.run_prediction_metric(
+                selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export, selected_cost10 = self.run_prediction_metric(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                 )
                 self.log(
@@ -2371,7 +2376,7 @@ class Plan:
                     # Try to drop the target
                     if drop and export_limit_target < 100:
                         self.export_limits_best[window_n_target] = 100.0
-                        best_metric_drop, best_battery_value_drop, best_cost_drop, best_keep_drop, best_cycle_drop, best_carbon_drop, best_import_drop, best_export_drop = self.run_prediction_metric(
+                        best_metric_drop, best_battery_value_drop, best_cost_drop, best_keep_drop, best_cycle_drop, best_carbon_drop, best_import_drop, best_export_drop, best_cost10_drop = self.run_prediction_metric(
                             self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                         )
                         if best_metric_drop <= selected_metric:
@@ -2474,7 +2479,7 @@ class Plan:
                                 self.export_limits_best[window_n_target] = export_limit
                                 self.export_window_best[window_n_target]["start"] = max(self.export_window_best[window_n_target]["end"] - window_length, previous_end_target)
 
-                            best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
+                            best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export, best_cost10 = self.run_prediction_metric(
                                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                             )
 
@@ -2669,7 +2674,7 @@ class Plan:
         # First optimise those at or below threshold highest to lowest (to turn down values)
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for export.
-        best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
+        best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export, best_cost10 = self.run_prediction_metric(
             self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
         )
         curr = self.currency_symbols[1]
@@ -2976,6 +2981,7 @@ class Plan:
 
         best_soc = self.soc_max
         best_cost = best_metric
+        best_cost10 = 99999999
         best_keep = metric_keep
         best_cycle = 0
         best_carbon = 0
@@ -3002,6 +3008,7 @@ class Plan:
                 best_battery_value,
                 tried_list,
                 levels_score,
+                best_cost10,
             ) = self.optimise_charge_limit_price_threads(
                 price_set,
                 price_links,
@@ -3047,6 +3054,7 @@ class Plan:
                             best_battery_value,
                             tried_list,
                             levels_score,
+                            best_cost10
                         ) = self.optimise_charge_limit_price_threads(
                             price_set,
                             price_links,
@@ -3072,6 +3080,7 @@ class Plan:
                             best_battery_value=best_battery_value,
                             tried_list=tried_list,
                             levels_score=levels_score,
+                            best_cost10=best_cost10,
                         )
                         # Reached the end of the window
                         if self.end_record + self.minutes_now - region - region_size < 0:

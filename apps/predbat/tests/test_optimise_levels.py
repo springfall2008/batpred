@@ -105,6 +105,7 @@ def run_optimise_levels(
         best_battery_value,
         tried_list,
         level_results,
+        best_cost10,
     ) = my_predbat.optimise_charge_limit_price_threads(
         price_set,
         price_links,

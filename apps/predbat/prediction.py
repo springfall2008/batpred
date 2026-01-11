@@ -23,12 +23,11 @@ def reset_prediction_globals():
     PRED_GLOBAL = {}
 
 
-def wrapped_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step):
+def wrapped_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step, early_out_cost=None):
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step)
-
+    return pred.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step, early_out_cost)
 
 def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
@@ -187,7 +186,7 @@ class Prediction:
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
 
-    def thread_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step):
+    def thread_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step, early_out_cost=None):
         """
         Run single prediction in a thread
         """
@@ -210,7 +209,7 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step, cache=self.prediction_cache_enable)
+        ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step, cache=self.prediction_cache_enable, early_out_cost=early_out_cost)
         return (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
@@ -370,7 +369,7 @@ class Prediction:
                     charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
-    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP, cache=False):
+    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP, cache=False, early_out_cost=None):
         """
         Run a prediction scenario given a charge limit, return the results
         """
@@ -1080,6 +1079,10 @@ class Prediction:
                     predict_carbon_g[stamp] = round(carbon_g, 3)
 
             minute += step
+            if early_out_cost and metric > early_out_cost:
+                # Early out if cost already too high
+                self.log("Note: Early out at minute %s with metric %s exceeding early out cost %s" % (minute, metric, early_out_cost))
+                break
 
         hours_left = minute_left / 60.0
         if self.debug_enable or save:
