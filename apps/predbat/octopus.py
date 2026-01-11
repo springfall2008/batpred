@@ -666,7 +666,7 @@ class OctopusAPI(ComponentBase):
                         current_completed.append(dispatch)
             current_completed = sorted(current_completed, key=lambda x: parse_date_time(x["start"]))
             # Prune completed dispatches for results older than 5 days
-            current_completed = [x for x in current_completed if parse_date_time(x["start"]) > self.now_utc - timedelta(days=5)]
+            current_completed = [x for x in current_completed if parse_date_time(x["start"]) > self.now_utc_exact - timedelta(days=5)]
             self.intelligent_device["completed_dispatches"] = current_completed
 
     def join_saving_session_event(self, event_code):
