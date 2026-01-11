@@ -991,16 +991,10 @@ class UserInterface:
             self.watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(self.watch_list))
 
-            if not self.ha_interface.websocket_active and not self.ha_interface.db_primary:
+            if self.ha_interface.websocket_active and not self.ha_interface.db_primary:
                 # Registering HA events as Websocket is not active
                 for item in self.SERVICE_REGISTER_LIST:
-                    self.fire_event("service_registered", domain=item["domain"], service=item["service"])
-                for item in self.EVENT_LISTEN_LIST:
-                    self.listen_select_handle = self.listen_event(item["callback"], event="call_service", domain=item["domain"], service=item["service"])
-
-                for entity in self.watch_list:
-                    if entity and isinstance(entity, str) and ("." in entity):
-                        self.listen_state(self.watch_event, entity_id=entity)
+                    self.fire_event_wrapper(domain=item["domain"], service=item["service"])
 
         # Save current config to file if it was pending
         self.save_current_config()
