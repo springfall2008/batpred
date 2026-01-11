@@ -514,10 +514,10 @@ def test_minute_data_load(my_predbat):
 
     # Store original get_history_wrapper for restoration
     original_get_history = my_predbat.get_history_wrapper
-    
+
     # Mock history store
     mock_history_store = {}
-    
+
     def mock_get_history_wrapper(entity_id, days):
         """Mock get_history_wrapper that returns data from mock_history_store"""
         if entity_id in mock_history_store:
@@ -530,7 +530,7 @@ def test_minute_data_load(my_predbat):
     # Test 1: Basic functionality with single entity
     print("Test 1: Basic functionality with single entity")
     my_predbat.args["test_load_entity"] = "sensor.test_load"
-    
+
     # Mock history data for the entity
     history_data = [
         {"state": "0.0", "last_updated": "2024-10-04T10:00:00+00:00"},
@@ -538,16 +538,9 @@ def test_minute_data_load(my_predbat):
         {"state": "10.0", "last_updated": "2024-10-04T12:00:00+00:00"},
     ]
     mock_history_store["sensor.test_load"] = [history_data]
-    
-    load_minutes, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_load_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+
+    load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_load_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     if len(load_minutes) == 0:
         print("ERROR: Basic test failed - no data returned")
         failed = True
@@ -560,7 +553,7 @@ def test_minute_data_load(my_predbat):
     # Test 2: Multiple entities (list)
     print("Test 2: Multiple entities")
     my_predbat.args["test_multi_entity"] = ["sensor.test_load1", "sensor.test_load2"]
-    
+
     # Mock history for both entities
     history_data1 = [
         {"state": "0.0", "last_updated": "2024-10-04T10:00:00+00:00"},
@@ -574,16 +567,9 @@ def test_minute_data_load(my_predbat):
     ]
     mock_history_store["sensor.test_load1"] = [history_data1]
     mock_history_store["sensor.test_load2"] = [history_data2]
-    
-    load_minutes, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_multi_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+
+    load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_multi_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     if len(load_minutes) == 0:
         print("ERROR: Multiple entities test failed - no data returned")
         failed = True
@@ -596,16 +582,9 @@ def test_minute_data_load(my_predbat):
     # Don't set the entity in args
     if "test_missing_entity" in my_predbat.args:
         del my_predbat.args["test_missing_entity"]
-    
+
     try:
-        load_minutes, age_days = my_predbat.minute_data_load(
-            now_utc=now,
-            entity_name="test_missing_entity",
-            max_days_previous=1,
-            load_scaling=1.0,
-            required_unit="kWh",
-            interpolate=False
-        )
+        load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_missing_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
         # Should raise TypeError when entity_ids is None
         print("ERROR: Missing entity test failed - expected TypeError but got no exception")
         failed = True
@@ -619,19 +598,12 @@ def test_minute_data_load(my_predbat):
     # Test 4: History fetch returns None (error condition)
     print("Test 4: History fetch returns None (error)")
     my_predbat.args["test_error_entity"] = "sensor.error_entity"
-    
+
     # Mock history to return None (simulates fetch error)
     mock_history_store["sensor.error_entity"] = None
-    
-    load_minutes, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_error_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+
+    load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_error_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     # Should log warning and return empty results
     if len(load_minutes) != 0:
         print(f"ERROR: Error entity test failed - expected empty dict, got {len(load_minutes)} items")
@@ -645,19 +617,12 @@ def test_minute_data_load(my_predbat):
     # Test 5: History fetch returns empty list (no data)
     print("Test 5: History fetch returns empty list")
     my_predbat.args["test_empty_entity"] = "sensor.empty_entity"
-    
+
     # Mock history to return empty list
     mock_history_store["sensor.empty_entity"] = []
-    
-    load_minutes, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_empty_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+
+    load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_empty_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     # Should log warning and return empty results
     if len(load_minutes) != 0:
         print(f"ERROR: Empty entity test failed - expected empty dict, got {len(load_minutes)} items")
@@ -671,27 +636,20 @@ def test_minute_data_load(my_predbat):
     # Test 6: ValueError/TypeError exception during history fetch
     print("Test 6: Exception during history fetch")
     my_predbat.args["test_exception_entity"] = "sensor.exception_entity"
-    
+
     # Mock get_history_wrapper to raise ValueError
     def mock_get_history_error(entity_id, days):
         if entity_id == "sensor.exception_entity":
             raise ValueError("Simulated history fetch error")
         return mock_get_history_wrapper(entity_id, days)
-    
+
     my_predbat.get_history_wrapper = mock_get_history_error
-    
-    load_minutes, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_exception_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+
+    load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_exception_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     # Restore mock
     my_predbat.get_history_wrapper = mock_get_history_wrapper
-    
+
     # Should handle exception and return empty results
     if len(load_minutes) != 0:
         print(f"ERROR: Exception test failed - expected empty dict, got {len(load_minutes)} items")
@@ -705,7 +663,7 @@ def test_minute_data_load(my_predbat):
     # Test 7: Invalid last_updated format (error in str2time conversion)
     print("Test 7: Invalid last_updated format")
     my_predbat.args["test_invalid_time_entity"] = "sensor.invalid_time"
-    
+
     history_bad_time = [
         [
             {"state": "10.0", "last_updated": "invalid-timestamp"},
@@ -713,16 +671,9 @@ def test_minute_data_load(my_predbat):
         ]
     ]
     mock_history_store["sensor.invalid_time"] = history_bad_time
-    
-    load_minutes, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_invalid_time_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+
+    load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_invalid_time_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     # Should handle error and use now_utc as fallback, age_days should be 0
     if age_days != 0:
         print(f"ERROR: Invalid time test failed - expected age_days=0 when time conversion fails, got {age_days}")
@@ -733,34 +684,20 @@ def test_minute_data_load(my_predbat):
     # Test 8: Load scaling parameter
     print("Test 8: Load scaling parameter")
     my_predbat.args["test_scaling_entity"] = "sensor.test_scaling"
-    
+
     history_scaling = [
         {"state": "0.0", "last_updated": "2024-10-04T10:00:00+00:00"},
         {"state": "10.0", "last_updated": "2024-10-04T11:00:00+00:00"},
         {"state": "20.0", "last_updated": "2024-10-04T12:00:00+00:00"},
     ]
     mock_history_store["sensor.test_scaling"] = [history_scaling]
-    
+
     # Test with scaling factor of 2.0
-    load_minutes_scaled, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_scaling_entity",
-        max_days_previous=1,
-        load_scaling=2.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+    load_minutes_scaled, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_scaling_entity", max_days_previous=1, load_scaling=2.0, required_unit="kWh", interpolate=False)
+
     # Test with scaling factor of 1.0 for comparison
-    load_minutes_normal, _ = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_scaling_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+    load_minutes_normal, _ = my_predbat.minute_data_load(now_utc=now, entity_name="test_scaling_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     if len(load_minutes_scaled) == 0:
         print("ERROR: Scaling test failed - no scaled data returned")
         failed = True
@@ -781,7 +718,7 @@ def test_minute_data_load(my_predbat):
     # Test 9: Multiple entities with different ages
     print("Test 9: Multiple entities with different ages (min age calculation)")
     my_predbat.args["test_age_entity"] = ["sensor.old_data", "sensor.new_data"]
-    
+
     # Old data (2 days old)
     history_old = [
         {"state": "0.0", "last_updated": "2024-10-02T10:00:00+00:00"},
@@ -792,19 +729,12 @@ def test_minute_data_load(my_predbat):
         {"state": "0.0", "last_updated": "2024-10-04T10:00:00+00:00"},
         {"state": "3.0", "last_updated": "2024-10-04T11:00:00+00:00"},
     ]
-    
+
     mock_history_store["sensor.old_data"] = [history_old]
     mock_history_store["sensor.new_data"] = [history_new]
-    
-    load_minutes, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_age_entity",
-        max_days_previous=3,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+
+    load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_age_entity", max_days_previous=3, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     # Should return the minimum age (newest data age)
     if age_days != 0:
         print(f"ERROR: Age calculation test failed - expected min age of 0 days, got {age_days}")
@@ -815,33 +745,19 @@ def test_minute_data_load(my_predbat):
     # Test 10: Interpolate parameter
     print("Test 10: Interpolate parameter")
     my_predbat.args["test_interpolate_entity"] = "sensor.test_interpolate"
-    
+
     history_sparse = [
         {"state": "0.0", "last_updated": "2024-10-04T10:00:00+00:00"},
         {"state": "10.0", "last_updated": "2024-10-04T12:00:00+00:00"},  # 2 hour gap
     ]
     mock_history_store["sensor.test_interpolate"] = [history_sparse]
-    
+
     # Test with interpolate=True
-    load_minutes_interp, _ = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_interpolate_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=True
-    )
-    
+    load_minutes_interp, _ = my_predbat.minute_data_load(now_utc=now, entity_name="test_interpolate_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=True)
+
     # Test with interpolate=False
-    load_minutes_no_interp, _ = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_interpolate_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+    load_minutes_no_interp, _ = my_predbat.minute_data_load(now_utc=now, entity_name="test_interpolate_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     if len(load_minutes_interp) == 0:
         print("ERROR: Interpolate test failed - no interpolated data returned")
         failed = True
@@ -854,22 +770,15 @@ def test_minute_data_load(my_predbat):
     # Test 11: Unit conversion (W to kWh)
     print("Test 11: Unit conversion (W to kWh)")
     my_predbat.args["test_unit_entity"] = "sensor.test_watts"
-    
+
     history_watts = [
         {"state": "1000.0", "last_updated": "2024-10-04T10:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
         {"state": "2000.0", "last_updated": "2024-10-04T11:00:00+00:00", "attributes": {"unit_of_measurement": "W"}},
     ]
     mock_history_store["sensor.test_watts"] = [history_watts]
-    
-    load_minutes, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_unit_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+
+    load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_unit_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     if len(load_minutes) == 0:
         print("ERROR: Unit conversion test failed - no data returned")
         failed = True
@@ -879,7 +788,7 @@ def test_minute_data_load(my_predbat):
     # Test 12: Entity list with one failing entity
     print("Test 12: Mixed success/failure in entity list")
     my_predbat.args["test_mixed_entity"] = ["sensor.good", "sensor.bad"]
-    
+
     # Good entity has data
     history_good = [
         {"state": "5.0", "last_updated": "2024-10-04T11:00:00+00:00"},
@@ -888,16 +797,9 @@ def test_minute_data_load(my_predbat):
     mock_history_store["sensor.good"] = [history_good]
     # Bad entity returns None
     mock_history_store["sensor.bad"] = None
-    
-    load_minutes, age_days = my_predbat.minute_data_load(
-        now_utc=now,
-        entity_name="test_mixed_entity",
-        max_days_previous=1,
-        load_scaling=1.0,
-        required_unit="kWh",
-        interpolate=False
-    )
-    
+
+    load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_mixed_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
+
     # Should process good entity and log warning for bad entity
     if len(load_minutes) == 0:
         print("ERROR: Mixed entity test failed - expected data from good entity")
@@ -908,23 +810,16 @@ def test_minute_data_load(my_predbat):
     # Test 13: History with nested list structure issue
     print("Test 13: History list structure validation")
     my_predbat.args["test_structure_entity"] = "sensor.structure"
-    
+
     # Test with improperly structured history (not nested list)
     history_flat = [
         {"state": "10.0", "last_updated": "2024-10-04T11:00:00+00:00"},
     ]
     # This should be [[{...}]] but we're testing [{}]
     mock_history_store["sensor.structure"] = history_flat
-    
+
     try:
-        load_minutes, age_days = my_predbat.minute_data_load(
-            now_utc=now,
-            entity_name="test_structure_entity",
-            max_days_previous=1,
-            load_scaling=1.0,
-            required_unit="kWh",
-            interpolate=False
-        )
+        load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_structure_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
         # If it doesn't crash, check what we got
         if len(load_minutes) != 0:
             print(f"WARN: Structure test - flat list should not process but got {len(load_minutes)} points")
