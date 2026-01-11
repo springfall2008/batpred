@@ -359,10 +359,11 @@ class Fetch:
         for entity_id in entity_ids:
             try:
                 history = self.get_history_wrapper(entity_id=entity_id, days=self.max_days_previous)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
+                self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
 
-            if history:
+            if history and len(history) > 0:
                 import_today, _ = minute_data(
                     history[0],
                     self.max_days_previous,
@@ -377,9 +378,9 @@ class Fetch:
                     required_unit=required_unit,
                 )
             else:
-                self.log("Error: Unable to fetch history for {}".format(entity_id))
-                self.record_status("Error: Unable to fetch history from {}".format(entity_id), had_errors=True)
-                raise ValueError
+                self.log("Warn: Unable to fetch history for {}".format(entity_id))
+                self.record_status("Warn: Unable to fetch history from {}".format(entity_id), had_errors=True)
+                return {}
 
         return import_today
 
