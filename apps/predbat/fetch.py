@@ -378,9 +378,12 @@ class Fetch:
                     required_unit=required_unit,
                 )
             else:
-                self.log("Warn: Unable to fetch history for {}".format(entity_id))
-                self.record_status("Warn: Unable to fetch history from {}".format(entity_id), had_errors=True)
-                return {}
+                if history is None:
+                    # Only record as a failure if it was None (not just empty but failure)
+                    self.log("Warn: Failure to fetch history for {}".format(entity_id))
+                    self.record_status("Warn: Failure to fetch history from {}".format(entity_id), had_errors=True)
+                else:
+                    self.log("Warn: Unable to fetch history for {}".format(entity_id))
 
         return import_today
 
