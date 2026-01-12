@@ -13,11 +13,21 @@
 from aiohttp import web
 import asyncio
 import os
+import os.path
+import sys
 import re
 from datetime import datetime, timedelta
 import json
 import shutil
 import html as html_module
+import urllib.parse
+import traceback
+import threading
+import io
+from io import StringIO
+from ruamel.yaml import YAML
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+
 from web_helper import (
     get_header_html,
     get_plan_css,
@@ -43,13 +53,15 @@ from web_helper import (
     get_entity_detailed_row_js,
     get_internals_css,
     get_internals_js,
+    get_dashboard_css,
+    get_dashboard_collapsible_js,
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string, history_attribute, prune_today
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
-import urllib.parse
 from component_base import ComponentBase
+from config import APPS_SCHEMA
 
 ROOT_YAML_KEY = "pred_bat"
 
@@ -1632,9 +1644,6 @@ chart.render();
             if not search_term or not text:
                 return text
 
-            import re
-            import html as html_module
-
             # Create case-insensitive pattern for the original text
             pattern = re.compile(re.escape(search_term), re.IGNORECASE)
 
@@ -1730,8 +1739,6 @@ chart.render();
                         highlighted_full_line = highlight_search_term(line, search_term)
                     else:
                         # Escape HTML characters even when no search highlighting
-                        import html as html_module
-
                         highlighted_timestamp = html_module.escape(start_line)
                         highlighted_message = html_module.escape(rest_line)
                         highlighted_full_line = html_module.escape(line)
@@ -2372,7 +2379,6 @@ chart.render();
         """
         Render apps.yaml as an HTML page
         """
-        from web_helper import get_dashboard_css, get_dashboard_collapsible_js
 
         self.default_page = "./dash"
         text = self.get_header("Predbat Dashboard", refresh=60)
@@ -2799,8 +2805,6 @@ chart.render();
         Handle POST request for apps page - batch edit values
         """
         try:
-            from ruamel.yaml import YAML
-
             postdata = await request.post()
             changes_json = postdata.get("changes", "")
 
@@ -3281,8 +3285,6 @@ chart.render();
                 self.log(f"Backup created at {backup_path}")
 
             # Redirect back to editor with success message
-            import urllib.parse
-
             success_message = f"Apps.yaml saved successfully. Backup created at {backup_path}."
             encoded_message = urllib.parse.quote(success_message)
             raise web.HTTPFound(f"./apps_editor?success={encoded_message}")
@@ -3292,8 +3294,6 @@ chart.render();
         except Exception as e:
             error_msg = f"Failed to save apps.yaml: {str(e)}"
             self.log(f"ERROR: {error_msg}")
-            import urllib.parse
-
             encoded_error = urllib.parse.quote(error_msg)
             raise web.HTTPFound(f"./apps_editor?error={encoded_error}")
 
@@ -3834,7 +3834,6 @@ chart.render();
         """
         try:
             from components import COMPONENT_LIST
-            from config import APPS_SCHEMA
 
             args = request.query
             component_name = args.get("component_name")
@@ -3903,8 +3902,6 @@ chart.render();
 
         except Exception as e:
             self.log(f"ERROR: Failed to get component config: {str(e)}")
-            import traceback
-
             traceback.print_exc()
             return web.json_response({"success": False, "message": str(e)}, status=500)
 
@@ -3913,10 +3910,6 @@ chart.render();
         Save component configuration using ruamel.yaml
         """
         try:
-            from ruamel.yaml import YAML
-            from ruamel.yaml.scalarstring import DoubleQuotedScalarString
-            from config import APPS_SCHEMA
-
             json_data = await request.json()
             component_name = json_data.get("component_name")
             changes = json_data.get("changes", {})
@@ -3989,11 +3982,7 @@ chart.render();
                                 converted_value = json.loads(str(new_value))
                             except json.JSONDecodeError:
                                 # Fall back to YAML parser
-                                from ruamel.yaml import YAML
-
                                 yaml_parser = YAML()
-                                from io import StringIO
-
                                 stream = StringIO(str(new_value))
                                 converted_value = yaml_parser.load(stream)
                     else:
@@ -4031,8 +4020,6 @@ chart.render();
 
         except Exception as e:
             self.log(f"ERROR: Failed to save component config: {str(e)}")
-            import traceback
-
             traceback.print_exc()
             return web.json_response({"success": False, "message": str(e)}, status=500)
 
@@ -4049,8 +4036,6 @@ chart.render();
 
         # Security check - prevent directory traversal attacks
         # Normalize the path and ensure it's within the current working directory
-        import os.path
-
         base_dir = os.getcwd()
         safe_path = os.path.abspath(os.path.join(base_dir, current_path))
 
@@ -4250,8 +4235,6 @@ chart.render();
             return web.Response(text="File not specified", status=400)
 
         # Security check - prevent directory traversal attacks
-        import os.path
-
         base_dir = os.getcwd()
         safe_path = os.path.abspath(os.path.join(base_dir, current_path))
 
@@ -4354,10 +4337,6 @@ chart.render();
         """
         Get HTML representation of all thread stack frames
         """
-        import sys
-        import threading
-        import traceback
-
         text = ""
 
         try:
@@ -4615,9 +4594,6 @@ chart.render();
 
             # Convert to YAML
             try:
-                import io
-                from ruamel.yaml import YAML
-
                 yaml = YAML()
                 yaml.default_flow_style = False
                 yaml.preserve_quotes = True
