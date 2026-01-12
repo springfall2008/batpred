@@ -4112,7 +4112,7 @@ chart.render();
                     text += f'<div class="file-actions">\n'
                     text += f'<a href="./download?path={current_path}&file={view_file}" class="download-button" download><span class="mdi mdi-download"></span> Download</a>\n'
                     text += f'<a href="./browse?path={current_path}" class="back-button">← Back to Directory</a>\n'
-                    text += f'</div>\n'
+                    text += f"</div>\n"
                     text += f"</div>\n"
 
                     # File content with basic syntax highlighting
@@ -4320,18 +4320,18 @@ chart.render();
 
         # Add thread stack frames section
         text += '<div class="threads-section">\n'
-        text += '<h3>Thread Stack Frames</h3>\n'
+        text += "<h3>Thread Stack Frames</h3>\n"
         text += '<div class="threads-container">\n'
         text += self._get_thread_stacks_html()
-        text += '</div>\n'
-        text += '</div>\n'
+        text += "</div>\n"
+        text += "</div>\n"
 
         # Object tree in a panel
         text += '<div class="tree-section">\n'
-        text += '<h3>Object Hierarchy</h3>\n'
+        text += "<h3>Object Hierarchy</h3>\n"
         text += '<div class="tree-container">\n'
         text += '<div class="tree-view">\n'
-        
+
         # Create a single root node for 'predbat' pointing to self.base
         text += '<div class="tree-item" title="predbat" onclick="toggleNode(this, \'predbat\')">\n'
         text += '<span class="expand-icon expandable">+</span>'
@@ -4339,9 +4339,9 @@ chart.render();
         text += '<a href="./api/internals/download?path=predbat" class="download-icon" title="Download as YAML" onclick="event.stopPropagation()">⬇</a>'
         text += '<span class="key">predbat</span>'
         text += f'<span class="type">&lt;{type(self.base).__name__}&gt;</span>'
-        text += '</div>\n'
+        text += "</div>\n"
         text += '<div class="tree-children"></div>\n'
-        
+
         text += "</div>\n"  # tree-view
         text += "</div>\n"  # tree-container
         text += "</div>\n"  # tree-section
@@ -4357,27 +4357,27 @@ chart.render();
         import sys
         import threading
         import traceback
-        
+
         text = ""
-        
+
         try:
             # Get all thread frames
             frames = sys._current_frames()
             threads = {thread.ident: thread for thread in threading.enumerate()}
-            
+
             # Sort threads by name for consistent display
             thread_list = []
             for thread_id, frame in frames.items():
                 thread = threads.get(thread_id)
                 thread_name = thread.name if thread else f"Thread-{thread_id}"
                 thread_list.append((thread_name, thread_id, frame, thread))
-            
+
             thread_list.sort(key=lambda x: x[0])
-            
+
             if not thread_list:
                 text += '<div class="thread-item">No threads found</div>'
                 return text
-            
+
             for thread_name, thread_id, frame, thread in thread_list:
                 # Thread header
                 text += f'<div class="thread-item">'
@@ -4389,14 +4389,14 @@ chart.render();
                     alive_status = "alive" if thread.is_alive() else "dead"
                     daemon_status = "daemon" if thread.daemon else "normal"
                     text += f'<span class="thread-status">{alive_status}, {daemon_status}</span>'
-                text += '</div>'
-                
+                text += "</div>"
+
                 # Stack trace (collapsed by default)
                 text += f'<div class="thread-stack collapsed">'
-                
+
                 # Extract all stack frames
                 stack = traceback.extract_stack(frame)
-                
+
                 text += '<div class="stack-frames">'
                 for i, frame_info in enumerate(stack):
                     frame_num = i
@@ -4406,20 +4406,20 @@ chart.render();
                     text += f'<span class="frame-function">in {frame_info.name}()</span>'
                     if frame_info.line:
                         text += f'<div class="frame-code">{html_module.escape(frame_info.line.strip())}</div>'
-                    text += '</div>'
-                text += '</div>'
-                
+                    text += "</div>"
+                text += "</div>"
+
                 # Check if this thread has an asyncio event loop with tasks
                 asyncio_tasks = self._get_thread_asyncio_tasks(frame)
                 if asyncio_tasks:
                     text += '<div class="asyncio-tasks">'
-                    text += '<h4>Asyncio Tasks in this thread:</h4>'
+                    text += "<h4>Asyncio Tasks in this thread:</h4>"
                     for task_info in asyncio_tasks:
                         text += '<div class="asyncio-task">'
                         text += f'<div class="task-header">'
                         text += f'<span class="task-name">{task_info["name"]}</span>'
                         text += f'<span class="task-state">{task_info["state"]}</span>'
-                        text += '</div>'
+                        text += "</div>"
                         if task_info.get("stack"):
                             text += '<div class="task-stack">'
                             for frame_info in task_info["stack"]:
@@ -4428,18 +4428,18 @@ chart.render();
                                 text += f'<span class="frame-function">in {frame_info["name"]}()</span>'
                                 if frame_info.get("code"):
                                     text += f'<div class="frame-code">{html_module.escape(frame_info["code"])}</div>'
-                                text += '</div>'
-                            text += '</div>'
-                        text += '</div>'
-                    text += '</div>'
-                
-                text += '</div>'  # thread-stack
-                text += '</div>'  # thread-item
-            
+                                text += "</div>"
+                            text += "</div>"
+                        text += "</div>"
+                    text += "</div>"
+
+                text += "</div>"  # thread-stack
+                text += "</div>"  # thread-item
+
         except Exception as e:
             self.log(f"Error getting thread stacks: {e}")
             text += f'<div class="error">Error retrieving thread information: {html_module.escape(str(e))}</div>'
-        
+
         return text
 
     def _get_thread_asyncio_tasks(self, frame):
@@ -4447,33 +4447,32 @@ chart.render();
         Extract asyncio tasks from a thread's frame if it's running an event loop
         """
         import asyncio
-        import inspect
-        
+
         tasks_info = []
-        
+
         try:
             # Try to find the event loop in this thread's frame locals
             current_frame = frame
             event_loop = None
-            
+
             # Walk up the stack to find the event loop
             while current_frame is not None:
-                if 'self' in current_frame.f_locals:
-                    obj = current_frame.f_locals['self']
+                if "self" in current_frame.f_locals:
+                    obj = current_frame.f_locals["self"]
                     if isinstance(obj, asyncio.AbstractEventLoop):
                         event_loop = obj
                         break
                 current_frame = current_frame.f_back
-            
+
             if not event_loop:
                 return tasks_info
-            
+
             # Get all tasks for this event loop
             all_tasks = asyncio.all_tasks(event_loop)
-            
+
             for task in all_tasks:
                 task_name = task.get_name()
-                
+
                 # Get task state
                 if task.done():
                     if task.cancelled():
@@ -4482,20 +4481,16 @@ chart.render();
                         state = "done"
                 else:
                     state = "running"
-                
-                task_info = {
-                    "name": task_name,
-                    "state": state,
-                    "stack": []
-                }
-                
+
+                task_info = {"name": task_name, "state": state, "stack": []}
+
                 # Get the coroutine stack
                 try:
                     coro = task.get_coro()
                     if coro:
                         # Get the stack frames for this coroutine
                         stack = []
-                        cr_frame = getattr(coro, 'cr_frame', None)
+                        cr_frame = getattr(coro, "cr_frame", None)
                         if cr_frame:
                             # Extract stack from coroutine frame
                             frames_list = []
@@ -4503,38 +4498,34 @@ chart.render();
                             while current:
                                 frames_list.append(current)
                                 current = current.f_back
-                            
+
                             # Reverse to show from oldest to newest
                             frames_list.reverse()
-                            
+
                             for fr in frames_list:
                                 code = fr.f_code
                                 line_no = fr.f_lineno
-                                
+
                                 # Try to get the actual line of code
                                 try:
                                     import linecache
+
                                     line_code = linecache.getline(code.co_filename, line_no).strip()
                                 except:
                                     line_code = ""
-                                
-                                stack.append({
-                                    "file": code.co_filename,
-                                    "line": line_no,
-                                    "name": code.co_name,
-                                    "code": line_code
-                                })
-                            
+
+                                stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
+
                             task_info["stack"] = stack
                 except Exception as e:
                     # If we can't get the coroutine stack, just skip it
                     pass
-                
+
                 tasks_info.append(task_info)
-        
+
         except Exception as e:
             self.log(f"Error extracting asyncio tasks: {e}")
-        
+
         return tasks_info
 
     async def html_api_internals(self, request):
@@ -4543,7 +4534,7 @@ chart.render();
         """
         args = request.query
         path = args.get("path", "")
-        
+
         try:
             # Navigate to the requested object
             obj = self.base
@@ -4558,10 +4549,7 @@ chart.render();
                         if part in obj:
                             obj = obj[part]
                         else:
-                            return web.Response(
-                                content_type="application/json",
-                                text=json.dumps({"success": False, "error": f"Key not found: {part}"})
-                            )
+                            return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": f"Key not found: {part}"}))
                     elif isinstance(obj, (list, tuple)):
                         try:
                             # Strip brackets if present (e.g., "[0]" -> "0")
@@ -4569,31 +4557,19 @@ chart.render();
                             index = int(index_str)
                             obj = obj[index]
                         except (ValueError, IndexError):
-                            return web.Response(
-                                content_type="application/json",
-                                text=json.dumps({"success": False, "error": f"Invalid index: {part}"})
-                            )
+                            return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": f"Invalid index: {part}"}))
                     elif hasattr(obj, part):
                         obj = getattr(obj, part)
                     else:
-                        return web.Response(
-                            content_type="application/json",
-                            text=json.dumps({"success": False, "error": f"Path not found: {path}"})
-                        )
-            
+                        return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": f"Path not found: {path}"}))
+
             # Get members of the object
             members = self._get_object_members(obj, path)
-            
-            return web.Response(
-                content_type="application/json",
-                text=json.dumps({"success": True, "members": members})
-            )
+
+            return web.Response(content_type="application/json", text=json.dumps({"success": True, "members": members}))
         except Exception as e:
             self.log(f"Error in internals API: {str(e)}")
-            return web.Response(
-                content_type="application/json",
-                text=json.dumps({"success": False, "error": str(e)})
-            )
+            return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": str(e)}))
 
     async def html_api_internals_download(self, request):
         """
@@ -4601,7 +4577,7 @@ chart.render();
         """
         args = request.query
         path = args.get("path", "")
-        
+
         try:
             # Navigate to the requested object
             obj = self.base
@@ -4616,10 +4592,7 @@ chart.render();
                         if part in obj:
                             obj = obj[part]
                         else:
-                            return web.Response(
-                                content_type="text/plain",
-                                text=f"Error: Key not found: {part}"
-                            )
+                            return web.Response(content_type="text/plain", text=f"Error: Key not found: {part}")
                     elif isinstance(obj, (list, tuple)):
                         try:
                             # Strip brackets if present (e.g., "[0]" -> "0")
@@ -4627,67 +4600,47 @@ chart.render();
                             index = int(index_str)
                             obj = obj[index]
                         except (ValueError, IndexError):
-                            return web.Response(
-                                content_type="text/plain",
-                                text=f"Error: Invalid index: {part}"
-                            )
+                            return web.Response(content_type="text/plain", text=f"Error: Invalid index: {part}")
                     elif hasattr(obj, part):
                         obj = getattr(obj, part)
                     else:
-                        return web.Response(
-                            content_type="text/plain",
-                            text=f"Error: Attribute not found: {part}"
-                        )
-            
+                        return web.Response(content_type="text/plain", text=f"Error: Attribute not found: {part}")
+
             # Convert object to YAML-serializable format
             try:
                 yaml_data = self._object_to_yaml_dict(obj, visited=set())
             except Exception as e:
                 self.log(f"Error converting object to YAML dict: {e}")
-                return web.Response(
-                    content_type="text/plain",
-                    text=f"Error: Failed to convert object to YAML-serializable format: {str(e)}"
-                )
-            
+                return web.Response(content_type="text/plain", text=f"Error: Failed to convert object to YAML-serializable format: {str(e)}")
+
             # Convert to YAML
             try:
                 import io
                 from ruamel.yaml import YAML
+
                 yaml = YAML()
                 yaml.default_flow_style = False
                 yaml.preserve_quotes = True
-                
+
                 stream = io.StringIO()
                 yaml.dump(yaml_data, stream)
                 yaml_content = stream.getvalue()
             except Exception as e:
                 self.log(f"Error dumping YAML: {e}")
-                return web.Response(
-                    content_type="text/plain",
-                    text=f"Error: Failed to serialize to YAML format: {str(e)}\n\nThis object may contain types that are not YAML-serializable."
-                )
-            
+                return web.Response(content_type="text/plain", text=f"Error: Failed to serialize to YAML format: {str(e)}\n\nThis object may contain types that are not YAML-serializable.")
+
             # Generate filename from path
             if path:
                 filename = path.replace("::", "_") + ".yaml"
             else:
                 filename = "predbat_root.yaml"
-            
+
             # Return as downloadable file
-            return web.Response(
-                content_type="application/x-yaml",
-                headers={
-                    "Content-Disposition": f'attachment; filename="{filename}"'
-                },
-                text=yaml_content
-            )
-            
+            return web.Response(content_type="application/x-yaml", headers={"Content-Disposition": f'attachment; filename="{filename}"'}, text=yaml_content)
+
         except Exception as e:
             self.log(f"Error downloading internals as YAML: {e}")
-            return web.Response(
-                content_type="text/plain",
-                text=f"Error: {str(e)}"
-            )
+            return web.Response(content_type="text/plain", text=f"Error: {str(e)}")
 
     def _object_to_yaml_dict(self, obj, max_depth=10, current_depth=0, visited=None):
         """
@@ -4697,26 +4650,26 @@ chart.render();
         """
         if visited is None:
             visited = set()
-        
+
         if current_depth >= max_depth:
             return f"<max depth {max_depth} reached>"
-        
+
         # Handle None
         if obj is None:
             return None
-        
+
         # Handle primitives (no circular reference check needed)
         if isinstance(obj, (str, int, float, bool)):
             return obj
-        
+
         # Check for circular references for complex objects
         obj_id = id(obj)
         if obj_id in visited:
             return f"<circular reference to {type(obj).__name__}>"
-        
+
         # Add to visited set
         visited.add(obj_id)
-        
+
         # Handle lists and tuples
         if isinstance(obj, (list, tuple)):
             result = []
@@ -4728,7 +4681,7 @@ chart.render();
             # Remove from visited after processing to allow same object in different branches
             visited.discard(obj_id)
             return result
-        
+
         # Handle dictionaries
         if isinstance(obj, dict):
             result = {}
@@ -4746,7 +4699,7 @@ chart.render();
             # Remove from visited after processing to allow same object in different branches
             visited.discard(obj_id)
             return result
-        
+
         # Handle objects with __dict__
         if hasattr(obj, "__dict__"):
             result = {}
@@ -4764,7 +4717,7 @@ chart.render();
             # Remove from visited after processing to allow same object in different branches
             visited.discard(obj_id)
             return result if result else f"<{type(obj).__name__} object>"
-        
+
         # Fallback: try to convert to string
         try:
             str_value = str(obj)
@@ -4780,7 +4733,7 @@ chart.render();
         Returns a list of dictionaries with key, type, value, and expandable flag
         """
         members = []
-        
+
         try:
             # Handle dictionaries
             if isinstance(obj, dict):
@@ -4790,21 +4743,11 @@ chart.render();
                         member_info = self._analyze_value(str(key), value, path)
                         members.append(member_info)
                     except Exception as e:
-                        members.append({
-                            "key": str(key),
-                            "type": "error",
-                            "value": f"Error: {str(e)}",
-                            "expandable": False
-                        })
-                
+                        members.append({"key": str(key), "type": "error", "value": f"Error: {str(e)}", "expandable": False})
+
                 if len(obj) > 100:
-                    members.append({
-                        "key": "...",
-                        "type": "info",
-                        "value": f"({len(obj) - 100} more items)",
-                        "expandable": False
-                    })
-            
+                    members.append({"key": "...", "type": "info", "value": f"({len(obj) - 100} more items)", "expandable": False})
+
             # Handle lists/tuples
             elif isinstance(obj, (list, tuple)):
                 for i, value in enumerate(obj[:100]):  # Limit to first 100 items
@@ -4812,21 +4755,11 @@ chart.render();
                         member_info = self._analyze_value(f"[{i}]", value, path)
                         members.append(member_info)
                     except Exception as e:
-                        members.append({
-                            "key": f"[{i}]",
-                            "type": "error",
-                            "value": f"Error: {str(e)}",
-                            "expandable": False
-                        })
-                
+                        members.append({"key": f"[{i}]", "type": "error", "value": f"Error: {str(e)}", "expandable": False})
+
                 if len(obj) > 100:
-                    members.append({
-                        "key": "...",
-                        "type": "info",
-                        "value": f"({len(obj) - 100} more items)",
-                        "expandable": False
-                    })
-            
+                    members.append({"key": "...", "type": "info", "value": f"({len(obj) - 100} more items)", "expandable": False})
+
             # Handle objects with attributes
             else:
                 # Get all attributes
@@ -4836,7 +4769,7 @@ chart.render();
                     if attr.startswith("_"):
                         continue
                     attrs.append(attr)
-                
+
                 # Sort and limit
                 for attr in sorted(attrs)[:200]:  # Limit to 200 attributes
                     try:
@@ -4847,22 +4780,12 @@ chart.render();
                         member_info = self._analyze_value(attr, value, path)
                         members.append(member_info)
                     except Exception as e:
-                        members.append({
-                            "key": attr,
-                            "type": "error",
-                            "value": f"Error: {str(e)}",
-                            "expandable": False
-                        })
-        
+                        members.append({"key": attr, "type": "error", "value": f"Error: {str(e)}", "expandable": False})
+
         except Exception as e:
             self.log(f"Error getting object members: {str(e)}")
-            members.append({
-                "key": "error",
-                "type": "error",
-                "value": str(e),
-                "expandable": False
-            })
-        
+            members.append({"key": "error", "type": "error", "value": str(e), "expandable": False})
+
         return members
 
     def _analyze_value(self, key, value, path):
@@ -4873,7 +4796,7 @@ chart.render();
         expandable = False
         display_value = None
         type_size = None
-        
+
         # Check if expandable
         if isinstance(value, dict):
             expandable = len(value) > 0
@@ -4908,21 +4831,14 @@ chart.render();
                     display_value = str_value
             except:
                 display_value = f"<{value_type}>"
-        
+
         # Build the full path for this item using :: as separator
         full_path = f"{path}::{key}" if path else key
-        
-        result = {
-            "key": key,
-            "type": value_type,
-            "value": display_value,
-            "expandable": expandable,
-            "path": full_path
-        }
-        
+
+        result = {"key": key, "type": value_type, "value": display_value, "expandable": expandable, "path": full_path}
+
         # Add size for collections
         if type_size is not None:
             result["size"] = type_size
-        
-        return result
 
+        return result

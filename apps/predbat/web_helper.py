@@ -7472,11 +7472,11 @@ def get_internals_js():
 async function toggleThreadStack(headerElement) {
     const stackContainer = headerElement.nextElementSibling;
     const expandIcon = headerElement.querySelector('.expand-icon');
-    
+
     if (!stackContainer || !stackContainer.classList.contains('thread-stack')) {
         return;
     }
-    
+
     if (stackContainer.classList.contains('expanded')) {
         // Collapse
         stackContainer.classList.remove('expanded');
@@ -7493,11 +7493,11 @@ async function toggleThreadStack(headerElement) {
 async function toggleNode(element, path) {
     const childrenContainer = element.nextElementSibling;
     const expandIcon = element.querySelector('.expand-icon');
-    
+
     if (!childrenContainer || !childrenContainer.classList.contains('tree-children')) {
         return;
     }
-    
+
     if (childrenContainer.classList.contains('expanded')) {
         // Collapse
         childrenContainer.classList.remove('expanded');
@@ -7507,11 +7507,11 @@ async function toggleNode(element, path) {
         if (childrenContainer.children.length === 0) {
             // Load children if not already loaded
             childrenContainer.innerHTML = '<div class="loading">Loading...</div>';
-            
+
             try {
                 const response = await fetch(`./api/internals?path=${encodeURIComponent(path)}`);
                 const data = await response.json();
-                
+
                 if (data.success) {
                     childrenContainer.innerHTML = '';
                     renderTreeNodes(childrenContainer, data.members, path);
@@ -7522,7 +7522,7 @@ async function toggleNode(element, path) {
                 childrenContainer.innerHTML = `<div class="error">Error loading: ${error.message}</div>`;
             }
         }
-        
+
         childrenContainer.classList.add('expanded');
         expandIcon.textContent = '−';
     }
@@ -7532,21 +7532,21 @@ async function refreshNode(buttonElement, path) {
     // Find the parent tree-item
     const treeItem = buttonElement.closest('.tree-item');
     if (!treeItem) return;
-    
+
     // Find the children container
     const childrenContainer = treeItem.nextElementSibling;
     if (!childrenContainer || !childrenContainer.classList.contains('tree-children')) return;
-    
+
     // Only refresh if already expanded
     if (!childrenContainer.classList.contains('expanded')) return;
-    
+
     // Show loading state
     childrenContainer.innerHTML = '<div class="loading">Refreshing...</div>';
-    
+
     try {
         const response = await fetch(`./api/internals?path=${encodeURIComponent(path)}`);
         const data = await response.json();
-        
+
         if (data.success) {
             childrenContainer.innerHTML = '';
             renderTreeNodes(childrenContainer, data.members, path);
@@ -7562,13 +7562,13 @@ function renderTreeNodes(container, members, basePath) {
     members.forEach(member => {
         const itemDiv = document.createElement('div');
         itemDiv.className = 'tree-item';
-        
+
         // Use the path provided by the server
         const path = member.path || (basePath ? `${basePath}.${member.key}` : member.key);
-        
+
         // Add tooltip showing full path
         itemDiv.title = path;
-        
+
         let expandIcon = '';
         let refreshButton = '';
         let downloadButton = '';
@@ -7584,7 +7584,7 @@ function renderTreeNodes(container, members, basePath) {
         } else {
             expandIcon = `<span class="expand-icon"></span>`;
         }
-        
+
         let valueHtml = '';
         if (!member.expandable && member.value !== undefined) {
             let valueClass = 'value';
@@ -7604,7 +7604,7 @@ function renderTreeNodes(container, members, basePath) {
                 valueHtml = `<span class="${valueClass}">${escapeHtml(String(member.value))}</span>`;
             }
         }
-        
+
         itemDiv.innerHTML = `
             ${expandIcon}
             ${refreshButton}
@@ -7613,9 +7613,9 @@ function renderTreeNodes(container, members, basePath) {
             <span class="type">&lt;${member.type}${member.size !== undefined ? ': ' + member.size + ' items' : ''}&gt;</span>
             ${valueHtml}
         `;
-        
+
         container.appendChild(itemDiv);
-        
+
         if (member.expandable) {
             const childrenDiv = document.createElement('div');
             childrenDiv.className = 'tree-children';
