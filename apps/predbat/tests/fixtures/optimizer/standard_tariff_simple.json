@@ -1,0 +1,52 @@
+{
+  "price_set": [7.5, 30.0],
+  "price_links": {
+    "7.5": ["c_0", "c_1"],
+    "30.0": ["c_2", "c_3", "d_0", "d_1"]
+  },
+  "window_index": {
+    "c_0": {"type": "c", "id": 0},
+    "c_1": {"type": "c", "id": 1},
+    "c_2": {"type": "c", "id": 2},
+    "c_3": {"type": "c", "id": 3},
+    "d_0": {"type": "d", "id": 0},
+    "d_1": {"type": "d", "id": 1}
+  },
+  "all_prices": [7.5, 30.0],
+  "charge_windows": [
+    {"start": 0, "end": 120, "average": 7.5},
+    {"start": 120, "end": 240, "average": 7.5},
+    {"start": 240, "end": 360, "average": 30.0},
+    {"start": 360, "end": 480, "average": 30.0}
+  ],
+  "export_windows": [
+    {"start": 960, "end": 1080, "average": 15.0},
+    {"start": 1080, "end": 1200, "average": 15.0}
+  ],
+  "charge_limits": [0, 0, 0, 0],
+  "export_limits": [100, 100],
+  "rates_import": {},
+  "rates_export": {},
+  "pv_forecast": {},
+  "load_forecast": {},
+  "battery": {
+    "soc_kw": 5.0,
+    "soc_max": 10.0,
+    "reserve": 0.5,
+    "charge_rate_max": 3.0,
+    "discharge_rate_max": 3.0,
+    "loss_charge": 0.95,
+    "loss_discharge": 0.95
+  },
+  "config": {
+    "forecast_minutes": 1440,
+    "step": 5,
+    "minutes_now": 0,
+    "set_charge_freeze": false,
+    "set_export_freeze": false,
+    "debug_enable": false
+  },
+  "region_start": null,
+  "region_end": null,
+  "end_record": 1440
+}

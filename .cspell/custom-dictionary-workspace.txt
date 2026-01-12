@@ -175,6 +175,7 @@ mbuhansen
 mdlrc
 measurand
 measurands
+meshgrid
 Meteo
 Meteoalarm
 meterpoint
@@ -201,7 +202,9 @@ myenergi
 mypy
 nattribute
 ncalls
+ndarray
 nearr
+njit
 njpwerner
 nocharge
 nodischarge
@@ -209,6 +212,7 @@ nord
 Nordpool
 nosc
 nrgheat
+numba
 octo
 octoplus
 octopoints
@@ -236,11 +240,13 @@ powerline
 Powerwall
 ppdetails
 ppkwh
+prange
 Pred
 Predai
 Predbat
 predbatt
 Predheat
+preds
 psum
 pvbat
 pvenergytotal
