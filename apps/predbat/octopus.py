@@ -2091,6 +2091,7 @@ class Octopus:
 
         # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
         slots_added_set = set()
+        plan_interval_minutes = self.plan_interval_minutes
 
         if octopus_slots:
             # Add in IO slots
@@ -2100,36 +2101,37 @@ class Octopus:
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
                     # Round slots to 30 minute boundary
-                    start_minutes = int(round(start_minutes / 30, 0) * 30)
-                    end_minutes = int(round(end_minutes / 30, 0) * 30)
+                    start_minutes = int(round(start_minutes / plan_interval_minutes, 0) * plan_interval_minutes)
+                    end_minutes = int(round(end_minutes / plan_interval_minutes, 0) * plan_interval_minutes)
+                    start_minutes = max(start_minutes, -96 * 60)  # Allow for previous 2 days
+                    end_minutes = min(end_minutes, self.forecast_minutes)
 
                     if octopus_slot_low_rate:
                         assumed_price = self.rate_min
                         for minute in range(start_minutes, end_minutes):
-                            if minute >= (-96 * 60) and minute < self.forecast_minutes:
-                                # Calculate which day this minute belongs to (day boundary at midnight)
-                                # Day 0 = minutes 0-1439, Day 1 = 1440-2879, Day -1 = -1440 to -1, etc.
-                                # Python's floor division handles negative numbers correctly
-                                day_offset = minute // (24 * 60)
+                            # Calculate which day this minute belongs to (day boundary at midnight)
+                            # Day 0 = minutes 0-1439, Day 1 = 1440-2879, Day -1 = -1440 to -1, etc.
+                            # Python's floor division handles negative numbers correctly
+                            day_offset = minute // (24 * 60)
 
-                                # Initialize counter for this day if needed
-                                if day_offset not in slots_per_day:
-                                    slots_per_day[day_offset] = 0
+                            # Initialize counter for this day if needed
+                            if day_offset not in slots_per_day:
+                                slots_per_day[day_offset] = 0
 
-                                # Calculate the 30-min slot start for this minute
-                                slot_start = (minute // 30) * 30
+                            # Calculate the 30-min slot start for this minute
+                            slot_start = (minute // 30) * 30
 
-                                # At the start of each 30-min slot, decide if we can add it
-                                if minute % 30 == 0:
-                                    if slots_per_day[day_offset] < octopus_slot_max:
-                                        slots_per_day[day_offset] += 1
-                                        slots_added_set.add(slot_start)
-                                        rates[minute] = assumed_price
+                            # At the start of each 30-min slot, decide if we can add it
+                            if minute % 30 == 0:
+                                if slots_per_day[day_offset] < octopus_slot_max:
+                                    slots_per_day[day_offset] += 1
+                                    slots_added_set.add(slot_start)
+                                    rates[minute] = assumed_price
 
-                                else:
-                                    # For minutes within a 30-min slot, only apply if the slot was added
-                                    if slot_start in slots_added_set:
-                                        rates[minute] = assumed_price
+                            else:
+                                # For minutes within a 30-min slot, only apply if the slot was added
+                                if slot_start in slots_added_set:
+                                    rates[minute] = assumed_price
                     else:
                         assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
