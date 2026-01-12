@@ -325,7 +325,7 @@ class Components:
                     self.log(f"Starting {component_info['name']} interface")
 
                 # Create new task
-                self.component_tasks[component_name] = self.base.create_task(component.start())
+                self.component_tasks[component_name] = self.base.create_task(component.start(), name=f"{component_name}_component_task")
                 if not component.wait_api_started():
                     self.log(f"Error: {component_info['name']} API failed to start")
                     failed = True

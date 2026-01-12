@@ -6730,6 +6730,7 @@ setTimeout(function() {
 <a href='./components'>Components</a>
 <a href='./apps_editor'>Editor</a>
 <a href='./browse'>Browse</a>
+<a href='./internals'>Internals</a>
 <a href='https://springfall2008.github.io/batpred/'>Docs</a>
 <div class="dark-mode-toggle">
     """
@@ -6842,6 +6843,32 @@ def get_browse_css():
     border-bottom: 1px solid #ddd;
 }
 
+.file-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.download-button {
+    background-color: #2196F3;
+    color: white;
+    padding: 8px 16px;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.download-button:hover {
+    background-color: #0b7dda;
+}
+
+.download-button .mdi {
+    font-size: 16px;
+}
+
 .back-button {
     background-color: #4CAF50;
     color: white;
@@ -6936,5 +6963,671 @@ body.dark-mode .back-button:hover {
     background-color: #444;
     color: #fff;
 }
+
+body.dark-mode .download-button {
+    background-color: #1976D2;
+    color: #e0e0e0;
+    border: 1px solid #1565C0;
+}
+
+body.dark-mode .download-button:hover {
+    background-color: #1565C0;
+    color: #fff;
+}
 </style>
+    """
+
+
+def get_internals_css():
+    """
+    Return CSS styles for the internals page
+    """
+    return """
+<style>
+.internals-container {
+    margin: 20px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.threads-section {
+    margin-bottom: 30px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    border: 1px solid #ddd;
+}
+
+.threads-section h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #333;
+}
+
+.threads-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.thread-item {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.thread-header {
+    padding: 10px 15px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background-color: #fff;
+    transition: background-color 0.2s;
+}
+
+.thread-header:hover {
+    background-color: #f0f0f0;
+}
+
+.thread-name {
+    font-weight: bold;
+    color: #2196F3;
+    flex: 0 0 200px;
+}
+
+.thread-id {
+    color: #666;
+    font-size: 0.9em;
+    flex: 0 0 150px;
+}
+
+.thread-status {
+    color: #4CAF50;
+    font-size: 0.9em;
+}
+
+.thread-stack {
+    max-height: 500px;
+    overflow-y: auto;
+    background-color: #fafafa;
+    border-top: 1px solid #ddd;
+}
+
+.thread-stack.collapsed {
+    display: none;
+}
+
+.thread-stack.expanded {
+    display: block;
+}
+
+.stack-frames {
+    padding: 10px;
+}
+
+.stack-frame {
+    padding: 8px 10px;
+    margin-bottom: 5px;
+    background: white;
+    border-left: 3px solid #2196F3;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85em;
+}
+
+.frame-number {
+    display: inline-block;
+    width: 40px;
+    color: #999;
+    font-weight: bold;
+}
+
+.frame-file {
+    color: #FF9800;
+    margin-right: 10px;
+}
+
+.frame-function {
+    color: #9C27B0;
+}
+
+.frame-code {
+    margin-top: 5px;
+    padding: 5px 10px;
+    background-color: #f5f5f5;
+    border-left: 2px solid #ddd;
+    color: #333;
+    margin-left: 40px;
+}
+
+.asyncio-tasks {
+    margin-top: 15px;
+    padding: 10px;
+    background-color: #e3f2fd;
+    border-left: 3px solid #2196F3;
+}
+
+.asyncio-tasks h4 {
+    margin: 0 0 10px 0;
+    color: #1976D2;
+    font-size: 0.9em;
+}
+
+.asyncio-task {
+    margin-bottom: 10px;
+    padding: 8px;
+    background: white;
+    border-radius: 3px;
+    border: 1px solid #90CAF9;
+}
+
+.task-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 5px;
+}
+
+.task-name {
+    font-weight: bold;
+    color: #1976D2;
+}
+
+.task-state {
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.85em;
+    background-color: #4CAF50;
+    color: white;
+}
+
+.task-stack {
+    margin-top: 8px;
+    padding-left: 10px;
+}
+
+.tree-section {
+    margin-bottom: 30px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    border: 1px solid #ddd;
+}
+
+.tree-section h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #333;
+}
+
+.tree-container {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+}
+
+.tree-view {
+    margin-top: 20px;
+}
+
+.tree-node {
+    margin-left: 0;
+    list-style: none;
+    padding: 0;
+}
+
+.tree-item {
+    padding: 4px 8px;
+    margin: 2px 0;
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    border-radius: 3px;
+}
+
+.tree-item:hover {
+    background-color: #f0f0f0;
+}
+
+.tree-item .expand-icon {
+    width: 20px;
+    display: inline-block;
+    cursor: pointer;
+    font-weight: bold;
+    color: #666;
+    text-align: center;
+}
+
+.tree-item .expand-icon.expandable {
+    color: #4CAF50;
+}
+
+.tree-item .refresh-icon {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 6px;
+    font-size: 14px;
+    color: #007bff;
+    background-color: rgba(0, 123, 255, 0.1);
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.tree-item .refresh-icon:hover {
+    background-color: rgba(0, 123, 255, 0.2);
+    transform: rotate(180deg);
+}
+
+.tree-item .download-icon {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 6px;
+    font-size: 14px;
+    color: #28a745;
+    text-decoration: none;
+    border-radius: 3px;
+    background-color: rgba(40, 167, 69, 0.1);
+    transition: all 0.2s;
+}
+
+.tree-item .download-icon:hover {
+    background-color: rgba(40, 167, 69, 0.2);
+    transform: scale(1.1);
+}
+
+.tree-item .key {
+    font-weight: bold;
+    color: #2196F3;
+    margin-right: 8px;
+}
+
+.tree-item .type {
+    color: #999;
+    font-size: 0.9em;
+    margin-right: 8px;
+}
+
+.tree-item .value {
+    color: #333;
+    word-break: break-all;
+}
+
+.tree-item .value.string {
+    color: #4CAF50;
+}
+
+.tree-item .value.number {
+    color: #FF9800;
+}
+
+.tree-item .value.boolean {
+    color: #9C27B0;
+}
+
+.tree-item .value.none {
+    color: #999;
+    font-style: italic;
+}
+
+.tree-children {
+    margin-left: 20px;
+    border-left: 1px solid #ddd;
+    padding-left: 10px;
+    display: none;
+}
+
+.tree-children.expanded {
+    display: block;
+}
+
+.loading {
+    color: #999;
+    font-style: italic;
+}
+
+.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+    border-radius: 4px;
+    padding: 12px;
+    margin: 10px 0;
+}
+
+.breadcrumb-container {
+    margin-bottom: 20px;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+}
+
+.breadcrumb {
+    margin-top: 10px;
+    font-size: 14px;
+    color: #666;
+}
+
+/* Dark mode styles */
+body.dark-mode .threads-section {
+    background-color: #2a2a2a;
+    border-color: #444;
+}
+
+body.dark-mode .threads-section h3 {
+    color: #e0e0e0;
+}
+
+body.dark-mode .thread-item {
+    background: #1e1e1e;
+    border-color: #444;
+}
+
+body.dark-mode .thread-header {
+    background-color: #1e1e1e;
+}
+
+body.dark-mode .thread-header:hover {
+    background-color: #333;
+}
+
+body.dark-mode .thread-name {
+    color: #64B5F6;
+}
+
+body.dark-mode .thread-id {
+    color: #999;
+}
+
+body.dark-mode .thread-status {
+    color: #81C784;
+}
+
+body.dark-mode .thread-stack {
+    background-color: #252525;
+    border-top-color: #444;
+}
+
+body.dark-mode .stack-frame {
+    background: #2a2a2a;
+    border-left-color: #64B5F6;
+}
+
+body.dark-mode .frame-file {
+    color: #FFB74D;
+}
+
+body.dark-mode .frame-function {
+    color: #BA68C8;
+}
+
+body.dark-mode .frame-code {
+    background-color: #1a1a1a;
+    border-left-color: #444;
+    color: #e0e0e0;
+}
+
+body.dark-mode .asyncio-tasks {
+    background-color: #1a2332;
+    border-left-color: #64B5F6;
+}
+
+body.dark-mode .asyncio-tasks h4 {
+    color: #64B5F6;
+}
+
+body.dark-mode .asyncio-task {
+    background: #2a2a2a;
+    border-color: #64B5F6;
+}
+
+body.dark-mode .task-name {
+    color: #64B5F6;
+}
+
+body.dark-mode .tree-section {
+    background-color: #2a2a2a;
+    border-color: #444;
+}
+
+body.dark-mode .tree-section h3 {
+    color: #e0e0e0;
+}
+
+body.dark-mode .tree-container {
+    background: #1e1e1e;
+    border-color: #444;
+}
+
+body.dark-mode .tree-item:hover {
+    background-color: #333;
+}
+
+body.dark-mode .tree-item .key {
+    color: #64B5F6;
+}
+
+body.dark-mode .tree-item .type {
+    color: #999;
+}
+
+body.dark-mode .tree-item .value {
+    color: #e0e0e0;
+}
+
+body.dark-mode .tree-item .value.string {
+    color: #81C784;
+}
+
+body.dark-mode .tree-item .value.number {
+    color: #FFB74D;
+}
+
+body.dark-mode .tree-item .value.boolean {
+    color: #BA68C8;
+}
+
+body.dark-mode .tree-item .refresh-icon {
+    color: #64B5F6;
+    background-color: rgba(100, 181, 246, 0.15);
+}
+
+body.dark-mode .tree-item .refresh-icon:hover {
+    background-color: rgba(100, 181, 246, 0.25);
+}
+
+body.dark-mode .tree-item .download-icon {
+    color: #4CAF50;
+    background-color: rgba(76, 175, 80, 0.15);
+}
+
+body.dark-mode .tree-item .download-icon:hover {
+    background-color: rgba(76, 175, 80, 0.25);
+}
+
+body.dark-mode .tree-children {
+    border-left-color: #444;
+}
+
+body.dark-mode .breadcrumb-container {
+    border-bottom-color: #333;
+}
+
+body.dark-mode .error {
+    background-color: #3c2124;
+    color: #f5b5c4;
+    border-color: #662c34;
+}
+</style>
+    """
+
+
+def get_internals_js():
+    """
+    Return JavaScript for the internals page
+    """
+    return """
+<script>
+async function toggleThreadStack(headerElement) {
+    const stackContainer = headerElement.nextElementSibling;
+    const expandIcon = headerElement.querySelector('.expand-icon');
+    
+    if (!stackContainer || !stackContainer.classList.contains('thread-stack')) {
+        return;
+    }
+    
+    if (stackContainer.classList.contains('expanded')) {
+        // Collapse
+        stackContainer.classList.remove('expanded');
+        stackContainer.classList.add('collapsed');
+        expandIcon.textContent = '+';
+    } else {
+        // Expand
+        stackContainer.classList.remove('collapsed');
+        stackContainer.classList.add('expanded');
+        expandIcon.textContent = '−';
+    }
+}
+
+async function toggleNode(element, path) {
+    const childrenContainer = element.nextElementSibling;
+    const expandIcon = element.querySelector('.expand-icon');
+    
+    if (!childrenContainer || !childrenContainer.classList.contains('tree-children')) {
+        return;
+    }
+    
+    if (childrenContainer.classList.contains('expanded')) {
+        // Collapse
+        childrenContainer.classList.remove('expanded');
+        expandIcon.textContent = '+';
+    } else {
+        // Expand
+        if (childrenContainer.children.length === 0) {
+            // Load children if not already loaded
+            childrenContainer.innerHTML = '<div class="loading">Loading...</div>';
+            
+            try {
+                const response = await fetch(`./api/internals?path=${encodeURIComponent(path)}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    childrenContainer.innerHTML = '';
+                    renderTreeNodes(childrenContainer, data.members, path);
+                } else {
+                    childrenContainer.innerHTML = `<div class="error">${data.error}</div>`;
+                }
+            } catch (error) {
+                childrenContainer.innerHTML = `<div class="error">Error loading: ${error.message}</div>`;
+            }
+        }
+        
+        childrenContainer.classList.add('expanded');
+        expandIcon.textContent = '−';
+    }
+}
+
+async function refreshNode(buttonElement, path) {
+    // Find the parent tree-item
+    const treeItem = buttonElement.closest('.tree-item');
+    if (!treeItem) return;
+    
+    // Find the children container
+    const childrenContainer = treeItem.nextElementSibling;
+    if (!childrenContainer || !childrenContainer.classList.contains('tree-children')) return;
+    
+    // Only refresh if already expanded
+    if (!childrenContainer.classList.contains('expanded')) return;
+    
+    // Show loading state
+    childrenContainer.innerHTML = '<div class="loading">Refreshing...</div>';
+    
+    try {
+        const response = await fetch(`./api/internals?path=${encodeURIComponent(path)}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            childrenContainer.innerHTML = '';
+            renderTreeNodes(childrenContainer, data.members, path);
+        } else {
+            childrenContainer.innerHTML = `<div class="error">${data.error}</div>`;
+        }
+    } catch (error) {
+        childrenContainer.innerHTML = `<div class="error">Error refreshing: ${error.message}</div>`;
+    }
+}
+
+function renderTreeNodes(container, members, basePath) {
+    members.forEach(member => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'tree-item';
+        
+        // Use the path provided by the server
+        const path = member.path || (basePath ? `${basePath}.${member.key}` : member.key);
+        
+        // Add tooltip showing full path
+        itemDiv.title = path;
+        
+        let expandIcon = '';
+        let refreshButton = '';
+        let downloadButton = '';
+        if (member.expandable) {
+            expandIcon = `<span class="expand-icon expandable">+</span>`;
+            // Add refresh button for expandable items
+            const safePathJs = path.replace(/'/g, "\\'");
+            refreshButton = `<button class="refresh-icon" title="Refresh this node" onclick="event.stopPropagation(); refreshNode(this, '${safePathJs}')">🔄</button>`;
+            // Add download button for expandable items
+            const safePathUrl = encodeURIComponent(path);
+            downloadButton = `<a href="./api/internals/download?path=${safePathUrl}" class="download-icon" title="Download as YAML" onclick="event.stopPropagation()">⬇</a>`;
+            itemDiv.onclick = function() { toggleNode(this, path); };
+        } else {
+            expandIcon = `<span class="expand-icon"></span>`;
+        }
+        
+        let valueHtml = '';
+        if (!member.expandable && member.value !== undefined) {
+            let valueClass = 'value';
+            if (member.type === 'str') {
+                valueClass += ' string';
+                valueHtml = `<span class="${valueClass}">"${escapeHtml(member.value)}"</span>`;
+            } else if (member.type === 'int' || member.type === 'float') {
+                valueClass += ' number';
+                valueHtml = `<span class="${valueClass}">${member.value}</span>`;
+            } else if (member.type === 'bool') {
+                valueClass += ' boolean';
+                valueHtml = `<span class="${valueClass}">${member.value}</span>`;
+            } else if (member.type === 'NoneType') {
+                valueClass += ' none';
+                valueHtml = `<span class="${valueClass}">None</span>`;
+            } else {
+                valueHtml = `<span class="${valueClass}">${escapeHtml(String(member.value))}</span>`;
+            }
+        }
+        
+        itemDiv.innerHTML = `
+            ${expandIcon}
+            ${refreshButton}
+            ${downloadButton}
+            <span class="key">${escapeHtml(member.key)}</span>
+            <span class="type">&lt;${member.type}${member.size !== undefined ? ': ' + member.size + ' items' : ''}&gt;</span>
+            ${valueHtml}
+        `;
+        
+        container.appendChild(itemDiv);
+        
+        if (member.expandable) {
+            const childrenDiv = document.createElement('div');
+            childrenDiv.className = 'tree-children';
+            container.appendChild(childrenDiv);
+        }
+    });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
     """
