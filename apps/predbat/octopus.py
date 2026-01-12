@@ -2092,21 +2092,34 @@ class Octopus:
         # Track which 30-min slot starts were actually added (for filling in the rest of the slot)
         slots_added_set = set()
 
+        # Use plan_interval_minutes for rate granularity (default 30 for backwards compatibility)
+        interval = getattr(self, "plan_interval_minutes", 30)
+
         if octopus_slots:
             # Add in IO slots
             for slot in octopus_slots:
                 start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot, raw=True)
 
+                # Skip slots that have already ended - they don't affect future planning
+                if end_minutes <= self.minutes_now:
+                    continue
+
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
-                    # Round slots to 30 minute boundary
-                    start_minutes = int(round(start_minutes / 30, 0) * 30)
-                    end_minutes = int(round(end_minutes / 30, 0) * 30)
+                    # Round slots to interval boundary
+                    start_minutes = int(round(start_minutes / interval, 0) * interval)
+                    end_minutes = int(round(end_minutes / interval, 0) * interval)
+
+                    # Only process from current time onwards
+                    effective_start = max(start_minutes, self.minutes_now)
+                    # Align to interval boundary
+                    effective_start = (effective_start // interval) * interval
 
                     if octopus_slot_low_rate:
                         assumed_price = self.rate_min
-                        for minute in range(start_minutes, end_minutes):
-                            if minute >= (-96 * 60) and minute < self.forecast_minutes:
+                        # Iterate by interval steps instead of minute-by-minute
+                        for minute in range(effective_start, end_minutes, interval):
+                            if minute >= 0 and minute < self.forecast_minutes:
                                 # Calculate which day this minute belongs to (day boundary at midnight)
                                 # Day 0 = minutes 0-1439, Day 1 = 1440-2879, Day -1 = -1440 to -1, etc.
                                 # Python's floor division handles negative numbers correctly
@@ -2116,20 +2129,11 @@ class Octopus:
                                 if day_offset not in slots_per_day:
                                     slots_per_day[day_offset] = 0
 
-                                # Calculate the 30-min slot start for this minute
-                                slot_start = (minute // 30) * 30
-
-                                # At the start of each 30-min slot, decide if we can add it
-                                if minute % 30 == 0:
-                                    if slots_per_day[day_offset] < octopus_slot_max:
-                                        slots_per_day[day_offset] += 1
-                                        slots_added_set.add(slot_start)
-                                        rates[minute] = assumed_price
-
-                                else:
-                                    # For minutes within a 30-min slot, only apply if the slot was added
-                                    if slot_start in slots_added_set:
-                                        rates[minute] = assumed_price
+                                # At the start of each interval slot, decide if we can add it
+                                if slots_per_day[day_offset] < octopus_slot_max:
+                                    slots_per_day[day_offset] += 1
+                                    slots_added_set.add(minute)
+                                    rates[minute] = assumed_price
                     else:
                         assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
