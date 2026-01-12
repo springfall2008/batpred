@@ -998,13 +998,13 @@ class Inverter:
                         self.log("Note: Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(curve_type))
                 else:
                     self.log(
-                        "Note: Cannot find battery {} curve (no final curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
-                            curve_type, curve_label, soc_label, curve_type
+                        "Note: Cannot find battery {} curve (no full rate {} curve found for battery to {}), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(
+                            curve_type, curve_type, curve_label, soc_label, curve_type
                         )
                     )
             else:
                 self.log("Note: Cannot find battery {} curve (missing history), one of the required settings for {}, {}_rate, battery_power and predbat.status do not have history, check apps.yaml".format(curve_type, soc_label, curve_type))
-                self.log("Note: Sensor with history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
+                self.log("Note: Sensor history data lengths: {} {}, {}_rate {}, battery_power {}, predbat_status {}".format(soc_label, len(soc_kwh), curve_type, len(charge_rate), len(battery_power), len(predbat_status)))
         else:
             self.log("Note: Cannot find battery {} curve (settings missing), one of the required settings for {}, {}_rate and battery_power are missing from apps.yaml".format(curve_type, soc_label, curve_type))
         return {}
