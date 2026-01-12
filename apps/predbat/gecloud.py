@@ -1009,7 +1009,7 @@ class GECloudDirect(ComponentBase):
                 while len(futures) < MAX_THREADS and pending:
                     future = pending.pop(0)
                     if not first:
-                        future["future"] = loop.create_task(self.async_read_inverter_setting(future["serial"], future["sid"]))
+                        future["future"] = loop.create_task(self.async_read_inverter_setting(future["serial"], future["sid"]), name=f"ReadSetting-{future['sid']}")
                     futures.append(future)
                 if futures:
                     future = futures.pop(0)

@@ -143,12 +143,12 @@ class Hass:
         """
         asyncio.run(self.task_waiter_async(task))
 
-    def create_task(self, task):
+    def create_task(self, task, name="TaskCreate"):
         """
         Creates a new thread to run the task in
         """
         self.log("Creating task: {}".format(task), quiet=False)
-        t1 = threading.Thread(name="TaskCreate", target=self.task_waiter, args=[task])
+        t1 = threading.Thread(name=name, target=self.task_waiter, args=[task])
         t1.start()
         self.threads.append(t1)
         return t1
