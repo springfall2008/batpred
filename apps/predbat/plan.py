@@ -227,7 +227,7 @@ class Plan:
         tried_list=None,
         test_mode=False,
         levels_score=None,
-        enable_course_fine=True,
+        enable_coarse_fine=True,
         best_max_charge_slots=1,
         best_max_export_slots=1,
     ):
@@ -321,16 +321,16 @@ class Plan:
                             best_export_limits_reset[window_n] = 100.0
 
         FINE_SLOT_LENGTHS = [48, 32, 24, 16, 14, 12, 10, 8, 6, 5, 4, 3, 2, 1]
-        COURSE_SLOT_LENGTHS = [32, 16, 8, 4, 2, 1]
+        COARSE_SLOT_LENGTHS = [32, 16, 8, 4, 2, 1]
 
         # Start loop of trials
-        for course in [True, False] if enable_course_fine else [False]:
-            if not enable_course_fine:
+        for coarse in [True, False] if enable_coarse_fine else [False]:
+            if not enable_coarse_fine:
                 charge_slot_choices = FINE_SLOT_LENGTHS
                 export_slot_choices = FINE_SLOT_LENGTHS
-            elif course:
-                charge_slot_choices = COURSE_SLOT_LENGTHS
-                export_slot_choices = COURSE_SLOT_LENGTHS
+            elif coarse:
+                charge_slot_choices = COARSE_SLOT_LENGTHS
+                export_slot_choices = COARSE_SLOT_LENGTHS
             else:
                 charge_slot_choices = slots_around(best_max_charge_slots, FINE_SLOT_LENGTHS)
                 export_slot_choices = slots_around(best_max_export_slots, FINE_SLOT_LENGTHS)
@@ -344,8 +344,8 @@ class Plan:
                         continue
 
                 pred_table = []
-                charge_freeze_options = [True, False] if self.set_charge_freeze and not course else [False]
-                export_freeze_options = [True, False] if self.set_export_freeze and not course else [False]
+                charge_freeze_options = [True, False] if self.set_charge_freeze and not coarse else [False]
+                export_freeze_options = [True, False] if self.set_export_freeze and not coarse else [False]
                 min_freeze_percent = calc_percent_limit(self.best_soc_min, self.soc_max)
                 for max_charge_slots in charge_slot_choices:
                     for max_export_slots in export_slot_choices:
@@ -3019,8 +3019,8 @@ class Plan:
         best_import = 0
         best_soc_min = 0
         best_battery_value = 0
-        fast_mode = True
-        enable_course_fine = True
+        fast_mode = self.get_arg("enable_fast_mode_levels", True)
+        enable_coarse_fine = self.get_arg("enable_coarse_fine_levels", True)
 
         start_time = time.time()
         self.log("Optimise levels pass started at {}".format(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))))
@@ -3058,7 +3058,7 @@ class Plan:
                 end_record=self.end_record,
                 fast=fast_mode,
                 quiet=False if debug_mode else True,
-                enable_course_fine=enable_course_fine,
+                enable_coarse_fine=enable_coarse_fine,
             )
 
             self.plan_write_debug(debug_mode, "plan_pre_levels.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
@@ -3118,7 +3118,7 @@ class Plan:
                             best_battery_value=best_battery_value,
                             tried_list=tried_list,
                             levels_score=levels_score,
-                            enable_course_fine=enable_course_fine,
+                            enable_coarse_fine=enable_coarse_fine,
                             best_max_charge_slots=best_max_charge_slots,
                             best_max_export_slots=best_max_export_slots,
                         )
