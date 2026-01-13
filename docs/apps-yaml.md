@@ -215,6 +215,21 @@ Valid values are:
   threads: auto
 ```
 
+### enable_coarse_fine_levels
+
+Controls the two-pass coarse/fine optimization algorithm for improved planning performance. The default is True (enabled).
+
+When enabled, Predbat uses a two-pass optimization strategy:
+
+- **Coarse pass**: Quickly evaluates a reduced set of slot length combinations to identify approximately optimal charge/export window sizes
+- **Fine pass**: Refines the search by focusing only on slot lengths near those identified as optimal
+
+This significantly reduces planning time while maintaining near-optimal results. You can disable this by setting it to False if needed.
+
+```yaml
+  enable_coarse_fine_levels: True
+```
+
 ### Web interface
 
 Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat add-on.
