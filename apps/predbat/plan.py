@@ -40,6 +40,7 @@ class DummyThread:
         Store the data into the class
         """
         self.result = result
+        time.sleep(0)  # Yield control
 
     def get(self):
         """
@@ -322,31 +323,32 @@ class Plan:
 
         FINE_SLOT_LENGTHS = [48, 32, 24, 16, 14, 12, 10, 8, 6, 5, 4, 3, 2, 1]
         COARSE_SLOT_LENGTHS = [32, 16, 8, 4, 2, 1]
+        min_freeze_percent = calc_percent_limit(self.best_soc_min, self.soc_max)
 
         # Start loop of trials
-        for coarse in [True, False] if enable_coarse_fine else [False]:
-            if not enable_coarse_fine:
-                charge_slot_choices = FINE_SLOT_LENGTHS
-                export_slot_choices = FINE_SLOT_LENGTHS
-            elif coarse:
-                charge_slot_choices = COARSE_SLOT_LENGTHS
-                export_slot_choices = COARSE_SLOT_LENGTHS
-            else:
-                charge_slot_choices = slots_around(best_max_charge_slots, FINE_SLOT_LENGTHS)
-                export_slot_choices = slots_around(best_max_export_slots, FINE_SLOT_LENGTHS)
+        for loop_price in all_prices:
+            if best_level_score is not None:
+                this_level_score = levels_score.get(loop_price, 9999999)
+                if abs(this_level_score - best_level_score) > (0.3 * level_score_range):
+                    if self.debug_enable:
+                        self.log("Skipping price {} as level score {} is not within 30% of best {}".format(loop_price, this_level_score, best_level_score))
+                    continue
 
-            for loop_price in all_prices:
-                if best_level_score is not None:
-                    this_level_score = levels_score.get(loop_price, 9999999)
-                    if abs(this_level_score - best_level_score) > (0.3 * level_score_range):
-                        if self.debug_enable:
-                            self.log("Skipping price {} as level score {} is not within 30% of best {}".format(loop_price, this_level_score, best_level_score))
-                        continue
+            for coarse in [True, False] if enable_coarse_fine else [False]:
+                if not enable_coarse_fine:
+                    charge_slot_choices = FINE_SLOT_LENGTHS
+                    export_slot_choices = FINE_SLOT_LENGTHS
+                elif coarse:
+                    charge_slot_choices = COARSE_SLOT_LENGTHS
+                    export_slot_choices = COARSE_SLOT_LENGTHS
+                else:
+                    charge_slot_choices = slots_around(best_max_charge_slots, FINE_SLOT_LENGTHS)
+                    export_slot_choices = slots_around(best_max_export_slots, FINE_SLOT_LENGTHS)
 
                 pred_table = []
-                charge_freeze_options = [True, False] if self.set_charge_freeze and not coarse else [False]
-                export_freeze_options = [True, False] if self.set_export_freeze and not coarse else [False]
-                min_freeze_percent = calc_percent_limit(self.best_soc_min, self.soc_max)
+                charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
+                export_freeze_options = [True, False] if (self.set_export_freeze and not coarse) else [False]
+
                 for max_charge_slots in charge_slot_choices:
                     for max_export_slots in export_slot_choices:
                         for try_charge_freeze in charge_freeze_options:
