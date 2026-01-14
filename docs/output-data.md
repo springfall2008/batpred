@@ -504,7 +504,9 @@ You'll need to change the hard-coded timestamp "2024-12-12..." to the date/time 
 ## Car data
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
-as described in [Predbat led car charging](car-charging.md#car-charging-planning)
+as described in [Predbat led car charging](car-charging.md#car-charging-planning).
+The *planned* attribute of the binary_sensor contains details of all planned car charging activity with start and end dates and times, kWh to charge and charging cost.
+Note that the start and ends are expressed in 'MM-DD HH:MM:SS" format, use the template sensor below if you want to convert these to full date format, e.g. to display on an Apex chart
 - predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format
 - predbat.car_soc_best - Predicted charge level of your car in the best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
 - predbat.cost_today_car - Current cost in pence so far today of charging all cars, with attribute of the projected future car charging costs and slots
@@ -512,6 +514,26 @@ as described in [Predbat led car charging](car-charging.md#car-charging-planning
 - predbat.cost_yesterday_car - A sensor that gives the total energy costs in pence of charging all cars for yesterday (00:00-23:59 on the previous day)
 
 See [Example Automation to separate car charging costs](car-charging.md#example-separating-car-charging-costs-for-multiple-cars) if you have multiple EV's and want to separate predbat.cost_today_car into costs per car.
+
+Template sensor to convert Predbat car charging times to full HA date format such as for displaying on an Apex chart:
+
+```yaml
+- unique_id: "PredBat Car Charging Times"
+- sensor:
+    - name: "PredBat Car Charging Times"
+      state: "{{ now() }}"
+      attributes:
+      planned_times: >
+        {% set times = state_attr('binary_sensor.predbat_car_charging_slot','planned') %}
+        {% set ns = namespace(erg = []) %}
+        {% set delta = now().date().strftime("%Y") | int %}
+        {% for time in times %}
+          {% set x = strptime(time.start,"%m-%d %H:%M:%S").replace(year=delta) %}
+          {% set item = { "start": x | string } %}
+          {% set ns.erg = ns.erg + [item] %}
+        {% endfor %}
+        {{ ns.erg }}
+```
 
 ## iBoost Solar Diverter data
 

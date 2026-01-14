@@ -302,6 +302,7 @@ startminute
 startt
 stdlib
 stepline
+strptime
 sunsynk
 syscmd
 tabindex
