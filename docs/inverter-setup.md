@@ -2555,7 +2555,7 @@ If however, you want the service to be called on each Predbat run then you shoul
       repeat: True
 ```
 
-#### `charge_start_service`
+### `charge_start_service`
 
 Called to start a charge
 
@@ -2567,17 +2567,17 @@ The default options passed in are:
 - charge_start_time - Start time for the charge
 - charge_end_time - End time for the charge
 
-#### `charge_freeze_service`
+### `charge_freeze_service`
 
 If defined will be called for freeze charge, otherwise, charge_start_service is used for freeze charge also.
 
-#### `charge_stop_service`
+### `charge_stop_service`
 
 Called to stop a charge
 
 - device_id - as defined in `apps.yaml` by **device_id**
 
-#### `discharge_start_service`
+### `discharge_start_service`
 
 Called to start a discharge
 
@@ -2587,11 +2587,11 @@ The default options passed in are:
 - target_soc - The SoC to discharge to
 - power - The discharge power to use
 
-#### `discharge_freeze_service`
+### `discharge_freeze_service`
 
 If defined will be called for Discharge freeze, otherwise, discharge_start_service is used for freeze discharge also.
 
-#### `discharge_stop_service`
+### `discharge_stop_service`
 
 Called to stop a discharge, if not set then **charge_stop_service** will be used instead
 
