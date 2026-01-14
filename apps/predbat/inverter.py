@@ -1150,9 +1150,6 @@ class Inverter:
         # If the battery is being charged then find the charge window
         if self.charge_enable_time or not self.inv_has_charge_enable_time:
             # Find current charge window
-            charge_start_time = None
-            charge_end_time = None
-
             if self.rest_data:
                 charge_start_time = time_string_to_stamp(self.rest_data["Timeslots"]["Charge_start_time_slot_1"])
                 charge_end_time = time_string_to_stamp(self.rest_data["Timeslots"]["Charge_end_time_slot_1"])
@@ -1256,9 +1253,6 @@ class Inverter:
 
         # Construct discharge window from GivTCP settings
         self.export_window = []
-
-        discharge_start = None
-        discharge_end = None
 
         if self.rest_data:
             discharge_start = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_start_time_slot_1"])
