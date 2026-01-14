@@ -317,15 +317,15 @@ input_number.plenticore_max_discharge  # this is how fast inverter has to charge
 Min value: 0
 Max value: 100
 
-input_number.predbat_charge_limit      # this can be used if charge limit is set to true
+input_number.predbat_charge_limit      # this is the limit % Predbat is charging the battery to, can be used if charge limit is set to true
 Min value: 0
 Max value: 100
 
-input_number.predbat_reserve           # this is used to set Min_soc in inverter
+input_number.predbat_reserve           # this is used to set Min_soc in inverter, the minimum level to discharge the battery to
 Min value: 0
 Max value: 100
 
-input_number.predbat_charge_rate       # This can be used to if low power charge mode is Enabled, remember to switch from "write -100 charging" to "write power rate charging" in automation
+input_number.predbat_charge_rate       # This is the rate Predbat is charging the battery at, can be used if low power charge mode is Enabled, remember to switch from "write -100 charging" to "write power rate charging" in automation
 Min value: 0
 Max value: (Inverter Battery max charge in watt)
 
@@ -407,10 +407,10 @@ actions:
                               hub: kostalplenticore
                               value: >
                                 [ {{ '0x%x' %
-                                unpack(pack(states('input_number.plenticore_g3_max_charge')
+                                unpack(pack(states('input_number.plenticore_max_charge')
                                 |float(0),
                                     ">f"), ">H", offset=2) | abs }}, {{ '0x%04x' %
-                                    unpack(pack(states('input_number.plenticore_g3_max_charge')|float(0), ">f"), ">H")|abs }}
+                                    unpack(pack(states('input_number.plenticore_max_charge')|float(0), ">f"), ">H")|abs }}
                                     ]
                             enabled: true
                           - alias: Write power rate charging
