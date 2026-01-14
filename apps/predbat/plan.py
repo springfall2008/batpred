@@ -3023,6 +3023,7 @@ class Plan:
         best_battery_value = 0
         fast_mode = self.get_arg("enable_fast_mode_levels", True)
         enable_coarse_fine = self.get_arg("enable_coarse_fine_levels", True)
+        tried_list = {} # Track tried combinations
 
         start_time = time.time()
         self.log("Optimise levels pass started at {}".format(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))))
@@ -3064,7 +3065,6 @@ class Plan:
             )
 
             self.plan_write_debug(debug_mode, "plan_pre_levels.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
-            tried_list = {}
 
             if self.calculate_regions:
                 region_size = int(16 * 60)
