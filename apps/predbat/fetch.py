@@ -236,7 +236,7 @@ class Fetch:
         if average_non_zero_count > 0:
             average_non_zero_day /= average_non_zero_count
         else:
-            average_non_zero_day = 24 # Assume a nominal 24kWh day if no data
+            average_non_zero_day = 24  # Assume a nominal 24kWh day if no data
 
         self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(days_list, sum_days, min_sum))
         if self.load_filter_modal and total_points >= 3 and (min_sum_day > 0):
