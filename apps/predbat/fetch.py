@@ -210,10 +210,9 @@ class Fetch:
         days_list = self.days_previous.copy()
         # Sort days list in numerical order with highest number day first
         days_list.sort(reverse=True)
-        for days in range(max(max(days_list), self.load_minutes_age) + 1):
-            use_days = max(days, 1)
+        for days in range(1, max(max(days_list), self.load_minutes_age) + 1):
             sum_day = 0
-            full_days = 24 * 60 * (use_days - 1)
+            full_days = 24 * 60 * (days - 1)
             for minute in range(0, 24 * 60, PREDICT_STEP):
                 minute_previous = 24 * 60 - minute + full_days - 1
                 load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(data, minute_previous, historical=False, step=PREDICT_STEP)
@@ -226,7 +225,7 @@ class Fetch:
                     min_sum = dp2(sum_day)
             sum_all_days[days] = dp2(sum_day)
 
-        # Work out the highest non-zero day load
+        # Work out the average non-zero day
         average_non_zero_day = 0
         average_non_zero_count = 0
         for day_sum in sum_all_days.values():
@@ -237,7 +236,7 @@ class Fetch:
         if average_non_zero_count > 0:
             average_non_zero_day /= average_non_zero_count
         else:
-            average_non_zero_day = 24
+            average_non_zero_day = 24 # Assume a nominal 24kWh day if no data
 
         self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(days_list, sum_days, min_sum))
         if self.load_filter_modal and total_points >= 3 and (min_sum_day > 0):
