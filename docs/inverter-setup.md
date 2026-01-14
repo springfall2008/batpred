@@ -627,214 +627,610 @@ mode: queued
 max: 10
 ```
 
-## Lux Power
+## LuxPower Inverters
 
-This requires the LuxPython component which integrates with your Lux Power inverter
+This requires the LuxPython integration, which communicates with your LuxPower inverter.
 
-- Copy the template `luxpower.yaml` from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required
-- LuxPower does not have a SoC max entity in kWh and the SoC percentage entity never reports the battery reaching 100%, so create the following template helper sensors:
+- Copy the template `luxpower.yaml` from `templates` over the top of your <span style="color:red">`apps.yaml`</span>, and edit inverter and battery settings as required.
+- Predbat should have access to the full usable capacity of your battery system. In the LuxPowerTek web portal (not the app), ensure that:
+
+  - **System Charge SOC Limit (%)** is set to 100% (default).
+  - **On-Grid Cut-Off SOC (%)** is set to 100% minus battery depth of discharge(%). Depending on your battery, this is typically between 20% and 0%.
+- If you want to use Predbat in **Control charge** mode, go to the LuxPowerTek app or web portal and set all start and end time slots for AC Charge to `00:00`.
+  For **Control charge and discharge** mode, set all AC Charge and Forced Discharge slots to `00:00`.
+  Predbat only uses the first time slots and will set these automatically.
+- LuxPower inverters do not have an SoC max entity in kWh, and the SoC percentage entity never reports the battery reaching 100%. Create the following template helper sensors using the Home Assistant UI.
 
 ```yaml
 name: Lux SoC Max kWh
-template:
-  {{ (states("sensor.lux_battery_capacity_ah") |float) *
-     (states("sensor.lux_battery_voltage_live") | float) / 1000}}
+template options:
+  state: >
+    {{ (states("sensor.lux_battery_capacity_ah") | float)
+       * (states("sensor.lux_battery_voltage_live") | float) / 1000 }}
 unit of measurement: kWh
-device class: Energy
-state class: Total
+device class: energy
+state class: total
+```
 
+```yaml
 name: Lux Battery SoC Corrected
-template:
-  {% set soc = states('sensor.lux_battery')|int %}
-  {% set charging_stopped = states('sensor.lux_bms_limit_charge_live')|float == 0 %}
-  {% if charging_stopped and soc > 97 %}
-    100
-  {% else %}
-    {{ soc }}
-  {% endif %}
-unit of measurement: %
-device class: Battery
-state class: Measurement
+template options:
+  state: >
+    {% set soc = states('sensor.lux_battery') | int %}
+    {% set charging_stopped = states('sensor.lux_bms_limit_charge_live') | float == 0 %}
+    {% if charging_stopped and soc > 97 %}
+      100
+    {% else %}
+      {{ soc }}
+    {% endif %}
+unit of measurement: "%"
+device class: battery
+state class: measurement
 ```
 
-Thanks to the work of @brickatius, the following set of automations and configurations have been devised to enable LuxPower inverters to deliver Freeze Charge functionality in Predbat:
-
-- create the following helper input boolean and template binary sensor:
+- Create the following number helper. The maximum value (in Watts) can be found in your inverter datasheet. A more accurate figure can be obtained by observing the flow chart in the Monitor section of the LuxPower app/portal or by inspecting `sensor.lux_battery_flow_live` when the battery is force charging or discharging.
 
 ```yaml
-input_boolean.freeze_charge_guard
+name: Battery Rate Max
+entity_id: input_number.battery_rate_max
+minimum value: 0
+maximum value: YOUR_INVERTER_MAXIMUM_CHARGE/DISCHARGE_RATE
+unit of measurement: W
+```
+ 
+ Thanks to the work of **@brickatius**, the following automations and configurations enable LuxPower inverters to provide **Freeze Charging** and **Freeze Exporting** functionality when Predbat is operating in **Control charge and discharge** mode.
 
-name: binary_sensor.solar_compare_home
-template:
-  {{ 'on' if states('sensor.lux_solar_output_live') | float(0)
-        <= states('sensor.lux_home_consumption_live') | float(0)
-    else 'off' }}
+---
+
+**Important:**
+The Freeze Charging and Freeze Exporting setup described below relies on a set of carefully designed helpers and automations that work together. Each component has a specific role in safely entering, maintaining, and exiting Freeze Charging mode. Removing or skipping any part can lead to missed triggers, stuck AC charging, or incomplete cleanup. For reliable operation, make sure all helpers and automations in this section are created exactly as described before using Freeze Charging or Freeze Exporting modes.
+
+---
+
+### Freeze Charging 
+
+**Note:**
+Although LuxPower inverters have the *Charge first / Charge priority* feature, Predbat achieves a similar outcome by directly manipulating AC charge settings. This is why the following implementation is required.
+
+### LuxPower Integration
+
+- Set up your LuxPower Integration as follows:
+
+	- If you have not already done so, set up the blueprint for changing the refresh interval as described in the LuxPython_DEV README. 
+	- In the LUX Refresh Interval automation set the refresh interval to **20 seconds**. Freeze Charging relies on frequent state updates; intervals above 30 seconds may result in delayed or missed AC arbitration.
+
+### Predbat configuration
+
+- In your `apps.yaml` file:
+
+  - Look for `support_charge_freeze` in the inverter section and change `False` to `True`.
+  - On the next line also change `maintain_freeze_charge_status` from  `False` to `True`.
+  - Uncomment the three lines in the `charge_freeze_service` section so Predbat turns on `automation.luxpower_freeze_charge` when Freeze Charging starts.
+  - Ensure the indentation and alignment match the other service entries.
+
+---
+
+**Helpers**
+
+- Create the following **Freeze Charge Guard** toggle helper and **Solar compare Home** binary sensor helper using the HA user interface. 
+
+**Toggle helper**
+
+```yaml
+name: Freeze Charge Guard
+entity_id: input_boolean.freeze_charge_guard
 ```
 
-- Create the following freeze charge automation that is enabled when Predbat starts Freeze Charge mode, and is disabled when Freeze Charge is stopped.  Under other Predbat modes the automation is disabled - this is normal behaviour!<BR>
-The automation writes progress status entries to the Home Assistant log so you can see what it is doing. These system_log.write actions can be removed if wanted, they are only there to aid debugging.
+The `freeze_charge_guard` helper acts as a lifecycle gate. It is enabled only when Predbat explicitly requests Freeze Charging and is cleared on exit, watchdog abort, or Home Assistant restart. All Freeze Charging automations check this guard to prevent unintended operation.
+
+
+**Binary sensor template helper**¹
+
 
 ```yaml
-alias: LuxPower freeze charge
-description: Full AC charge control with guard, SoC update, and debug logging.
+name: Solar compare Home
+entity_id: binary_sensor.solar_compare_home
+template options:
+  state: >
+    {{ 'on' if states('sensor.lux_solar_output_live') | float(0)
+         <= states('sensor.lux_home_consumption_live') | float(0)
+       else 'off' }}
+```
+
+---
+### Automations
+
+- Create the following **Freeze Charge**² and **Freeze Charge Predbat Override**³ automations.
+These are enabled when Predbat enters Freeze Charging mode and disabled when it exits.
+Under other Predbat modes, they remain disabled — this is expected behaviour.
+
+**Note:** The Freeze Charge automation uses `sensor.lux_battery_soc_corrected` as described above.
+
+```yaml
+alias: LuxPower Freeze Charge
+description: >
+  Controls AC charging during Predbat freeze charge mode. Arms and triggers
+  freeze subsystems and watchdog via freeze guard.
 triggers:
-  - entity_id: binary_sensor.solar_compare_home
-    to:
-      - "on"
-      - "off"
-    trigger: state
-  - entity_id: switch.lux_ac_charge_enable
+  - entity_id: automation.luxpower_freeze_charge
     from: "off"
     to: "on"
+    id: freeze_enabled
     trigger: state
-  - entity_id: automation.luxpower_freeze_charge
+  - entity_id: binary_sensor.solar_compare_home
+    to: "on"
+    for: "00:00:10"
+    id: solar_on
+    trigger: state
+  - entity_id: binary_sensor.solar_compare_home
+    to: "off"
+    for: "00:00:10"
+    id: solar_off
+    trigger: state
+conditions:
+  - condition: state
+    entity_id: input_boolean.predbat_ready
+    state: "on"
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: freeze_enabled
+        sequence:
+          - alias: "FreezeEntry: Enable exit & override automations"
+            action: automation.turn_on
+            target:
+              entity_id:
+                - automation.luxpower_freeze_charge_exit
+                - automation.luxpower_freeze_charge_predbat_override
+          - alias: "FreezeEntry: Arm watchdog"
+            action: automation.turn_on
+            target:
+              entity_id: automation.luxpower_freeze_charge_watchdog
+          - alias: "FreezeEntry: Set freeze guard ON (triggers watchdog)"
+            action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.freeze_charge_guard
+          - alias: "FreezeEntry: Set initial SOC charge level"
+            action: number.set_value
+            target:
+              entity_id: number.lux_ac_battery_charge_level
+            data:
+              value: "{{ states('sensor.lux_battery_soc_corrected') | float(0) }}"
+          - alias: "FreezeEntry: Initial AC arbitration"
+            choose:
+              - conditions:
+                  - condition: state
+                    entity_id: binary_sensor.solar_compare_home
+                    state: "on"
+                  - condition: state
+                    entity_id: switch.lux_ac_charge_enable
+                    state: "off"
+                sequence:
+                  - action: switch.turn_on
+                    target:
+                      entity_id: switch.lux_ac_charge_enable
+              - conditions:
+                  - condition: state
+                    entity_id: binary_sensor.solar_compare_home
+                    state: "off"
+                  - condition: state
+                    entity_id: switch.lux_ac_charge_enable
+                    state: "on"
+                sequence:
+                  - action: switch.turn_off
+                    target:
+                      entity_id: switch.lux_ac_charge_enable
+      - conditions:
+          - condition: trigger
+            id:
+              - solar_on
+              - solar_off
+          - condition: state
+            entity_id: input_boolean.freeze_charge_guard
+            state: "on"
+        sequence:
+          - alias: "FreezeSolar: AC arbitration"
+            choose:
+              - conditions:
+                  - condition: state
+                    entity_id: binary_sensor.solar_compare_home
+                    state: "on"
+                  - condition: state
+                    entity_id: switch.lux_ac_charge_enable
+                    state: "off"
+                sequence:
+                  - action: switch.turn_on
+                    target:
+                      entity_id: switch.lux_ac_charge_enable
+              - conditions:
+                  - condition: state
+                    entity_id: binary_sensor.solar_compare_home
+                    state: "off"
+                  - condition: state
+                    entity_id: switch.lux_ac_charge_enable
+                    state: "on"
+                sequence:
+                  - action: switch.turn_off
+                    target:
+                      entity_id: switch.lux_ac_charge_enable
+mode: single
+
+```
+
+```yaml
+alias: LuxPower Freeze Charge Predbat Override
+description: >
+  Handles Predbat forcing AC ON during Freeze Charge. Uses template trigger to
+  avoid repeated retriggers every few seconds.
+triggers:
+  - value_template: |
+      {{ is_state('switch.lux_ac_charge_enable', 'on')
+         and is_state('binary_sensor.solar_compare_home', 'off')
+         and is_state('input_boolean.freeze_charge_guard', 'on')
+         and is_state('input_boolean.predbat_ready', 'on') }}
+    trigger: template
+conditions: []
+actions:
+  - alias: "Predbat Override: Turn AC OFF due to Solar > Home"
+    action: switch.turn_off
+    target:
+      entity_id: switch.lux_ac_charge_enable
+  - alias: "Predbat Override: Log AC override"
+    action: system_log.write
+    data:
+      level: debug
+      message: >
+        FreezeCharge: Predbat forced AC ON → overridden OFF (Solar=OFF,
+        FreezeGuard=ON, PredbatReady=ON)
+mode: single
+
+```
+
+
+---
+
+
+- Create the **Freeze Charge Exit** automation to cleanly restore inverter state when Freeze Charging ends.
+
+```yaml
+alias: LuxPower Freeze Charge Exit
+description: |
+  Cleanup when Predbat leaves Freeze charging (ignore warn/error noise).
+triggers:
+  - entity_id: predbat.status
+    from: Freeze charging
+    trigger: state
+conditions:
+  - condition: state
+    entity_id: input_boolean.freeze_charge_guard
+    state: "on"
+  - condition: template
+    value_template: |
+      {{ not trigger.to_state.state.startswith('Warn:')
+         and not trigger.to_state.state.startswith('Error:')
+         and trigger.to_state.state not in ['unknown','unavailable'] }}
+actions:
+  - target:
+      entity_id:
+        - automation.luxpower_freeze_charge
+        - automation.luxpower_freeze_charge_predbat_override
+        - automation.luxpower_freeze_charge_watchdog
+    action: automation.turn_off
+  - target:
+      entity_id: input_boolean.freeze_charge_guard
+    action: input_boolean.turn_off
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |
+              {{ trigger.to_state.state.startswith('Charging')
+                 or trigger.to_state.state == 'Hold charging' }}
+        sequence:
+          - target:
+              entity_id: switch.lux_ac_charge_enable
+            action: switch.turn_on
+    default:
+      - target:
+          entity_id: switch.lux_ac_charge_enable
+        action: switch.turn_off
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |
+              {{ trigger.to_state.state.startswith('Charging') }}
+        sequence:
+          - target:
+              entity_id: number.lux_ac_battery_charge_level
+            data:
+              value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
+            action: number.set_value
+      - conditions:
+          - condition: template
+            value_template: |
+              {{ trigger.to_state.state == 'Hold charging' }}
+        sequence:
+          - target:
+              entity_id: number.lux_ac_battery_charge_level
+            data:
+              value: >-
+                {{ states('number.lux_on_grid_discharge_cut_off_soc') | int(0)
+                }}
+            action: number.set_value
+  - target:
+      entity_id: automation.luxpower_freeze_charge_exit
+    action: automation.turn_off
+mode: single
+
+```
+
+Occasionally, when a Manual Freeze Charge is requested, Predbat may immediately decide that **Hold Charging** is the more appropriate state based on current conditions. In this case, Freeze Charging automations may remain enabled even though Predbat reports Hold Charging. The watchdog safely exits Freeze Charging after a short grace period.
+
+- Create the **Freeze Charge Watchdog** automation to handle cases where Manual Freeze Charging immediately transitions to **Hold Charging**.
+
+```yaml
+alias: LuxPower Freeze Charge Watchdog
+description: >
+  Cancels freeze charge if Predbat does not commit to Freeze charging. Triggered
+  by freeze guard Boolean; self-disarms after execution.
+triggers:
+  - entity_id: input_boolean.freeze_charge_guard
     from: "off"
     to: "on"
     trigger: state
 conditions: []
 actions:
-  - data:
-      level: debug
-      message: >
-        LuxPowerFreezeCharge TRIGGERED: trigger={{ trigger.entity_id if trigger
-        is defined else 'unknown' }}, from={{ trigger.from_state.state if
-        trigger.from_state is defined else 'unknown' }}, to={{
-        trigger.to_state.state if trigger.to_state is defined else 'unknown' }},
-        sensor={{ states('binary_sensor.solar_compare_home') }}, ac={{
-        states('switch.lux_ac_charge_enable') }}, guard={{
-        states('input_boolean.freeze_charge_guard') }}
-    action: system_log.write
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: |
-              {{ trigger.to_state is defined
-                and trigger.from_state.state == 'off'
-                and trigger.to_state.state == 'on' }}
-        sequence:
-          - target:
-              entity_id: number.lux_ac_battery_charge_level
-            data:
-              value: "{{ states('sensor.lux_battery_soc_corrected') | float }}"
-            action: number.set_value
-          - target:
-              entity_id: input_boolean.freeze_charge_guard
-            action: input_boolean.turn_on
-          - data:
-              level: debug
-              message: >
-                LuxPowerFreezeCharge: Automation ON → SoC set to {{
-                states('sensor.lux_battery_soc_corrected') }} and guard ON
-            action: system_log.write
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: |
-              {{ not (trigger.to_state is defined
-                      and trigger.from_state.state == 'off'
-                      and trigger.to_state.state == 'on')
-                and (states('sensor.lux_battery_soc_corrected') | float !=
-                      states('number.lux_ac_battery_charge_level') | float) }}
-        sequence:
-          - target:
-              entity_id: number.lux_ac_battery_charge_level
-            data:
-              value: "{{ states('sensor.lux_battery_soc_corrected') | float }}"
-            action: number.set_value
-          - data:
-              level: debug
-              message: >
-                LuxPowerFreezeCharge: SoC updated to {{
-                states('sensor.lux_battery_soc_corrected') }} due to value
-                difference
-            action: system_log.write
-  - condition: state
-    entity_id: input_boolean.freeze_charge_guard
-    state: "on"
-  - choose:
-      - conditions:
-          - condition: state
-            entity_id: binary_sensor.solar_compare_home
-            state: "on"
-          - condition: state
-            entity_id: switch.lux_ac_charge_enable
-            state: "off"
-        sequence:
-          - target:
-              entity_id: switch.lux_ac_charge_enable
-            action: switch.turn_on
-          - data:
-              level: debug
-              message: "LuxPowerFreezeCharge: AC turned ON (sensor ON)"
-            action: system_log.write
-      - conditions:
-          - condition: state
-            entity_id: binary_sensor.solar_compare_home
-            state: "off"
-          - condition: state
-            entity_id: switch.lux_ac_charge_enable
-            state: "on"
-        sequence:
-          - target:
-              entity_id: switch.lux_ac_charge_enable
-            action: switch.turn_off
-          - data:
-              level: debug
-              message: "LuxPowerFreezeCharge: AC turned OFF (sensor OFF)"
-            action: system_log.write
-  - choose:
-      - conditions:
-          - condition: template
-            value_template: |
-              {{ states('predbat.status') in ['Charging','Hold charging'] }}
-        sequence:
-          - target:
-              entity_id: automation.luxpower_freeze_charge
-            action: automation.turn_off
-          - data:
-              level: debug
-              message: >
-                LuxPowerFreezeCharge: Predbat status {{ states('predbat.status')
-                }} → automation OFF, guard cleared
-            action: system_log.write
+  - alias: "Watchdog: Grace period"
+    delay: "00:00:30"
+  - alias: "Watchdog: Abort if no Freeze charging"
+    if:
+      - condition: template
+        value_template: |
+          {{ not states('predbat.status').startswith('Freeze charging') }}
+    then:
+      - alias: "Watchdog: Trace cancellation"
+        action: system_log.write
+        data:
+          level: warning
+          message: >
+            Predbat never entered Freeze charging (status="{{
+            states('predbat.status') }}") → cancelling freeze
+      - alias: "Watchdog: Disable freeze automations"
+        action: automation.turn_off
+        target:
+          entity_id:
+            - automation.luxpower_freeze_charge
+            - automation.luxpower_freeze_charge_predbat_override
+            - automation.luxpower_freeze_charge_exit
+      - alias: "Watchdog: Reset guard Boolean"
+        action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.freeze_charge_guard
+      - alias: "Watchdog: AC handling"
+        choose:
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status').startswith('Charging') 
+                     or states('predbat.status') == 'Hold charging' }}
+            sequence:
+              - if:
+                  - condition: state
+                    entity_id: switch.lux_ac_charge_enable
+                    state: "off"
+                then:
+                  - action: switch.turn_on
+                    target:
+                      entity_id: switch.lux_ac_charge_enable
+        default:
+          - if:
+              - condition: state
+                entity_id: switch.lux_ac_charge_enable
+                state: "on"
+            then:
+              - action: switch.turn_off
+                target:
+                  entity_id: switch.lux_ac_charge_enable
+      - alias: "Watchdog: Restore SOC limits"
+        choose:
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status').startswith('Charging') }}
+            sequence:
+              - action: number.set_value
+                target:
+                  entity_id: number.lux_ac_battery_charge_level
+                data:
+                  value: "{{ states('number.lux_system_charge_soc_limit') | int(0) }}"
+          - conditions:
+              - condition: template
+                value_template: |
+                  {{ states('predbat.status') == 'Hold charging' }}
+            sequence:
+              - action: number.set_value
+                target:
+                  entity_id: number.lux_ac_battery_charge_level
+                data:
+                  value: >-
+                    {{ states('number.lux_on_grid_discharge_cut_off_soc') |
+                    int(0) }}
+  - alias: "Watchdog: Disarm self"
+    action: automation.turn_off
+    target:
+      entity_id: automation.luxpower_freeze_charge_watchdog
 mode: single
-```
 
-- Create the following automation to reset the input_boolean when the freeze charge automation is turned off by Predbat stopping Freeze Charge mode:
+```
+**Enable Freeze Charging**
+
+- Ensure **`switch.predbat_set_charge_freeze`** is turned On.
+
+After Predbat recomputes, you may see some light grey **FrzChrg** slots in the state column of the plan. To disable Freeze Charging simply turn the switch Off. Predbat will no longer schedule any FrzChrg slots. 
+
+
+---
+
+### Freeze Exporting
+
+If you have a LuxPower inverter with the *Charge Last* feature, enable the Predbat `discharge_freeze_service`.
+
+**Note:**
+Freeze Exporting requires fewer supporting automations than Freeze Charging, as it relies primarily on inverter-side behaviour. No additional watchdog or guard logic is required.
+
+- In your `apps.yaml` file:
+
+  - Look for `support_discharge_freeze` in the inverter section and change `False` to `True`
+  - Uncomment the last two lines of the `discharge_stop_service` section so Predbat turns `switch.lux_charge_last` off when Freeze exporting stops.
+  - Uncomment the three lines of the `discharge_freeze_service` section so that Predbat turns on the LuxPower Charge Last switch. 
+  - Ensure the indentation and alignment match the other service entries.
+
+  
+**Enable Freeze Exporting**
+
+- Ensure **`switch.predbat_set_export_freeze`** is turned On.
+
+After Predbat recomputes, you may see some dark grey **FrzExp** slots in the state column of the plan. To disable Freeze Exporting simply turn the switch Off. Predbat will no longer schedule any FrzExp slots. 
+
+
+
+---
+
+### Home Assistant restart recovery
+
+- Create the following toggle helper and automation to ensure the inverter and Predbat return to a known safe state after a Home Assistant restart.
+This automation must always be enabled.
 
 ```yaml
-alias: Freeze Charge – Guard Reset
-description: "Turn off the input boolean guard whenever the LuxPower freeze charge automation is turned off."
-triggers:
-  - entity_id: automation.luxpower_freeze_charge
-    to: "off"
-    trigger: state
-actions:
-  - target:
-      entity_id: input_boolean.freeze_charge_guard
-    action: input_boolean.turn_off
-  - data:
-      level: debug
-      message: >-
-        FreezeCharge: Guard cleared because automation was turned OFF
-        externally.
-    action: system_log.write
-mode: single
+name: Predbat Ready
+entity_id: input_boolean.predbat_ready
 ```
 
-- Check that the Predbat configuration switch **switch.predbat_set_charge_freeze** is turned On.
+The `predbat_ready` helper prevents automation actions until LuxPower entities are fully available after startup. Ensure it is On after it has been created. 
 
-- If you have a LuxPower inverter with the 'Charge Last' feature you should enable the Predbat discharge freeze service. Enabling this will ensure you get the most out of Predbat. In your `apps.yaml` file:
 
-    - change the 'support_discharge_freeze' line in the Inverter section from 'False' to 'True'
-    - uncomment the following two lines in the 'discharge_stop_service' section so that Predbat turns switch.lux_charge_last off when it stops discharge from your inverter
-    - uncomment the next three lines, so adding a new 'discharge_freeze_service'
-    - make sure the indentation and alignment of these new lines is consistent with the other service entries
+```yaml
+alias: LuxPower HA Startup Reset
+description: >
+  On Home Assistant restart, wait for LuxPower entities to be available, then
+  safely disable freeze charge, override, watchdog, guard boolean, AC/charge and
+  charge last switches, and reset discharge current limit. Marks Predbat ready
+  only after HA and Lux are stable.
+triggers:
+  - event: start
+    trigger: homeassistant
+actions:
+  - alias: "StartupReset: Mark Predbat NOT ready"
+    target:
+      entity_id: input_boolean.predbat_ready
+    action: input_boolean.turn_off
+  - alias: "StartupReset: Wait for Lux entities"
+    wait_template: |
+      {{ states('switch.lux_ac_charge_enable') not in ['unknown','unavailable']
+         and states('switch.lux_charge_last') not in ['unknown','unavailable']
+         and states('switch.lux_force_discharge_enable') not in ['unknown','unavailable']
+         and states('number.lux_discharge_current_limit') not in ['unknown','unavailable'] }}
+    timeout: "00:02:00"
+    continue_on_timeout: true
+  - alias: "StartupReset: Disable freeze/override/watchdog"
+    target:
+      entity_id:
+        - automation.luxpower_freeze_charge
+        - automation.luxpower_freeze_charge_predbat_override
+        - automation.luxpower_freeze_charge_exit
+        - automation.luxpower_freeze_charge_watchdog
+    action: automation.turn_off
+  - alias: "StartupReset: Reset guard boolean"
+    target:
+      entity_id: input_boolean.freeze_charge_guard
+    action: input_boolean.turn_off
+  - alias: "StartupReset: Wait for battery voltage to be > 0"
+    wait_template: "{{ states('sensor.lux_battery_voltage_live') | float > 0 }}"
+    timeout: "00:01:00"
+    continue_on_timeout: true
+  - alias: "StartupReset: Set discharge current limit from battery_rate_max"
+    target:
+      entity_id: number.lux_discharge_current_limit
+    data:
+      value: |
+        {{ (states('input_number.battery_rate_max') | float
+            / states('sensor.lux_battery_voltage_live') | float(1))
+            | round(0) }}
+    action: number.set_value
+  - alias: "StartupReset: Turn off AC if on"
+    if:
+      - condition: state
+        entity_id: switch.lux_ac_charge_enable
+        state: "on"
+    then:
+      - target:
+          entity_id: switch.lux_ac_charge_enable
+        action: switch.turn_off
+  - alias: "StartupReset: Turn off charge last if on"
+    if:
+      - condition: state
+        entity_id: switch.lux_charge_last
+        state: "on"
+    then:
+      - target:
+          entity_id: switch.lux_charge_last
+        action: switch.turn_off
+  - alias: "StartupReset: Turn off force discharge if on"
+    if:
+      - condition: state
+        entity_id: switch.lux_force_discharge_enable
+        state: "on"
+    then:
+      - target:
+          entity_id: switch.lux_force_discharge_enable
+        action: switch.turn_off
+  - alias: "StartupReset: Final settle delay"
+    delay: "00:01:30"
+  - alias: "StartupReset: Mark Predbat ready"
+    target:
+      entity_id: input_boolean.predbat_ready
+    action: input_boolean.turn_on
+  - alias: "StartupReset: Log completion"
+    data:
+      level: debug
+      message: "StartupReset: cleanup complete, watchdog and guard OFF, Predbat ready"
+    action: system_log.write
+mode: single
 
-  Check that the Predbat configuration switch **switch.predbat_set_export_freeze** is turned On.
+```
 
-  After the Predbat Plan has recalculated you may notice some 'FrzExp' in the state column next to some slots.
 
+---
+
+### Notes
+
+¹
+If you do not need to record the binary sensor, you can exclude it from the HA recorder by adding the following to your `configuration.yaml` file: *(HA restart required)*
+
+```yaml
+recorder:
+  exclude:
+    entities:
+      - binary_sensor.solar_compare_home
+```
+
+²
+While LuxPower inverters cannot exactly replicate Predbat’s native Freeze Charging behaviour, these automations achieve an equivalent outcome. Any small differences are corrected the next time Predbat recalculates its plan.
+
+³ 
+You shouldn't encounter any warnings or errors like those below but if you do they can safely be ignored. They are benign and purely informational. They do not indicate a fault with Predbat. 
+
+```yaml
+Predbat log:
+Completed run status Freeze charging with Errors reported (check log)
+Warn: record_status – Inverter 0 write to scheduled_charge_enable failed
+Warn: Inverter 0 Trying to write scheduled_charge_enable to True didn’t complete (got off)
+
+Predbat Status:
+Warn: Inverter 0 write to scheduled_charge_enable failed
+```
+
+---
 ## Sigenergy Sigenstor
 
 To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to follow the steps below:
@@ -2084,11 +2480,11 @@ The following template can be used as a starting point:
 
 The following options are supported per inverter:
 
-### has_rest_api
+### `has_rest_api`
 
 When True the REST API will be used to fetch data/control the inverter. This is currently only for GivEnergy inverters with GivTCP and **givtcp_rest** must be set in `apps.yaml`
 
-### has_mqtt_api
+### `has_mqtt_api`
 
 When True the Home Assistant MQTT API will be used to issue control messages for the inverter
 
@@ -2109,7 +2505,7 @@ These three messages change between battery charge/discharge and auto (demand) m
 - **topic**/set/discharge - payload=discharge_rate
 - **topic**/set/auto - payload=true
 
-### has_service_api
+### `has_service_api`
 
 When True a Home Assistant service will be used to issue control messages for the inverter.
 
@@ -2159,7 +2555,7 @@ If however, you want the service to be called on each Predbat run then you shoul
       repeat: True
 ```
 
-#### charge_start_service
+#### `charge_start_service`
 
 Called to start a charge
 
@@ -2171,17 +2567,17 @@ The default options passed in are:
 - charge_start_time - Start time for the charge
 - charge_end_time - End time for the charge
 
-#### charge_freeze_service
+#### `charge_freeze_service`
 
 If defined will be called for freeze charge, otherwise, charge_start_service is used for freeze charge also.
 
-#### charge_stop_service
+#### `charge_stop_service`
 
 Called to stop a charge
 
 - device_id - as defined in `apps.yaml` by **device_id**
 
-#### discharge_start_service
+#### `discharge_start_service`
 
 Called to start a discharge
 
@@ -2191,17 +2587,17 @@ The default options passed in are:
 - target_soc - The SoC to discharge to
 - power - The discharge power to use
 
-#### discharge_freeze_service
+#### `discharge_freeze_service`
 
 If defined will be called for Discharge freeze, otherwise, discharge_start_service is used for freeze discharge also.
 
-#### discharge_stop_service
+#### `discharge_stop_service`
 
 Called to stop a discharge, if not set then **charge_stop_service** will be used instead
 
 - device_id - as defined in `apps.yaml` by **device_id**
 
-### output_charge_control
+### `output_charge_control`
 
 Controls what charge control units are to be used when starting charging. Set to "power", "current" or "none".
 
@@ -2211,79 +2607,84 @@ When set to "current", Predbat will use the inverter sensors configured as  **ti
 Additionally if you are using "current" control for your inverter you must set **battery_voltage** in `apps.yaml` to your nominal maximum battery voltage (NB: not the current battery voltage)
 as Predbat will use this to convert its output commands from watts to amps for the inverter.
 
-### charge_control_immediate
+### `charge_control_immediate`
 
 When True, the inverter uses **timed_charge_current** and **timed_discharge_current** in `apps.yaml` to control charging and discharging by setting current levels directly, instead of following a time-based plan.
 
-### current_dp
+### `current_dp`
 
 Sets the number of decimal places to be used when setting the current in Amps, which should be 0 or 1.
 
-### charge_discharge_with_rate
+### `charge_discharge_with_rate`
 
 When True, the inverter requires that when charging the discharge rate must set be 0; and vice-versa, when discharging the charge rate must be set to 0.
 
 When False, the charge/discharge rate does not have to change.
 
-### has_charge_enable_time
+### `has_charge_enable_time`
 
 When True, Predbat uses the **scheduled_charge_enable** switch configured in `apps.yaml` to enable/disable timed charging on the inverter.
 
-### has_discharge_enable_time
+### `has_discharge_enable_time`
 
 When True, Predbat uses the **scheduled_discharge_enable** switch configured in `apps.yaml` to enable/disable timed discharging on the inverter.
 
-### has_target_soc
+### `has_target_soc`
 
 When True, Predbat uses the **charge_limit** sensor configured in `apps.yaml` to set the target charge SoC % setting for the inverter. The charge limit is the limit that the inverter will charge the battery up to.
 When False, charging will be turned on and off by Predbat rather than the inverter doing it based on the target SoC %.
 
-### target_soc_used_for_discharge
+### `target_soc_used_for_discharge`
 
 When True, Predbat will use the **charge_limit** sensor configured in `apps.yaml` to control the target discharge SoC% for the inverter.
 
 When False, Predbat will not adjust the **charge_limit** sensor when discharging.
 
-### has_reserve_soc
+### `has_reserve_soc`
 
 When True, Predbat uses the **reserve** sensor configured in `apps.yaml` to set the discharge reserve SoC % for the inverter. The reserve SoC is the target % to discharge the battery down to.
 When False, discharging will be turned on and off by Predbat rather than the inverter doing it based on discharge SoC %.
 
-### has_timed_pause
+### `has_timed_pause`
 
 When True, Predbat uses the **pause_mode** and optional **pause_start_time** and **pause_end_time**  settings in `apps.yaml` to pause the inverter from charging and discharging the battery. This setting is for GivEnergy systems only right now.
 
-### time_button_press
+### `time_button_press`
 
 When True, the inverter requires a button press to update the inverter registers from the Home Assistant values.
 
 The `apps.yaml` setting **charge_discharge_update_button** is the entity name of the button that Predbat will "push" to update the inverter registers.
 
-### support_charge_freeze
+### `support_charge_freeze`
 
 When True, the inverter supports charge freeze modes.
 
-### support_discharge_freeze
+### `maintain_freeze_charge_status` 
+
+Only required for inverters without native Freeze Charging support.
+When True, suppresses expected warnings resulting from the manipulation of `scheduled_charge_enable` during Freeze Charging, ensuring that `predbat.status` remains stable instead of transitioning to `Warn:` states.
+
+### `support_discharge_freeze`
 
 When True, the inverter supports discharge freeze modes.
 
-### has_ge_inverter_mode
+### `has_ge_inverter_mode`
 
 When True, the inverter supports the GivEnergy inverter modes (ECO, Timed Export etc).
 
-### has_fox_inverter_mode
+### `has_fox_inverter_mode`
 
 When True, the inverter supports Fox inverter modes, i.e. Eco (Paused) is treated the same as Eco mode and the inverter mode is always set to "SelfUse" as all charging and discharging is controlled by schedule, not inverter modes.
 
-### has_idle_time
+### `has_idle_time`
 
 When True, the inverter has an idle time register which must be set to the start and end times for Eco mode (GivEnergy EMS).  **idle_start_time** and **idle_end_time** must be configured in `apps.yaml` to the appropriate inverter controls.
 
-### has_time_window
+### `has_time_window`
 
 Not currently used by Predbat.
 
-### charge_time_format
+### `charge_time_format`
 
 This setting is used to control what format of charge and discharge times the inverter requires.
 
@@ -2299,31 +2700,33 @@ These entities are used to set the start and end hours and minutes of charges an
 When set to "H:M-H:M", Predbat will control the inverter charge/discharge start and end times by setting the entities defined by **charge_time** and **discharge_time** in `apps.yaml`.
 The entities take a single time range value in the format "*start hour*:*start minute*-*end hour*:*end minute*"
 
-### charge_time_entity_is_option
+### `charge_time_entity_is_option`
 
 When True, **charge_start_time** **charge_end_time** **discharge_start_time** and **discharge_end_time** are all option selectors for time in the format HH:MM:SS (e.g. 12:23:00) where seconds are always 00.
 
 When False, these entities are all number values.
 
-### can_span_midnight
+### `can_span_midnight`
 
 When True, start and end times for charge and discharge can span midnight e.g. 23:00:00 - 01:00:00 is a 2-hour slot.
 
 When False, start and end times can't span midnight and Predbat will control the inverter with separate charges/discharges up to and then after midnight if required by the plan.
 
-### clock_time_format
+### `clock_time_format`
 
 Defines the time format of the inverter clock setting **inverter_time** in `apps.yaml`
 
-### num_load_entities
+### `num_load_entities`
 
 Enables you to define additional house load power sensors in `apps.yaml` in addition to the default **load_power** sensor.  e.g. if set to 2 then Predbat will additionally use **load_power_1** and **load_power_2** settings in `apps.yaml`.
 This setting might be required for 3-phase inverters.
 
-### soc_units
+### `soc_units`
 
 Defines the units of the SoC setting (currently not used), it defaults to "%".
 
-### write_and_poll_sleep
+### `write_and_poll_sleep`
 
 Sets the number of seconds between polls of inverter settings.
+
+
