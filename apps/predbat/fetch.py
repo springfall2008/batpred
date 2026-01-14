@@ -206,7 +206,7 @@ class Fetch:
         min_sum = 99999999
         min_sum_day = 0
         sum_all_days = {}
-            
+
         days_list = self.days_previous.copy()
         # Sort days list in numerical order with highest number day first
         days_list.sort(reverse=True)
