@@ -1162,39 +1162,44 @@ class Inverter:
                 raise ValueError
 
             if charge_start_time is None or charge_end_time is None:
-                self.log("Error: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None".format(self.id))
-                self.base.record_status("Error: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None".format(self.id), had_errors=True)
-                raise ValueError
-
-            # Update simulated charge enable time to match the charge window time.
-            if not self.inv_has_charge_enable_time:
-                if charge_start_time == charge_end_time:
-                    self.charge_enable_time = False
-                else:
-                    self.charge_enable_time = True
-                self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
-
-            # Track charge start/end
-            if charge_start_time and charge_end_time:
-                self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
-                self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
-            else:
-                self.track_charge_start = "00:00:00"
-                self.track_charge_end = "00:00:00"
-
-            # Reverse clock skew
-            charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
-            charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
-
-            # Compute charge window minutes start/end just for the next charge window
-            self.charge_start_time_minutes, self.charge_end_time_minutes = compute_window_minutes(charge_start_time, charge_end_time, minutes_now)
-
-            # Charge is off due to start/end time being same
-            if not self.inv_has_charge_enable_time and not self.charge_enable_time:
+                self.log("Warn: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None, will retry next update".format(self.id))
+                self.base.record_status("Warn: Inverter {} unable to read charge window time, will retry next update".format(self.id), had_errors=True)
+                # Set safe defaults to allow graceful recovery on next update
+                self.charge_enable_time = False
                 self.charge_start_time_minutes = self.base.forecast_minutes
                 self.charge_end_time_minutes = self.base.forecast_minutes
                 self.track_charge_start = "00:00:00"
                 self.track_charge_end = "00:00:00"
+            else:
+                # Update simulated charge enable time to match the charge window time.
+                if not self.inv_has_charge_enable_time:
+                    if charge_start_time == charge_end_time:
+                        self.charge_enable_time = False
+                    else:
+                        self.charge_enable_time = True
+                    self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
+
+                # Track charge start/end
+                if charge_start_time and charge_end_time:
+                    self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
+                    self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
+                else:
+                    self.track_charge_start = "00:00:00"
+                    self.track_charge_end = "00:00:00"
+
+                # Reverse clock skew
+                charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
+                charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
+
+                # Compute charge window minutes start/end just for the next charge window
+                self.charge_start_time_minutes, self.charge_end_time_minutes = compute_window_minutes(charge_start_time, charge_end_time, minutes_now)
+
+                # Charge is off due to start/end time being same
+                if not self.inv_has_charge_enable_time and not self.charge_enable_time:
+                    self.charge_start_time_minutes = self.base.forecast_minutes
+                    self.charge_end_time_minutes = self.base.forecast_minutes
+                    self.track_charge_start = "00:00:00"
+                    self.track_charge_end = "00:00:00"
         else:
             # If charging is disabled set a fake window outside
             self.charge_start_time_minutes = self.base.forecast_minutes
@@ -1260,30 +1265,40 @@ class Inverter:
             self.base.record_status("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
             raise ValueError
 
-        # Update simulated discharge enable time to match the discharge window time.
-        if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode:
-            if discharge_start == discharge_end:
-                self.discharge_enable_time = False
-            else:
-                self.discharge_enable_time = True
-            entity_id = self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id)
-            self.write_and_poll_switch("scheduled_discharge_enable", entity_id, self.discharge_enable_time)
-            self.log("Inverter {} {} set to {}".format(self.id, entity_id, self.discharge_enable_time))
-
-        # Tracking for idle time
-        if self.discharge_enable_time:
-            self.track_discharge_start = discharge_start.strftime(TIME_FORMAT_HMS)
-            self.track_discharge_end = discharge_end.strftime(TIME_FORMAT_HMS)
-        else:
+        if discharge_start is None or discharge_end is None:
+            self.log("Warn: Inverter {} unable to read Export window as discharge_start or discharge_end is None, will retry next update".format(self.id))
+            self.base.record_status("Warn: Inverter {} unable to read Export window, will retry next update".format(self.id), had_errors=True)
+            # Set safe defaults to allow graceful recovery on next update
+            self.discharge_enable_time = False
+            self.discharge_start_time_minutes = 0
+            self.discharge_end_time_minutes = 0
             self.track_discharge_start = "00:00:00"
             self.track_discharge_end = "00:00:00"
+        else:
+            # Update simulated discharge enable time to match the discharge window time.
+            if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode:
+                if discharge_start == discharge_end:
+                    self.discharge_enable_time = False
+                else:
+                    self.discharge_enable_time = True
+                entity_id = self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id)
+                self.write_and_poll_switch("scheduled_discharge_enable", entity_id, self.discharge_enable_time)
+                self.log("Inverter {} {} set to {}".format(self.id, entity_id, self.discharge_enable_time))
 
-        # Reverse clock skew
-        discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
-        discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
+            # Tracking for idle time
+            if self.discharge_enable_time:
+                self.track_discharge_start = discharge_start.strftime(TIME_FORMAT_HMS)
+                self.track_discharge_end = discharge_end.strftime(TIME_FORMAT_HMS)
+            else:
+                self.track_discharge_start = "00:00:00"
+                self.track_discharge_end = "00:00:00"
 
-        # Compute discharge window minutes start/end just for the next discharge window
-        self.discharge_start_time_minutes, self.discharge_end_time_minutes = compute_window_minutes(discharge_start, discharge_end, minutes_now)
+            # Reverse clock skew
+            discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
+            discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
+
+            # Compute discharge window minutes start/end just for the next discharge window
+            self.discharge_start_time_minutes, self.discharge_end_time_minutes = compute_window_minutes(discharge_start, discharge_end, minutes_now)
 
         if not quiet:
             self.base.log("Inverter {} scheduled discharge enable is {}".format(self.id, self.discharge_enable_time))
@@ -2007,6 +2022,10 @@ class Inverter:
         elif "discharge_start_time" in self.base.args:
             old_start = self.base.get_arg("discharge_start_time", index=self.id)
             old_end = self.base.get_arg("discharge_end_time", index=self.id)
+            if old_start is None:
+                old_start = "00:00:00"
+            if old_end is None:
+                old_end = "00:00:00"
             if len(old_start) == 5:
                 old_start += ":00"
             if len(old_end) == 5:
@@ -2463,6 +2482,10 @@ class Inverter:
         elif "charge_start_time" in self.base.args:
             old_start = self.base.get_arg("charge_start_time", index=self.id)
             old_end = self.base.get_arg("charge_end_time", index=self.id)
+            if old_start is None:
+                old_start = "00:00:00"
+            if old_end is None:
+                old_end = "00:00:00"
             if len(old_start) == 5:
                 old_start += ":00"
             if len(old_end) == 5:

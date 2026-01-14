@@ -27,7 +27,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.32.1"
+THIS_VERSION = "v8.32.2"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py"]
@@ -1591,7 +1591,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 raise e
             finally:
                 self.prediction_started = False
-            self.prediction_started = False
         elif not self.prediction_started:
             time_now = datetime.now()
             if self.inverter_data_last_fetch:
@@ -1599,8 +1598,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 if tdiff.total_seconds() >= INVERTER_QUICK_UPDATE_SECONDS:
                     # Perform quick update of inverter data for the dashboard only
                     self.prediction_started = True
-                    self.quick_inverter_data_update()
-                    self.prediction_started = False
+                    try:
+                        self.quick_inverter_data_update()
+                    except Exception as e:
+                        self.log("Error: Exception raised {}".format(e))
+                        self.log("Error: " + traceback.format_exc())
+                        self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
+                        raise e
+                    finally:
+                        self.prediction_started = False
 
     def check_entity_refresh(self):
         """
@@ -1650,6 +1656,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
             try:
                 self.update_pred(scheduled=True)
+                if config_changed:
+                    self.create_entity_list()
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
@@ -1657,9 +1665,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 raise e
             finally:
                 self.prediction_started = False
-            if config_changed:
-                self.create_entity_list()
-            self.prediction_started = False
 
     def run_time_loop_balance(self, cb_args):
         """
