@@ -3023,6 +3023,7 @@ class Plan:
         best_battery_value = 0
         fast_mode = self.get_arg("enable_fast_mode_levels", True)
         enable_coarse_fine = self.get_arg("enable_coarse_fine_levels", True)
+        tried_list = {}  # Track tried combinations
 
         start_time = time.time()
         self.log("Optimise levels pass started at {}".format(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time))))
