@@ -205,26 +205,39 @@ class Fetch:
         sum_days_id = {}
         min_sum = 99999999
         min_sum_day = 0
-
+        sum_all_days = {}
+            
         days_list = self.days_previous.copy()
         # Sort days list in numerical order with highest number day first
         days_list.sort(reverse=True)
-
-        idx = 0
-        for days in days_list:
-            use_days = max(min(days, self.load_minutes_age), 1)
+        for days in range(max(max(days_list), self.load_minutes_age) + 1):
+            use_days = max(days, 1)
             sum_day = 0
             full_days = 24 * 60 * (use_days - 1)
             for minute in range(0, 24 * 60, PREDICT_STEP):
                 minute_previous = 24 * 60 - minute + full_days - 1
                 load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(data, minute_previous, historical=False, step=PREDICT_STEP)
                 sum_day += load_yesterday
-            sum_days.append(dp2(sum_day))
-            sum_days_id[days] = sum_day
-            if sum_day < min_sum:
-                min_sum_day = days
-                min_sum = dp2(sum_day)
-            idx += 1
+            if days in days_list:
+                sum_days.append(dp2(sum_day))
+                sum_days_id[days] = sum_day
+                if sum_day < min_sum:
+                    min_sum_day = days
+                    min_sum = dp2(sum_day)
+            sum_all_days[days] = dp2(sum_day)
+
+        # Work out the highest non-zero day load
+        average_non_zero_day = 0
+        average_non_zero_count = 0
+        for day_sum in sum_all_days.values():
+            # Sensible threshold to ignore zero days
+            if day_sum > 2.5:
+                average_non_zero_day += day_sum
+                average_non_zero_count += 1
+        if average_non_zero_count > 0:
+            average_non_zero_day /= average_non_zero_count
+        else:
+            average_non_zero_day = 24
 
         self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(days_list, sum_days, min_sum))
         if self.load_filter_modal and total_points >= 3 and (min_sum_day > 0):
@@ -239,7 +252,7 @@ class Fetch:
         # Gap filling
         gap_size = max(self.get_arg("load_filter_threshold", self.plan_interval_minutes), 5)
         for days in days_list:
-            use_days = max(min(days, self.load_minutes_age), 1)
+            use_days = max(days, 1)
             num_gaps = 0
             full_days = 24 * 60 * (use_days - 1)
             gap_minutes = 0
@@ -267,8 +280,8 @@ class Fetch:
             if num_gaps > 0:
                 average_day = sum_days_id[days]
                 if (average_day == 0) or (num_gaps >= 24 * 60):
-                    self.log("Warn: Historical day {} has no load history data, unable to fill gaps normally using nominal 24kWh - you should check your load_today sensor in apps.yaml".format(days))
-                    average_day = 24.0
+                    self.log("Warn: Historical day {} has no load history data, unable to fill gaps normally using nominal {}kWh - you should check your load_today sensor in apps.yaml".format(days, dp2(average_non_zero_day)))
+                    average_day = average_non_zero_day
                 else:
                     real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
                     average_day /= real_data_percent

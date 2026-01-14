@@ -3064,6 +3064,7 @@ class Plan:
             )
 
             self.plan_write_debug(debug_mode, "plan_pre_levels.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+            tried_list = {}
 
             if self.calculate_regions:
                 region_size = int(16 * 60)
