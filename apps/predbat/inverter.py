@@ -1152,7 +1152,7 @@ class Inverter:
             # Find current charge window
             charge_start_time = None
             charge_end_time = None
-            
+
             if self.rest_data:
                 charge_start_time = time_string_to_stamp(self.rest_data["Timeslots"]["Charge_start_time_slot_1"])
                 charge_end_time = time_string_to_stamp(self.rest_data["Timeslots"]["Charge_end_time_slot_1"])
@@ -1160,10 +1160,9 @@ class Inverter:
                 charge_start_time = time_string_to_stamp(self.base.get_arg("charge_start_time", index=self.id))
                 charge_end_time = time_string_to_stamp(self.base.get_arg("charge_end_time", index=self.id))
             else:
-                self.log("Warn: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set, will retry next update".format(self.id))
-                self.base.record_status("Warn: Inverter {} unable to read charge window time, will retry next update".format(self.id), had_errors=True)
-                charge_start_time = None
-                charge_end_time = None
+                self.log("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
+                self.base.record_status("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True)
+                raise ValueError
 
             if charge_start_time is None or charge_end_time is None:
                 self.log("Warn: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None, will retry next update".format(self.id))
@@ -1260,7 +1259,7 @@ class Inverter:
 
         discharge_start = None
         discharge_end = None
-        
+
         if self.rest_data:
             discharge_start = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_start_time_slot_1"])
             discharge_end = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_end_time_slot_1"])
@@ -1268,10 +1267,9 @@ class Inverter:
             discharge_start = time_string_to_stamp(self.base.get_arg("discharge_start_time", index=self.id))
             discharge_end = time_string_to_stamp(self.base.get_arg("discharge_end_time", index=self.id))
         else:
-            self.log("Warn: Inverter {} unable to read Export window as neither REST or discharge_start_time are set, will retry next update".format(self.id))
-            self.base.record_status("Warn: Inverter {} unable to read Export window, will retry next update".format(self.id), had_errors=True)
-            discharge_start = None
-            discharge_end = None
+            self.log("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id))
+            self.base.record_status("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
+            raise ValueError
 
         if discharge_start is None or discharge_end is None:
             self.log("Warn: Inverter {} unable to read Export window as discharge_start or discharge_end is None, will retry next update".format(self.id))
@@ -2030,6 +2028,10 @@ class Inverter:
         elif "discharge_start_time" in self.base.args:
             old_start = self.base.get_arg("discharge_start_time", index=self.id)
             old_end = self.base.get_arg("discharge_end_time", index=self.id)
+            if old_start is None:
+                old_start = "00:00:00"
+            if old_end is None:
+                old_end = "00:00:00"
             if len(old_start) == 5:
                 old_start += ":00"
             if len(old_end) == 5:
@@ -2486,6 +2488,10 @@ class Inverter:
         elif "charge_start_time" in self.base.args:
             old_start = self.base.get_arg("charge_start_time", index=self.id)
             old_end = self.base.get_arg("charge_end_time", index=self.id)
+            if old_start is None:
+                old_start = "00:00:00"
+            if old_end is None:
+                old_end = "00:00:00"
             if len(old_start) == 5:
                 old_start += ":00"
             if len(old_end) == 5:
