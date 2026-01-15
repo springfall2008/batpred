@@ -278,8 +278,8 @@ class Fetch:
             # If we have some gaps
             if num_gaps > 0:
                 average_day = sum_days_id[days]
-                if (average_day == 0) or (num_gaps >= 24 * 60):
-                    self.log("Warn: Historical day {} has no load history data, unable to fill gaps normally using nominal {}kWh - you should check your load_today sensor in apps.yaml".format(days, dp2(average_non_zero_day)))
+                if (average_day == 0) or (num_gaps >= 16 * 60):
+                    self.log("Warn: Historical day {} has no/limited load history data, unable to fill gaps normally using nominal {}kWh - you should check your load_today sensor in apps.yaml".format(days, dp2(average_non_zero_day)))
                     average_day = average_non_zero_day
                 else:
                     real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
