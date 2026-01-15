@@ -210,7 +210,6 @@ class Fetch:
         Since data goes backwards in time (minute 0 is now, higher minutes are further in past),
         the load value DECREASES as we go forward in time (backwards through minutes).
         """
-        print("Saving load power data to YAML")
 
         if not load_power_data:
             self.log("Warn: No power data provided to fill_load_from_power")
