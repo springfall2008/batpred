@@ -73,11 +73,13 @@ NB2: If you have **car_charging_soc** set and working for your car SoC sensor in
 
 - Set **select.predbat_car_charging_plan_time** to the time you want the car charging to be completed by
 
-- Turn on **switch.predbat_car_charging_plan_smart** if you want to use the cheapest slots only. When disabled (turned off) all low-rate slots will be used in time order
+- Turn on **switch.predbat_car_charging_plan_smart** if you want to use the cheapest slots only. When disabled (turned off) all low-rate slots will be used in time order.
+Low-rate slots are time periods where the import rate is below the threshold determined by **input_number.predbat_rate_low_threshold** (_expert mode_).
+By default this threshold is calculated automatically based on future import rates - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options) for details on configuring this threshold.
 
 - You can set **input_number.predbat_car_charging_plan_max_price** if you want to set a maximum price in pence per kWh to charge your car (e.g. 10p).
 If you set this to zero, this feature is disabled, and all low-rate slots will be used.
-This may mean you need to use expert mode and change your low-rate threshold to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. Flux)
+This may mean you need to use expert mode and change your low-rate threshold (**input_number.predbat_rate_low_threshold**) to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. Flux)
 
 - _WARNING: Do not set **car_charging_now** in `apps.yaml` or you will create a circular dependency._
 
