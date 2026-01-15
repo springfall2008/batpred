@@ -31,6 +31,7 @@ class MockGECloudDirect(GECloudDirect):
         self.dashboard_items = {}
         self.log_messages = []
         self.config_args = {}
+        self.prefix = "predbat"  # Add prefix attribute for entity naming
 
         # Initialize instance variables that GECloudDirect expects
         self.requests_total = 0
@@ -1504,16 +1505,16 @@ def _test_run_method(my_predbat):
             print("Got:      {}".format(call_order))
             return 1
 
-        # Test subsequent run at seconds=60 (not first, but divisible by 60)
+        # Test subsequent run at seconds=120 (not first, but divisible by 120)
         call_order = []
-        result = await ge_cloud.run(seconds=60, first=False)
+        result = await ge_cloud.run(seconds=120, first=False)
 
         if not result:
             print("ERROR: run() should return True on success")
             return 1
 
         # Should only do device polling, not device discovery or one-shot tasks
-        expected_order_60 = [
+        expected_order_120 = [
             "async_get_inverter_status:inv001",
             "publish_status:inv001",
             "async_get_inverter_meter:inv001",
@@ -1526,9 +1527,9 @@ def _test_run_method(my_predbat):
             "publish_evc_data:evc-serial-001",
         ]
 
-        if call_order != expected_order_60:
-            print("ERROR: Call order mismatch at seconds=60")
-            print("Expected: {}".format(expected_order_60))
+        if call_order != expected_order_120:
+            print("ERROR: Call order mismatch at seconds=120")
+            print("Expected: {}".format(expected_order_120))
             print("Got:      {}".format(call_order))
             return 1
 

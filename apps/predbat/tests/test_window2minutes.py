@@ -113,5 +113,33 @@ def test_window2minutes(my_predbat):
         print(f"ERROR: Test 10 failed - expected (630, 885) got ({start}, {end})")
         failed = True
 
+    # Test 11: window2minutes with None time strings - should return (0, 0)
+    print("Test 11: window2minutes with None time strings")
+    minutes_now = 8 * 60
+    start, end = window2minutes(None, "14:00:00", minutes_now)
+    if start != 0 or end != 0:
+        print(f"ERROR: Test 11a failed - expected (0, 0) got ({start}, {end})")
+        failed = True
+    start, end = window2minutes("10:00:00", None, minutes_now)
+    if start != 0 or end != 0:
+        print(f"ERROR: Test 11b failed - expected (0, 0) got ({start}, {end})")
+        failed = True
+    start, end = window2minutes(None, None, minutes_now)
+    if start != 0 or end != 0:
+        print(f"ERROR: Test 11c failed - expected (0, 0) got ({start}, {end})")
+        failed = True
+
+    # Test 12: window2minutes with "unknown" time string - should return (0, 0)
+    print("Test 12: window2minutes with 'unknown' time string")
+    minutes_now = 8 * 60
+    start, end = window2minutes("unknown", "14:00:00", minutes_now)
+    if start != 0 or end != 0:
+        print(f"ERROR: Test 12a failed - expected (0, 0) got ({start}, {end})")
+        failed = True
+    start, end = window2minutes("10:00:00", "unknown", minutes_now)
+    if start != 0 or end != 0:
+        print(f"ERROR: Test 12b failed - expected (0, 0) got ({start}, {end})")
+        failed = True
+
     print("**** window2minutes tests completed ****")
     return failed

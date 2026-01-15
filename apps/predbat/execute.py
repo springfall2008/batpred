@@ -8,7 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from datetime import timedelta
+from datetime import timedelta, datetime
 from const import MINUTE_WATT
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from inverter import Inverter
@@ -378,7 +378,8 @@ class Execute:
                             status = "Hold exporting"
                             target = self.export_window_best[0].get("target", self.export_limits_best[0])
                             status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {}%-{}%".format(inverter.soc_percent, int(target))
+                            status_extra += " {}%-{}%".format(inverter.soc_percent, inverter.soc_percent)
+                            self.isExporting_Target = inverter.soc_percent
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.export_limits_best[0] < 99.0):
@@ -703,10 +704,13 @@ class Execute:
         self.battery_power = 0
         self.battery_temperature = 0
         self.grid_power = 0
+        self.inverter_data_last_fetch = datetime.now()
         found_first = False
 
-        if create:
+        # Create inverters list if needed
+        if create or (not self.inverters) or (len(self.inverters) != self.num_inverters):
             self.inverters = []
+            create = True
 
         # For each inverter get the details
         for id in range(self.num_inverters):
@@ -715,7 +719,7 @@ class Execute:
                 self.inverters.append(inverter)
             else:
                 inverter = self.inverters[id]
-            inverter.update_status(self.minutes_now)
+            inverter.update_status(self.minutes_now, quiet=not create)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
                 curve = inverter.find_charge_curve(discharge=False)
@@ -817,6 +821,15 @@ class Execute:
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]
         self.charge_limit_percent = calc_percent_limit(self.charge_limit, self.soc_max)
         self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
+        self.publish_inverter_data()
+
+    def quick_inverter_data_update(self):
+        """
+        Quick update of inverter data for dashboard
+        """
+        if self.inverters is None:
+            return
+        self.fetch_inverter_data(create=False)
         self.publish_inverter_data()
 
     def publish_inverter_data(self):

@@ -325,7 +325,7 @@ class Components:
                     self.log(f"Starting {component_info['name']} interface")
 
                 # Create new task
-                self.component_tasks[component_name] = self.base.create_task(component.start())
+                self.component_tasks[component_name] = self.base.create_task(component.start(), name=f"{component_name}_component_task")
                 if not component.wait_api_started():
                     self.log(f"Error: {component_info['name']} API failed to start")
                     failed = True
@@ -353,8 +353,9 @@ class Components:
         await self.stop(only=only)
         self.log("Waiting 10 seconds before restarting component(s)")
         await asyncio.sleep(10)
-        self.log("Starting component(s) again")
-        self.initialize(only=only)
+        self.log(f"Starting component(s) {only} again")
+        self.initialize(only=only, phase=0)
+        self.initialize(only=only, phase=1)
         self.start(only=only)
 
     """

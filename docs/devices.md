@@ -73,7 +73,7 @@ Can be used to extract the car's current SoC.
 
 Predbat can talk direct to the Ohme cloud service to control your Ohme EV charger.
 
-See [Ohme Direct](apps-yaml.md#ohme-car-charger---direct-integration)
+See [Ohme Direct](apps-yaml.md#ohme-car-charger-direct-integration)
 
 ## HA In-Built Ohme Integration
 

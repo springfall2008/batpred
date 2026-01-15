@@ -25,13 +25,13 @@ class AxleAPI(ComponentBase):
         self.automatic = automatic
         self.failures_total = 0
         self.event_history = []  # List of past events
-        self.current_event = {
+        self.current_event = {  # Current event
             "start_time": None,
             "end_time": None,
             "import_export": None,
-            "updated_at": None,
             "pence_per_kwh": None,
         }
+        self.updated_at: None  # Last updated moved out to separate attribute to not pollute triggering on change of current_event
 
     def load_event_history(self):
         """
@@ -213,13 +213,31 @@ class AxleAPI(ComponentBase):
                 "start_time": start_time.strftime(TIME_FORMAT) if start_time else None,
                 "end_time": end_time.strftime(TIME_FORMAT) if end_time else None,
                 "import_export": import_export,
-                "updated_at": updated_at.strftime(TIME_FORMAT) if updated_at else None,
                 "pence_per_kwh": self.pence_per_kwh,
             }
+            self.updated_at = updated_at.strftime(TIME_FORMAT) if updated_at else None
 
-            # Add to history if event has started (active or past events)
+            # Get the sensor entity_id from configuration
+            sensor_id = "binary_sensor." + self.prefix + "_axle_event"
+            current_start_time = None  # start and end of any current Axle event
+            current_end_time = None
+            if sensor_id:
+                # Fetch current event(s)
+                event_current = self.get_state_wrapper(entity_id=sensor_id, attribute="event_current")
+                if event_current and isinstance(event_current, list):
+                    current_start_time = event_current[0]["start_time"]
+                    current_end_time = event_current[0]["end_time"]
+
             if start_time and end_time:
+                # An Axle event is planned
+
+                # Add to history once event has started (active or past events)
                 self.add_event_to_history(self.current_event)
+
+                # send alert if this is a new Axle event
+                if (start_time.strftime(TIME_FORMAT) != current_start_time) or (end_time.strftime(TIME_FORMAT) != current_end_time):
+                    if self.get_arg("set_event_notify"):
+                        self.call_notify("Predbat: Scheduled Axle VPP event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), self.pence_per_kwh))
 
             self.cleanup_event_history()
             self.publish_axle_event()
@@ -262,6 +280,7 @@ class AxleAPI(ComponentBase):
                 "icon": "mdi:transmission-tower",
                 "event_current": event_current,
                 "event_history": self.event_history,
+                "updated_at": self.updated_at,
             },
         )
 
@@ -298,6 +317,7 @@ def fetch_axle_sessions(base):
     Returns a list of all events (current + history)
     """
     axle_events = []
+    axle_events_deduplicated = []
 
     # Get the sensor entity_id from configuration
     entity_id = base.get_arg("axle_session", indirect=False)
@@ -313,14 +333,19 @@ def fetch_axle_sessions(base):
             axle_events.extend(event_history)
 
         if axle_events:
-            base.log("Axle API: Fetched {} total events from sensor {}".format(len(axle_events), entity_id))
+            # deduplicate events, which occurs when a current event starts and it's immediately written to the history
+            for i in range(len(axle_events)):
+                if axle_events[i] not in axle_events[i + 1 :]:
+                    axle_events_deduplicated.append(axle_events[i])
 
-    return axle_events
+            base.log("Axle API: Fetched {} total events from sensor {}".format(len(axle_events_deduplicated), entity_id))
+
+    return axle_events_deduplicated
 
 
 def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
     """
-    Load octopus saving session slot
+    Load Axle VPP session slot
     """
 
     for axle_session in axle_sessions:
@@ -338,24 +363,22 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
             except (ValueError, TypeError):
                 start_time = None
                 end_time = None
-                base.log("Warn: Unable to decode Axle saving session start/end time")
+                base.log("Warn: Unable to decode Axle VPP session start/end time")
         if start_time and end_time:
             start_minutes = minutes_to_time(start_time, base.midnight_utc)
-            end_minutes = min(minutes_to_time(end_time, base.midnight_utc), base.forecast_minutes)
+            end_minutes = min(minutes_to_time(end_time, base.midnight_utc), base.forecast_minutes + base.minutes_now)
 
         if start_minutes is not None and end_minutes is not None and start_minutes < (base.forecast_minutes + base.minutes_now):
             if (export and import_export == "export") or (not export and import_export == "import"):
-                base.log("Setting Axle saving session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
+                base.log("Setting Axle VPP session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        if minute in base.rate_export:
-                            base.rate_export[minute] += pence_per_kwh
-                            rate_replicate[minute] = "saving"
+                        base.rate_export[minute] = base.rate_export.get(minute, 0) + pence_per_kwh
+                        rate_replicate[minute] = "saving"
                     else:
-                        if minute in base.rate_import:
-                            base.rate_import[minute] += pence_per_kwh
-                            base.load_scaling_dynamic[minute] = base.load_scaling_saving
-                            rate_replicate[minute] = "saving"
+                        base.rate_import[minute] = base.rate_import.get(minute, 0) + pence_per_kwh
+                        base.load_scaling_dynamic[minute] = base.load_scaling_saving
+                        rate_replicate[minute] = "saving"
 
 
 def fetch_axle_active(base):

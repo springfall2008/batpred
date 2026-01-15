@@ -28,6 +28,7 @@ from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
 from tests.test_find_charge_curve import run_find_charge_curve_tests
+from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_car_charging_smart import run_car_charging_smart_tests
@@ -38,7 +39,7 @@ from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
 from tests.test_solax import run_solax_tests
 from tests.test_single_debug import run_single_debug
-from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints
+from tests.test_saving_session import test_saving_session, test_saving_session_null_octopoints, test_saving_session_notify_config
 from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import test_ge_cloud
 from tests.test_axle import test_axle
@@ -56,12 +57,13 @@ from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
 from tests.test_manual_select import run_test_manual_select
-from tests.test_minute_data import test_minute_data
+from tests.test_minute_data import test_minute_data, test_minute_data_load
 from tests.test_minute_data_state import test_minute_data_state
 from tests.test_format_time_ago import test_format_time_ago
 from tests.test_override_time import test_get_override_time_from_string
 from tests.test_units import run_test_units
 from tests.test_previous_days_modal import test_previous_days_modal_filter
+from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from_power
 from tests.test_octopus_free import test_octopus_free
 from tests.test_prune_today import test_prune_today
 from tests.test_cumulative import test_get_now_from_cumulative
@@ -151,6 +153,7 @@ def main():
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("minute_data", test_minute_data, "Minute data tests", False),
+        ("minute_data_load", test_minute_data_load, "Minute data load tests", False),
         ("get_now_cumulative", test_get_now_from_cumulative, "Get now from cumulative tests", False),
         ("prune_today", test_prune_today, "Prune today tests", False),
         ("history_attribute", test_history_attribute, "History attribute tests", False),
@@ -158,6 +161,7 @@ def main():
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
+        ("fill_load_from_power", test_fill_load_from_power, "Fill load from power sensor tests", False),
         # Octopus Energy URL/API tests
         ("octopus_url", test_octopus_url, "Octopus URL/API comprehensive tests (downloads, day/night rates, saving sessions, intelligent dispatch, tariffs, EDF)", False),
         ("octopus_cache", test_octopus_cache_wrapper, "Octopus cache save/load tests", False),
@@ -190,9 +194,11 @@ def main():
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
+        ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", test_energydataservice, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
         ("saving_session_null", test_saving_session_null_octopoints, "Saving session null octopoints test (issue #3079)", False),
+        ("saving_session_notify", test_saving_session_notify_config, "Saving session notification config tests", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),

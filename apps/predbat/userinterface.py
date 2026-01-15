@@ -43,6 +43,7 @@ DEBUG_EXCLUDE_LIST = [
     "futurerate_url_cache",
     "github_url_cache",
     "octopus_url_cache",
+    "secrets",
 ]
 
 
@@ -140,7 +141,7 @@ class UserInterface:
                 value = self.get_state_wrapper(entity_id=value, default=default, required_unit=required_unit)
         return value
 
-    def set_arg(self, arg, value):
+    def set_arg(self, arg, value, index=None):
         """
         Argument setter that can use HA state as well as fixed values
         Parameters:
@@ -153,7 +154,14 @@ class UserInterface:
             if arg in self.args:
                 del self.args[arg]
         else:
-            self.args[arg] = value
+            if index is not None:
+                if arg not in self.args:
+                    self.args[arg] = []
+                while len(self.args[arg]) <= index:
+                    self.args[arg].append(None)
+                self.args[arg][index] = value
+            else:
+                self.args[arg] = value
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
@@ -581,7 +589,8 @@ class UserInterface:
                 if (item["value"] != item.get("default", None)) and item.get("restore", True):
                     self.log("Restore setting: {} = {} (was {})".format(item["name"], item["default"], item["value"]))
                     await self.async_expose_config(item["name"], item["default"], event=True)
-            await self.async_call_notify("Predbat settings restored from default")
+            if self.get_arg("set_system_notify"):
+                await self.async_call_notify("Predbat settings restored from default")
         else:
             filepath = os.path.join(self.save_restore_dir, filename)
             if os.path.exists(filepath):
@@ -595,7 +604,8 @@ class UserInterface:
                         if current and (current["value"] != item["value"]) and current.get("restore", True):
                             self.log("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                             await self.async_expose_config(item["name"], item["value"], event=True)
-                await self.async_call_notify("Predbat settings restored from {}".format(filename))
+                if self.get_arg("set_system_notify"):
+                    await self.async_call_notify("Predbat settings restored from {}".format(filename))
         await self.async_expose_config("saverestore", None)
 
     def load_current_config(self):
@@ -666,7 +676,8 @@ class UserInterface:
         with open(filepath, "w") as file:
             yaml.dump(self.CONFIG_ITEMS, file)
         self.log("Saved Predbat settings to {}".format(filepath_p))
-        await self.async_call_notify("Predbat settings saved to {}".format(filename))
+        if self.get_arg("set_system_notify"):
+            await self.async_call_notify("Predbat settings saved to {}".format(filename))
 
     def read_debug_yaml(self, filename):
         """
@@ -723,7 +734,7 @@ class UserInterface:
                         # Remove keys from args
                         debug[key] = copy.deepcopy(self.__dict__[key])
                         for sub_key in debug[key]:
-                            if "_key" in sub_key:
+                            if ("_key" in sub_key.lower()) or ("password" in sub_key.lower()):
                                 debug[key][sub_key] = "xxx"
                     else:
                         debug[key] = self.__dict__[key]
@@ -980,16 +991,10 @@ class UserInterface:
             self.watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(self.watch_list))
 
-            if not self.ha_interface.websocket_active and not self.ha_interface.db_primary:
+            if self.ha_interface.websocket_active and not self.ha_interface.db_primary:
                 # Registering HA events as Websocket is not active
                 for item in self.SERVICE_REGISTER_LIST:
-                    self.fire_event("service_registered", domain=item["domain"], service=item["service"])
-                for item in self.EVENT_LISTEN_LIST:
-                    self.listen_select_handle = self.listen_event(item["callback"], event="call_service", domain=item["domain"], service=item["service"])
-
-                for entity in self.watch_list:
-                    if entity and isinstance(entity, str) and ("." in entity):
-                        self.listen_state(self.watch_event, entity_id=entity)
+                    self.fire_event_wrapper(domain=item["domain"], service=item["service"])
 
         # Save current config to file if it was pending
         self.save_current_config()

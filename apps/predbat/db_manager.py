@@ -15,6 +15,8 @@ import threading
 from db_engine import DatabaseEngine, TIME_FORMAT_DB
 from component_base import ComponentBase
 
+IPC_TIMEOUT = 60.0  # Seconds to wait for IPC response
+
 
 class DatabaseManager(ComponentBase):
     def initialize(self, db_enable, db_days):
@@ -111,7 +113,7 @@ class DatabaseManager(ComponentBase):
 
         if expect_response:
             count = 0.0
-            while (queue_id not in self.queue_results) and count < 15.0:
+            while (queue_id not in self.queue_results) and count < IPC_TIMEOUT:
                 self.return_event.wait(0.1)
                 if queue_id not in self.queue_results:
                     time.sleep(0.1)  # Wait a bit before checking again

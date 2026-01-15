@@ -44,6 +44,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.key = "test_api_key"
         self.automatic = False
         self.failures_total = 0
+        self.prefix = "predbat"  # Add default prefix
         self.device_list = []
         self.device_detail = {}
         self.device_power_generation = {}
@@ -4767,6 +4768,144 @@ def test_automatic_config_no_scheduler_error(my_predbat):
     return False
 
 
+def test_automatic_config_custom_prefix(my_predbat):
+    """
+    Test automatic_config with custom prefix
+    """
+    print("  - test_automatic_config_custom_prefix")
+
+    fox = MockFoxAPIWithRequests()
+    fox.prefix = "custom_prefix"  # Set custom prefix
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    run_async(fox.automatic_config())
+
+    # Verify entity mappings use custom prefix
+    sn_lower = deviceSN.lower()
+    assert fox.args_set.get("soc_percent") == [f"sensor.custom_prefix_fox_{sn_lower}_soc"], f"Expected custom_prefix, got {fox.args_set.get('soc_percent')}"
+    assert fox.args_set.get("battery_power") == [f"sensor.custom_prefix_fox_{sn_lower}_invbatpower"]
+    assert fox.args_set.get("charge_start_time") == [f"select.custom_prefix_fox_{sn_lower}_battery_schedule_charge_start_time"]
+    assert fox.args_set.get("inverter_mode") == [f"select.custom_prefix_fox_{sn_lower}_setting_workmode"]
+    assert fox.args_set.get("battery_temperature_history") == f"sensor.custom_prefix_fox_{sn_lower}_battemperature"
+
+    return False
+
+
+def test_automatic_config_export_limit_all_devices(my_predbat):
+    """
+    Test automatic_config sets export_limit for all devices when they all have exportlimit setting
+    """
+    print("  - test_automatic_config_export_limit_all_devices")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN1 = "TEST111111"
+    deviceSN2 = "TEST222222"
+
+    fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
+    fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    # Both devices have exportlimit setting
+    fox.device_settings[deviceSN1] = {"exportLimit": {"value": 5000}}
+    fox.device_settings[deviceSN2] = {"exportLimit": {"value": 3000}}
+
+    run_async(fox.automatic_config())
+
+    # Verify export_limit includes both devices
+    export_limit = fox.args_set.get("export_limit", [])
+    assert len(export_limit) == 2, f"Expected 2 devices in export_limit, got {len(export_limit)}"
+    assert f"number.predbat_fox_{deviceSN1.lower()}_setting_exportlimit" in export_limit
+    assert f"number.predbat_fox_{deviceSN2.lower()}_setting_exportlimit" in export_limit
+
+    return False
+
+
+def test_automatic_config_export_limit_some_devices(my_predbat):
+    """
+    Test automatic_config sets export_limit with 99999 for devices without exportlimit setting
+    """
+    print("  - test_automatic_config_export_limit_some_devices")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN1 = "TEST111111"
+    deviceSN2 = "TEST222222"
+
+    fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
+    fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    # Only device 1 has exportlimit setting
+    fox.device_settings[deviceSN1] = {"exportLimit": {"value": 5000}}
+    fox.device_settings[deviceSN2] = {}  # No exportLimit
+
+    run_async(fox.automatic_config())
+
+    # Verify export_limit includes both devices, with 99999 for device without setting
+    export_limit = fox.args_set.get("export_limit", [])
+    assert len(export_limit) == 2, f"Expected 2 devices in export_limit, got {len(export_limit)}"
+    assert f"number.predbat_fox_{deviceSN1.lower()}_setting_exportlimit" in export_limit
+    assert 99999 in export_limit
+
+    return False
+
+
+def test_automatic_config_export_limit_no_devices(my_predbat):
+    """
+    Test automatic_config sets export_limit with 99999 when no devices have exportlimit setting
+    """
+    print("  - test_automatic_config_export_limit_no_devices")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN1 = "TEST111111"
+    deviceSN2 = "TEST222222"
+
+    fox.device_list = [{"deviceSN": deviceSN1}, {"deviceSN": deviceSN2}]
+    fox.device_detail[deviceSN1] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+    fox.device_detail[deviceSN2] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    # Neither device has exportlimit setting
+    fox.device_settings[deviceSN1] = {}
+    fox.device_settings[deviceSN2] = {}
+
+    run_async(fox.automatic_config())
+
+    # Verify export_limit includes both devices with 99999 for each
+    export_limit = fox.args_set.get("export_limit", [])
+    assert len(export_limit) == 2, f"Expected 2 devices in export_limit, got {len(export_limit)}"
+    assert export_limit[0] == 99999, f"Expected 99999 for device 1, got {export_limit[0]}"
+    assert export_limit[1] == 99999, f"Expected 99999 for device 2, got {export_limit[1]}"
+
+    return False
+
+
+def test_automatic_config_export_limit_case_insensitive(my_predbat):
+    """
+    Test automatic_config handles case-insensitive exportlimit key matching
+    """
+    print("  - test_automatic_config_export_limit_case_insensitive")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {"scheduler": True}}
+
+    # Setting key with different case - should be detected because code uses setting.lower()
+    fox.device_settings[deviceSN] = {"ExportLimit": {"value": 5000}}
+
+    run_async(fox.automatic_config())
+
+    # The code checks setting.lower() == "exportlimit", so it SHOULD match "ExportLimit"
+    export_limit = fox.args_set.get("export_limit", [])
+    assert len(export_limit) == 1, f"Expected 1 device in export_limit (case-insensitive match), got {len(export_limit)}"
+    assert f"number.predbat_fox_{deviceSN.lower()}_setting_exportlimit" in export_limit
+
+    return False
+
+
 def test_fox_rate_limiting_normal_operation(my_predbat):
     """Test that normal operation under 60/hour allows retries"""
     print("  - test_fox_rate_limiting_normal_operation")
@@ -5181,6 +5320,11 @@ def run_fox_api_tests(my_predbat):
         failed |= test_automatic_config_multiple_batteries(my_predbat)
         failed |= test_automatic_config_battery_and_pv_inverter(my_predbat)
         failed |= test_automatic_config_no_scheduler_error(my_predbat)
+        failed |= test_automatic_config_custom_prefix(my_predbat)
+        failed |= test_automatic_config_export_limit_all_devices(my_predbat)
+        failed |= test_automatic_config_export_limit_some_devices(my_predbat)
+        failed |= test_automatic_config_export_limit_no_devices(my_predbat)
+        failed |= test_automatic_config_export_limit_case_insensitive(my_predbat)
 
         # Rate limiting tests
         failed |= test_fox_rate_limiting_normal_operation(my_predbat)

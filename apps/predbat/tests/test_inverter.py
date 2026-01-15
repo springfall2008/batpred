@@ -630,6 +630,12 @@ def test_inverter_rest_template(
     dummy_rest = DummyRestAPI()
     my_predbat.args["givtcp_rest"] = "dummy"
 
+    # Remove inverter_limit and export_limit from config to test REST data parsing
+    if "inverter_limit" in my_predbat.args:
+        del my_predbat.args["inverter_limit"]
+    if "export_limit" in my_predbat.args:
+        del my_predbat.args["export_limit"]
+
     dummy_rest.rest_data = {}
     with open(filename, "r") as file:
         dummy_rest.rest_data = json.load(file)
@@ -652,6 +658,10 @@ def test_inverter_rest_template(
         failed = True
     if assert_inverter_limit != inv.inverter_limit * MINUTE_WATT:
         print("ERROR: Inverter limit should be {} got {}".format(assert_inverter_limit, inv.inverter_limit * MINUTE_WATT))
+        failed = True
+    # Verify export_limit defaults correctly from REST data when config unset (should be 99999.0 / MINUTE_WATT = 1.66665)
+    if inv.export_limit * MINUTE_WATT < 99999.0:
+        print("ERROR: Export limit should default to 99999 W (1.66665 kW/min) when unset, got {} W ({} kW/min)".format(inv.export_limit * MINUTE_WATT, inv.export_limit))
         failed = True
     if assert_battery_rate_max != inv.battery_rate_max_raw:
         print("ERROR: Battery rate max should be {} got {}".format(assert_battery_rate_max, inv.battery_rate_max_raw))
@@ -916,7 +926,7 @@ def test_inverter_update(
     return failed
 
 
-def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expected, active=False):
+def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expected, active=False, set_system_notify=None, expect_notify=False):
     print("**** Running Test: {} ****".format(test_name))
     failed = 0
     ha.service_store_enable = True
@@ -924,6 +934,10 @@ def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expe
     my_predbat.restart_active = active
 
     my_predbat.args["auto_restart"] = service
+
+    # Set notification config if specified
+    if set_system_notify is not None:
+        my_predbat.expose_config("set_system_notify", set_system_notify, quiet=True)
 
     failed = 1 if not active else 0
     try:
@@ -935,8 +949,26 @@ def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expe
             failed = 1
 
     result = ha.get_service_store()
-    if json.dumps(expected) != json.dumps(result):
-        print("ERROR: Auto-restart service should be {} got {}".format(expected, result))
+
+    # Check for notification if expected
+    notify_found = False
+    for call in result:
+        if call[0].startswith("notify"):
+            notify_found = True
+            break
+
+    if expect_notify and not notify_found:
+        print("ERROR: Expected notification but none was sent")
+        failed = 1
+    elif not expect_notify and notify_found:
+        print("ERROR: Did not expect notification but one was sent")
+        failed = 1
+
+    # Filter out notifications when checking expected service calls
+    result_filtered = [call for call in result if not call[0].startswith("notify")]
+
+    if json.dumps(expected) != json.dumps(result_filtered):
+        print("ERROR: Auto-restart service should be {} got {}".format(expected, result_filtered))
         failed = 1
     return failed
 
@@ -1092,6 +1124,166 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
             failed = True
 
     ha.service_store_enable = False
+    return failed
+
+
+def test_charge_window_none_illegal_time(test_name, my_predbat, dummy_items):
+    """
+    Test charge window handling when time is illegal (e.g., 'unknown')
+    This should result in None after time_string_to_stamp and trigger safe defaults
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_charge_enable_time = True
+
+    # Set illegal time value that will cause time_string_to_stamp to return None
+    dummy_items["select.charge_start_time"] = "unknown"
+    dummy_items["select.charge_end_time"] = "unknown"
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    inv.update_status(my_predbat.minutes_now)
+
+    # Should set safe defaults
+    if inv.charge_enable_time != False:
+        print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
+        failed = True
+    if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - charge_start_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_start_time_minutes}")
+        failed = True
+    if inv.charge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - charge_end_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_end_time_minutes}")
+        failed = True
+    if inv.track_charge_start != "00:00:00":
+        print(f"ERROR: {test_name} - track_charge_start should be '00:00:00', got {inv.track_charge_start}")
+        failed = True
+    if inv.track_charge_end != "00:00:00":
+        print(f"ERROR: {test_name} - track_charge_end should be '00:00:00', got {inv.track_charge_end}")
+        failed = True
+
+    return failed
+
+
+def test_charge_window_none_value(test_name, my_predbat, dummy_items):
+    """
+    Test charge window handling when value is None from get_arg returning None
+    This happens when the entity exists but returns None
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_charge_enable_time = True
+    inv.rest_api = None
+
+    # Set entities to return None (entity exists but value is None)
+    dummy_items["select.charge_start_time"] = None
+    dummy_items["select.charge_end_time"] = None
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    inv.update_status(my_predbat.minutes_now)
+
+    # Should set safe defaults
+    if inv.charge_enable_time != False:
+        print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
+        failed = True
+    if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - charge_start_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_start_time_minutes}")
+        failed = True
+    if inv.charge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - charge_end_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_end_time_minutes}")
+        failed = True
+    if inv.track_charge_start != "00:00:00":
+        print(f"ERROR: {test_name} - track_charge_start should be '00:00:00', got {inv.track_charge_start}")
+        failed = True
+    if inv.track_charge_end != "00:00:00":
+        print(f"ERROR: {test_name} - track_charge_end should be '00:00:00', got {inv.track_charge_end}")
+        failed = True
+
+    return failed
+
+
+def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
+    """
+    Test discharge window handling when time is illegal (e.g., 'unknown')
+    This should result in None after time_string_to_stamp and trigger safe defaults
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_discharge_enable_time = True
+    inv.inv_has_ge_inverter_mode = False
+
+    # Set illegal time value that will cause time_string_to_stamp to return None
+    dummy_items["select.discharge_start_time"] = "unknown"
+    dummy_items["select.discharge_end_time"] = "unknown"
+    dummy_items["switch.scheduled_discharge_enable"] = "on"
+
+    inv.update_status(my_predbat.minutes_now)
+
+    # Should set safe defaults
+    if inv.discharge_enable_time != False:
+        print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
+        failed = True
+    if inv.discharge_start_time_minutes != 0:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+        failed = True
+    if inv.discharge_end_time_minutes != 0:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+        failed = True
+    if inv.track_discharge_start != "00:00:00":
+        print(f"ERROR: {test_name} - track_discharge_start should be '00:00:00', got {inv.track_discharge_start}")
+        failed = True
+    if inv.track_discharge_end != "00:00:00":
+        print(f"ERROR: {test_name} - track_discharge_end should be '00:00:00', got {inv.track_discharge_end}")
+        failed = True
+
+    return failed
+
+
+def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
+    """
+    Test discharge window handling when value is None from get_arg returning None
+    This happens when the entity exists but returns None
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_discharge_enable_time = True
+    inv.inv_has_ge_inverter_mode = False
+    inv.rest_api = None
+
+    # Set entities to return None (entity exists but value is None)
+    dummy_items["select.discharge_start_time"] = None
+    dummy_items["select.discharge_end_time"] = None
+    dummy_items["switch.scheduled_discharge_enable"] = "on"
+
+    inv.update_status(my_predbat.minutes_now)
+
+    # Should set safe defaults
+    if inv.discharge_enable_time != False:
+        print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
+        failed = True
+    if inv.discharge_start_time_minutes != 0:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+        failed = True
+    if inv.discharge_end_time_minutes != 0:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+        failed = True
+    if inv.track_discharge_start != "00:00:00":
+        print(f"ERROR: {test_name} - track_discharge_start should be '00:00:00', got {inv.track_discharge_start}")
+        failed = True
+    if inv.track_discharge_end != "00:00:00":
+        print(f"ERROR: {test_name} - track_discharge_end should be '00:00:00', got {inv.track_discharge_end}")
+        failed = True
+
     return failed
 
 
@@ -1660,14 +1852,13 @@ charge_start_service:
         inv,
         dummy_items,
         service={"command": "service", "service": "restart_service", "addon": "adds"},
-        expected=[["restart_service", {"addon": "adds"}], ["notify/notify", {"message": "Auto-restart service restart_service called due to: Crashed"}]],
+        expected=[["restart_service", {"addon": "adds"}]],
+        expect_notify=True,
     )
     if failed:
         return failed
 
-    failed |= test_auto_restart(
-        "auto_restart2", my_predbat, ha, inv, dummy_items, service=[{"command": "service", "service": "restart_service"}], expected=[["restart_service", {}], ["notify/notify", {"message": "Auto-restart service restart_service called due to: Crashed"}]]
-    )
+    failed |= test_auto_restart("auto_restart2", my_predbat, ha, inv, dummy_items, service=[{"command": "service", "service": "restart_service"}], expected=[["restart_service", {}]], expect_notify=True)
     if failed:
         return failed
 
@@ -1691,7 +1882,8 @@ charge_start_service:
         inv,
         dummy_items,
         service={"command": "service", "service": "restart_service", "entity_id": "switch.restart"},
-        expected=[["restart_service", {"entity_id": "switch.restart"}], ["notify/notify", {"message": "Auto-restart service restart_service called due to: Crashed"}]],
+        expected=[["restart_service", {"entity_id": "switch.restart"}]],
+        expect_notify=True,
     )
     if failed:
         return failed
@@ -1711,6 +1903,66 @@ charge_start_service:
     if os.path.exists("tmp1234"):
         print("ERROR: File should be deleted")
         failed = True
+
+    # Test notification config for auto_restart
+    failed |= test_auto_restart(
+        "auto_restart_notify_default",
+        my_predbat,
+        ha,
+        inv,
+        dummy_items,
+        service={"command": "service", "service": "restart_service"},
+        expected=[["restart_service", {}]],
+        expect_notify=True,
+    )
+    if failed:
+        return failed
+
+    failed |= test_auto_restart(
+        "auto_restart_notify_enabled",
+        my_predbat,
+        ha,
+        inv,
+        dummy_items,
+        service={"command": "service", "service": "restart_service"},
+        expected=[["restart_service", {}]],
+        set_system_notify=True,
+        expect_notify=True,
+    )
+    if failed:
+        return failed
+
+    failed |= test_auto_restart(
+        "auto_restart_notify_disabled",
+        my_predbat,
+        ha,
+        inv,
+        dummy_items,
+        service={"command": "service", "service": "restart_service"},
+        expected=[["restart_service", {}]],
+        set_system_notify=False,
+        expect_notify=False,
+    )
+    if failed:
+        return failed
+
+    # Test charge window None handling
+    failed |= test_charge_window_none_illegal_time("charge_window_illegal_time", my_predbat, dummy_items)
+    if failed:
+        return failed
+
+    failed |= test_charge_window_none_value("charge_window_none_value", my_predbat, dummy_items)
+    if failed:
+        return failed
+
+    # Test discharge window None handling
+    failed |= test_discharge_window_none_illegal_time("discharge_window_illegal_time", my_predbat, dummy_items)
+    if failed:
+        return failed
+
+    failed |= test_discharge_window_none_value("discharge_window_none_value", my_predbat, dummy_items)
+    if failed:
+        return failed
 
     failed |= test_inverter_self_test("self_test1", my_predbat)
     return failed

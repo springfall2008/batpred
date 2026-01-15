@@ -401,6 +401,10 @@ def minute_data(
                         state = state / 1000.0
                     elif required_unit in ["W", "Wh", "g", "g/kWh"] and unit in ["kW", "kWh", "kg", "kg/kWh"]:
                         state = state * 1000.0
+                    elif required_unit in ["MW", "MWh"] and unit in ["kW", "kWh"]:
+                        state = state / 1000.0
+                    elif required_unit in ["kW", "kWh"] and unit in ["MW", "MWh"]:
+                        state = state * 1000.0
                     else:
                         # Ignore data in wrong units if we can't converter
                         continue
@@ -746,6 +750,10 @@ def compute_window_minutes(start_time, end_time, minutes_now):
     Returns:
         Tuple of (start_minute, end_minute) adjusted for midnight spanning and current time
     """
+    if start_time is None or end_time is None:
+        # Invalid time, return 0,0
+        return 0, 0
+
     start_minute = start_time.hour * 60 + start_time.minute
     end_minute = end_time.hour * 60 + end_time.minute
 

@@ -363,7 +363,7 @@ class GECloudDirect(ComponentBase):
         """
 
         for key in device_info:
-            entity_name = "sensor.predbat_gecloud_" + device
+            entity_name = f"sensor.{self.prefix}_gecloud_{device}"
             entity_name = entity_name.lower()
             attributes = {}
             if key == "info":
@@ -393,7 +393,7 @@ class GECloudDirect(ComponentBase):
         Data passed in is a dictionary of measurands according to EVC_DATA_POINTS
         """
         for key in evc_data:
-            entity_name = "sensor.predbat_gecloud_" + serial
+            entity_name = f"sensor.{self.prefix}_gecloud_{serial}"
             entity_name = entity_name.lower()
             measurand = EVC_DATA_POINTS.get(key, None)
             if measurand:
@@ -445,7 +445,7 @@ class GECloudDirect(ComponentBase):
         """
 
         for key in status:
-            entity_name = "sensor.predbat_gecloud_" + device
+            entity_name = f"sensor.{self.prefix}_gecloud_{device}"
             entity_name = entity_name.lower()
             attributes = {}
             if status[key] is None:
@@ -494,7 +494,7 @@ class GECloudDirect(ComponentBase):
         for key in meter:
             if key == "today":
                 for subkey in meter[key]:
-                    entity_name = "sensor.predbat_gecloud_" + device
+                    entity_name = f"sensor.{self.prefix}_gecloud_{device}"
                     entity_name = entity_name.lower()
                     attributes = {}
                     if subkey == "solar":
@@ -509,7 +509,7 @@ class GECloudDirect(ComponentBase):
                         self.dashboard_item(entity_name + "_grid_export_today", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_today", {}), app="gecloud")
             elif key == "total":
                 for subkey in meter[key]:
-                    entity_name = "sensor.predbat_gecloud_" + device
+                    entity_name = f"sensor.{self.prefix}_gecloud_{device}"
                     entity_name = entity_name.lower()
                     attributes = {}
                     if subkey == "solar":
@@ -651,20 +651,20 @@ class GECloudDirect(ComponentBase):
                 options_text = post.split(",")
 
             if is_select_time or is_select_options:
-                entity_name = "select.predbat_gecloud_" + device
+                entity_name = f"select.{self.prefix}_gecloud_{device}"
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
                 attributes["options"] = options_text
                 self.dashboard_item(entity_id, state=value, attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key, "time": is_select_time}
             elif is_number:
-                entity_name = "number.predbat_gecloud_" + device
+                entity_name = f"number.{self.prefix}_gecloud_{device}"
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
                 self.dashboard_item(entity_id, state=value, attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
             elif is_switch:
-                entity_name = "switch.predbat_gecloud_" + device
+                entity_name = f"switch.{self.prefix}_gecloud_{device}"
                 entity_id = entity_name + "_" + ha_name
                 entity_id = entity_id.lower()
                 state = False
@@ -720,52 +720,52 @@ class GECloudDirect(ComponentBase):
 
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
-        self.set_arg("load_today", ["sensor.predbat_gecloud_" + device + "_consumption_today" for device in batteries])
-        self.set_arg("import_today", ["sensor.predbat_gecloud_" + device + "_grid_import_today" for device in batteries])
-        self.set_arg("export_today", ["sensor.predbat_gecloud_" + device + "_grid_export_today" for device in batteries])
-        self.set_arg("pv_today", ["sensor.predbat_gecloud_" + device + "_solar_today" for device in batteries])
-        self.set_arg("charge_rate", ["number.predbat_gecloud_" + device + "_battery_charge_power" for device in batteries])
-        self.set_arg("battery_rate_max", ["sensor.predbat_gecloud_" + device + "_max_charge_rate" for device in batteries])
-        self.set_arg("discharge_rate", ["number.predbat_gecloud_" + device + "_battery_discharge_power" for device in batteries])
-        self.set_arg("battery_power", ["sensor.predbat_gecloud_" + device + "_battery_power" for device in batteries])
-        self.set_arg("pv_power", ["sensor.predbat_gecloud_" + device + "_solar_power" for device in batteries])
-        self.set_arg("load_power", ["sensor.predbat_gecloud_" + device + "_consumption_power" for device in batteries])
-        self.set_arg("grid_power", ["sensor.predbat_gecloud_" + device + "_grid_power" for device in batteries])
-        self.set_arg("soc_percent", ["sensor.predbat_gecloud_" + device + "_battery_percent" for device in batteries])
-        self.set_arg("soc_max", ["sensor.predbat_gecloud_" + device + "_battery_size" for device in batteries])
-        self.set_arg("reserve", ["number.predbat_gecloud_" + device + "_battery_reserve_percent_limit" for device in batteries])
-        self.set_arg("inverter_time", ["sensor.predbat_gecloud_" + device + "_time" for device in batteries])
-        self.set_arg("charge_start_time", ["select.predbat_gecloud_" + device + "_ac_charge_1_start_time" for device in batteries])
-        self.set_arg("charge_end_time", ["select.predbat_gecloud_" + device + "_ac_charge_1_end_time" for device in batteries])
-        self.set_arg("charge_limit", ["number.predbat_gecloud_" + device + "_ac_charge_upper_percent_limit" for device in batteries])
-        self.set_arg("discharge_start_time", ["select.predbat_gecloud_" + device + "_dc_discharge_1_start_time" for device in batteries])
-        self.set_arg("discharge_end_time", ["select.predbat_gecloud_" + device + "_dc_discharge_1_end_time" for device in batteries])
-        self.set_arg("scheduled_charge_enable", ["switch.predbat_gecloud_" + device + "_ac_charge_enable" for device in batteries])
-        self.set_arg("scheduled_discharge_enable", ["switch.predbat_gecloud_" + device + "_enable_dc_discharge" for device in batteries])
-        self.set_arg("battery_temperature", ["sensor.predbat_gecloud_" + device + "_battery_temperature" for device in batteries])
-        self.set_arg("battery_scaling", ["sensor.predbat_gecloud_" + device + "_battery_dod" for device in batteries])
+        self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_today" for device in batteries])
+        self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_today" for device in batteries])
+        self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_export_today" for device in batteries])
+        self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_today" for device in batteries])
+        self.set_arg("charge_rate", [f"number.{self.prefix}_gecloud_{device}_battery_charge_power" for device in batteries])
+        self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_gecloud_{device}_max_charge_rate" for device in batteries])
+        self.set_arg("discharge_rate", [f"number.{self.prefix}_gecloud_{device}_battery_discharge_power" for device in batteries])
+        self.set_arg("battery_power", [f"sensor.{self.prefix}_gecloud_{device}_battery_power" for device in batteries])
+        self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{device}_solar_power" for device in batteries])
+        self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{device}_consumption_power" for device in batteries])
+        self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{device}_grid_power" for device in batteries])
+        self.set_arg("soc_percent", [f"sensor.{self.prefix}_gecloud_{device}_battery_percent" for device in batteries])
+        self.set_arg("soc_max", [f"sensor.{self.prefix}_gecloud_{device}_battery_size" for device in batteries])
+        self.set_arg("reserve", [f"number.{self.prefix}_gecloud_{device}_battery_reserve_percent_limit" for device in batteries])
+        self.set_arg("inverter_time", [f"sensor.{self.prefix}_gecloud_{device}_time" for device in batteries])
+        self.set_arg("charge_start_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_start_time" for device in batteries])
+        self.set_arg("charge_end_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_end_time" for device in batteries])
+        self.set_arg("charge_limit", [f"number.{self.prefix}_gecloud_{device}_ac_charge_upper_percent_limit" for device in batteries])
+        self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries])
+        self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries])
+        self.set_arg("scheduled_charge_enable", [f"switch.{self.prefix}_gecloud_{device}_ac_charge_enable" for device in batteries])
+        self.set_arg("scheduled_discharge_enable", [f"switch.{self.prefix}_gecloud_{device}_enable_dc_discharge" for device in batteries])
+        self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
+        self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod" for device in batteries])
 
         if len(batteries):
-            self.set_arg("battery_temperature_history", "sensor.predbat_gecloud_" + batteries[0] + "_battery_temperature")
+            self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_gecloud_{batteries[0]}_battery_temperature")
 
         if has_pause_battery:
-            self.set_arg("pause_mode", ["select.predbat_gecloud_" + device + "_pause_battery" for device in batteries])
+            self.set_arg("pause_mode", [f"select.{self.prefix}_gecloud_{device}_pause_battery" for device in batteries])
             if has_pause_start_time:
-                self.set_arg("pause_start_time", ["select.predbat_gecloud_" + device + "_pause_battery_start_time" for device in batteries])
-                self.set_arg("pause_end_time", ["select.predbat_gecloud_" + device + "_pause_battery_end_time" for device in batteries])
+                self.set_arg("pause_start_time", [f"select.{self.prefix}_gecloud_{device}_pause_battery_start_time" for device in batteries])
+                self.set_arg("pause_end_time", [f"select.{self.prefix}_gecloud_{device}_pause_battery_end_time" for device in batteries])
         else:
             self.set_arg("pause_mode", None)
             self.set_arg("pause_start_time", None)
             self.set_arg("pause_end_time", None)
 
         if has_discharge_target_soc:
-            self.set_arg("discharge_target_soc", ["number.predbat_gecloud_" + device + "_dc_discharge_1_lower_soc_percent_limit" for device in batteries])
+            self.set_arg("discharge_target_soc", [f"number.{self.prefix}_gecloud_{device}_dc_discharge_1_lower_soc_percent_limit" for device in batteries])
         else:
             self.set_arg("discharge_target_soc", None)
 
         if has_charge_power_percent:
-            self.set_arg("charge_rate_percent", ["number.predbat_gecloud_" + device + "_inverter_charge_power_percentage" for device in batteries])
-            self.set_arg("discharge_rate_percent", ["number.predbat_gecloud_" + device + "_inverter_discharge_power_percentage" for device in batteries])
+            self.set_arg("charge_rate_percent", [f"number.{self.prefix}_gecloud_{device}_inverter_charge_power_percentage" for device in batteries])
+            self.set_arg("discharge_rate_percent", [f"number.{self.prefix}_gecloud_{device}_inverter_discharge_power_percentage" for device in batteries])
         else:
             self.set_arg("charge_rate_percent", None)
             self.set_arg("discharge_rate_percent", None)
@@ -782,23 +782,23 @@ class GECloudDirect(ComponentBase):
             self.set_arg("inverter_type", ["GEE" for _ in range(num_inverters)])
             self.set_arg("ge_cloud_serial", ems)
             self.set_arg("ge_cloud_data", False)
-            self.set_arg("load_today", ["sensor.predbat_gecloud_" + ems + "_consumption_today"])
-            self.set_arg("import_today", ["sensor.predbat_gecloud_" + ems + "_grid_import_today"])
-            self.set_arg("export_today", ["sensor.predbat_gecloud_" + ems + "_grid_export_today"])
-            self.set_arg("pv_today", ["sensor.predbat_gecloud_" + ems + "_solar_today"])
-            self.set_arg("charge_start_time", ["select.predbat_gecloud_" + ems + "_charge_start_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("charge_end_time", ["select.predbat_gecloud_" + ems + "_charge_end_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("idle_start_time", ["select.predbat_gecloud_" + ems + "_discharge_start_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("idle_end_time", ["select.predbat_gecloud_" + ems + "_discharge_end_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("charge_limit", ["number.predbat_gecloud_" + ems + "_charge_soc_percent_limit_1" for _ in range(num_inverters)])
-            self.set_arg("discharge_start_time", ["select.predbat_gecloud_" + ems + "_export_start_time_slot_1" for _ in range(num_inverters)])
-            self.set_arg("discharge_end_time", ["select.predbat_gecloud_" + ems + "_export_end_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_today"])
+            self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{ems}_grid_import_today"])
+            self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{ems}_grid_export_today"])
+            self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{ems}_solar_today"])
+            self.set_arg("charge_start_time", [f"select.{self.prefix}_gecloud_{ems}_charge_start_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("charge_end_time", [f"select.{self.prefix}_gecloud_{ems}_charge_end_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("idle_start_time", [f"select.{self.prefix}_gecloud_{ems}_discharge_start_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("idle_end_time", [f"select.{self.prefix}_gecloud_{ems}_discharge_end_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("charge_limit", [f"number.{self.prefix}_gecloud_{ems}_charge_soc_percent_limit_1" for _ in range(num_inverters)])
+            self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{ems}_export_start_time_slot_1" for _ in range(num_inverters)])
+            self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{ems}_export_end_time_slot_1" for _ in range(num_inverters)])
 
             # EMS Produces the data for all inverters
-            self.set_arg("battery_power", ["sensor.predbat_gecloud_" + ems + "_battery_power"] + [0 for _ in range(num_inverters - 1)])
-            self.set_arg("pv_power", ["sensor.predbat_gecloud_" + ems + "_solar_power"] + [0 for _ in range(num_inverters - 1)])
-            self.set_arg("load_power", ["sensor.predbat_gecloud_" + ems + "_consumption_power"] + [0 for _ in range(num_inverters - 1)])
-            self.set_arg("grid_power", ["sensor.predbat_gecloud_" + ems + "_grid_power"] + [0 for _ in range(num_inverters - 1)])
+            self.set_arg("battery_power", [f"sensor.{self.prefix}_gecloud_{ems}_battery_power"] + [0 for _ in range(num_inverters - 1)])
+            self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{ems}_solar_power"] + [0 for _ in range(num_inverters - 1)])
+            self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{ems}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
+            self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{ems}_grid_power"] + [0 for _ in range(num_inverters - 1)])
 
         self.log("GECloud: Automatic configuration complete")
 
@@ -845,7 +845,7 @@ class GECloudDirect(ComponentBase):
                 self.api_fatal = True
                 return False
 
-        if first or (seconds % 60 == 0):
+        if first or (seconds % 120 == 0):
             for device in self.device_list:
                 self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
                 await self.publish_status(device, self.status[device])
@@ -1009,7 +1009,7 @@ class GECloudDirect(ComponentBase):
                 while len(futures) < MAX_THREADS and pending:
                     future = pending.pop(0)
                     if not first:
-                        future["future"] = loop.create_task(self.async_read_inverter_setting(future["serial"], future["sid"]))
+                        future["future"] = loop.create_task(self.async_read_inverter_setting(future["serial"], future["sid"]), name=f"ReadSetting-{future['sid']}")
                     futures.append(future)
                 if futures:
                     future = futures.pop(0)
@@ -1369,15 +1369,19 @@ class GECloudDirect(ComponentBase):
                 data = {}
             self.update_success_timestamp()
             return data
-        if status in [401, 403, 404, 422]:
+        elif status in [401, 403, 404, 422]:
             # Unauthorized
             self.failures_total += 1
             self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, status))
             return {}
-        if status == 429:
+        elif status == 429:
             # Rate limiting so wait up to 30 seconds
             self.failures_total += 1
             await asyncio.sleep(random.random() * 30)
+            return None
+        else:
+            self.failures_total += 1
+            self.log("Warn: GECloud: Failed to get data from {} code {}".format(endpoint, status))
         return None
 
 

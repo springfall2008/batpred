@@ -97,7 +97,8 @@ class Inverter:
                     else:
                         self.log("Warn: Calling restart service {}".format(service))
                         self.base.call_service_wrapper(service)
-                    self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
+                    if self.base.get_arg("set_system_notify"):
+                        self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     self.sleep(15)
             raise Exception("Auto-restart triggered")
         else:
@@ -126,9 +127,10 @@ class Inverter:
         self.current_charge_limit = 0.0
         self.soc_kw = 0
         self.soc_percent = 0
+        self.soc_max = None
         self.rest_data = None
-        self.inverter_limit = 7500.0
-        self.export_limit = 99999.0
+        self.inverter_limit = 7500.0 / MINUTE_WATT
+        self.export_limit = 99999.0 / MINUTE_WATT
         self.inverter_time = None
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
@@ -343,14 +345,14 @@ class Inverter:
 
             # Max invertor rate
             if "Invertor_Max_Inv_Rate" in idetails:
-                self.inverter_limit = idetails["Invertor_Max_Inv_Rate"]
+                self.inverter_limit = idetails["Invertor_Max_Inv_Rate"] / MINUTE_WATT
 
             # Inverter time
             if "Invertor_Time" in idetails:
                 ivtime = idetails["Invertor_Time"]
         else:
             self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id, required_unit="°C")
-            self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.battery_scaling
+            self.soc_max = self.base.get_arg("soc_max", default=0.0, index=self.id) * self.battery_scaling
             self.nominal_capacity = self.soc_max
 
             if self.inverter_type in ["GE", "GEC", "GEE"]:
@@ -363,9 +365,17 @@ class Inverter:
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
         # Battery cannot be zero size
-        if self.soc_max <= 0:
-            self.base.log("Error: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
-            raise ValueError
+        if not self.soc_max or self.soc_max <= 0:
+            self.log("Note: Battery size was not set, attempting to find it..")
+            found_size = self.find_battery_size()
+            if not found_size or found_size <= 0:
+                self.log("Warn: Unable to determine battery size, setting to 8 kWh default, you must set soc_max in apps.yaml or wait until enough data is collected to estimate battery size")
+                self.soc_max = 8.0
+            else:
+                # Store found battery size so we don't keep having to fetch it
+                self.soc_max = found_size * self.battery_scaling
+                self.base.set_arg("soc_max", found_size, index=self.id)
+            self.nominal_capacity = self.soc_max
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")
@@ -452,9 +462,9 @@ class Inverter:
 
         # Max inverter rate override
         if "inverter_limit" in self.base.args:
-            self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit, index=self.id, required_unit="W") / MINUTE_WATT
+            self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
         if "export_limit" in self.base.args:
-            self.export_limit = self.base.get_arg("export_limit", self.inverter_limit, index=self.id, required_unit="W") / MINUTE_WATT
+            self.export_limit = self.base.get_arg("export_limit", self.export_limit * MINUTE_WATT, index=self.id, required_unit="W") / MINUTE_WATT
 
         # Log inverter details
         if not quiet:
@@ -518,6 +528,184 @@ class Inverter:
             self.create_missing_arg("idle_end_time", "00:00:00")
             self.base.args["idle_start_time"][id] = self.create_entity("idle_start_time", "00:00:00")
             self.base.args["idle_end_time"][id] = self.create_entity("idle_end_time", "00:00:00")
+
+    def find_battery_size(self):
+        """
+        Given SOC Percent and battery power figure out the approximate battery size in kWh
+        """
+        soc_percent_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
+        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
+        battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
+        max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
+
+        if soc_percent_sensor and battery_power_sensor:
+            soc_percent_data = self.base.get_history_wrapper(entity_id=soc_percent_sensor, days=self.base.max_days_previous, required=False)
+            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous, required=False)
+
+            if not soc_percent_data or not battery_power_data:
+                self.log("Warn: Unable to estimate battery size - no history data available")
+                return None
+
+            soc_percent, _ = minute_data(
+                soc_percent_data[0],
+                self.base.max_days_previous,
+                self.base.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=self.battery_scaling,
+                required_unit="%",
+            )
+            battery_power, _ = minute_data(
+                battery_power_data[0],
+                self.base.max_days_previous,
+                self.base.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=1.0,
+                required_unit="W",
+            )
+            if battery_power_invert:
+                # Invert the battery power if required
+                for minute in battery_power:
+                    battery_power[minute] = -battery_power[minute]
+            min_len = min(len(soc_percent), len(battery_power))
+            self.log("Find battery size has {} days of data, max days {}".format(min_len / 60 / 24.0, self.base.max_days_previous))
+
+            estimate_battery_sizes = []
+
+            # Find continuous charging periods and calculate battery size from energy/SoC relationship
+            # Data is indexed backwards: minute 0 = now, minute N = N minutes ago
+            max_power_threshold = max_power * 0.9
+
+            # Scan backwards through time to find charging periods
+            in_charge = False
+            charge_start_minute = None  # Higher minute = older = start of charge
+
+            for minute in range(min_len - 1, -1, -1):
+                power = battery_power.get(minute, 0)
+                is_charging = power < -max_power_threshold
+
+                if is_charging and not in_charge:
+                    # Start of a charging period (going forward in real time, backwards in minute index)
+                    in_charge = True
+                    charge_start_minute = minute
+
+                elif not is_charging and in_charge:
+                    # End of a charging period
+                    charge_end_minute = minute + 1  # Previous minute was still charging
+                    in_charge = False
+
+                    if charge_start_minute is not None and charge_end_minute < charge_start_minute:
+                        # We have a valid charge period (start_minute > end_minute because of backwards indexing)
+                        # charge_start_minute is OLDER (beginning of charge, lower SoC)
+                        # charge_end_minute is NEWER (end of charge, higher SoC)
+
+                        start_soc = soc_percent.get(charge_start_minute, 0)
+                        end_soc = soc_percent.get(charge_end_minute, 0)
+
+                        self.log(
+                            "Charge start {} soc {} end {} soc {}".format(
+                                charge_start_minute,
+                                start_soc,
+                                charge_end_minute,
+                                end_soc,
+                            )
+                        )
+
+                        # Clip to 20-80% range and align to percentage boundaries
+                        # to avoid partial energy from transition minutes
+                        # A "transition minute" is one where the SoC changed from the previous minute
+                        # We want to start AFTER a transition and end BEFORE a transition
+                        clipped_start_minute = charge_start_minute
+                        clipped_end_minute = charge_end_minute
+
+                        # Find first stable minute ≥20% (where SoC didn't just change)
+                        # Search forward in real time (decreasing minute index)
+                        found_start = False
+                        for m in range(charge_start_minute, charge_end_minute - 1, -1):
+                            curr_soc = int(soc_percent.get(m, 0))
+                            prev_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
+                            # Check if this is a stable minute (no transition) and within range
+                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != prev_soc:
+                                clipped_start_minute = m
+                                found_start = True
+                                break
+                        if not found_start:
+                            # No stable minute found in 20-80% range, skip this period
+                            continue
+
+                        # Find last stable minute ≤80% (where SoC won't change next minute)
+                        # Search backward in real time (increasing minute index)
+                        found_end = False
+                        for m in range(charge_end_minute, charge_start_minute + 1):
+                            curr_soc = int(soc_percent.get(m, 0))
+                            next_soc = int(soc_percent.get(m + 1, 0))  # m+1 is older
+                            # Check if this is a stable minute (no upcoming transition) and within range
+                            if curr_soc >= 20 and curr_soc <= 80 and curr_soc != next_soc:
+                                clipped_end_minute = m
+                                found_end = True
+                                break
+                        if not found_end:
+                            # No stable minute found in 20-80% range, skip this period
+                            continue
+
+                        # Validate the clipped range is still valid
+                        if clipped_start_minute <= clipped_end_minute:
+                            continue  # Invalid range after clipping
+
+                        # Get the clipped SoC values (as integers for consistent percentage)
+                        clipped_start_soc = int(soc_percent.get(clipped_start_minute, 0))
+                        clipped_end_soc = int(soc_percent.get(clipped_end_minute, 0))
+                        percent_change = clipped_end_soc - clipped_start_soc
+
+                        self.log(
+                            "Charging clipped start at {} percent {} end {} percent {}, percent change {}".format(
+                                clipped_start_minute,
+                                clipped_start_soc,
+                                clipped_end_minute,
+                                clipped_end_soc,
+                                percent_change,
+                            )
+                        )
+
+                        if percent_change > 15:  # Need at least 15% change for a meaningful estimate
+                            # Calculate energy added during this period (using clipped range)
+                            power_added = 0.0
+                            sample_count = 0
+                            for power_minute in range(clipped_start_minute, clipped_end_minute - 1, -1):
+                                minute_power = -battery_power.get(power_minute, 0)
+                                power_added += minute_power / 60.0  # W to Wh
+                                sample_count += 1
+
+                            self.log("  Power added over {} samples is {} Wh".format(sample_count, power_added))
+
+                            if power_added > 0:
+                                estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh
+                                estimated_battery_size = dp2(estimated_battery_size)
+                                estimate_battery_sizes.append(estimated_battery_size)
+
+            # Average the estimated battery sizes
+            if len(estimate_battery_sizes) > 0:
+                average_battery_size = sum(estimate_battery_sizes) / len(estimate_battery_sizes)
+                average_battery_size = dp2(average_battery_size)
+                # Add in charging loss factor, assume the inverter loss is not counted in the charge rate sensor (as it's AC side)
+                average_battery_size *= self.base.battery_loss * self.base.inverter_loss
+                self.log("Estimated battery size is {} kWh from {} samples (assumed charging loss factor {})".format(average_battery_size, len(estimate_battery_sizes), self.base.battery_loss * self.base.inverter_loss))
+                return average_battery_size
+            else:
+                self.log("Warn: Unable to find any suitable charge periods to estimate battery size")
+                return None
+        else:
+            self.log("Warn: Unable to estimate battery size from soc_percent and battery_power data")
+        return None
 
     def find_charge_curve(self, discharge):
         """
@@ -878,10 +1066,6 @@ class Inverter:
             None
         """
 
-        # If it's not a GE inverter then turn Quiet off
-        if self.inverter_type != "GE":
-            quiet = False
-
         self.battery_power = 0
         self.pv_power = 0
         self.load_power = 0
@@ -978,39 +1162,44 @@ class Inverter:
                 raise ValueError
 
             if charge_start_time is None or charge_end_time is None:
-                self.log("Error: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None".format(self.id))
-                self.base.record_status("Error: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None".format(self.id), had_errors=True)
-                raise ValueError
-
-            # Update simulated charge enable time to match the charge window time.
-            if not self.inv_has_charge_enable_time:
-                if charge_start_time == charge_end_time:
-                    self.charge_enable_time = False
-                else:
-                    self.charge_enable_time = True
-                self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
-
-            # Track charge start/end
-            if charge_start_time and charge_end_time:
-                self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
-                self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
-            else:
-                self.track_charge_start = "00:00:00"
-                self.track_charge_end = "00:00:00"
-
-            # Reverse clock skew
-            charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
-            charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
-
-            # Compute charge window minutes start/end just for the next charge window
-            self.charge_start_time_minutes, self.charge_end_time_minutes = compute_window_minutes(charge_start_time, charge_end_time, minutes_now)
-
-            # Charge is off due to start/end time being same
-            if not self.inv_has_charge_enable_time and not self.charge_enable_time:
+                self.log("Warn: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None, will retry next update".format(self.id))
+                self.base.record_status("Warn: Inverter {} unable to read charge window time, will retry next update".format(self.id), had_errors=True)
+                # Set safe defaults to allow graceful recovery on next update
+                self.charge_enable_time = False
                 self.charge_start_time_minutes = self.base.forecast_minutes
                 self.charge_end_time_minutes = self.base.forecast_minutes
                 self.track_charge_start = "00:00:00"
                 self.track_charge_end = "00:00:00"
+            else:
+                # Update simulated charge enable time to match the charge window time.
+                if not self.inv_has_charge_enable_time:
+                    if charge_start_time == charge_end_time:
+                        self.charge_enable_time = False
+                    else:
+                        self.charge_enable_time = True
+                    self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
+
+                # Track charge start/end
+                if charge_start_time and charge_end_time:
+                    self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
+                    self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
+                else:
+                    self.track_charge_start = "00:00:00"
+                    self.track_charge_end = "00:00:00"
+
+                # Reverse clock skew
+                charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
+                charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
+
+                # Compute charge window minutes start/end just for the next charge window
+                self.charge_start_time_minutes, self.charge_end_time_minutes = compute_window_minutes(charge_start_time, charge_end_time, minutes_now)
+
+                # Charge is off due to start/end time being same
+                if not self.inv_has_charge_enable_time and not self.charge_enable_time:
+                    self.charge_start_time_minutes = self.base.forecast_minutes
+                    self.charge_end_time_minutes = self.base.forecast_minutes
+                    self.track_charge_start = "00:00:00"
+                    self.track_charge_end = "00:00:00"
         else:
             # If charging is disabled set a fake window outside
             self.charge_start_time_minutes = self.base.forecast_minutes
@@ -1076,30 +1265,40 @@ class Inverter:
             self.base.record_status("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
             raise ValueError
 
-        # Update simulated discharge enable time to match the discharge window time.
-        if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode:
-            if discharge_start == discharge_end:
-                self.discharge_enable_time = False
-            else:
-                self.discharge_enable_time = True
-            entity_id = self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id)
-            self.write_and_poll_switch("scheduled_discharge_enable", entity_id, self.discharge_enable_time)
-            self.log("Inverter {} {} set to {}".format(self.id, entity_id, self.discharge_enable_time))
-
-        # Tracking for idle time
-        if self.discharge_enable_time:
-            self.track_discharge_start = discharge_start.strftime(TIME_FORMAT_HMS)
-            self.track_discharge_end = discharge_end.strftime(TIME_FORMAT_HMS)
-        else:
+        if discharge_start is None or discharge_end is None:
+            self.log("Warn: Inverter {} unable to read Export window as discharge_start or discharge_end is None, will retry next update".format(self.id))
+            self.base.record_status("Warn: Inverter {} unable to read Export window, will retry next update".format(self.id), had_errors=True)
+            # Set safe defaults to allow graceful recovery on next update
+            self.discharge_enable_time = False
+            self.discharge_start_time_minutes = 0
+            self.discharge_end_time_minutes = 0
             self.track_discharge_start = "00:00:00"
             self.track_discharge_end = "00:00:00"
+        else:
+            # Update simulated discharge enable time to match the discharge window time.
+            if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode:
+                if discharge_start == discharge_end:
+                    self.discharge_enable_time = False
+                else:
+                    self.discharge_enable_time = True
+                entity_id = self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id)
+                self.write_and_poll_switch("scheduled_discharge_enable", entity_id, self.discharge_enable_time)
+                self.log("Inverter {} {} set to {}".format(self.id, entity_id, self.discharge_enable_time))
 
-        # Reverse clock skew
-        discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
-        discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
+            # Tracking for idle time
+            if self.discharge_enable_time:
+                self.track_discharge_start = discharge_start.strftime(TIME_FORMAT_HMS)
+                self.track_discharge_end = discharge_end.strftime(TIME_FORMAT_HMS)
+            else:
+                self.track_discharge_start = "00:00:00"
+                self.track_discharge_end = "00:00:00"
 
-        # Compute discharge window minutes start/end just for the next discharge window
-        self.discharge_start_time_minutes, self.discharge_end_time_minutes = compute_window_minutes(discharge_start, discharge_end, minutes_now)
+            # Reverse clock skew
+            discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
+            discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
+
+            # Compute discharge window minutes start/end just for the next discharge window
+            self.discharge_start_time_minutes, self.discharge_end_time_minutes = compute_window_minutes(discharge_start, discharge_end, minutes_now)
 
         if not quiet:
             self.base.log("Inverter {} scheduled discharge enable is {}".format(self.id, self.discharge_enable_time))
@@ -1823,6 +2022,10 @@ class Inverter:
         elif "discharge_start_time" in self.base.args:
             old_start = self.base.get_arg("discharge_start_time", index=self.id)
             old_end = self.base.get_arg("discharge_end_time", index=self.id)
+            if old_start is None:
+                old_start = "00:00:00"
+            if old_end is None:
+                old_end = "00:00:00"
             if len(old_start) == 5:
                 old_start += ":00"
             if len(old_end) == 5:
@@ -2279,6 +2482,10 @@ class Inverter:
         elif "charge_start_time" in self.base.args:
             old_start = self.base.get_arg("charge_start_time", index=self.id)
             old_end = self.base.get_arg("charge_end_time", index=self.id)
+            if old_start is None:
+                old_start = "00:00:00"
+            if old_end is None:
+                old_end = "00:00:00"
             if len(old_start) == 5:
                 old_start += ":00"
             if len(old_end) == 5:

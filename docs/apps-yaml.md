@@ -215,6 +215,21 @@ Valid values are:
   threads: auto
 ```
 
+### enable_coarse_fine_levels
+
+Controls the two-pass coarse/fine optimization algorithm for improved planning performance. The default is True (enabled).
+
+When enabled, Predbat uses a two-pass optimization strategy:
+
+- **Coarse pass**: Quickly evaluates a reduced set of slot length combinations to identify approximately optimal charge/export window sizes
+- **Fine pass**: Refines the search by focusing only on slot lengths near those identified as optimal
+
+This significantly reduces planning time while maintaining near-optimal results. You can disable this by setting it to False if needed.
+
+```yaml
+  enable_coarse_fine_levels: True
+```
+
 ### Web interface
 
 Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat add-on.
@@ -512,16 +527,23 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
 
 #### Important notes (Solis)
 
-**IMPORTANT:** Currently the Solis Cloud integration cannot determine your battery size. You **must** set `soc_max` in `apps.yaml` manually with your battery capacity in kWh.
+**IMPORTANT:** The Solis Cloud integration cannot automatically determine your battery size from the inverter. You have two options:
 
-For example:
+1. **Manual configuration (recommended):** Set `soc_max` in `apps.yaml` manually with your battery capacity in kWh:
 
 ```yaml
   soc_max:
     - 13.5
 ```
 
-Replace `13.5` with your actual battery capacity in kWh. This setting is critical for Predbat to correctly calculate battery charge levels and optimization plans.
+Replace `13.5` with your actual battery capacity in kWh.
+
+2. **Automatic detection:** Leave `soc_max` unset or set to 0, and Predbat will attempt to automatically determine battery size by analyzing historical charging data. This requires:
+   - At least several days of historical data from `soc_percent` and `battery_power` sensors
+   - Charging periods with at least 15% SoC change
+   - May take time to collect sufficient data
+
+Manual configuration is recommended as it's immediate and more reliable.
 
 #### Automatic configuration (solis_automatic: True)
 
@@ -552,12 +574,10 @@ No manual entity configuration is required when using automatic mode.
 If you disable automatic configuration, you must manually configure inverter entities in `apps.yaml` similar to other inverter types. In this case, set:
 
 ```yaml
-  modules:
-    solis:
-      api_key: !secret solis_api_key
-      api_secret: !secret solis_api_secret
-      automatic: False
-
+  solis_api_key: !secret solis_api_key
+  solis_api_secret: !secret solis_api_secret
+  solis_automatic: False
+  solis_control_enable: True
   num_inverters: 1
   inverter_type: 'SolisCloud'
   soc_max:
@@ -668,6 +688,8 @@ You don't need multiple lines for the import or export sensors as each inverter 
 Edit if necessary if you have non-standard sensor names:
 
 - **load_today** - Entity name for the house load in kWh today (must be incrementing)
+- **load_power** - Current load power sensor in W (used with load_power_fill_enable to improve load_today data accuracy)
+- **load_power_fill_enable** - When True (default), uses load_power data to fill gaps and smooth load_today sensor data. Set to False to disable this feature.
 - **import_today** - Imported energy today in kWh (incrementing)
 - **export_today** - Exported energy today in kWh (incrementing)
 - **pv_today** - PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
@@ -675,6 +697,10 @@ If you have an AC-coupled inverter then enter the Home Assistant sensor for your
 If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
 Note: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.
+
+The **load_power_fill_enable** feature helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
+out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
+the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors.
 
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
@@ -855,7 +881,9 @@ or
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
 Predbat also uses **battery_rate_max** when creating [charge and discharge curves](#battery-chargedischarge-curves), looking for charging or discharging at 95% of the max rate.
 Be careful of setting the rate at a value higher than your inverter can handle for grid charging in order for Predbat to be able to find the historical 'full rate' charging/discharging needed to correctly calculate the curves.
-- **soc_max** - Entity name for the maximum charge level for the battery in kWh
+- **soc_max** - Entity name for the maximum charge level for the battery in kWh.
+If not set or set to 0, Predbat will attempt to automatically determine the battery size by analyzing historical charging data from `soc_percent` and `battery_power` sensors.
+This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
 - **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set).
@@ -1370,7 +1398,7 @@ SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for
 
 An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
 
-## Ohme car charger - direct integration
+## Ohme car charger direct integration
 
 Predbat can talk directly to the Ohme charger by setting your login details. When **ohme_automatic_octopus_intelligent** is set then Predbat is automatically
 configured to take Octopus Intelligent car charging slots from Ohme (rather than from Octopus Intelligent directly).
@@ -1612,6 +1640,7 @@ If the battery has not recently been fully charged or fully discharged then Pred
 - **battery_charge_power_curve** - This optional configuration item enables you to model in Predbat a tail-off in charging at high SoC%.
 
 Enter the charging curve as a series of steps of % of max charge rate for each SoC percentage.
+The percentage steps can either be expressed as an integer number (e.g. 97) or as a string (e.g. "97"); the Percent symbol is not required (see example curve below).
 
 The default is 1.0 (full power) charge to 100%.
 

@@ -13,11 +13,21 @@
 from aiohttp import web
 import asyncio
 import os
+import os.path
+import sys
 import re
 from datetime import datetime, timedelta
 import json
 import shutil
 import html as html_module
+import urllib.parse
+import traceback
+import threading
+import io
+from io import StringIO
+from ruamel.yaml import YAML
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+
 from web_helper import (
     get_header_html,
     get_plan_css,
@@ -41,13 +51,17 @@ from web_helper import (
     get_restart_button_js,
     get_browse_css,
     get_entity_detailed_row_js,
+    get_internals_css,
+    get_internals_js,
+    get_dashboard_css,
+    get_dashboard_collapsible_js,
 )
 
 from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string, history_attribute, prune_today
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
-import urllib.parse
 from component_base import ComponentBase
+from config import APPS_SCHEMA
 
 ROOT_YAML_KEY = "pred_bat"
 
@@ -124,6 +138,10 @@ class WebInterface(ComponentBase):
         app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
         app.router.add_get("/browse", self.html_browse)
+        app.router.add_get("/download", self.html_download_file)
+        app.router.add_get("/internals", self.html_internals)
+        app.router.add_get("/api/internals", self.html_api_internals)
+        app.router.add_get("/api/internals/download", self.html_api_internals_download)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -1626,9 +1644,6 @@ chart.render();
             if not search_term or not text:
                 return text
 
-            import re
-            import html as html_module
-
             # Create case-insensitive pattern for the original text
             pattern = re.compile(re.escape(search_term), re.IGNORECASE)
 
@@ -1724,8 +1739,6 @@ chart.render();
                         highlighted_full_line = highlight_search_term(line, search_term)
                     else:
                         # Escape HTML characters even when no search highlighting
-                        import html as html_module
-
                         highlighted_timestamp = html_module.escape(start_line)
                         highlighted_message = html_module.escape(rest_line)
                         highlighted_full_line = html_module.escape(line)
@@ -2366,7 +2379,6 @@ chart.render();
         """
         Render apps.yaml as an HTML page
         """
-        from web_helper import get_dashboard_css, get_dashboard_collapsible_js
 
         self.default_page = "./dash"
         text = self.get_header("Predbat Dashboard", refresh=60)
@@ -2793,8 +2805,6 @@ chart.render();
         Handle POST request for apps page - batch edit values
         """
         try:
-            from ruamel.yaml import YAML
-
             postdata = await request.post()
             changes_json = postdata.get("changes", "")
 
@@ -3275,8 +3285,6 @@ chart.render();
                 self.log(f"Backup created at {backup_path}")
 
             # Redirect back to editor with success message
-            import urllib.parse
-
             success_message = f"Apps.yaml saved successfully. Backup created at {backup_path}."
             encoded_message = urllib.parse.quote(success_message)
             raise web.HTTPFound(f"./apps_editor?success={encoded_message}")
@@ -3286,8 +3294,6 @@ chart.render();
         except Exception as e:
             error_msg = f"Failed to save apps.yaml: {str(e)}"
             self.log(f"ERROR: {error_msg}")
-            import urllib.parse
-
             encoded_error = urllib.parse.quote(error_msg)
             raise web.HTTPFound(f"./apps_editor?error={encoded_error}")
 
@@ -3828,7 +3834,6 @@ chart.render();
         """
         try:
             from components import COMPONENT_LIST
-            from config import APPS_SCHEMA
 
             args = request.query
             component_name = args.get("component_name")
@@ -3897,8 +3902,6 @@ chart.render();
 
         except Exception as e:
             self.log(f"ERROR: Failed to get component config: {str(e)}")
-            import traceback
-
             traceback.print_exc()
             return web.json_response({"success": False, "message": str(e)}, status=500)
 
@@ -3907,10 +3910,6 @@ chart.render();
         Save component configuration using ruamel.yaml
         """
         try:
-            from ruamel.yaml import YAML
-            from ruamel.yaml.scalarstring import DoubleQuotedScalarString
-            from config import APPS_SCHEMA
-
             json_data = await request.json()
             component_name = json_data.get("component_name")
             changes = json_data.get("changes", {})
@@ -3983,11 +3982,7 @@ chart.render();
                                 converted_value = json.loads(str(new_value))
                             except json.JSONDecodeError:
                                 # Fall back to YAML parser
-                                from ruamel.yaml import YAML
-
                                 yaml_parser = YAML()
-                                from io import StringIO
-
                                 stream = StringIO(str(new_value))
                                 converted_value = yaml_parser.load(stream)
                     else:
@@ -4025,8 +4020,6 @@ chart.render();
 
         except Exception as e:
             self.log(f"ERROR: Failed to save component config: {str(e)}")
-            import traceback
-
             traceback.print_exc()
             return web.json_response({"success": False, "message": str(e)}, status=500)
 
@@ -4043,8 +4036,6 @@ chart.render();
 
         # Security check - prevent directory traversal attacks
         # Normalize the path and ensure it's within the current working directory
-        import os.path
-
         base_dir = os.getcwd()
         safe_path = os.path.abspath(os.path.join(base_dir, current_path))
 
@@ -4103,7 +4094,10 @@ chart.render();
                     text += f'<div class="file-viewer">\n'
                     text += f'<div class="file-header">\n'
                     text += f"<h3>Viewing: {view_file}</h3>\n"
+                    text += f'<div class="file-actions">\n'
+                    text += f'<a href="./download?path={current_path}&file={view_file}" class="download-button" download><span class="mdi mdi-download"></span> Download</a>\n'
                     text += f'<a href="./browse?path={current_path}" class="back-button">← Back to Directory</a>\n'
+                    text += f"</div>\n"
                     text += f"</div>\n"
 
                     # File content with basic syntax highlighting
@@ -4228,3 +4222,599 @@ chart.render();
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    async def html_download_file(self, request):
+        """
+        Download a file from the filesystem
+        """
+        args = request.query
+        current_path = args.get("path", ".")
+        download_file = args.get("file", None)
+
+        if not download_file:
+            return web.Response(text="File not specified", status=400)
+
+        # Security check - prevent directory traversal attacks
+        base_dir = os.getcwd()
+        safe_path = os.path.abspath(os.path.join(base_dir, current_path))
+
+        # Ensure the path is within the base directory
+        if not safe_path.startswith(base_dir):
+            return web.Response(text="Access denied", status=403)
+
+        file_path = os.path.join(safe_path, download_file)
+
+        try:
+            # Security check for file path
+            file_abs_path = os.path.abspath(file_path)
+            if not file_abs_path.startswith(base_dir):
+                return web.Response(text="Access denied", status=403)
+
+            if os.path.isfile(file_abs_path):
+                # Read file content
+                with open(file_abs_path, "rb") as f:
+                    content = f.read()
+
+                # Set appropriate content type based on file extension
+                file_ext = os.path.splitext(download_file)[1].lower()
+                content_type = "application/octet-stream"
+
+                if file_ext in [".yaml", ".yml"]:
+                    content_type = "text/yaml"
+                elif file_ext in [".py"]:
+                    content_type = "text/x-python"
+                elif file_ext in [".json"]:
+                    content_type = "application/json"
+                elif file_ext in [".log", ".txt"]:
+                    content_type = "text/plain"
+                elif file_ext in [".html"]:
+                    content_type = "text/html"
+                elif file_ext in [".md"]:
+                    content_type = "text/markdown"
+
+                # Create response with download headers
+                response = web.Response(body=content, content_type=content_type)
+                response.headers["Content-Disposition"] = f'attachment; filename="{download_file}"'
+                return response
+            else:
+                return web.Response(text="File not found", status=404)
+        except PermissionError:
+            return web.Response(text="Permission denied", status=403)
+        except Exception as e:
+            self.log(f"Error downloading file: {str(e)}")
+            return web.Response(text=f"Error downloading file: {str(e)}", status=500)
+
+    async def html_internals(self, request):
+        """
+        Return the Internals page showing the class hierarchy and object inspection
+        """
+        self.default_page = "./internals"
+
+        text = self.get_header("Predbat Internals", refresh=0)
+        text += "<body>\n"
+        text += get_internals_css()
+        text += get_internals_js()
+
+        text += '<div class="internals-container">\n'
+        text += '<div class="breadcrumb-container">\n'
+        text += "<h2>Predbat Internals Browser</h2>\n"
+        text += '<div class="breadcrumb">Browse the internal object hierarchy starting from predbat</div>\n'
+        text += "</div>\n"
+
+        # Add thread stack frames section
+        text += '<div class="threads-section">\n'
+        text += "<h3>Thread Stack Frames</h3>\n"
+        text += '<div class="threads-container">\n'
+        text += self._get_thread_stacks_html()
+        text += "</div>\n"
+        text += "</div>\n"
+
+        # Object tree in a panel
+        text += '<div class="tree-section">\n'
+        text += "<h3>Object Hierarchy</h3>\n"
+        text += '<div class="tree-container">\n'
+        text += '<div class="tree-view">\n'
+
+        # Create a single root node for 'predbat' pointing to self.base
+        text += '<div class="tree-item" title="predbat" onclick="toggleNode(this, \'predbat\')">\n'
+        text += '<span class="expand-icon expandable">+</span>'
+        text += '<button class="refresh-icon" title="Refresh this node" onclick="event.stopPropagation(); refreshNode(this, \'predbat\')">🔄</button>'
+        text += '<a href="./api/internals/download?path=predbat" class="download-icon" title="Download as YAML" onclick="event.stopPropagation()">⬇</a>'
+        text += '<span class="key">predbat</span>'
+        text += f'<span class="type">&lt;{type(self.base).__name__}&gt;</span>'
+        text += "</div>\n"
+        text += '<div class="tree-children"></div>\n'
+
+        text += "</div>\n"  # tree-view
+        text += "</div>\n"  # tree-container
+        text += "</div>\n"  # tree-section
+        text += "</div>\n"  # internals-container
+
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
+    def _get_thread_stacks_html(self):
+        """
+        Get HTML representation of all thread stack frames
+        """
+        text = ""
+
+        try:
+            # Get all thread frames
+            frames = sys._current_frames()
+            threads = {thread.ident: thread for thread in threading.enumerate()}
+
+            # Sort threads by name for consistent display
+            thread_list = []
+            for thread_id, frame in frames.items():
+                thread = threads.get(thread_id)
+                thread_name = thread.name if thread else f"Thread-{thread_id}"
+                thread_list.append((thread_name, thread_id, frame, thread))
+
+            thread_list.sort(key=lambda x: x[0])
+
+            if not thread_list:
+                text += '<div class="thread-item">No threads found</div>'
+                return text
+
+            for thread_name, thread_id, frame, thread in thread_list:
+                # Thread header
+                text += f'<div class="thread-item">'
+                text += f'<div class="thread-header" onclick="toggleThreadStack(this)">'
+                text += f'<span class="expand-icon expandable">+</span>'
+                text += f'<span class="thread-name">{thread_name}</span>'
+                text += f'<span class="thread-id">ID: {thread_id}</span>'
+                if thread:
+                    alive_status = "alive" if thread.is_alive() else "dead"
+                    daemon_status = "daemon" if thread.daemon else "normal"
+                    text += f'<span class="thread-status">{alive_status}, {daemon_status}</span>'
+                text += "</div>"
+
+                # Stack trace (collapsed by default)
+                text += f'<div class="thread-stack collapsed">'
+
+                # Extract all stack frames
+                stack = traceback.extract_stack(frame)
+
+                text += '<div class="stack-frames">'
+                for i, frame_info in enumerate(stack):
+                    frame_num = i
+                    text += f'<div class="stack-frame">'
+                    text += f'<span class="frame-number">#{frame_num}</span>'
+                    text += f'<span class="frame-file">{frame_info.filename}:{frame_info.lineno}</span>'
+                    text += f'<span class="frame-function">in {frame_info.name}()</span>'
+                    if frame_info.line:
+                        text += f'<div class="frame-code">{html_module.escape(frame_info.line.strip())}</div>'
+                    text += "</div>"
+                text += "</div>"
+
+                # Check if this thread has an asyncio event loop with tasks
+                asyncio_tasks = self._get_thread_asyncio_tasks(frame)
+                if asyncio_tasks:
+                    text += '<div class="asyncio-tasks">'
+                    text += "<h4>Asyncio Tasks in this thread:</h4>"
+                    for task_info in asyncio_tasks:
+                        text += '<div class="asyncio-task">'
+                        text += f'<div class="task-header">'
+                        text += f'<span class="task-name">{task_info["name"]}</span>'
+                        text += f'<span class="task-state">{task_info["state"]}</span>'
+                        text += "</div>"
+                        if task_info.get("stack"):
+                            text += '<div class="task-stack">'
+                            for frame_info in task_info["stack"]:
+                                text += f'<div class="stack-frame">'
+                                text += f'<span class="frame-file">{frame_info["file"]}:{frame_info["line"]}</span>'
+                                text += f'<span class="frame-function">in {frame_info["name"]}()</span>'
+                                if frame_info.get("code"):
+                                    text += f'<div class="frame-code">{html_module.escape(frame_info["code"])}</div>'
+                                text += "</div>"
+                            text += "</div>"
+                        text += "</div>"
+                    text += "</div>"
+
+                text += "</div>"  # thread-stack
+                text += "</div>"  # thread-item
+
+        except Exception as e:
+            self.log(f"Error getting thread stacks: {e}")
+            text += f'<div class="error">Error retrieving thread information: {html_module.escape(str(e))}</div>'
+
+        return text
+
+    def _get_thread_asyncio_tasks(self, frame):
+        """
+        Extract asyncio tasks from a thread's frame if it's running an event loop
+        """
+        import asyncio
+
+        tasks_info = []
+
+        try:
+            # Try to find the event loop in this thread's frame locals
+            current_frame = frame
+            event_loop = None
+
+            # Walk up the stack to find the event loop
+            while current_frame is not None:
+                if "self" in current_frame.f_locals:
+                    obj = current_frame.f_locals["self"]
+                    if isinstance(obj, asyncio.AbstractEventLoop):
+                        event_loop = obj
+                        break
+                current_frame = current_frame.f_back
+
+            if not event_loop:
+                return tasks_info
+
+            # Get all tasks for this event loop
+            all_tasks = asyncio.all_tasks(event_loop)
+
+            for task in all_tasks:
+                task_name = task.get_name()
+
+                # Get task state
+                if task.done():
+                    if task.cancelled():
+                        state = "cancelled"
+                    else:
+                        state = "done"
+                else:
+                    state = "running"
+
+                task_info = {"name": task_name, "state": state, "stack": []}
+
+                # Get the coroutine stack
+                try:
+                    coro = task.get_coro()
+                    if coro:
+                        # Get the stack frames for this coroutine
+                        stack = []
+                        cr_frame = getattr(coro, "cr_frame", None)
+                        if cr_frame:
+                            # Extract stack from coroutine frame
+                            frames_list = []
+                            current = cr_frame
+                            while current:
+                                frames_list.append(current)
+                                current = current.f_back
+
+                            # Reverse to show from oldest to newest
+                            frames_list.reverse()
+
+                            for fr in frames_list:
+                                code = fr.f_code
+                                line_no = fr.f_lineno
+
+                                # Try to get the actual line of code
+                                try:
+                                    import linecache
+
+                                    line_code = linecache.getline(code.co_filename, line_no).strip()
+                                except:
+                                    line_code = ""
+
+                                stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
+
+                            task_info["stack"] = stack
+                except Exception as e:
+                    # If we can't get the coroutine stack, just skip it
+                    pass
+
+                tasks_info.append(task_info)
+
+        except Exception as e:
+            self.log(f"Error extracting asyncio tasks: {e}")
+
+        return tasks_info
+
+    async def html_api_internals(self, request):
+        """
+        API endpoint to get object members for a given path
+        """
+        args = request.query
+        path = args.get("path", "")
+
+        try:
+            # Navigate to the requested object
+            obj = self.base
+            if path and path != "predbat":
+                parts = path.split("::")
+                # Skip 'predbat' if it's the first part
+                if parts[0] == "predbat":
+                    parts = parts[1:]
+                for part in parts:
+                    # Check dict first before hasattr to avoid accessing dict methods
+                    if isinstance(obj, dict):
+                        if part in obj:
+                            obj = obj[part]
+                        else:
+                            return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": f"Key not found: {part}"}))
+                    elif isinstance(obj, (list, tuple)):
+                        try:
+                            # Strip brackets if present (e.g., "[0]" -> "0")
+                            index_str = part.strip("[]")
+                            index = int(index_str)
+                            obj = obj[index]
+                        except (ValueError, IndexError):
+                            return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": f"Invalid index: {part}"}))
+                    elif hasattr(obj, part):
+                        obj = getattr(obj, part)
+                    else:
+                        return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": f"Path not found: {path}"}))
+
+            # Get members of the object
+            members = self._get_object_members(obj, path)
+
+            return web.Response(content_type="application/json", text=json.dumps({"success": True, "members": members}))
+        except Exception as e:
+            self.log(f"Error in internals API: {str(e)}")
+            return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": str(e)}))
+
+    async def html_api_internals_download(self, request):
+        """
+        API endpoint to download object as YAML
+        """
+        args = request.query
+        path = args.get("path", "")
+
+        try:
+            # Navigate to the requested object
+            obj = self.base
+            if path and path != "predbat":
+                parts = path.split("::")
+                # Skip 'predbat' if it's the first part
+                if parts[0] == "predbat":
+                    parts = parts[1:]
+                for part in parts:
+                    # Check dict first before hasattr to avoid accessing dict methods
+                    if isinstance(obj, dict):
+                        if part in obj:
+                            obj = obj[part]
+                        else:
+                            return web.Response(content_type="text/plain", text=f"Error: Key not found: {part}")
+                    elif isinstance(obj, (list, tuple)):
+                        try:
+                            # Strip brackets if present (e.g., "[0]" -> "0")
+                            index_str = part.strip("[]")
+                            index = int(index_str)
+                            obj = obj[index]
+                        except (ValueError, IndexError):
+                            return web.Response(content_type="text/plain", text=f"Error: Invalid index: {part}")
+                    elif hasattr(obj, part):
+                        obj = getattr(obj, part)
+                    else:
+                        return web.Response(content_type="text/plain", text=f"Error: Attribute not found: {part}")
+
+            # Convert object to YAML-serializable format
+            try:
+                yaml_data = self._object_to_yaml_dict(obj, visited=set())
+            except Exception as e:
+                self.log(f"Error converting object to YAML dict: {e}")
+                return web.Response(content_type="text/plain", text=f"Error: Failed to convert object to YAML-serializable format: {str(e)}")
+
+            # Convert to YAML
+            try:
+                yaml = YAML()
+                yaml.default_flow_style = False
+                yaml.preserve_quotes = True
+
+                stream = io.StringIO()
+                yaml.dump(yaml_data, stream)
+                yaml_content = stream.getvalue()
+            except Exception as e:
+                self.log(f"Error dumping YAML: {e}")
+                return web.Response(content_type="text/plain", text=f"Error: Failed to serialize to YAML format: {str(e)}\n\nThis object may contain types that are not YAML-serializable.")
+
+            # Generate filename from path
+            if path:
+                filename = path.replace("::", "_") + ".yaml"
+            else:
+                filename = "predbat_root.yaml"
+
+            # Return as downloadable file
+            return web.Response(content_type="application/x-yaml", headers={"Content-Disposition": f'attachment; filename="{filename}"'}, text=yaml_content)
+
+        except Exception as e:
+            self.log(f"Error downloading internals as YAML: {e}")
+            return web.Response(content_type="text/plain", text=f"Error: {str(e)}")
+
+    def _object_to_yaml_dict(self, obj, max_depth=10, current_depth=0, visited=None):
+        """
+        Convert an object to a YAML-serializable dictionary
+        Handles nested objects, lists, dicts, etc.
+        Detects circular references to prevent infinite loops
+        """
+        if visited is None:
+            visited = set()
+
+        if current_depth >= max_depth:
+            return f"<max depth {max_depth} reached>"
+
+        # Handle None
+        if obj is None:
+            return None
+
+        # Handle primitives (no circular reference check needed)
+        if isinstance(obj, (str, int, float, bool)):
+            return obj
+
+        # Check for circular references for complex objects
+        obj_id = id(obj)
+        if obj_id in visited:
+            return f"<circular reference to {type(obj).__name__}>"
+
+        # Add to visited set
+        visited.add(obj_id)
+
+        # Handle lists and tuples
+        if isinstance(obj, (list, tuple)):
+            result = []
+            for i, item in enumerate(obj[:100]):  # Limit to 100 items
+                try:
+                    result.append(self._object_to_yaml_dict(item, max_depth, current_depth + 1, visited))
+                except Exception as e:
+                    result.append(f"<error at index {i}: {type(e).__name__}>")
+            # Remove from visited after processing to allow same object in different branches
+            visited.discard(obj_id)
+            return result
+
+        # Handle dictionaries
+        if isinstance(obj, dict):
+            result = {}
+            for key, value in list(obj.items())[:100]:  # Limit to 100 items
+                try:
+                    # Ensure key is YAML-serializable
+                    yaml_key = str(key) if not isinstance(key, (str, int, float, bool)) else key
+                    result[yaml_key] = self._object_to_yaml_dict(value, max_depth, current_depth + 1, visited)
+                except Exception as e:
+                    try:
+                        yaml_key = str(key)
+                    except:
+                        yaml_key = f"<unprintable_key_{hash(key)}>"
+                    result[yaml_key] = f"<error: {type(e).__name__}>"
+            # Remove from visited after processing to allow same object in different branches
+            visited.discard(obj_id)
+            return result
+
+        # Handle objects with __dict__
+        if hasattr(obj, "__dict__"):
+            result = {}
+            try:
+                obj_dict = obj.__dict__
+                for key, value in list(obj_dict.items())[:100]:  # Limit to 100 items
+                    if not key.startswith("_"):
+                        try:
+                            result[key] = self._object_to_yaml_dict(value, max_depth, current_depth + 1, visited)
+                        except Exception as e:
+                            result[key] = f"<error: {type(e).__name__}>"
+            except Exception as e:
+                visited.discard(obj_id)
+                return f"<{type(obj).__name__} object - error accessing __dict__: {type(e).__name__}>"
+            # Remove from visited after processing to allow same object in different branches
+            visited.discard(obj_id)
+            return result if result else f"<{type(obj).__name__} object>"
+
+        # Fallback: try to convert to string
+        try:
+            str_value = str(obj)
+            if len(str_value) > 200:
+                return str_value[:200] + "..."
+            return str_value
+        except:
+            return f"<{type(obj).__name__}>"
+
+    def _get_object_members(self, obj, path):
+        """
+        Get members of an object for display in the internals browser
+        Returns a list of dictionaries with key, type, value, and expandable flag
+        """
+        members = []
+
+        try:
+            # Handle dictionaries
+            if isinstance(obj, dict):
+                for key in sorted(obj.keys())[:100]:  # Limit to first 100 items
+                    try:
+                        value = obj[key]
+                        member_info = self._analyze_value(str(key), value, path)
+                        members.append(member_info)
+                    except Exception as e:
+                        members.append({"key": str(key), "type": "error", "value": f"Error: {str(e)}", "expandable": False})
+
+                if len(obj) > 100:
+                    members.append({"key": "...", "type": "info", "value": f"({len(obj) - 100} more items)", "expandable": False})
+
+            # Handle lists/tuples
+            elif isinstance(obj, (list, tuple)):
+                for i, value in enumerate(obj[:100]):  # Limit to first 100 items
+                    try:
+                        member_info = self._analyze_value(f"[{i}]", value, path)
+                        members.append(member_info)
+                    except Exception as e:
+                        members.append({"key": f"[{i}]", "type": "error", "value": f"Error: {str(e)}", "expandable": False})
+
+                if len(obj) > 100:
+                    members.append({"key": "...", "type": "info", "value": f"({len(obj) - 100} more items)", "expandable": False})
+
+            # Handle objects with attributes
+            else:
+                # Get all attributes
+                attrs = []
+                for attr in dir(obj):
+                    # Skip private attributes and methods
+                    if attr.startswith("_"):
+                        continue
+                    attrs.append(attr)
+
+                # Sort and limit
+                for attr in sorted(attrs)[:200]:  # Limit to 200 attributes
+                    try:
+                        value = getattr(obj, attr)
+                        # Skip methods for now (could make them expandable later)
+                        if callable(value):
+                            continue
+                        member_info = self._analyze_value(attr, value, path)
+                        members.append(member_info)
+                    except Exception as e:
+                        members.append({"key": attr, "type": "error", "value": f"Error: {str(e)}", "expandable": False})
+
+        except Exception as e:
+            self.log(f"Error getting object members: {str(e)}")
+            members.append({"key": "error", "type": "error", "value": str(e), "expandable": False})
+
+        return members
+
+    def _analyze_value(self, key, value, path):
+        """
+        Analyze a value and return information about it
+        """
+        value_type = type(value).__name__
+        expandable = False
+        display_value = None
+        type_size = None
+
+        # Check if expandable
+        if isinstance(value, dict):
+            expandable = len(value) > 0
+            display_value = f"{{{len(value)} items}}"
+            type_size = len(value)
+        elif isinstance(value, (list, tuple)):
+            expandable = len(value) > 0
+            display_value = f"[{len(value)} items]"
+            type_size = len(value)
+        elif hasattr(value, "__dict__") and not isinstance(value, (str, int, float, bool, type(None))):
+            # Object with attributes
+            expandable = True
+            display_value = f"<{value_type} object>"
+        elif isinstance(value, (str, int, float, bool, type(None))):
+            # Scalar types
+            expandable = False
+            if isinstance(value, str):
+                # Truncate long strings
+                if len(value) > 100:
+                    display_value = value[:100] + "..."
+                else:
+                    display_value = value
+            else:
+                display_value = value
+        else:
+            # Other types
+            try:
+                str_value = str(value)
+                if len(str_value) > 100:
+                    display_value = str_value[:100] + "..."
+                else:
+                    display_value = str_value
+            except:
+                display_value = f"<{value_type}>"
+
+        # Build the full path for this item using :: as separator
+        full_path = f"{path}::{key}" if path else key
+
+        result = {"key": key, "type": value_type, "value": display_value, "expandable": expandable, "path": full_path}
+
+        # Add size for collections
+        if type_size is not None:
+            result["size"] = type_size
+
+        return result

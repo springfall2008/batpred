@@ -27,7 +27,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.31.9"
+THIS_VERSION = "v8.32.4"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py"]
@@ -60,6 +60,7 @@ from const import (
     INVERTER_TEST,
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
+    INVERTER_QUICK_UPDATE_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 from prediction import reset_prediction_globals
@@ -218,8 +219,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         if not units:
             return state
 
-        units = str(units).strip().lower()
-        required_unit = str(required_unit).strip().lower()
+        units = str(units).strip()
+        required_unit = str(required_unit).strip()
 
         try:
             state = float(state)
@@ -231,20 +232,42 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             units, required_unit = required_unit, units
 
         if isinstance(state, float) and units and required_unit and units != required_unit:
-            if units.startswith("k") and not required_unit.startswith("k"):
+            units_lhs = units[0]
+            if units_lhs == "K":
+                units_lhs = "k"
+            if units_lhs not in ["k", "M", "m"]:
+                units_lhs = ""
+
+            required_lhs = required_unit[0]
+            if required_lhs not in ["k", "M", "m"]:
+                required_lhs = ""
+            if required_lhs == "K":
+                required_lhs = "k"
+
+            if units_lhs == "M" and required_lhs == "k":
+                # Convert MW to kW
+                state *= 1000.0
+                units = "k" + units[1:]
+            elif units_lhs == "k" and required_lhs == "M":
+                # Convert kW to MW
+                state /= 1000.0
+                units = "M" + units[1:]
+            elif units_lhs == "k" and required_lhs == "":
                 # Convert kWh to Wh
                 state *= 1000.0
                 units = units[1:]  # Remove 'k' from units
-            elif not units.startswith("k") and required_unit.startswith("k"):
+            elif units_lhs == "" and required_lhs == "k":
                 # Convert Wh to kWh
                 state /= 1000.0
-                required_unit = required_unit[1:]  # Remove 'k' from units
-            elif units.startswith("m") and not required_unit.startswith("m"):
+                units = "k" + units  # Add 'k' to units
+            elif units_lhs == "m" and required_lhs == "":
                 # Convert mW to W
                 state /= 1000.0
-            elif not units.startswith("m") and required_unit.startswith("m"):
+                units = units[1:]  # Remove 'm' from units
+            elif units_lhs == "" and required_lhs == "m":
                 # Convert W to mW
                 state *= 1000.0
+                units = "m" + units  # Add 'm' to units
 
             if units != required_unit:
                 self.log("Warn: unit_conversion - Units mismatch for {}: expected {}, got {} after conversion".format(entity_id, required_unit, units))
@@ -285,6 +308,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         state = self.unit_conversion(entity_id, state, None, required_unit, going_to=True)
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
+
+    def fire_event_wrapper(self, domain, service):
+        """
+        Wrapper function to fire a HA event
+        """
+        if not self.ha_interface:
+            self.log("Error: fire_event_wrapper - No HA interface available")
+            return False
+        return self.call_service_wrapper("fire_event/service_registered", event_domain=domain, event_service=service)
 
     def call_service_wrapper(self, service, **kwargs):
         """
@@ -645,6 +677,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.inverter_can_charge_during_export = True
         self.octopus_last_joined_try = None
         self.calculate_savings_max_charge_slots = 1
+        self.inverter_data_last_fetch = None
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -701,10 +734,20 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.fetch_config_options()
         sensor_force_replan = self.fetch_sensor_data()
 
+        # Check if any sensor changes require a replan
         if sensor_force_replan:
             self.log("Sensor changes require a replan, will recompute the plan")
             recompute = True
+
+        # Fetch inverter data
         self.fetch_inverter_data()
+
+        # Check if we have valid import rates
+        if self.rate_min == self.rate_max == 0:
+            self.log("Error: Import rates are all zero, not able to compute a plan")
+            self.record_status("Error: Import rates are all zero, not able to compute a plan", had_errors=True)
+            return
+
         if self.dynamic_load():
             self.log("Dynamic load adjustment changed, will recompute the plan")
             recompute = True
@@ -1031,7 +1074,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.pool = None
 
             # Notify that we are about to update
-            self.call_notify("Predbat: update to: {}".format(version))
+            if self.get_arg("set_system_notify"):
+                self.call_notify("Predbat: update to: {}".format(version))
 
             # Perform the update
             self.log("Perform the update.....")
@@ -1446,7 +1490,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
             self.ha_interface.update_states()
             self.auto_config()
-            self.load_user_config(quiet=False, register=True)
+            self.load_user_config(quiet=False, register=False)
             self.validate_config()
             self.comparison = Compare(self)
 
@@ -1455,6 +1499,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 self.log("Error: Some components failed to start (phase1)")
                 self.record_status("Error: Some components failed to start (phase1)", had_errors=True)
 
+            self.load_user_config(quiet=False, register=True)
             self.auto_config(final=True)
 
         except Exception as e:
@@ -1531,6 +1576,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         self.check_entity_refresh()
         if self.update_pending and not self.prediction_started:
+            # Full update required
             self.update_pending = False
             self.prediction_started = True
             self.load_user_config()
@@ -1545,7 +1591,22 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 raise e
             finally:
                 self.prediction_started = False
-            self.prediction_started = False
+        elif not self.prediction_started:
+            time_now = datetime.now()
+            if self.inverter_data_last_fetch:
+                tdiff = time_now - self.inverter_data_last_fetch
+                if tdiff.total_seconds() >= INVERTER_QUICK_UPDATE_SECONDS:
+                    # Perform quick update of inverter data for the dashboard only
+                    self.prediction_started = True
+                    try:
+                        self.quick_inverter_data_update()
+                    except Exception as e:
+                        self.log("Error: Exception raised {}".format(e))
+                        self.log("Error: " + traceback.format_exc())
+                        self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
+                        raise e
+                    finally:
+                        self.prediction_started = False
 
     def check_entity_refresh(self):
         """
@@ -1595,6 +1656,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
             try:
                 self.update_pred(scheduled=True)
+                if config_changed:
+                    self.create_entity_list()
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
@@ -1602,9 +1665,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 raise e
             finally:
                 self.prediction_started = False
-            if config_changed:
-                self.create_entity_list()
-            self.prediction_started = False
 
     def run_time_loop_balance(self, cb_args):
         """

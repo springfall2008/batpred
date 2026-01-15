@@ -22,6 +22,7 @@ class AlertFeed(ComponentBase):
         self.alert_cache = {}
         self.alert_config = alert_config
         self.alert_url = self.alert_config.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom")
+        self.alert_xml = None
 
     async def select_event(self, entity_id, value):
         pass
