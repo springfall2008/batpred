@@ -63,6 +63,7 @@ from tests.test_format_time_ago import test_format_time_ago
 from tests.test_override_time import test_get_override_time_from_string
 from tests.test_units import run_test_units
 from tests.test_previous_days_modal import test_previous_days_modal_filter
+from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from_power
 from tests.test_octopus_free import test_octopus_free
 from tests.test_prune_today import test_prune_today
 from tests.test_cumulative import test_get_now_from_cumulative
@@ -160,6 +161,7 @@ def main():
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
+        ("fill_load_from_power", test_fill_load_from_power, "Fill load from power sensor tests", False),
         # Octopus Energy URL/API tests
         ("octopus_url", test_octopus_url, "Octopus URL/API comprehensive tests (downloads, day/night rates, saving sessions, intelligent dispatch, tariffs, EDF)", False),
         ("octopus_cache", test_octopus_cache_wrapper, "Octopus cache save/load tests", False),

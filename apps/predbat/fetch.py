@@ -10,7 +10,7 @@
 # pyright: reportAttributeAccessIssue=false
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
+from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
@@ -195,6 +195,158 @@ class Fetch:
 
         return load_yesterday, load_yesterday_raw
 
+    def fill_load_from_power(self, load_minutes, load_power_data):
+        """
+        This function helps to deal with load sensors which don't increment very often leading to poor quality load data
+        For example if its in kWh units then it might take many hours to increment.
+        Predbat actually wants a much more real time estimate, but integrating power sensors alone leads to drift over time.
+
+        Strategy: Divide data into 30-minute periods. For each period:
+        1. Calculate total load consumed (difference between start and end of period)
+        2. Integrate power data over that period
+        3. Scale power data to match the total load
+        4. Generate smooth minute-by-minute load curve
+
+        Since data goes backwards in time (minute 0 is now, higher minutes are further in past),
+        the load value DECREASES as we go forward in time (backwards through minutes).
+        """
+        print("Saving load power data to YAML")
+
+        if not load_power_data:
+            self.log("Warn: No power data provided to fill_load_from_power")
+            return load_minutes
+
+        # Create a copy to avoid modifying the original
+        new_load_minutes = load_minutes.copy()
+        
+        # Find all the minutes we have data for
+        max_minute = max(max(load_minutes.keys()) if load_minutes else 0, max(load_power_data.keys()) if load_power_data else 0)
+
+        # Determine gap size threshold for zero-load detection
+        # This uses the same threshold as the gap filling logic
+        gap_size = max(self.get_arg("load_filter_threshold", self.plan_interval_minutes), 5)
+
+        # Preprocessing: Fill periods of zero load where power data exists
+        # Find zero-load periods by looking for consecutive minutes with the same value (or 0)
+        zero_periods = []
+        period_start = None
+        last_value = None
+        
+        for minute in range(0, max_minute + 1):
+            current_value = new_load_minutes.get(minute, 0)
+            
+            # Check if this is a zero or constant period
+            if minute == 0:
+                last_value = current_value
+                if current_value == 0 or current_value == new_load_minutes.get(minute + 1, 0):
+                    period_start = minute
+            else:
+                # If value is same as previous and same as next, it's a flat period
+                next_value = new_load_minutes.get(minute + 1, current_value)
+                if current_value == last_value and current_value == next_value:
+                    if period_start is None:
+                        period_start = minute
+                else:
+                    # End of constant period
+                    if period_start is not None and period_start < minute:
+                        period_length = minute - period_start
+                        # Only consider it zero load if it exceeds the gap_size threshold
+                        if period_length >= gap_size:
+                            # Check if there's power data in this period
+                            has_power = any(load_power_data.get(m, 0) > 0 for m in range(period_start, minute))
+                            if has_power and (last_value == 0 or last_value == new_load_minutes.get(minute, 0)):
+                                zero_periods.append((period_start, minute - 1, last_value))
+                    period_start = None
+                last_value = current_value
+        
+        # Check final period
+        if period_start is not None and period_start < max_minute:
+            period_length = max_minute - period_start + 1
+            # Only consider it zero load if it exceeds the gap_size threshold
+            if period_length >= gap_size:
+                has_power = any(load_power_data.get(m, 0) > 0 for m in range(period_start, max_minute + 1))
+                if has_power and last_value == 0:
+                    zero_periods.append((period_start, max_minute, last_value))
+        
+        # Fill zero periods with integrated power data
+        if zero_periods:
+            self.log(f"Found {len(zero_periods)} zero-load periods: {zero_periods}")
+            for period_start, period_end, base_value in zero_periods:
+                # Integrate power data over this period
+                # First calculate total energy consumed in this period
+                total_energy = 0
+                for minute in range(period_start, period_end + 1):
+                    power = load_power_data.get(minute, 0)
+                    total_energy += power / 60.0 / 1000.0
+                
+                amount_to_fill = 0
+                for minute in range(period_end, period_start, -1):
+                    power = load_power_data.get(minute, 0)
+                    energy = power / 60.0 / 1000.0
+                    amount_to_fill += energy
+                    new_load_minutes[minute] = new_load_minutes[minute] + amount_to_fill
+                # Fill to start
+                for minute in range(period_start, -1, -1):
+                    new_load_minutes[minute] = new_load_minutes[minute] + amount_to_fill
+
+        # Process in 30-minute periods
+        period_length = 30
+        num_periods = (max_minute + period_length) // period_length
+
+        self.log("Processing {} 30-minute periods for power integration".format(num_periods))
+
+        for period_idx in range(num_periods):
+            period_start = period_idx * period_length
+            period_end = min(period_start + period_length - 1, max_minute)
+
+            # Get load at start and end of period (going backwards in time)
+            # period_start is more recent (higher cumulative value)
+            # period_end is further in past (lower cumulative value)
+            load_at_start = new_load_minutes.get(period_start, 0)
+            load_at_end = new_load_minutes.get(period_end + 1, new_load_minutes.get(period_end, 0))
+
+            # Total energy consumed in this period (going backwards means decrement)
+            load_total = load_at_start - load_at_end
+            
+            self.log(f"Period {period_idx} ({period_start}-{period_end}): load_at_start={load_at_start}, load_at_end={load_at_end}, load_total={load_total}")
+
+            # Integrate power data over this period (convert W to kWh)
+            integrated_energy = 0.0
+            power_count = 0
+            for minute in range(period_start, period_end + 1):
+                power = max(load_power_data.get(minute, 0), 0)
+                if power > 0:
+                    power_count += 1
+                # Convert watts to kWh per minute: W * (1 hour / 60 minutes) / 1000
+                integrated_energy += power / 60.0 / 1000.0
+            
+            self.log(f"  integrated_energy={integrated_energy}, power_count={power_count}/{period_end - period_start + 1}, condition: integrated_energy > 0 and load_total > 0 = {integrated_energy > 0 and load_total > 0}")
+
+            # If we have both power data and load consumption, scale the power integration
+            if integrated_energy > 0 and load_total > 0:
+                # Calculate scaling factor to match load total
+                scale_factor = load_total / integrated_energy
+
+                # Apply scaled power integration to create smooth load curve
+                # Start from the highest value (at period_start = most recent)
+                # and decrement going backwards in time
+                running_total = load_at_start
+                for minute in range(period_start, period_end + 1):
+                    new_load_minutes[minute] = dp4(running_total)
+                    power = load_power_data.get(minute, 0)
+                    energy_decrement = (power / 60.0 / 1000.0) * scale_factor
+                    running_total -= energy_decrement
+            elif load_total > 0:
+                # No power data but we have load consumption
+                # Distribute the load evenly across the period
+                energy_per_minute = load_total / (period_end - period_start + 1)
+                running_total = load_at_start
+                for minute in range(period_start, period_end + 1):
+                    new_load_minutes[minute] = dp4(running_total)
+                    running_total -= energy_per_minute
+                
+        return new_load_minutes
+
     def previous_days_modal_filter(self, data):
         """
         Look at the data from previous days and discard the best case one
@@ -210,7 +362,8 @@ class Fetch:
         days_list = self.days_previous.copy()
         # Sort days list in numerical order with highest number day first
         days_list.sort(reverse=True)
-        for days in range(1, max(max(days_list), self.load_minutes_age) + 1):
+        max_days = max(max(days_list), self.load_minutes_age)
+        for days in range(1, max_days + 1):
             sum_day = 0
             full_days = 24 * 60 * (days - 1)
             for minute in range(0, 24 * 60, PREDICT_STEP):
@@ -248,59 +401,68 @@ class Fetch:
             del self.days_previous[min_sum_day_idx]
             del self.days_previous_weight[min_sum_day_idx]
 
-        # Gap filling
+        # Fill all the gaps including days we don't use
         gap_size = max(self.get_arg("load_filter_threshold", self.plan_interval_minutes), 5)
-        for days in days_list:
-            use_days = max(days, 1)
-            num_gaps = 0
-            full_days = 24 * 60 * (use_days - 1)
-            gap_minutes = 0
-            gap_start = None
-            gap_list = []
+        gap_minutes = 0
+        gap_start_minute_previous = None
+        gap_list = []
+        num_gaps = 0
+        max_minute = max(max_days * 24 * 60, max(data.keys()) if data else 0)
 
-            # Find all the gaps
-            for minute in range(PREDICT_STEP, 24 * 60 + PREDICT_STEP, PREDICT_STEP):
-                minute_previous = 24 * 60 - minute + full_days
-                if data.get(minute_previous, 0) == data.get(minute_previous + PREDICT_STEP, 0):
-                    gap_minutes += PREDICT_STEP
-                    if gap_start is None:
-                        gap_start = minute - PREDICT_STEP
-                else:
-                    if gap_minutes >= gap_size:
-                        num_gaps += gap_minutes
-                        gap_list.append((gap_start, gap_minutes))
-                    gap_minutes = 0
-                    gap_start = None
-            if gap_minutes >= gap_size:
-                num_gaps += gap_minutes
-                gap_list.append((gap_start, gap_minutes))
+        # Find all the gaps
+        for minute_previous in range(0, max_minute, PREDICT_STEP):
+            if data.get(minute_previous, 0) == data.get(minute_previous + PREDICT_STEP, 0):
+                gap_minutes += PREDICT_STEP
+                if gap_start_minute_previous is None:
+                    gap_start_minute_previous = minute_previous
+            else:
+                if gap_minutes >= gap_size:
+                    num_gaps += gap_minutes
+                    gap_list.append((gap_start_minute_previous, gap_minutes))
+                gap_minutes = 0
+                gap_start_minute_previous = None
+        if gap_minutes >= gap_size:
+            num_gaps += gap_minutes
+            gap_list.append((gap_start_minute_previous, gap_minutes))
 
-            # If we have some gaps
-            if num_gaps > 0:
-                average_day = sum_days_id[days]
-                if (average_day == 0) or (num_gaps >= 16 * 60):
-                    self.log("Warn: Historical day {} has no/limited load history data, unable to fill gaps normally using nominal {}kWh - you should check your load_today sensor in apps.yaml".format(days, dp2(average_non_zero_day)))
-                    average_day = average_non_zero_day
-                else:
-                    real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
-                    average_day /= real_data_percent
-                    self.log(
-                        "Warn: Historical day {} has {} minutes of gap in the load history data, filled from {}kWh to make new average {}kWh (percent {}%)".format(days, num_gaps, dp2(sum_days_id[days]), dp2(average_day), dp0(real_data_percent * 100.0))
-                    )
+        # Work out total number of gap_minutes
+        if num_gaps > 0:
+            self.log("Warn: Found {} gaps in load_today totalling {} minutes to fill using average data".format(len(gap_list), num_gaps))
 
-                # Do the filling
-                per_minute_increment = average_day / (24 * 60)
-                for gap in gap_list:
-                    gap_start = gap[0]
-                    gap_minutes = gap[1]
-                    total_to_add = 0
-                    end_of_data = 24 * 60 + full_days
-                    for minute in range(gap_start, end_of_data + 1):
-                        minute_previous = 24 * 60 - minute + full_days
-                        if minute_previous >= 0:
-                            data[minute_previous] = dp4(data.get(minute_previous, 0) + total_to_add)
-                            if minute < (gap_start + gap_minutes):
-                                total_to_add += per_minute_increment
+        # Do the filling
+        for gap in gap_list:
+            gap_start_minute_previous = gap[0]
+            gap_minutes = gap[1]
+            gap_end_minute_previous = gap_start_minute_previous + gap_minutes
+
+            total_to_add = 0
+            # Fill the gap region by stepping backward through time (decrementing minute_previous)
+            # gap_start_minute_previous is the highest index (earliest in gap)
+            # We fill from there down to the end of the gap
+
+            minute_previous = gap_end_minute_previous
+            gap_day = None
+            while minute_previous > gap_start_minute_previous and minute_previous >= 0:
+                # Change of day?
+                new_gap_day = max(minute_previous // (24 * 60), 1)
+                if gap_day is None or (new_gap_day != gap_day):
+                    gap_day = new_gap_day
+                    average_day = sum_all_days.get(gap_day, average_non_zero_day)
+                    if average_day <= 2.5:
+                        average_day = average_non_zero_day
+                    per_minute_increment = average_day / (24 * 60)
+                    gap_day = new_gap_day
+
+                data[minute_previous] = dp4(data.get(minute_previous, 0) + total_to_add)
+                minute_previous -= 1
+                total_to_add += per_minute_increment
+
+            # Now ensure the sensor is incrementing all the way to 0
+            while minute_previous >= 0:
+                data[minute_previous] = dp4(data.get(minute_previous, 0) + total_to_add)
+                minute_previous -= 1
+
+        return data
 
     def get_historical_base(self, data, minute, base_minutes):
         """
@@ -524,6 +686,12 @@ class Fetch:
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = get_now_from_cumulative(self.load_minutes, self.minutes_now, backwards=True)
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
+
+                if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
+                    # Use power data to make load data more accurate
+                    self.log("Using load_power data to fill gaps in load_today data")
+                    load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                    self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
             else:
                 if self.load_forecast:
                     self.log("Using load forecast from load_forecast sensor")

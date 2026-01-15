@@ -1213,6 +1213,21 @@ class SolisAPI(ComponentBase):
                 },
                 app="solis"
             )
+            total_today = detail.get('homeLoadTodayEnergy')
+            total_load_units = detail.get("homeLoadTodayEnergyStr", "kWh")
+            entity_id = f"sensor.{prefix}_solis_{inverter_sn}_today_load_energy"
+            self.dashboard_item(
+                entity_id,
+                state=total_today,
+                attributes={
+                    "friendly_name": f"Solis {inverter_name} Today Load Energy",
+                    "unit_of_measurement": total_load_units,
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                    "icon": "mdi:home-lightning-bolt",
+                },
+                app="solis"
+            )
 
             # Total Export Energy
             entity_id = f"sensor.{prefix}_solis_{inverter_sn}_today_export_energy"
