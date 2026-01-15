@@ -921,12 +921,6 @@ class Plan:
             load_adjust=self.manual_load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
-        import yaml
-
-        with open("load_step.yaml", "w") as f:
-            yaml.dump(load_minutes_step, f)
-        print("Wrote load_step.yaml for debug")
-
         load_minutes_step10 = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
