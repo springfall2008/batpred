@@ -317,7 +317,7 @@ class Fetch:
                     power_count += 1
                 # Convert watts to kWh per minute: W * (1 hour / 60 minutes) / 1000
                 integrated_energy += power / 60.0 / 1000.0
-            
+
             # If we have both power data and load consumption, scale the power integration
             if integrated_energy > 0 and load_total > 0:
                 # Calculate scaling factor to match load total
