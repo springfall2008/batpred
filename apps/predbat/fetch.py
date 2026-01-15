@@ -270,7 +270,6 @@ class Fetch:
         
         # Fill zero periods with integrated power data
         if zero_periods:
-            self.log(f"Found {len(zero_periods)} zero-load periods: {zero_periods}")
             for period_start, period_end, base_value in zero_periods:
                 # Integrate power data over this period
                 # First calculate total energy consumed in this period
@@ -320,8 +319,6 @@ class Fetch:
                 # Convert watts to kWh per minute: W * (1 hour / 60 minutes) / 1000
                 integrated_energy += power / 60.0 / 1000.0
             
-            self.log(f"  integrated_energy={integrated_energy}, power_count={power_count}/{period_end - period_start + 1}, condition: integrated_energy > 0 and load_total > 0 = {integrated_energy > 0 and load_total > 0}")
-
             # If we have both power data and load consumption, scale the power integration
             if integrated_energy > 0 and load_total > 0:
                 # Calculate scaling factor to match load total
