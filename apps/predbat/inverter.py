@@ -220,6 +220,7 @@ class Inverter:
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_fox_inverter_mode = INVERTER_DEF[self.inverter_type].get("has_fox_inverter_mode", False)
+        self.inv_maintain_freeze_charge_status = bool(INVERTER_DEF[self.inverter_type].get("maintain_freeze_charge_status", False))
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -1665,6 +1666,21 @@ class Inverter:
                 self.count_register_writes += 1
             return True
         else:
+            # Optional suppression for inverters (e.g. LuxPower) that don't reliably reflect
+            # scheduled_charge_enable writes during Freeze charging.
+            status = self.base.get_state_wrapper(entity_id="predbat.status", default="") or ""
+
+            suppress = (
+                name == "scheduled_charge_enable"
+                and self.inv_maintain_freeze_charge_status
+                and str(status).startswith("Freeze charging")
+            )
+
+            # If we're suppressing, treat the failure as expected *only* during Freeze charging
+            # so we don't pollute predbat.status with warnings.
+            if suppress:
+                return True
+                
             self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
             self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
