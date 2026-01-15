@@ -218,7 +218,7 @@ class Fetch:
 
         # Create a copy to avoid modifying the original
         new_load_minutes = load_minutes.copy()
-        
+
         # Find all the minutes we have data for
         max_minute = max(max(load_minutes.keys()) if load_minutes else 0, max(load_power_data.keys()) if load_power_data else 0)
 
@@ -231,10 +231,10 @@ class Fetch:
         zero_periods = []
         period_start = None
         last_value = None
-        
+
         for minute in range(0, max_minute + 1):
             current_value = new_load_minutes.get(minute, 0)
-            
+
             # Check if this is a zero or constant period
             if minute == 0:
                 last_value = current_value
@@ -258,7 +258,7 @@ class Fetch:
                                 zero_periods.append((period_start, minute - 1, last_value))
                     period_start = None
                 last_value = current_value
-        
+
         # Check final period
         if period_start is not None and period_start < max_minute:
             period_length = max_minute - period_start + 1
@@ -267,7 +267,7 @@ class Fetch:
                 has_power = any(load_power_data.get(m, 0) > 0 for m in range(period_start, max_minute + 1))
                 if has_power and last_value == 0:
                     zero_periods.append((period_start, max_minute, last_value))
-        
+
         # Fill zero periods with integrated power data
         if zero_periods:
             for period_start, period_end, base_value in zero_periods:
@@ -277,7 +277,7 @@ class Fetch:
                 for minute in range(period_start, period_end + 1):
                     power = load_power_data.get(minute, 0)
                     total_energy += power / 60.0 / 1000.0
-                
+
                 amount_to_fill = 0
                 for minute in range(period_end, period_start, -1):
                     power = load_power_data.get(minute, 0)
@@ -306,7 +306,7 @@ class Fetch:
 
             # Total energy consumed in this period (going backwards means decrement)
             load_total = load_at_start - load_at_end
-            
+
             self.log(f"Period {period_idx} ({period_start}-{period_end}): load_at_start={load_at_start}, load_at_end={load_at_end}, load_total={load_total}")
 
             # Integrate power data over this period (convert W to kWh)
@@ -341,7 +341,7 @@ class Fetch:
                 for minute in range(period_start, period_end + 1):
                     new_load_minutes[minute] = dp4(running_total)
                     running_total -= energy_per_minute
-                
+
         return new_load_minutes
 
     def previous_days_modal_filter(self, data):
@@ -685,7 +685,7 @@ class Fetch:
                 self.load_last_period = (self.load_minutes.get(0, 0) - self.load_minutes.get(PREDICT_STEP, 0)) * 60 / PREDICT_STEP
 
                 if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
-                    # Use power data to make load data more accurate
+                    # Use power data to make load data more accurate
                     self.log("Using load_power data to fill gaps in load_today data")
                     load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
                     self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
