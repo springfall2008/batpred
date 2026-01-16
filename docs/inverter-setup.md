@@ -632,11 +632,11 @@ max: 10
 This requires the LuxPython component which integrates with your Lux Power inverter
 
 - Copy the template `luxpower.yaml` from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required
- 
+
 - Predbat should have access to the full usable capacity of your battery system. In the LuxPowerTek web portal (not the app), ensure that:
 
-  - **System Charge SOC Limit (%)** is set to 100% (default).
-  - **On-Grid Cut-Off SOC (%)** is set to 100% minus battery depth of discharge(%). Depending on your battery, this is typically between 20% and 0%.
+    - **System Charge SOC Limit (%)** is set to 100% (default).
+    - **On-Grid Cut-Off SOC (%)** is set to 100% minus battery depth of discharge(%). Depending on your battery, this is typically between 20% and 0%.
 
 - If you want to use Predbat in **Control charge** mode, go to the LuxPowerTek app or web portal and set all start and end time slots for AC Charge to `00:00`.
   For **Control charge and discharge** mode, set all AC Charge and Forced Discharge slots to `00:00`.
@@ -676,17 +676,17 @@ minimum value: 0
 maximum value: YOUR_INVERTER_MAXIMUM_CHARGE/DISCHARGE_RATE
 unit of measurement: W
 ```
- 
+
  Thanks to the work of **@brickatius**, the following automations and configurations enable LuxPower inverters to provide **Freeze Charging** and **Freeze Exporting** functionality when Predbat is operating in **Control charge and discharge** mode.
 
 ---
 
 **Important:**
-The Freeze Charging and Freeze Exporting setup described below relies on a set of carefully designed helpers and automations that work together. Each component has a specific role in safely entering, maintaining, and exiting Freeze Charging mode. Removing or skipping any part can lead to missed triggers, stuck AC charging, or incomplete cleanup. For reliable operation, make sure all helpers and automations in this section are created exactly as described before using Freeze Charging or Freeze Exporting modes. All of the automations apart from LuxPower HA Startup Reset remain disabled when Predbat is not Freeze Charging. 
+The Freeze Charging and Freeze Exporting setup described below relies on a set of carefully designed helpers and automations that work together. Each component has a specific role in safely entering, maintaining, and exiting Freeze Charging mode. Removing or skipping any part can lead to missed triggers, stuck AC charging, or incomplete cleanup. For reliable operation, make sure all helpers and automations in this section are created exactly as described before using Freeze Charging or Freeze Exporting modes. All of the automations apart from LuxPower HA Startup Reset remain disabled when Predbat is not Freeze Charging.
 
 ---
 
-### Freeze Charging 
+### Freeze Charging
 
 **Note:**
 Although LuxPower inverters have the *Charge first / Charge priority* feature, Predbat achieves a similar outcome by directly manipulating AC charge settings. This is why the following implementation is required.
@@ -695,23 +695,23 @@ Although LuxPower inverters have the *Charge first / Charge priority* feature, P
 
 - Set up your LuxPower Integration as follows:
 
-	- If you have not already done so, set up the blueprint for changing the refresh interval as described in the LuxPython_DEV README. 
-	- In the LUX Refresh Interval automation set the refresh interval to **20 seconds**. Freeze Charging relies on frequent state updates; intervals above 30 seconds may result in delayed or missed AC arbitration.
+    - If you have not already done so, set up the blueprint for changing the refresh interval as described in the LuxPython_DEV README.
+    - In the LUX Refresh Interval automation set the refresh interval to **20 seconds**. Freeze Charging relies on frequent state updates; intervals above 30 seconds may result in delayed or missed AC arbitration.
 
 **Predbat configuration**
 
 - In your `apps.yaml` file:
 
-  - Look for `support_charge_freeze` in the inverter section and change `False` to `True`.
-  - On the next line also change `maintain_freeze_charge_status` from  `False` to `True`.
-  - Uncomment the three lines in the `charge_freeze_service` section so Predbat turns on `automation.luxpower_freeze_charge` when Freeze Charging starts.
-  - Ensure the indentation and alignment match the other service entries.
+    - Look for `support_charge_freeze` in the inverter section and change `False` to `True`.
+    - On the next line also change `maintain_freeze_charge_status` from  `False` to `True`.
+    - Uncomment the three lines in the `charge_freeze_service` section so Predbat turns on `automation.luxpower_freeze_charge` when Freeze Charging starts.
+    - Ensure the indentation and alignment match the other service entries.
 
 ---
 
 **Helpers**
 
-- Create the following **Freeze Charge Guard** toggle helper and **Solar compare Home** binary sensor helper using the HA user interface. 
+- Create the following **Freeze Charge Guard** toggle helper and **Solar compare Home** binary sensor helper using the HA user interface.
 
 **Toggle helper**
 
@@ -722,9 +722,7 @@ entity_id: input_boolean.freeze_charge_guard
 
 The `freeze_charge_guard` helper acts as a lifecycle gate. It is enabled only when Predbat explicitly requests Freeze Charging and is cleared on exit, watchdog abort, or Home Assistant restart. All Freeze Charging automations check this guard to prevent unintended operation.
 
-
 **Binary sensor template helper**¹
-
 
 ```yaml
 name: Solar compare Home
@@ -886,9 +884,7 @@ mode: single
 
 ```
 
-
 ---
-
 
 - Create the **Freeze Charge Exit** automation to cleanly restore inverter state when Freeze Charging ends.
 
@@ -1010,7 +1006,7 @@ actions:
           - conditions:
               - condition: template
                 value_template: |
-                  {{ states('predbat.status').startswith('Charging') 
+                  {{ states('predbat.status').startswith('Charging')
                      or states('predbat.status') == 'Hold charging' }}
             sequence:
               - if:
@@ -1061,12 +1057,12 @@ actions:
 mode: single
 
 ```
+
 **Enable Freeze Charging**
 
 - Ensure **`switch.predbat_set_charge_freeze`** is turned On.
 
-After Predbat recomputes, you may see some light grey **FrzChrg** slots in the state column of the plan. To disable Freeze Charging simply turn the switch Off. Predbat will no longer schedule any FrzChrg slots. 
-
+After Predbat recomputes, you may see some light grey **FrzChrg** slots in the state column of the plan. To disable Freeze Charging simply turn the switch Off. Predbat will no longer schedule any FrzChrg slots.
 
 ---
 
@@ -1079,19 +1075,16 @@ Freeze Exporting requires fewer supporting automations than Freeze Charging, as 
 
 - In your `apps.yaml` file:
 
-  - Look for `support_discharge_freeze` in the inverter section and change `False` to `True`
-  - Uncomment the last two lines of the `discharge_stop_service` section so Predbat turns `switch.lux_charge_last` off when Freeze exporting stops.
-  - Uncomment the three lines of the `discharge_freeze_service` section so that Predbat turns on the LuxPower Charge Last switch. 
-  - Ensure the indentation and alignment match the other service entries.
+    - Look for `support_discharge_freeze` in the inverter section and change `False` to `True`
+    - Uncomment the last two lines of the `discharge_stop_service` section so Predbat turns `switch.lux_charge_last` off when Freeze exporting stops.
+    - Uncomment the three lines of the `discharge_freeze_service` section so that Predbat turns on the LuxPower Charge Last switch.
+    - Ensure the indentation and alignment match the other service entries.
 
-  
 **Enable Freeze Exporting**
 
 - Ensure **`switch.predbat_set_export_freeze`** is turned On.
 
-After Predbat recomputes, you may see some dark grey **FrzExp** slots in the state column of the plan. To disable Freeze Exporting simply turn the switch Off. Predbat will no longer schedule any FrzExp slots. 
-
-
+After Predbat recomputes, you may see some dark grey **FrzExp** slots in the state column of the plan. To disable Freeze Exporting simply turn the switch Off. Predbat will no longer schedule any FrzExp slots.
 
 ---
 
@@ -1105,8 +1098,7 @@ name: Predbat Ready
 entity_id: input_boolean.predbat_ready
 ```
 
-The `predbat_ready` helper prevents automation actions until LuxPower entities are fully available after startup. Ensure it is On after it has been created. 
-
+The `predbat_ready` helper prevents automation actions until LuxPower entities are fully available after startup. Ensure it is On after it has been created.
 
 ```yaml
 alias: LuxPower HA Startup Reset
@@ -1198,7 +1190,6 @@ mode: single
 
 ```
 
-
 ---
 
 ### Notes
@@ -1216,8 +1207,8 @@ recorder:
 ²
 While LuxPower inverters cannot exactly replicate Predbat’s native Freeze Charging behaviour, these automations achieve an equivalent outcome. Any small differences are corrected the next time Predbat recalculates its plan.
 
-³ 
-You shouldn't encounter any warnings or errors like those below but if you do they can safely be ignored. They are benign and purely informational. They do not indicate a fault with Predbat. 
+³
+You shouldn't encounter any warnings or errors like those below but if you do they can safely be ignored. They are benign and purely informational. They do not indicate a fault with Predbat.
 
 ```yaml
 Predbat log:
@@ -1230,7 +1221,6 @@ Warn: Inverter 0 write to scheduled_charge_enable failed
 ```
 
 ---
-
 
 ## Sigenergy Sigenstor
 
@@ -2660,11 +2650,10 @@ The `apps.yaml` setting **charge_discharge_update_button** is the entity name of
 
 When True, the inverter supports charge freeze modes.
 
-### maintain_freeze_charge_status 
+### maintain_freeze_charge_status
 
 Only required for inverters without native Freeze Charging support.
 When True, suppresses expected warnings resulting from the manipulation of `scheduled_charge_enable` during Freeze Charging, ensuring that `predbat.status` remains stable instead of transitioning to `Warn:` states.
-
 
 ### support_discharge_freeze
 

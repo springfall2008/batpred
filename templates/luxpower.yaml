@@ -84,7 +84,7 @@ pred_bat:
     maintain_freeze_charge_status: False
     # if you have a LuxPower inverter with the 'Charge Last' feature you can take advantage of Freeze exporting. Change support_discharge_freeze to True
     support_discharge_freeze: False
-    
+
   charge_start_service:
     - service: switch.turn_on
       entity_id: "switch.lux_ac_charge_enable"
@@ -126,7 +126,7 @@ pred_bat:
   soc_max:
     - sensor.lux_soc_max_kwh  # Custom template sensor - see LuxPower inverter setup for details
   battery_rate_max:
-    - input_number.battery_rate_max # See the LuxPower setup documentation for details of how to configure this. 
+    - input_number.battery_rate_max # See the LuxPower setup documentation for details of how to configure this.
   battery_min_soc:
     - number.lux_on_grid_discharge_cut_off_soc
   battery_voltage:

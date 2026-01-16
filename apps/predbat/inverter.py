@@ -1670,17 +1670,13 @@ class Inverter:
             # scheduled_charge_enable writes during Freeze charging.
             status = self.base.get_state_wrapper(entity_id="predbat.status", default="") or ""
 
-            suppress = (
-                name == "scheduled_charge_enable"
-                and self.inv_maintain_freeze_charge_status
-                and str(status).startswith("Freeze charging")
-            )
+            suppress = name == "scheduled_charge_enable" and self.inv_maintain_freeze_charge_status and str(status).startswith("Freeze charging")
 
             # If we're suppressing, treat the failure as expected *only* during Freeze charging
             # so we don't pollute predbat.status with warnings.
             if suppress:
                 return True
-                
+
             self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
             self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
