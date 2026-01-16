@@ -47,7 +47,9 @@ The inverter also converts AC power from the grid into DC to charge a battery.
 - **Low-rate slot** - A time period where the import rate is below a threshold, making it suitable for charging.
 By default Predbat automatically calculates this threshold based on future import rates.
 You can adjust the threshold using **input_number.predbat_rate_low_threshold** (_expert mode_) - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options).
-- **High-rate slot** - A time period where the export rate is above a threshold, making it suitable for forced export. By default Predbat automatically calculates this threshold based on future export rates. You can adjust the threshold using **input_number.predbat_rate_high_threshold** (_expert mode_) - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options).
+- **High-rate slot** - A time period where the export rate is above a threshold, making it suitable for forced export.
+By default Predbat automatically calculates this threshold based on future export rates. 
+You can adjust the threshold using **input_number.predbat_rate_high_threshold** (_expert mode_) - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options).
 - **Loss** - Refers to energy lost in your system due to heat or other factors.
 
 - **PV10** - A prediction of the 10% scenario for solar, this is like a worst case, occurs 1 in 10 days
