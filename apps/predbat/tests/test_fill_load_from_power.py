@@ -79,7 +79,7 @@ def test_fill_load_from_power_basic():
     # Check that total energy is approximately preserved (3.0 kWh over 60 minutes)
     total_consumption = result[0] - result[59]
     assert abs(total_consumption - 3.0) < 0.2, f"Total consumption should be near 3.0 kWh, got {dp4(total_consumption)} kWh"
-    
+
     print(f"✓ Single 120-minute period (0-59): {dp4(result[0])} -> {dp4(result[59])}, consumption: {dp4(total_consumption)} kWh")
     print("Test 1 PASSED")
 
@@ -152,7 +152,7 @@ def test_fill_load_from_power_partial_power_data():
     assert result[1] < result[0], "Should decrease with power integration"
     assert result[29] < result[1], "Should continue decreasing"
     assert result[29] <= 1.2, f"Should reach near 1.0 by minute 29, got {result[29]}"
-    
+
     # Minute 30 onwards should be flat or nearly flat (no power data)
     # Allow small variance due to rounding
     assert abs(result[30] - result[29]) < 0.2, f"Should be flat or nearly flat after minute 29, got {result[29]} -> {result[30]}"
