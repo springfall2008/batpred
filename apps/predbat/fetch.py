@@ -282,17 +282,16 @@ class Fetch:
                     power = load_power_data.get(minute, 0)
                     energy = power / 60.0 / 1000.0
                     amount_to_fill += energy
-                    new_load_minutes[minute] = new_load_minutes[minute] + amount_to_fill
+                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
                 # Fill to start
                 for minute in range(period_start, -1, -1):
-                    new_load_minutes[minute] = new_load_minutes[minute] + amount_to_fill
+                    new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
 
-        # Process in 30-minute periods
-        period_length = 30
+        # Process in 120-minute periods
+        period_length = 120
         num_periods = (max_minute + period_length) // period_length
 
-        self.log("Processing {} 30-minute periods for power integration".format(num_periods))
-
+        self.log("Processing {} 120-minute periods for power integration".format(num_periods))
         for period_idx in range(num_periods):
             period_start = period_idx * period_length
             period_end = min(period_start + period_length - 1, max_minute)
@@ -305,8 +304,6 @@ class Fetch:
 
             # Total energy consumed in this period (going backwards means decrement)
             load_total = load_at_start - load_at_end
-
-            self.log(f"Period {period_idx} ({period_start}-{period_end}): load_at_start={load_at_start}, load_at_end={load_at_end}, load_total={load_total}")
 
             # Integrate power data over this period (convert W to kWh)
             integrated_energy = 0.0
