@@ -33,16 +33,16 @@ class TestFetch(Fetch):
 
 def test_fill_load_from_power_basic():
     """
-    Test basic power integration with load data using 120-minute periods
-    Load data spans 60 minutes (part of a single 120-minute period)
-    Power should be integrated and scaled to match load consumption in the period
+    Test basic power integration with load data using 30-minute periods
+    Load data spans 60 minutes (two 30-minute periods)
+    Power should be integrated and scaled to match load consumption in each period
     """
-    print("\n=== Test 1: Basic power integration with 120-minute periods ===")
+    print("\n=== Test 1: Basic power integration with 30-minute periods ===")
 
     fetch = TestFetch()
 
     # Load data going backwards (minute 0 is now, higher minutes are past)
-    # Create 60 minutes of data (within single 120-minute period)
+    # Create 60 minutes of data (two 30-minute periods)
     # Starts at 10.0 kWh, ends at 7.0 kWh (3.0 kWh consumed over 60 minutes)
     load_minutes = {}
     for minute in range(0, 30):
@@ -62,7 +62,7 @@ def test_fill_load_from_power_basic():
 
     result = fetch.fill_load_from_power(load_minutes, load_power_data)
 
-    # Check the 120-minute period (minutes 0-60)
+    # Check the two 30-minute periods (minutes 0-29 and 30-59)
     # Minute 0 should be highest value (around 10.0)
     assert result[0] >= 9.9, f"Minute 0 should be near 10.0, got {result[0]}"
 
@@ -80,7 +80,7 @@ def test_fill_load_from_power_basic():
     total_consumption = result[0] - result[59]
     assert abs(total_consumption - 3.0) < 0.2, f"Total consumption should be near 3.0 kWh, got {dp4(total_consumption)} kWh"
 
-    print(f"✓ Single 120-minute period (0-59): {dp4(result[0])} -> {dp4(result[59])}, consumption: {dp4(total_consumption)} kWh")
+    print(f"✓ Two 30-minute periods (0-59): {dp4(result[0])} -> {dp4(result[59])}, consumption: {dp4(total_consumption)} kWh")
     print("Test 1 PASSED")
 
 
@@ -123,13 +123,13 @@ def test_fill_load_from_power_no_power_data():
 
 def test_fill_load_from_power_partial_power_data():
     """
-    Test with power data in first part of 120-minute period but not the rest
+    Test with power data in first part of 30-minute period but not the rest
     """
     print("\n=== Test 3: Partial power data ===")
 
     fetch = TestFetch()
 
-    # Create 60 minutes of data (within single 120-minute period)
+    # Create 60 minutes of data (two 30-minute periods)
     load_minutes = {}
     for minute in range(0, 61):
         load_minutes[minute] = 5.0 - (minute / 60.0) * 4.0  # Linear decrease from 5.0 to 1.0
@@ -137,41 +137,39 @@ def test_fill_load_from_power_partial_power_data():
     # Power data only for first 30 minutes
     load_power_data = {}
     for minute in range(0, 30):
-        # Varying power around 4 kW (averages 2.0 kWh over 30 min, 4.0 kWh total for the period scaling)
+        # Varying power around 4 kW (averages 2.0 kWh over 30 min)
         load_power_data[minute] = 4000.0 + 400.0 * ((minute % 3) - 1)  # Varies: 3600, 4000, 4400, repeat
     # No data for minutes 30-59
 
     result = fetch.fill_load_from_power(load_minutes, load_power_data)
 
-    # With 120-minute period and power only in first 30 minutes:
-    # Total consumption = 4.0 kWh
-    # Integrated power (~2.0 kWh) gets scaled by 2.0 to match total
-    # This consumes all 4.0 kWh in the first 30 minutes
-    # Remaining minutes stay flat at ending value
+    # With 30-minute periods and power only in first 30 minutes:
+    # First period (0-29): consumption = 1.5 kWh (from 5.0 to 3.5)
+    # Power integrated (~2.0 kWh) gets scaled to match 1.5 kWh
+    # Second period (30-59): consumption = 2.5 kWh (from 3.5 to 1.0)
+    # No power data, so evenly distributed
     assert result[0] >= 4.9, f"Minute 0 should be near 5.0, got {result[0]}"
     assert result[1] < result[0], "Should decrease with power integration"
     assert result[29] < result[1], "Should continue decreasing"
-    assert result[29] <= 1.2, f"Should reach near 1.0 by minute 29, got {result[29]}"
 
-    # Minute 30 onwards should be flat or nearly flat (no power data)
-    # Allow small variance due to rounding
-    assert abs(result[30] - result[29]) < 0.2, f"Should be flat or nearly flat after minute 29, got {result[29]} -> {result[30]}"
-    assert abs(result[59] - result[30]) < 0.2, f"Should stay flat 30-59, got {result[30]} -> {result[59]}"
+    # Period boundary at minute 30 should show transition
+    assert result[30] < result[29], "Should continue decreasing into second period"
+    assert result[59] < result[30], "Should decrease through second period"
 
     # Check total consumption is preserved
     total_consumption = result[0] - result[59]
     assert abs(total_consumption - 4.0) < 0.2, f"Total consumption should be near 4.0 kWh, got {dp4(total_consumption)} kWh"
 
-    print(f"✓ Single 120-minute period: Power in first 30 min only, flat afterwards")
+    print(f"✓ Two 30-minute periods: Power in first period, distributed in second")
     print(f"  {dp4(result[0])} -> {dp4(result[29])} -> {dp4(result[59])}")
     print("Test 3 PASSED")
 
 
 def test_fill_load_from_power_single_minute_period():
     """
-    Test with short data span (less than 120 minutes)
+    Test with short data span (less than 30 minutes)
     """
-    print("\n=== Test 4: Short data span (< 120 minutes) ===")
+    print("\n=== Test 4: Short data span (< 30 minutes) ===")
 
     fetch = TestFetch()
 
@@ -188,7 +186,7 @@ def test_fill_load_from_power_single_minute_period():
 
     result = fetch.fill_load_from_power(load_minutes, load_power_data)
 
-    # All within first 120-minute period
+    # All within first 30-minute period
     # Minute 0 should be around 5.0
     assert abs(result[0] - 5.0) < 0.01, f"Minute 0: expected 5.0, got {result[0]}"
     # Should decrease smoothly
@@ -241,49 +239,65 @@ def test_fill_load_from_power_backwards_time():
 
     # Simulate real-world scenario: load accumulates over time
     # At minute 0 (now): 15.5 kWh consumed today
+    # At minute 30 (30 min ago): 14.75 kWh consumed
     # At minute 60 (1 hour ago): 14.0 kWh consumed
+    # At minute 90 (1.5 hours ago): 13.0 kWh consumed
     # At minute 120 (2 hours ago): 12.0 kWh consumed
     # Make load data slightly vary to avoid being detected as constant/zero periods
     load_minutes = {}
-    for minute in range(0, 60):
+    for minute in range(0, 30):
         # Slight variation around 15.5 to avoid constant detection
         load_minutes[minute] = 15.5 + 0.001 * (minute % 5)
-    for minute in range(60, 120):
+    for minute in range(30, 60):
+        # Slight variation around 14.75
+        load_minutes[minute] = 14.75 + 0.001 * (minute % 5)
+    for minute in range(60, 90):
         # Slight variation around 14.0
         load_minutes[minute] = 14.0 + 0.001 * (minute % 5)
+    for minute in range(90, 120):
+        # Slight variation around 13.0
+        load_minutes[minute] = 13.0 + 0.001 * (minute % 5)
     for minute in range(120, 240):
-        # Slight variation around 12.0 (extend to 240 to span 2 periods)
+        # Slight variation around 12.0 (extend to 240 to span more periods)
         load_minutes[minute] = 12.0 + 0.001 * (minute % 5)
 
     # Power data showing consumption pattern
     load_power_data = {}
-    for minute in range(0, 60):
-        # Varying around 1.5 kW average in first hour
+    for minute in range(0, 30):
+        # Varying around 1.5 kW average in first 30 min
         load_power_data[minute] = 1500.0 + 150.0 * ((minute % 3) - 1)  # Varies: 1350, 1500, 1650, repeat
-    for minute in range(60, 120):
-        # Varying around 2.0 kW average in second hour
+    for minute in range(30, 60):
+        # Varying around 1.5 kW average in second 30 min
+        load_power_data[minute] = 1500.0 + 150.0 * ((minute % 3) - 1)
+    for minute in range(60, 90):
+        # Varying around 2.0 kW average in third 30 min
         load_power_data[minute] = 2000.0 + 200.0 * ((minute % 3) - 1)  # Varies: 1800, 2000, 2200, repeat
+    for minute in range(90, 120):
+        # Varying around 2.0 kW average in fourth 30 min
+        load_power_data[minute] = 2000.0 + 200.0 * ((minute % 3) - 1)
     for minute in range(120, 240):
-        # Varying around 1.0 kW average in third and fourth hours
+        # Varying around 1.0 kW average in remaining periods
         load_power_data[minute] = 1000.0 + 100.0 * ((minute % 3) - 1)  # Varies: 900, 1000, 1100, repeat
 
     result = fetch.fill_load_from_power(load_minutes, load_power_data)
 
     # Check that load is highest at minute 0 (now) and decreases going backwards
-    assert result[0] >= result[30], "Load at minute 0 should be >= minute 30"
+    assert result[0] >= result[29], "Load at minute 0 should be >= minute 29"
+    assert result[29] >= result[30], "Load at minute 29 should be >= minute 30"
     assert result[30] >= result[59], "Load at minute 30 should be >= minute 59"
     assert result[59] >= result[60], "Load at minute 59 should be >= minute 60"
-    assert result[60] >= result[90], "Load at minute 60 should be >= minute 90"
+    assert result[60] >= result[89], "Load at minute 60 should be >= minute 89"
+    assert result[89] >= result[90], "Load at minute 89 should be >= minute 90"
     assert result[90] >= result[119], "Load at minute 90 should be >= minute 119"
 
-    # Check that load decreases across 120-minute period boundaries
+    # Check that load decreases across 30-minute period boundaries
     assert result[119] >= result[120], "Load should be continuous across period boundary at 120"
     assert result[120] >= result[150], "Load at minute 120 should be >= minute 150"
 
-    # Check that total energy is preserved in first 120-minute period
-    # First period (0-119): consumption should be ~3.5 kWh
-    first_period_consumption = result[0] - result[119]
-    assert abs(first_period_consumption - 3.5) < 0.5, f"First period should have ~3.5 kWh consumption, got {dp4(first_period_consumption)}"
+    # Check that total energy is preserved in first two 30-minute periods (0-59)
+    # First 60 minutes: consumption should be ~1.5 kWh
+    first_hour_consumption = result[0] - result[59]
+    assert abs(first_hour_consumption - 1.5) < 0.5, f"First hour should have ~1.5 kWh consumption, got {dp4(first_hour_consumption)}"
 
     print(f"✓ Backwards time: minute 0 (now) = {dp4(result[0])} kWh")
     print(f"✓ Backwards time: minute 60 (1h ago) = {dp4(result[60])} kWh")
