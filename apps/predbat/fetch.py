@@ -524,6 +524,10 @@ class Fetch:
 
         import_today = {}
         for entity_id in entity_ids:
+            # Ignore invalid entity IDs, they might be fixed values
+            if (not entity_id) or ("." not in entity_id):
+                continue
+
             try:
                 history = self.get_history_wrapper(entity_id=entity_id, days=self.max_days_previous)
             except (ValueError, TypeError) as exc:
@@ -565,6 +569,10 @@ class Fetch:
         load_minutes = {}
         age_days = None
         for entity_id in entity_ids:
+            if (not entity_id) or ("." not in entity_id):
+                # Invalid entity ID, might be a fixed value
+                continue
+
             try:
                 history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
             except (ValueError, TypeError):
