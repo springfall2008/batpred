@@ -287,11 +287,11 @@ class Fetch:
                 for minute in range(period_start, -1, -1):
                     new_load_minutes[minute] = new_load_minutes.get(minute, 0) + amount_to_fill
 
-        # Process in 120-minute periods
-        period_length = 120
+        # Process in 30-minute periods
+        period_length = 30
         num_periods = (max_minute + period_length) // period_length
 
-        self.log("Processing {} 120-minute periods for power integration".format(num_periods))
+        self.log("Processing {} 30-minute periods for power integration".format(num_periods))
         for period_idx in range(num_periods):
             period_start = period_idx * period_length
             period_end = min(period_start + period_length - 1, max_minute)
@@ -680,6 +680,12 @@ class Fetch:
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):
             self.download_ge_data(self.now_utc)
+
+            if ("load_power" in self.args) and self.get_arg("load_power_fill_enable", True):
+                # Use power data to make load data more accurate
+                self.log("Using load_power data to fill gaps in load_today data")
+                load_power_data, _ = self.minute_data_load(self.now_utc, "load_power", self.max_days_previous, required_unit="W", load_scaling=1.0, interpolate=True)
+                self.load_minutes = self.fill_load_from_power(self.load_minutes, load_power_data)
         else:
             # Load data
             if "load_today" in self.args:
