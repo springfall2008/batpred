@@ -58,6 +58,7 @@ from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
 from tests.test_manual_select import run_test_manual_select
 from tests.test_minute_data import test_minute_data, test_minute_data_load
+from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_minute_data_state import test_minute_data_state
 from tests.test_format_time_ago import test_format_time_ago
 from tests.test_override_time import test_get_override_time_from_string
@@ -154,6 +155,7 @@ def main():
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("minute_data", test_minute_data, "Minute data tests", False),
         ("minute_data_load", test_minute_data_load, "Minute data load tests", False),
+        ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
         ("get_now_cumulative", test_get_now_from_cumulative, "Get now from cumulative tests", False),
         ("prune_today", test_prune_today, "Prune today tests", False),
         ("history_attribute", test_history_attribute, "History attribute tests", False),

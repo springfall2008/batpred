@@ -96,10 +96,13 @@ fdpwr
 fdsoc
 feedin
 fentry
+figsize
 Fingerbot
 firstparty
 fline
 FLOMASTA
+fontsize
+fontweight
 Forestfire
 foxess
 freephase
