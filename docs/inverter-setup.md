@@ -1216,12 +1216,11 @@ recorder:
 While LuxPower inverters cannot exactly replicate Predbat’s native Freeze Charging behaviour, these automations achieve an equivalent outcome. Any small differences are corrected the next time Predbat recalculates its plan.
 
 ³
-You may see warnings like those below in the Predbat logs. They can safely be ignored. They are to be expected and confirm that the Predbat Override automation is working as intended.
+You will see a warning like this below in the Predbat logs. It can safely be ignored. It is to be expected and confirms that the Predbat Override automation is working as intended.
 
 ```yaml
 Predbat log:
-Completed run status Freeze charging with Errors reported (check log)
-Warn: record_status – Inverter 0 write to scheduled_charge_enable failed
+
 Warn: Inverter 0 Trying to write scheduled_charge_enable to True didn’t complete (got off)
 
 ```
