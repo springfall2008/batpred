@@ -21,7 +21,7 @@ Here's an example error message:
 failed
 ```
 
-This will happen if you have no actual selector's provided by integrations in Home Assistant before Predbat starts. You can workaround this by adding a
+This will happen if you have no actual selectors provided by integrations in Home Assistant before Predbat starts. You can workaround this by adding a
 dummy selector to configuration.yaml and restarting HA e.g:
 
 ```yaml
