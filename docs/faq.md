@@ -10,6 +10,34 @@ The default Solcast sensor names may be wrong, you might need to update the `app
 (some people don't have the solcast_ bit in their names)
 - Did you configure AppDaemon apps_dir correctly in `appdaemon.yaml`?
 
+## Predbat is failing with Warn: Service call select/select_option data failed
+
+Here's an example error message:
+
+```text
+2026-01-14 15:10:43.706153: Warn: Service call select/select_option data
+{'option': '17:00:00', 'entity_id':
+'select.predbat_fox_603j303046yp036_battery_schedule_charge_end_time'}
+failed
+```
+
+This will happen if you have no actual selector's provided by integrations in Home Assistant before Predbat starts. You can workaround this by adding a
+dummy selector to configuration.yaml and restarting HA e.g:
+
+```yaml
+template:
+  - select:
+      - name: "simple_select"
+        state: "{{ states('input_select.my_input') }}"  # Current value
+        options: "{{ ['Option 1', 'Option 2', 'Option 3'] }}"  # Available options
+        select_option:
+          - service: input_select.select_option
+            target:
+              entity_id: input_select.my_input
+            data:
+              option: "{{ option }}"
+```
+
 ## Why is my predicted charge % higher or lower than I might expect?
 
 - Predbat is based on cost, so it will try to save you money. If you have the PV 10% option enabled it will also
