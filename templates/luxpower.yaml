@@ -79,12 +79,15 @@ pred_bat:
     clock_time_format: "%Y-%m-%d %H:%M:%S"
     write_and_poll_sleep: 10
     has_time_window: False
-    # If you want to take advantage of Freeze charging, change support_charge_freeze and maintain_freeze_charge_status from False to True
+    # If you want to take advantage of Freeze charging, change support_charge_freeze from False to True 
     support_charge_freeze: False
-    maintain_freeze_charge_status: False
     # if you have a LuxPower inverter with the 'Charge Last' feature you can take advantage of Freeze exporting. Change support_discharge_freeze to True
     support_discharge_freeze: False
-
+    
+  # Also for Freeze charging change scheduled_charge_enable from False to True
+  suppress_record_status_on_write_fail:
+    scheduled_charge_enable: False
+      
   charge_start_service:
     - service: switch.turn_on
       entity_id: "switch.lux_ac_charge_enable"

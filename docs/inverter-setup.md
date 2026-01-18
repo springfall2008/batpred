@@ -703,8 +703,16 @@ Although LuxPower inverters have the *Charge first / Charge priority* feature, P
 - In your `apps.yaml` file:
 
     - Look for `support_charge_freeze` in the inverter section and change `False` to `True`.
-    - On the next line also change `maintain_freeze_charge_status` from  `False` to `True`.
-    - Uncomment the three lines in the `charge_freeze_service` section so Predbat turns on `automation.luxpower_freeze_charge` when Freeze Charging starts.
+    
+    - In the next section you will see the code below. Change `sheduled_charge_enable` from False to True
+    
+    ```yaml
+    suppress_record_status_on_write_fail:
+      scheduled_charge_enable: False  
+    ```
+  
+    - Uncomment the three lines of the `charge_freeze_service` section so that Predbat turns on `automation.luxpower_freeze_charge` when Freeze Charging starts.
+    
     - Ensure the indentation and alignment match the other service entries.
 
 ---
@@ -1208,7 +1216,7 @@ recorder:
 While LuxPower inverters cannot exactly replicate Predbat’s native Freeze Charging behaviour, these automations achieve an equivalent outcome. Any small differences are corrected the next time Predbat recalculates its plan.
 
 ³
-You shouldn't encounter any warnings or errors like those below but if you do they can safely be ignored. They are benign and purely informational. They do not indicate a fault with Predbat.
+You may see warnings like those below in the Predbat logs. They can safely be ignored. They are to be expected and confirm that the Predbat Override automation is working as intended.
 
 ```yaml
 Predbat log:
@@ -1216,8 +1224,6 @@ Completed run status Freeze charging with Errors reported (check log)
 Warn: record_status – Inverter 0 write to scheduled_charge_enable failed
 Warn: Inverter 0 Trying to write scheduled_charge_enable to True didn’t complete (got off)
 
-Predbat Status:
-Warn: Inverter 0 write to scheduled_charge_enable failed
 ```
 
 ---
@@ -2650,12 +2656,21 @@ The `apps.yaml` setting **charge_discharge_update_button** is the entity name of
 
 When True, the inverter supports charge freeze modes.
 
-### maintain_freeze_charge_status
+### suppress_record_status_on_write_fail
 
-Only required for inverters without native Freeze Charging support.
-When True, suppresses expected warnings resulting from the manipulation of `scheduled_charge_enable` during Freeze Charging, ensuring that `predbat.status` remains stable instead of transitioning to `Warn:` states.
+This option lets you tell Predbat to ignore certain expected write failure warnings.
+ 
+Example:
 
-### support_discharge_freeze
+```yaml
+suppress_record_status_on_write_fail:
+  scheduled_charge_enable: False
+```
+When True, Predbat will still log the warning but it will not change `predbat_status` allowing the current Predbat status to be maintained. 
+This can be useful when Predbat expects a control to be enabled, but it has been intentionally disabled elsewhere, causing repeated write attempts to fail as part of normal operation.   
+
+
+### `support_discharge_freeze`
 
 When True, the inverter supports discharge freeze modes.
 

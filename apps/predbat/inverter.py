@@ -220,7 +220,23 @@ class Inverter:
         self.inv_charge_discharge_with_rate = INVERTER_DEF[self.inverter_type].get("charge_discharge_with_rate", False)
         self.inv_target_soc_used_for_discharge = INVERTER_DEF[self.inverter_type].get("target_soc_used_for_discharge", True)
         self.inv_has_fox_inverter_mode = INVERTER_DEF[self.inverter_type].get("has_fox_inverter_mode", False)
-        self.inv_maintain_freeze_charge_status = bool(INVERTER_DEF[self.inverter_type].get("maintain_freeze_charge_status", False))
+        cfg = self.base.get_arg(
+            "suppress_record_status_on_write_fail",
+            default={},
+            indirect=False,
+        ) or {}
+
+        if isinstance(cfg, dict):
+            self.inv_suppress_record_status_on_write_fail = [
+                k for k, v in cfg.items() if v
+            ]
+        elif isinstance(cfg, (list, tuple)):
+            self.inv_suppress_record_status_on_write_fail = list(cfg)
+        elif isinstance(cfg, str):
+            self.inv_suppress_record_status_on_write_fail = [cfg]
+        else:
+            self.inv_suppress_record_status_on_write_fail = []
+        
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -1666,19 +1682,23 @@ class Inverter:
                 self.count_register_writes += 1
             return True
         else:
-            # Optional suppression for inverters (e.g. LuxPower) that don't reliably reflect
-            # scheduled_charge_enable writes during Freeze charging.
-            status = self.base.get_state_wrapper(entity_id="predbat.status", default="") or ""
+            # Always log the warning so failures remain visible in logs
+            self.base.log(
+                "Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(
+                    self.id,
+                    name,
+                    new_value,
+                    self.base.get_state_wrapper(entity_id=entity_id),
+                )
+            )
 
-            suppress = name == "scheduled_charge_enable" and self.inv_maintain_freeze_charge_status and str(status).startswith("Freeze charging")
+            # Optional suppression: prevent polluting predbat.status via record_status
+            # for specific "write" names configured in apps.yaml.
+            suppress_record_status = name in getattr(self, "inv_suppress_record_status_on_write_fail", [] )
 
-            # If we're suppressing, treat the failure as expected *only* during Freeze charging
-            # so we don't pollute predbat.status with warnings.
-            if suppress:
-                return True
+            if not suppress_record_status:
+                self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True,)
 
-            self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
-            self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
 
     def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
