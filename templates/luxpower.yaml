@@ -79,16 +79,18 @@ pred_bat:
     clock_time_format: "%Y-%m-%d %H:%M:%S"
     write_and_poll_sleep: 10
     has_time_window: False
-    support_charge_freeze: True
-  # if you have a LuxPower inverter with 'Charge Last' feature then change support_discharge_freeze to True
+    # If you want to take advantage of Freeze charging, change support_charge_freeze from False to True 
+    support_charge_freeze: False
+    # if you have a LuxPower inverter with the 'Charge Last' feature you can take advantage of Freeze exporting. Change support_discharge_freeze to True
     support_discharge_freeze: False
 
   charge_start_service:
     - service: switch.turn_on
       entity_id: "switch.lux_ac_charge_enable"
-  charge_freeze_service:
-    - service: automation.turn_on
-      entity_id: "automation.luxpower_freeze_charge"
+  # Setting up Freeze charging also requires you to uncomment the next 3 lines
+  # charge_freeze_service:
+  #   - service: automation.turn_on
+  #     entity_id: "automation.luxpower_freeze_charge"
   charge_stop_service:
     - service: switch.turn_off
       entity_id: "switch.lux_ac_charge_enable"
@@ -125,9 +127,9 @@ pred_bat:
   soc_max:
     - sensor.lux_soc_max_kwh  # Custom template sensor - see LuxPower inverter setup for details
   battery_rate_max:
-    - 5130  # Set to the maximum rate your inverter can charge your battery at (in Watts)
+    - input_number.battery_rate_max # See the LuxPower setup documentation for details of how to configure this.
   battery_min_soc:
-    - 5
+    - number.lux_on_grid_discharge_cut_off_soc
   battery_voltage:
     - sensor.lux_battery_voltage_live
   scheduled_charge_enable:
