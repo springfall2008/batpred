@@ -321,8 +321,8 @@ class Plan:
                             valid_export_windows[window_n] = True
                             best_export_limits_reset[window_n] = 100.0
 
-        FINE_SLOT_LENGTHS = [48, 32, 24, 16, 14, 12, 10, 8, 6, 5, 4, 3, 2, 1]
-        COARSE_SLOT_LENGTHS = [32, 16, 8, 4, 2, 1]
+        FINE_SLOT_LENGTHS = [48, 32, 24, 16, 14, 12, 10, 8, 6, 5, 4, 3, 2, 1, 0]
+        COARSE_SLOT_LENGTHS = [32, 16, 8, 4, 2, 1, 0]
         min_freeze_percent = calc_percent_limit(self.best_soc_min, self.soc_max)
 
         # Start loop of trials
@@ -438,9 +438,11 @@ class Plan:
 
                     # Optimise
                     if self.debug_enable:
+                        selected = metric < best_metric
                         if export_enable:
                             self.log(
-                                "Optimise all for buy/sell price band <= {} metric {} keep {} soc_min {} import {} export {} soc {} windows {} export on {}".format(
+                                "Optimise {} all for buy/sell price band <= {} metric {} keep {} soc_min {} import {} export {} soc {} windows {} export on {}".format(
+                                    "[SELECTED]" if selected else "",
                                     loop_price,
                                     dp2(metric),
                                     dp2(metric_keep),
@@ -454,7 +456,8 @@ class Plan:
                             )
                         else:
                             self.log(
-                                "Optimise all for buy/sell price band <= {} metric {} keep {} soc_min {} import {} export {}  soc {} windows {} export off".format(
+                                "Optimise {} all for buy/sell price band <= {} metric {} keep {} soc_min {} import {} export {}  soc {} windows {} export off".format(
+                                    "[SELECTED]" if selected else "",
                                     loop_price,
                                     dp2(metric),
                                     dp2(metric_keep),
@@ -502,7 +505,7 @@ class Plan:
                     dp2(best_battery_value),
                     dp1(best_soc_min),
                     best_limits,
-                    best_export,
+                    best_export_limits,
                 )
             )
 
@@ -3073,7 +3076,7 @@ class Plan:
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     # step_size = int(max(region_size / 2, min_region_size))
                     step_size = region_size
-                    # fast_mode = not (region_size == min_region_size)
+                    fast_mode = not (region_size == min_region_size)
                     for region in range(0, self.end_record + self.minutes_now, step_size):
                         region_start = max(self.end_record + self.minutes_now - region - region_size, 0)
                         region_end = min(region_start + region_size, self.end_record + self.minutes_now)
