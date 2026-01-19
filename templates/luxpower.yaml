@@ -94,8 +94,6 @@ pred_bat:
   charge_stop_service:
     - service: switch.turn_off
       entity_id: "switch.lux_ac_charge_enable"
-    - service: automation.turn_off
-      entity_id: "automation.luxpower_freeze_charge"
   discharge_start_service:
     - service: switch.turn_on
       entity_id: "switch.lux_force_discharge_enable"
