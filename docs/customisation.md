@@ -190,6 +190,10 @@ A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scen
 Predbat estimates solar generation for each half-hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
 A value of 0.15 (the default) is recommended.
 
+**switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use historical actual solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
+This can be useful to adjust for your systems real performance.<BR>
+Do not use if you are using the [Solcast integration and have turned on the integration's auto dampening](https://github.com/BJReplay/ha-solcast-solar?tab=readme-ov-file#dampening-configuration).
+
 ## Historical load data
 
 The historical load data is taken from the load sensor as configured in `apps.yaml` with the days are selected using **days_previous**, and weighted using **days_previous_weight** in `apps.yaml`.
@@ -337,14 +341,10 @@ If you set this to a negative value then Predbat will assume unpublished export 
 A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_) (default 0.95) to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact).
 The in-day adjustment factor can be seen in **predbat.load_inday_adjustment** and charted with the [In-Day Adjustment chart](creating-charts.md).
 
-**switch.predbat_metric_pv_calibration_enable** When turned On, Predbat will use historical data to calibrate your PV production estimates on a slot duration (default 30 minute) basis based on actual generation data.
-This can be useful to adjust for your systems real performance.
-Default is On.
-
 **input_number.predbat_carbon_metric** (_carbon enable_) When Carbon footprint tracking is turned On (**switch.predbat_carbon_enable**) (Off by default),
 you can specify a cost per kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
 
-_Note: Carbon footprint tracking can only be turned on if `apps.yaml` is configured to point to the correct CO2 cost sensor_
+_Note: Carbon footprint tracking can only be turned on if `apps.yaml` is configured to point to the correct [CO2 cost sensor](energy-rates.md#grid-carbon-intensity)_
 
 ## Notifications
 
