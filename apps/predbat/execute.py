@@ -840,7 +840,7 @@ class Execute:
             self.prefix + ".pv_power",
             state=dp3(self.pv_power / 1000.0),
             attributes={
-                "friendly_name": "Predicted PV Power",
+                "friendly_name": "Current PV Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
                 "icon": "mdi:battery",
@@ -850,7 +850,7 @@ class Execute:
             self.prefix + ".grid_power",
             state=dp3(self.grid_power / 1000.0),
             attributes={
-                "friendly_name": "Predicted Grid Power",
+                "friendly_name": "Current Grid Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
                 "icon": "mdi:battery",
@@ -860,7 +860,7 @@ class Execute:
             self.prefix + ".load_power",
             state=dp3(self.load_power / 1000.0),
             attributes={
-                "friendly_name": "Predicted Load Power",
+                "friendly_name": "Current Load Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
                 "icon": "mdi:battery",
@@ -870,7 +870,7 @@ class Execute:
             self.prefix + ".battery_power",
             state=dp3(self.battery_power / 1000.0),
             attributes={
-                "friendly_name": "Predicted Battery Power",
+                "friendly_name": "Current Battery Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
                 "icon": "mdi:battery",
