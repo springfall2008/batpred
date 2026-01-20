@@ -1210,6 +1210,15 @@ recorder:
 ²
 While LuxPower inverters cannot exactly replicate Predbat’s native Freeze Charging behaviour, these automations achieve an equivalent outcome. Any small differences are corrected the next time Predbat recalculates its plan.
 
+### Troubleshooting
+
+If you see recurring Predbat log warnings mentioning `scheduled_charge_enable` every few minutes, and Predbat switches to `Warn` during Freeze Charging when solar generation exceeds house load, increase the delay in the LuxPower Freeze Predbat Override automation.
+
+- Open the automation and locate the `delay: "00:00:10" entry`
+- Increase the delay by a few additional seconds.
+- Save the updated automation.
+- Confirm that the warnings stop appearing when Freeze Charging is active and solar generation exceeds house load.
+
 ---
 
 
