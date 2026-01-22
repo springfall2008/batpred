@@ -195,9 +195,14 @@ class WebInterface(ComponentBase):
             if key in ["icon", "device_class", "state_class", "unit_of_measurement", "friendly_name"]:
                 continue
             value = attributes[key]
-            if len(str(value)) > 1024:
-                value = "(large data)"
-            text += "<tr><td>{}</td><td>{}</td></tr>".format(key, value)
+            full_value = str(value)[:16384]  # Limit to 16k
+            full_value = full_value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#39;")
+            if len(str(value)) > 128:
+                display_value = str(value)[:128] + " ... "
+                # Escape HTML entities for tooltip
+                text += '<tr><td>{}</td><td title="{}">{}</td></tr>'.format(key, full_value, display_value)
+            else:
+                text += "<tr><td>{}</td><td>{}</td></tr>".format(key, value)
         text += "</table>"
         return text
 
