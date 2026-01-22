@@ -88,7 +88,7 @@ COMPONENT_LIST = {
             "pv_forecast_d4": {"required": False, "config": "pv_forecast_d4"},
             "pv_scaling": {"required": False, "config": "pv_scaling", "default": 1.0},
         },
-        "required_or": ["solcast_host", "forecast_solar", "pv_forecast_today"],
+        "required_or": ["solcast_api_key", "forecast_solar", "pv_forecast_today"],
         "phase": 1,
     },
     "gecloud": {
