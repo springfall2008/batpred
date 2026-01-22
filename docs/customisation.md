@@ -36,7 +36,7 @@ The mode that Predbat operates in will change the operation, this can be configu
 - Control charge & discharge
 
 If the **switch.predbat_set_read_only** is set to On then this prevents Predbat from making modifications to the inverter settings (regardless of the configuration).
-Predbat will continue making and updating its prediction plan every 5 minutes, but no inverter changes will be made.
+Predbat will continue making and updating its prediction plan every 10 minutes (by default), but no inverter changes will be made.
 This is useful if you want to override what Predbat is planning to do (e.g. your own automation), or whilst you are learning how Predbat works before turning it on 'in anger'.
 
 _NOTE: Changing the Predbat mode or the read-only switch will cause Predbat to reset the inverter settings to default, this will disable both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
@@ -79,10 +79,11 @@ It's recommended for new users to start without expert mode and then maybe turn 
 
 ## Performance related
 
-By default Predbat controls the inverter every 5 minutes and updates the plan every 10 minutes.
+Predbat controls the inverter every 5 minutes it runs, and by default, updates and recalulates the plan every 10 minutes.
 This can however use a lot of CPU power especially on more complex tariffs like Agile when run on lower power machines such as Raspberry PIs and some thin clients.
 
-You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (default 10 minutes) to reduce the frequency of replanning while keeping the inverter control in the 5-minute slots. E.g. a value of 10 or 15 minutes should also give good results.
+You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (default 10 minutes) to reduce the frequency of replanning while keeping the inverter control in the fixed 5-minute slots.
+E.g. a value of 10 or 15 minutes should also give good results.
 
 If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's quite CPU intensive and provides very little improvement for most systems.
 

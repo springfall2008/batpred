@@ -6,6 +6,10 @@ predbat:
     # Days forward
     forecast_days: 2
 
+    # Set the frequency in minutes that predheat runs
+    # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
+    run_every: 5
+
     # Days previous is the number of days back to find historical load data
     # Recommended is 7 to capture day of the week but 1 can also be used
     # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days

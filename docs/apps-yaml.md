@@ -1955,7 +1955,7 @@ so only 15 minutes of load will be predicted for tomorrow 3pm.
 and has to use Sunday's 3:30pm load for tomorrow's prediction.
 - Ditto the predicted load for tomorrow's (Tuesday) 4:00pm slot comes from Sunday 4pm.
 
-As today rolls forward and Predbat keeps on updating the forward plan every 5 minutes the prediction will be updated with the correct previous_day history as and when it exists.
+As today rolls forward and Predbat keeps on updating the forward plan each time it runs, the prediction will be updated with the correct previous_day history as and when it exists.
 
 It's recommended therefore that days_previous isn't set to 1, or if it is, that you understand the way this has to work and the consequences.
 If you want to set days_previous to take an average of the house load over all the days of the last week it's suggested that it be set as:
