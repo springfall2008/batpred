@@ -988,7 +988,7 @@ class Plan:
             # Remove charge windows that overlap with export windows
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
             # Update percent array to match the modified windows
-            self.charge_limit_percent_best = [calc_percent_limit(limit, self.soc_max) for limit in self.charge_limit_best]
+            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
 
             # Filter out any unused export windows
             if self.calculate_best_export and self.export_window_best:
