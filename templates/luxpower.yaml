@@ -79,7 +79,7 @@ pred_bat:
     clock_time_format: "%Y-%m-%d %H:%M:%S"
     write_and_poll_sleep: 10
     has_time_window: False
-    # If you want to take advantage of Freeze charging, change support_charge_freeze from False to True 
+    # If you want to take advantage of Freeze charging, change support_charge_freeze from False to True
     support_charge_freeze: False
     # if you have a LuxPower inverter with the 'Charge Last' feature you can take advantage of Freeze exporting. Change support_discharge_freeze to True
     support_discharge_freeze: False

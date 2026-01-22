@@ -233,7 +233,7 @@ You need to have a Solar Assistant installation <https://solar-assistant.io>
 
 Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
 
-## Huawei 
+## Huawei
 
 The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684>
 
@@ -652,6 +652,7 @@ unit of measurement: kWh
 device class: Energy
 state class: Total
 ```
+
 ```yaml
 
 name: Lux Battery SoC Corrected
@@ -704,10 +705,9 @@ Although LuxPower inverters have the *Charge first / Charge priority* feature, P
 - In your `apps.yaml` file:
 
     - Look for `support_charge_freeze` in the inverter section and change `False` to `True`.
-    
-  
+
     - Uncomment the three lines of the `charge_freeze_service` section so that Predbat turns on `automation.luxpower_freeze_charge` when Freeze Charging starts.
-    
+
     - Ensure the indentation and alignment match the other service entries.
 
 ---
@@ -1220,7 +1220,6 @@ If you see recurring Predbat log warnings mentioning `scheduled_charge_enable` e
 - Confirm that the warnings stop appearing when Freeze Charging is active and solar generation exceeds house load.
 
 ---
-
 
 ## Sigenergy Sigenstor
 
