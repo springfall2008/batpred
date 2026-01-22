@@ -79,7 +79,7 @@ It's recommended for new users to start without expert mode and then maybe turn 
 
 ## Performance related
 
-Predbat controls the inverter every 5 minutes it runs, and by default, updates and recalulates the plan every 10 minutes.
+Predbat controls the inverter every 5 minutes it runs, and by default, updates and recalculates the plan every 10 minutes.
 This can however use a lot of CPU power especially on more complex tariffs like Agile when run on lower power machines such as Raspberry PIs and some thin clients.
 
 You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (default 10 minutes) to reduce the frequency of replanning while keeping the inverter control in the fixed 5-minute slots.
@@ -353,7 +353,7 @@ Predbat can send mobile notifications for various events. You can control which 
 Set the list of [devices to notify](apps-yaml.md#notify_devices) in `apps.yaml`.
 
 | Switch | Default | Controls |
-|--------|---------|----------|
+| ------- | ------- | -------- |
 | **switch.predbat_set_status_notify** | On | Notifications when Predbat operational status changes (e.g. Idle, Charging, Exporting) |
 | **switch.predbat_set_inverter_notify** | Off | Notifications when inverter settings are changed (e.g. charge/discharge rates, reserve levels, time windows) |
 | **switch.predbat_set_event_notify** | On | Notifications for energy market events (e.g. Octopus Saving Sessions joined, Axle VPP events scheduled) |
@@ -602,9 +602,12 @@ In summary:
 ## Manual Control
 
 In some cases, you may want to override Predbat's planned behaviour and make a decision yourself. One way to achieve this is to put Predbat into read-only mode using **switch.predbat_set_read_only**.
-When going to read-only mode the inverter will be put back to the default settings and you should then control it yourself using your inverter controls directly.
+When going to read-only mode the inverter will be put back to the default settings and you can then control it yourself using your inverter controls directly.
 
 A better alternative in some cases is to tell Predbat what you want it to do in a particular time slot using the Manual Control feature.
+
+Note that none of the manual control commands override the [Predbat mode](#predbat-mode) you have selected.
+So if for example you want to force Predbat to charge then you need to be in either 'Control charge' or 'Control charge & discharge' mode, and if you want to force Predbat to export then you need to be in 'Control charge & discharge mode'.
 
 You can force the battery to be charged within a single slot by using the **select.predbat_manual_charge** selector.
 Pick the day and time slot you wish to charge in (up to 48 hours in advance), and Predbat will change the plan to charge in the selected slot. You can select multiple slots by using the drop-down menu more than once.
@@ -636,7 +639,7 @@ data:
     22:00,22:30,23:00
 ```
 
-All the other **select.predbat_manual_XX** controls operate in the same way.
+All the other **select.predbat_manual_XX** controls operate in a similar way.
 
 _NOTE_: once you select a day/time slot from any of the **select.predbat_manual_XX** selectors the selected time slot is immediately marked on the drop-down and you can then make another change.
 Predbat still has to update the plan which it will be doing so in the background, and this can take a few minutes to run (depending on the speed and power of the device you are running Home Assistant on),
@@ -644,15 +647,13 @@ so don't be surprised why the [Predbat plan](predbat-plan-card.md) doesn't chang
 
 _CAUTION: If you leave Predbat turned off for a long period of time then the override timeslots could end up repeating when you restart_
 
-The **select.predbat_manual_export** selector can be used to manually force an export within a slot in the same way as the manual force charge feature.
-The force export takes priority over force charging.
+The **select.predbat_manual_export** selector can be used to manually force Predbat to export within a slot. If you set a force export then this takes priority over force charging.
 
 The **select.predbat_manual_demand** selector is used to force Predbat to demand mode for a slot, this implies no forced grid charging or exporting of the battery.
 House load will be supplied from solar, or the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
 This is described as 'Eco' Mode for GivEnergy inverters but other inverters use different terminology.
 
-The **select.predbat_manual_freeze_charge** selector is used to force Predbat to freeze charge during a slot, this implies the battery will not discharge and will
-hold at the current level. The grid may be used if solar is not enough to cover the load.
+The **select.predbat_manual_freeze_charge** selector is used to force Predbat to freeze charge during a slot, this implies the battery will not discharge and will hold at the current level. The grid may be used if solar is not enough to cover the load.
 
 The **select.predbat_manual_freeze_export** selector is used to force Predbat to freeze export during a slot, this implies the battery will not charge but will still discharge for the house load. Any solar will be exported to the grid.
 
