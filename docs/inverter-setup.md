@@ -669,7 +669,9 @@ device class: Battery
 state class: Measurement
 ```
 
-- Create the following number helper. The maximum value (in Watts) can be found in your inverter datasheet. A more accurate figure can be obtained by observing the flow chart in the Monitor section of the LuxPower app/portal or by inspecting `sensor.lux_battery_flow_live` when the battery is force charging or discharging.
+- Create the following number helper. The maximum value (in Watts) can be found in your inverter data sheet.
+ A more accurate figure can be obtained by observing the flow chart in the Monitor section of the LuxPower app/portal
+ or by inspecting `sensor.lux_battery_flow_live` when the battery is force charging or discharging.
 
 ```yaml
 name: Battery Rate Max
@@ -684,7 +686,11 @@ unit of measurement: W
 ---
 
 **Important:**
-The Freeze Charging and Freeze Exporting setup described below relies on a set of carefully designed helpers and automations that work together. Each component has a specific role in safely entering, maintaining, and exiting Freeze Charging mode. Removing or skipping any part can lead to missed triggers, stuck AC charging, or incomplete cleanup. For reliable operation, make sure all helpers and automations in this section are created exactly as described before using Freeze Charging or Freeze Exporting modes. All of the automations apart from LuxPower HA Startup Reset remain disabled when Predbat is not Freeze Charging.
+The Freeze Charging and Freeze Exporting setup described below relies on a set of carefully designed helpers and automations that work together.
+Each component has a specific role in safely entering, maintaining, and exiting Freeze Charging mode.
+Removing or skipping any part can lead to missed triggers, stuck AC charging, or incomplete cleanup.
+For reliable operation, make sure all helpers and automations in this section are created exactly as described before using Freeze Charging or Freeze Exporting modes.
+All of the automations apart from LuxPower HA Startup Reset remain disabled when Predbat is not Freeze Charging.
 
 ---
 
@@ -723,7 +729,8 @@ name: Freeze Charge Guard
 entity_id: input_boolean.freeze_charge_guard
 ```
 
-The `freeze_charge_guard` helper acts as a lifecycle gate. It is enabled only when Predbat explicitly requests Freeze Charging and is cleared on exit, watchdog abort, or Home Assistant restart. All Freeze Charging automations check this guard to prevent unintended operation.
+The `freeze_charge_guard` helper acts as a lifecycle gate. It is enabled only when Predbat explicitly requests Freeze Charging and is cleared on exit, watchdog abort, or Home Assistant restart.
+All Freeze Charging automations check this guard to prevent unintended operation.
 
 **Binary sensor template helper**¹
 
@@ -890,7 +897,7 @@ mode: single
 ---
 
 - Create the **Freeze Charge Exit** automation to cleanly restore inverter state when Freeze Charging ends.
-
+<!-- cspell:ignore startswith -->
 ```yaml
 alias: LuxPower Freeze Charge Exit
 description: |
@@ -962,7 +969,9 @@ mode: single
 
 ```
 
-Occasionally, when a Manual Freeze Charge is requested, Predbat may immediately decide that **Hold Charging** is the more appropriate state based on current conditions. In this case, Freeze Charging automations may remain enabled even though Predbat reports Hold Charging. The watchdog safely exits Freeze Charging after a short grace period.
+Occasionally, when a Manual Freeze Charge is requested, Predbat may immediately decide that **Hold Charging** is the more appropriate state based on current conditions.
+In this case, Freeze Charging automations may remain enabled even though Predbat reports Hold Charging.
+The watchdog safely exits Freeze Charging after a short grace period.
 
 - Create the **Freeze Charge Watchdog** automation to handle cases where Manual Freeze Charging immediately transitions to **Hold Charging**.
 
@@ -1065,7 +1074,8 @@ mode: single
 
 - Ensure **`switch.predbat_set_charge_freeze`** is turned On.
 
-After Predbat recomputes, you may see some light grey **FrzChrg** slots in the state column of the plan. To disable Freeze Charging simply turn the switch Off. Predbat will no longer schedule any FrzChrg slots.
+After Predbat recomputes, you may see some light grey **FrzChrg** slots in the state column of the plan.
+To disable Freeze Charging simply turn the switch Off. Predbat will no longer schedule any FrzChrg slots.
 
 ---
 
@@ -1208,11 +1218,13 @@ recorder:
 ```
 
 ²
-While LuxPower inverters cannot exactly replicate Predbat’s native Freeze Charging behaviour, these automations achieve an equivalent outcome. Any small differences are corrected the next time Predbat recalculates its plan.
+While LuxPower inverters cannot exactly replicate Predbat’s native Freeze Charging behaviour, these automations achieve an equivalent outcome.
+Any small differences are corrected the next time Predbat recalculates its plan.
 
 ### Troubleshooting
 
-If you see recurring Predbat log warnings mentioning `scheduled_charge_enable` every few minutes, and Predbat switches to `Warn` during Freeze Charging when solar generation exceeds house load, increase the delay in the LuxPower Freeze Predbat Override automation.
+If you see recurring Predbat log warnings mentioning `scheduled_charge_enable` every few minutes, and Predbat switches to `Warn` during Freeze Charging when solar generation exceeds house load,
+increase the delay in the LuxPower Freeze Predbat Override automation.
 
 - Open the automation and locate the `delay: "00:00:10" entry`
 - Increase the delay by a few additional seconds.
