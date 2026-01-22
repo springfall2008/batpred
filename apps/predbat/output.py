@@ -3176,7 +3176,10 @@ class Output:
         first_window = True
         for window_n in range(len(windows)):
             window = windows[window_n]
-            percent = percents[window_n]
+            if len(percents) <= window_n:
+                percent = 0.0
+            else:
+                percent = percents[window_n]
             average = window["average"]
 
             if ignore_min and percent == 0.0:
