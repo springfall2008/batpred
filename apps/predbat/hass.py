@@ -260,7 +260,7 @@ class Hass:
                 try:
                     item["callback"](None)
                 except Exception as e:
-                    self.log("Error: {}".format(e), quiet=False)
+                    self.log("Error: timer_tick caught exception: {}".format(e), quiet=False)
                     print(traceback.format_exc())
                 while now > item["next_time"]:
                     run_every = timedelta(seconds=item["run_every"])
