@@ -168,6 +168,10 @@ attribute_table = {
     "battery_power": {"friendly_name": "Battery Power", "icon": "mdi:battery", "unit_of_measurement": "W", "device_class": "power"},
     "battery_percent": {"friendly_name": "Battery Percent", "icon": "mdi:battery", "unit_of_measurement": "%", "device_class": "battery"},
     "battery_temperature": {"friendly_name": "Battery Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature"},
+    "inverter_temperature": {"friendly_name": "Inverter Temperature", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature"},
+    "inverter_power": {"friendly_name": "Inverter Power", "icon": "mdi:flash", "unit_of_measurement": "W", "device_class": "power"},
+    "inverter_voltage": {"friendly_name": "Inverter Voltage", "icon": "mdi:flash", "unit_of_measurement": "V", "device_class": "voltage"},
+    "inverter_frequency": {"friendly_name": "Inverter Frequency", "icon": "mdi:flash", "unit_of_measurement": "Hz", "device_class": "frequency"},
     "grid_power": {"friendly_name": "Grid Power", "icon": "mdi:transmission-tower", "unit_of_measurement": "W", "device_class": "power"},
     "grid_voltage": {"friendly_name": "Grid Voltage", "icon": "mdi:transmission-tower", "unit_of_measurement": "V", "device_class": "voltage"},
     "grid_current": {"friendly_name": "Grid Current", "icon": "mdi:transmission-tower", "unit_of_measurement": "A", "device_class": "current"},
@@ -469,6 +473,11 @@ class GECloudDirect(ComponentBase):
                 self.dashboard_item(entity_name + "_grid_voltage", state=status[key].get("voltage", 0), attributes=attribute_table.get("grid_voltage", {}), app="gecloud")
                 self.dashboard_item(entity_name + "_grid_current", state=status[key].get("current", 0), attributes=attribute_table.get("grid_current", {}), app="gecloud")
                 self.dashboard_item(entity_name + "_grid_frequency", state=status[key].get("frequency", 0), attributes=attribute_table.get("grid_frequency", {}), app="gecloud")
+            elif key == "inverter":
+                self.dashboard_item(entity_name + "_inverter_temperature", state=status[key].get("temperature", 0), attributes=attribute_table.get("inverter_temperature", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_inverter_power", state=status[key].get("power", 0), attributes=attribute_table.get("inverter_power", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_inverter_voltage", state=status[key].get("output_voltage", 0), attributes=attribute_table.get("inverter_voltage", {}), app="gecloud")
+                self.dashboard_item(entity_name + "_inverter_frequency", state=status[key].get("output_frequency", 0), attributes={"friendly_name": "Inverter Output Frequency", "icon": "mdi:flash", "unit_of_measurement": "Hz", "device_class": "frequency"}, app="gecloud")
 
     async def publish_meter(self, device, meter):
         """
