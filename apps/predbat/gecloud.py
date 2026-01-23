@@ -477,7 +477,9 @@ class GECloudDirect(ComponentBase):
                 self.dashboard_item(entity_name + "_inverter_temperature", state=status[key].get("temperature", 0), attributes=attribute_table.get("inverter_temperature", {}), app="gecloud")
                 self.dashboard_item(entity_name + "_inverter_power", state=status[key].get("power", 0), attributes=attribute_table.get("inverter_power", {}), app="gecloud")
                 self.dashboard_item(entity_name + "_inverter_voltage", state=status[key].get("output_voltage", 0), attributes=attribute_table.get("inverter_voltage", {}), app="gecloud")
-                self.dashboard_item(entity_name + "_inverter_frequency", state=status[key].get("output_frequency", 0), attributes={"friendly_name": "Inverter Output Frequency", "icon": "mdi:flash", "unit_of_measurement": "Hz", "device_class": "frequency"}, app="gecloud")
+                self.dashboard_item(
+                    entity_name + "_inverter_frequency", state=status[key].get("output_frequency", 0), attributes={"friendly_name": "Inverter Output Frequency", "icon": "mdi:flash", "unit_of_measurement": "Hz", "device_class": "frequency"}, app="gecloud"
+                )
 
     async def publish_meter(self, device, meter):
         """
