@@ -215,6 +215,21 @@ Valid values are:
   threads: auto
 ```
 
+### enable_coarse_fine_levels
+
+Controls the two-pass coarse/fine optimization algorithm for improved planning performance. The default is True (enabled).
+
+When enabled, Predbat uses a two-pass optimization strategy:
+
+- **Coarse pass**: Quickly evaluates a reduced set of slot length combinations to identify approximately optimal charge/export window sizes
+- **Fine pass**: Refines the search by focusing only on slot lengths near those identified as optimal
+
+This significantly reduces planning time while maintaining near-optimal results. You can disable this by setting it to False if needed.
+
+```yaml
+  enable_coarse_fine_levels: True
+```
+
 ### Web interface
 
 Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat add-on.
@@ -673,6 +688,8 @@ You don't need multiple lines for the import or export sensors as each inverter 
 Edit if necessary if you have non-standard sensor names:
 
 - **load_today** - Entity name for the house load in kWh today (must be incrementing)
+- **load_power** - Current load power sensor in W (used with load_power_fill_enable to improve load_today data accuracy)
+- **load_power_fill_enable** - When True (default), uses load_power data to fill gaps and smooth load_today sensor data. Set to False to disable this feature.
 - **import_today** - Imported energy today in kWh (incrementing)
 - **export_today** - Exported energy today in kWh (incrementing)
 - **pv_today** - PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
@@ -680,6 +697,10 @@ If you have an AC-coupled inverter then enter the Home Assistant sensor for your
 If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
 Note: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.
+
+The **load_power_fill_enable** feature helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
+out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
+the main load data analysis and can significantly improve prediction accuracy, especially for systems with coarse-grained energy sensors.
 
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 

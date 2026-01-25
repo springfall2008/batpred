@@ -96,10 +96,13 @@ fdpwr
 fdsoc
 feedin
 fentry
+figsize
 Fingerbot
 firstparty
 fline
 FLOMASTA
+fontsize
+fontweight
 Forestfire
 foxess
 freephase
@@ -142,6 +145,7 @@ iflux
 inday
 INTELLI
 intelligentdevice
+interp
 invbatpower
 invname
 isoformat

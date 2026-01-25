@@ -44,7 +44,7 @@ Then add in the Home Assistant service and connect up your API key to obtain hou
 
 Use HACS to install Apex Charts: <https://github.com/RomRider/apexcharts-card>
 
-There is a template for the Predheat charts in: <https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predheat.yaml_template>
+There is a template of [example_Predheat charts](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predheat.yaml_template) you can use.
 
 Create a new Apex chart for each chart in this template and copy the YAML code into the chart.
 

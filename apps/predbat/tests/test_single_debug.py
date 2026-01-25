@@ -12,7 +12,6 @@ import json
 from compare import Compare
 from prediction import Prediction
 from tests.test_infra import reset_inverter
-from utils import calc_percent_limit
 
 
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False, debug=False):
@@ -190,7 +189,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     # Save plan
     # Pre-optimise all plan
-    my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
     my_predbat.update_target_values()
     html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
     filename = "plan_orig.html"

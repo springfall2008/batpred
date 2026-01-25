@@ -491,7 +491,6 @@ def reset_inverter(my_predbat):
     my_predbat.charge_window_best = []
     my_predbat.export_limits_best = []
     my_predbat.export_window_best = []
-    my_predbat.charge_limit_percent_best = []
     my_predbat.manual_charge_times = []
     my_predbat.manual_demand_times = []
     my_predbat.manual_export_times = []

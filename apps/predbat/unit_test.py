@@ -57,12 +57,14 @@ from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
 from tests.test_manual_select import run_test_manual_select
-from tests.test_minute_data import test_minute_data
+from tests.test_minute_data import test_minute_data, test_minute_data_load
+from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_minute_data_state import test_minute_data_state
 from tests.test_format_time_ago import test_format_time_ago
 from tests.test_override_time import test_get_override_time_from_string
 from tests.test_units import run_test_units
 from tests.test_previous_days_modal import test_previous_days_modal_filter
+from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from_power
 from tests.test_octopus_free import test_octopus_free
 from tests.test_prune_today import test_prune_today
 from tests.test_cumulative import test_get_now_from_cumulative
@@ -152,6 +154,8 @@ def main():
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("minute_data", test_minute_data, "Minute data tests", False),
+        ("minute_data_load", test_minute_data_load, "Minute data load tests", False),
+        ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
         ("get_now_cumulative", test_get_now_from_cumulative, "Get now from cumulative tests", False),
         ("prune_today", test_prune_today, "Prune today tests", False),
         ("history_attribute", test_history_attribute, "History attribute tests", False),
@@ -159,6 +163,7 @@ def main():
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
+        ("fill_load_from_power", test_fill_load_from_power, "Fill load from power sensor tests", False),
         # Octopus Energy URL/API tests
         ("octopus_url", test_octopus_url, "Octopus URL/API comprehensive tests (downloads, day/night rates, saving sessions, intelligent dispatch, tariffs, EDF)", False),
         ("octopus_cache", test_octopus_cache_wrapper, "Octopus cache save/load tests", False),

@@ -416,7 +416,6 @@ class Compare:
         save_export_window_best = my_predbat.export_window_best
         save_export_limits_best = my_predbat.export_limits_best
         save_charge_limit_best = my_predbat.charge_limit_best
-        save_charge_limit_percent_best = my_predbat.charge_limit_percent_best
         save_cost_today_sofar = my_predbat.cost_today_sofar
         save_carbon_today_sofar = my_predbat.carbon_today_sofar
         save_iboost_today = my_predbat.iboost_today
@@ -462,7 +461,6 @@ class Compare:
         my_predbat.export_window_best = save_export_window_best
         my_predbat.export_limits_best = save_export_limits_best
         my_predbat.charge_limit_best = save_charge_limit_best
-        my_predbat.charge_limit_percent_best = save_charge_limit_percent_best
         my_predbat.cost_today_sofar = save_cost_today_sofar
         my_predbat.carbon_today_sofar = save_carbon_today_sofar
         my_predbat.iboost_today = save_iboost_today

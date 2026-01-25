@@ -27,6 +27,7 @@ class MockFoxAPI:
         self.device_current_schedule = {}
         self.fdpwr_max = {}
         self.fdsoc_min = {}
+        self.inverter_sn_filter = []
 
     def getMinSocOnGrid(self, deviceSN):
         """Mock implementation of getMinSocOnGrid"""
@@ -59,6 +60,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.fdpwr_max = {}
         self.fdsoc_min = {}
         self.local_tz = pytz.timezone("Europe/London")
+        self.inverter_sn_filter = []
 
         # Mock request responses - keyed by API path
         self.mock_responses = {}

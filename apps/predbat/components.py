@@ -88,7 +88,7 @@ COMPONENT_LIST = {
             "pv_forecast_d4": {"required": False, "config": "pv_forecast_d4"},
             "pv_scaling": {"required": False, "config": "pv_scaling", "default": 1.0},
         },
-        "required_or": ["solcast_host", "forecast_solar", "pv_forecast_today"],
+        "required_or": ["solcast_api_key", "forecast_solar", "pv_forecast_today"],
         "phase": 1,
     },
     "gecloud": {
@@ -191,6 +191,10 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "fox_automatic",
             },
+            "inverter_sn": {
+                "required": False,
+                "config": "fox_inverter_sn",
+            },
         },
         "phase": 1,
     },
@@ -238,6 +242,10 @@ COMPONENT_LIST = {
             "region": {"required": False, "config": "solax_region", "default": "eu"},
             "automatic": {"required": False, "config": "solax_automatic", "default": False},
             "enable_controls": {"required": False, "config": "solax_enable_controls", "default": True},
+            "plant_sn": {
+                "required": False,
+                "config": "solax_plant_sn",
+            },
         },
         "phase": 1,
         "can_restart": True,
@@ -325,7 +333,7 @@ class Components:
                     self.log(f"Starting {component_info['name']} interface")
 
                 # Create new task
-                self.component_tasks[component_name] = self.base.create_task(component.start())
+                self.component_tasks[component_name] = self.base.create_task(component.start(), name=f"{component_name}_component_task")
                 if not component.wait_api_started():
                     self.log(f"Error: {component_info['name']} API failed to start")
                     failed = True

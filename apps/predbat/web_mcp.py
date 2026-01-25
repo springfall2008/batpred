@@ -804,7 +804,7 @@ class PredbatMCPServer(ComponentBase):
             await asyncio.sleep(60)
             self.authorization_codes.pop(code, None)
 
-        asyncio.create_task(cleanup_code())
+        asyncio.create_task(cleanup_code(), name="cleanup_used_auth_code")
 
         self.log(f"MCP OAuth: Access token issued (authorization_code), resource: {resource}")
 
