@@ -490,13 +490,13 @@ Add a card of type 'markdown' to your dashboard to display a simple dashboard of
 ```yaml
 type: markdown
 content: >-
-  {% set dd = (as_timestamp(now()) - as_timestamp("2024-12-22 17:20:00")) | timestamp_custom("%j")| int %}
+  {% set dd = ((as_timestamp(now()) - as_timestamp("2024-12-22 17:20:00")/86400) | int %}
   {% set tw = (states('predbat.inverter_register_writes') | int) %}
   {{ dd }} days, total {{ tw }} inverter writes
 
-  {{ states('sensor.predbat_daily_inverter_writes')|int }} writes today
+  {{ states('sensor.predbat_daily_inverter_writes')|int(0) }} writes today
 
-  Average {{ (tw / dd ) | int }} writes per day
+  Average {{ (tw / dd ) | int(0) }} writes per day
 ```
 
 You'll need to change the hard-coded timestamp "2024-12-12..." to the date/time you first started counting Predbat inverter writes from to get the number of days and average writes per day correct.
