@@ -27,7 +27,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.32.11"
+THIS_VERSION = "v8.32.12"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py"]
@@ -532,9 +532,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
         self.charge_limit = []
-        self.charge_limit_percent = []
         self.charge_limit_best = []
-        self.charge_limit_best_percent = []
         self.charge_window = []
         self.charge_window_best = []
         self.car_charging_battery_size = [100]

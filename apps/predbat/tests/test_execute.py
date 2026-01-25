@@ -274,7 +274,6 @@ def run_execute_test(
 
     my_predbat.charge_window_best = charge_window_best
     my_predbat.charge_limit_best = charge_limit_best
-    my_predbat.charge_limit_percent_best = [calc_percent_limit(x, my_predbat.soc_max) for x in charge_limit_best]
     my_predbat.export_window_best = export_window_best
     my_predbat.export_limits_best = export_limits_best
     my_predbat.set_charge_window = set_charge_window

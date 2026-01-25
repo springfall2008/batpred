@@ -2257,7 +2257,7 @@ class Inverter:
             solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
 
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
-            switch = solax_modes.get(self.base.get_state_wrapper(entity_id), 0)
+            switch = solax_modes.get(str(self.base.get_state_wrapper(entity_id, "")), 0)
 
             if direction == "charge":
                 if enable:

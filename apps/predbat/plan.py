@@ -829,7 +829,6 @@ class Plan:
         sets:
            self.charge_window_best
            self.charge_limit_best
-           self.charge_limit_percent_best
            self.export_window_best
            self.export_limits_best
         """
@@ -849,7 +848,6 @@ class Plan:
             if window["end"] <= self.minutes_now:
                 del self.charge_window_best[0]
                 del self.charge_limit_best[0]
-                del self.charge_limit_percent_best[0]
                 self.log("Current charge window has expired, removing it")
             else:
                 break
@@ -898,14 +896,13 @@ class Plan:
 
             # Pre-fill best charge limit with the current charge limit
             self.charge_limit_best = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window_best))]
-            self.charge_limit_percent_best = [self.current_charge_limit for i in range(len(self.charge_window_best))]
 
             # Pre-fill best export enable with Off
             self.export_limits_best = [100.0 for i in range(len(self.export_window_best))]
 
             self.end_record = self.forecast_minutes
         # Show best windows
-        self.log("Best charge window {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best)))
+        self.log("Best charge window {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max))))
         self.log("Best export window {}".format(self.window_as_text(self.export_window_best, self.export_limits_best)))
 
         # Created optimised step data
@@ -987,8 +984,6 @@ class Plan:
 
             # Remove charge windows that overlap with export windows
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
-            # Update percent array to match the modified windows
-            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
 
             # Filter out any unused export windows
             if self.calculate_best_export and self.export_window_best:
@@ -1068,10 +1063,8 @@ class Plan:
                     # Filter out the windows we disabled during clipping
                     self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-                    self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                     self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
                 else:
-                    self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                     self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
 
             # Plan comparison
@@ -1185,8 +1178,7 @@ class Plan:
 
             # Publish charge and export window best
             if publish:
-                self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
-                self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True, soc=self.predict_soc_best)
+                self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, best=True, soc=self.predict_soc_best)
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
 
                 # HTML data
@@ -2345,7 +2337,6 @@ class Plan:
                 end_record=end_record,
                 save="best10" if name else "yesterday10",
             )
-            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
 
             if name:
@@ -2356,7 +2347,6 @@ class Plan:
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record, save="best" if name else "yesterday"
             )
 
-            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.update_target_values()
             html_data, json_data = self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, publish=False)
 

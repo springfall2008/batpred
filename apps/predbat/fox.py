@@ -199,7 +199,7 @@ def validate_schedule(new_schedule, reserve, fdPwr_max):
 class FoxAPI(ComponentBase):
     """Fox API client."""
 
-    def initialize(self, key, automatic):
+    def initialize(self, key, automatic, inverter_sn=None):
         """Initialize the Fox API component"""
         self.key = key
         self.automatic = automatic
@@ -222,6 +222,14 @@ class FoxAPI(ComponentBase):
         self.rate_limit_errors_today = 0
         self.start_time_today = None
         self.last_midnight_utc = None
+
+        # Convert inverter_sn to list
+        if inverter_sn is None:
+            self.inverter_sn_filter = []
+        elif isinstance(inverter_sn, str):
+            self.inverter_sn_filter = [inverter_sn]
+        else:
+            self.inverter_sn_filter = inverter_sn
 
     def should_allow_retry(self):
         """
@@ -1006,6 +1014,9 @@ class FoxAPI(ComponentBase):
         devices = []
         if result is not None:
             devices = result.get("data", [])
+            # If self.inverter_sn_filter is set, keep only devices whose deviceSN is in that filter
+            if self.inverter_sn_filter:
+                devices = [device for device in devices if device.get("deviceSN", "") in self.inverter_sn_filter]
             self.device_list = devices
         return devices
 

@@ -107,10 +107,10 @@ class Execute:
                 if (not inExportWindow) and ((minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
-                    self.log("Inverter {} Charge window will be: {} - {} - current SoC {}%, target {}%".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
+                    self.log("Inverter {} Charge window will be: {} - {} - current SoC {}%, target {}%".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, calc_percent_limit(self.charge_limit_best[0], self.soc_max)))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        target_soc = self.charge_limit_percent_best[0] if not self.is_freeze_charge(self.charge_limit_best[0]) else calc_percent_limit(self.soc_kw, self.soc_max)
+                        target_soc = calc_percent_limit(self.charge_limit_best[0], self.soc_max) if not self.is_freeze_charge(self.charge_limit_best[0]) else calc_percent_limit(self.soc_kw, self.soc_max)
                         inv_target_soc = self.adjust_battery_target_multi(inverter, target_soc, True, False, check=True)
 
                         current_charge_rate = inverter.get_current_charge_rate()
@@ -819,8 +819,7 @@ class Execute:
 
         # Work out current charge limits and publish charge limit base
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]
-        self.charge_limit_percent = calc_percent_limit(self.charge_limit, self.soc_max)
-        self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
+        self.publish_charge_limit(self.charge_limit, self.charge_window, best=False)
         self.publish_inverter_data()
 
     def quick_inverter_data_update(self):

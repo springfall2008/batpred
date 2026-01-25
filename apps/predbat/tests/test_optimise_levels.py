@@ -7,7 +7,6 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-from utils import calc_percent_limit
 from tests.test_infra import reset_rates, update_rates_import, update_rates_export, reset_inverter
 from prediction import Prediction
 
@@ -130,7 +129,6 @@ def run_optimise_levels(
 
     # Save plan
     my_predbat.charge_limit_best = charge_limit_best
-    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
