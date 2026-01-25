@@ -2139,7 +2139,7 @@ class Output:
                 },
             )
 
-    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc={}):
+    def publish_charge_limit(self, charge_limit, charge_window, best=False, soc={}):
         """
         Create entity to chart charge limit
 
@@ -2147,11 +2147,13 @@ class Output:
 
         - charge_limit (list): List of charge limits in kWh
         - charge_window (list): List of charge window dictionaries
-        - charge_limit_percent (list): List of charge limit percentages
         - best (bool, optional): Flag indicating if we publish as base or as best
         - soc (dict, optional): Dictionary of the predicted SoC over time
 
         """
+        # Calculate charge_limit_percent from charge_limit
+        charge_limit_percent = calc_percent_limit(charge_limit, self.soc_max)
+
         charge_limit_time = {}
         charge_limit_time_kw = {}
         prev_perc = -1

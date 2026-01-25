@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from utils import calc_percent_limit
 from tests.test_infra import reset_rates, reset_inverter, update_rates_import, update_rates_export
 from prediction import Prediction
 from compare import Compare
@@ -81,7 +80,6 @@ def run_optimise_all_windows(
     )
     # Save plan
     my_predbat.charge_limit_best = charge_limit_best
-    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
@@ -100,7 +98,6 @@ def run_optimise_all_windows(
 
     # Save plan
     my_predbat.charge_limit_best = charge_limit_best
-    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best

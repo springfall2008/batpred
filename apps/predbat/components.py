@@ -191,6 +191,10 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "fox_automatic",
             },
+            "inverter_sn": {
+                "required": False,
+                "config": "fox_inverter_sn",
+            },
         },
         "phase": 1,
     },
@@ -238,6 +242,10 @@ COMPONENT_LIST = {
             "region": {"required": False, "config": "solax_region", "default": "eu"},
             "automatic": {"required": False, "config": "solax_automatic", "default": False},
             "enable_controls": {"required": False, "config": "solax_enable_controls", "default": True},
+            "plant_sn": {
+                "required": False,
+                "config": "solax_plant_sn",
+            },
         },
         "phase": 1,
         "can_restart": True,
