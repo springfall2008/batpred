@@ -1014,7 +1014,7 @@ class FoxAPI(ComponentBase):
         devices = []
         if result is not None:
             devices = result.get("data", [])
-            # Filter by self.inverter_sn_filter if its not
+            # If self.inverter_sn_filter is set, keep only devices whose deviceSN is in that filter
             if self.inverter_sn_filter:
                 devices = [device for device in devices if device.get("deviceSN", "") in self.inverter_sn_filter]
             self.device_list = devices
