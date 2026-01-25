@@ -1,26 +1,24 @@
-# Predbat automation API
+# Manual API
 
 **CAUTION** This is an expert feature only, you can break Predbat if you set the wrong things here.
 
-While for most people Predbat will do what you want without any adjustments there are some special cases where users wish to write some more complex
-automations which override Predbat settings
+While for most people Predbat will do what you want without any adjustments there are some special cases where users wish to write some more complex automations which override Predbat settings.
 
-For settings inside Home Assistant e.g. switch.predbat_*, select.predbat_* and input_number.predbat_* you can already use an automation to change these values
+For settings inside Home Assistant e.g. switch.predbat_*, select.predbat_* and input_number.predbat_* you can already use an automation to change these values.
 
-For settings in apps.yaml it's very difficult or impossible to update them via an automation.
+For settings in `apps.yaml` it's very difficult or impossible to update them via an automation.
 
 For this reason, there is a selector called **select.predbat_manual_api** which works a bit like the manual override ones but this can have new values added using the select API in Home Assistant.
 The only function the selector itself serves is to store override commands, you can clear from the selector but you have to set them using a service call.
 
-Certain settings from apps.yaml may be overridden using this method.
+Certain settings in `apps.yaml` may be overridden using this method.
 
 Each override is in a string format and works a bit like a web URL, setting the command and the values.
 
 ## Data retention
 
 The data for overrides is kept inside the Home Assistant selector itself and so will survive a reboot. There is likely a limit to the size of this data so be sure to remove
-old overrides when you are done with them. Keep in mind it's easy to lose all of the overrides with the 'off' option so do not keep important data here only use it for short-term
-automations.
+old overrides when you are done with them. Keep in mind it's easy to lose all of the overrides with the 'off' option so do not keep important data here only use it for short-term automations.
 
 ## Supported command formats
 
@@ -44,7 +42,7 @@ Commands are disabled again by putting them in square brackets e.g:
 
 Below is an example of setting a rate override, you can clear all overrides by calling 'off' or this specific one only by calling the same thing again but in square brackets []
 
-For the rates you can use **rates_export_override** or **rates_import_override** with all the same options as [apps.yaml](energy-rates.md#manually-over-riding-energy-rates) but in a URL type format:
+For the rates you can use **rates_export_override** or **rates_import_override** with all the [same rate override options as apps.yaml](energy-rates.md#manually-over-riding-energy-rates), but in a URL type format:
 
 ```text
 rates_export_override?start=17:00:00&end=19:00:00&rate=0
@@ -74,7 +72,7 @@ off
 
 ### Supported overrides
 
-The following settings can be overridden with this method:
+The following `apps.yaml` settings can be overridden using predbat_manual_api:
 
 - rates_export_override
 - rates_import_override
@@ -96,9 +94,12 @@ The following settings can be overridden with this method:
 
 ## Example solution to over-ride predicted house load
 
-One common feedback is there is no mechanism in Predbat to alter the predicted house load, for example ignoring the effects of extra washing load in the past, or to take account of planned extra load such as cooking a big Sunday dinner.
+Prior to the addition of **select.predbat_manual_load_adjust** a common feedback was that there was no mechanism in Predbat to alter the predicted house load,
+for example ignoring the effects of extra washing load in the past, or to take account of planned extra load such as cooking a big Sunday dinner.
 
 The Predbat manual API provides a mechanism to meet this need by setting an export (or import) rates override.
+
+Now that you can use the manual load adjust selector to overwrite predicted load this example solution is retained as a worked example of how you can use the manual API to overwrite `apps.yaml` settings.
 
 1. Control variables
 

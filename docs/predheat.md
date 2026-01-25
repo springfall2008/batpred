@@ -6,7 +6,7 @@ Further details can be found in the [Predheat YouTube video](https://youtu.be/_-
 
 ## Operation
 
-The app runs every 5 minutes and it will automatically update its prediction for the heating system for the next period, up to a maximum of 48 hours.
+The app runs every 5 minutes (by default) and will automatically update its prediction for the heating system for the next period, up to a maximum of 48 hours.
 
 The inputs are as follows
 
@@ -42,9 +42,9 @@ Then add in the Home Assistant service and connect up your API key to obtain hou
 
 ### Apex Charts install
 
-Use HACS to install Apex Charts (Lovelace frontend add-on) - <https://github.com/RomRider/apexcharts-card>
+Use HACS to install Apex Charts: <https://github.com/RomRider/apexcharts-card>
 
-There is a template for the Predheat charts in: [example_chart_predheat.yaml_template](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predheat.yaml_template)
+There is a template of [example_Predheat charts](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/example_chart_predheat.yaml_template) you can use.
 
 Create a new Apex chart for each chart in this template and copy the YAML code into the chart.
 
@@ -109,6 +109,8 @@ in the next calculation cycle.
 For energy rates, they will come from the Predbat configuration, ensure you have your electric or gas rates set correctly.
 
 Note you can also change the tables for **gas_efficiency**, **heat_pump_efficiency** and **delta_correction** in the Predheat configuration but the defaults should be fine to get going.
+
+Set **run_every** to how often you want Predheat to update its heat energy prediction. By default this is every 5 minutes.
 
 Now comes the tricky part, we need to calculate the heat loss for your house:
 

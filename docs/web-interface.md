@@ -110,6 +110,22 @@ The Compare View provides access to Predbat's [Compare Energy Tariff feature](co
 
 ![image](images/web-interface-compare-view.png)
 
+### Log View
+
+Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so the Log view provides an easy way to see and download the Predbat logfile.
+
+![image](images/web-interface-log-view.png)
+
+By default the Log view opens in the Warnings tab which shows a filtered list of Warnings and Errors in the Predbat logfile.
+
+The Errors tab shows a filtered list of logfile Errors, and the All tab shows all entries in the Predbat logfile.
+
+Normal log messages are coloured Green, Warnings are Orange, and Errors in Red.  The Logfile view shows newest entries at the top and auto-refreshes so as Predbat is executing the most recent logs will appear at the top and the log will scroll downwards.
+
+The Download tab gives the ability to download the logfile.
+
+Further details about the Predbat logfile and its location is [described in the output data document](output-data.md#predbat-logfile).
+
 #### Config View
 
 The Config view provides a way to see and change all of Predbat's configuration entities in Home Assistant.  For each entity is displayed the name, entity type, the current entity value and Predbat's default value for that entity.
@@ -128,19 +144,13 @@ and full explanation of Predbat's control entities and what they do can be found
 The Apps view allows you to look at your `apps.yaml` configuration and to modify the values within the web browser without having to edit the YAML file directly.
 Click the edit button to change a value, when all the edits are complete hit save to save the `apps.yaml` and Predbat will automatically be restarted with the new configuration.
 
-<img width="1746" height="764" alt="image" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
+<img alt="image of Predbat apps view" src="https://github.com/user-attachments/assets/f9aacd17-f25b-45d6-95fe-229431a1f4d6" />
 
 Predbat validates your `apps.yaml` every time it runs and if there are any configuration issues it displays a count of those errors and highlights the items in error in red:
 
 ![image](images/web-interface-apps-yaml-validation-error.png)
 
 Further details of the `apps.yaml` error can be found in the [Predbat Log](#log-view).
-
-### Browse View
-
-The Browse view gives a simple file system browser to enable you to view any of the configuration, output and code files in the directory that Predbat is installed in.
-
-You can navigate around subfolders and view files, but not make any changes using the Browse view.
 
 ### Components View
 
@@ -153,25 +163,15 @@ You can restart individual Predbat components if required.
 The editor view allows you to edit apps.yaml as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
 will be disabled pending a fix.
 
-<img width="1746" height="476" alt="image" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
+<img alt="image of Predbat Editor view" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
 
-### Log View
+### Browse View
 
-Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so the Log view provides an easy way to see and download the Predbat logfile.
+The Browse view gives a simple file system browser to enable you to view any of the configuration, output and code files in the directory that Predbat is installed in.
 
-![image](images/web-interface-log-view.png)
+You can navigate around subfolders and view files, but not make any changes using the Browse view.
 
-By default the Log view opens in the Warnings tab which shows a filtered list of Warnings and Errors in the Predbat logfile.
-
-The Errors tab shows a filtered list of logfile Errors, and the All tab shows all entries in the Predbat logfile.
-
-Normal log messages are coloured Green, Warnings are Orange, and Errors in Red.  The Logfile view shows newest entries at the top and auto-refreshes so as Predbat is executing the most recent logs will appear at the top and the log will scroll downwards.
-
-The Download tab gives the ability to download the logfile.
-
-Further details about the Predbat logfile and its location is [described in the output data document](output-data.md#predbat-logfile).
-
-## Docs View
+### Docs View
 
 Provides a quick link to the [Predbat documentation](https://springfall2008.github.io/batpred/).
 

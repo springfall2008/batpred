@@ -65,7 +65,7 @@ class AlertFeed(ComponentBase):
         if not alert_config:
             return alerts, alert_active_keep
         if not isinstance(alert_config, dict):
-            self.log("Warn: AlertFeed: Alerts must be a dictionary, ignoring")
+            self.log("Warn: AlertFeed: Weather alerts must be a dictionary, ignoring")
             return alerts, alert_active_keep
 
         # Try apps.yaml
@@ -80,10 +80,10 @@ class AlertFeed(ComponentBase):
 
         # If latitude and longitude are not found, we cannot process alerts
         if latitude and longitude:
-            self.log("AlertFeed: Processing alerts for approx position latitude {} longitude {}".format(dp1(latitude), dp1(longitude)))
+            self.log("AlertFeed: Processing weather alerts for approx position latitude {}, longitude {}".format(dp1(latitude), dp1(longitude)))
         else:
             if not testing:
-                self.log("Warn: AlertFeed: No latitude or longitude found, cannot process alerts")
+                self.log("Warn: AlertFeed: No latitude or longitude found, cannot process weather alerts")
                 return alerts, alert_active_keep
 
         area = alert_config.get("area", "")
@@ -121,7 +121,7 @@ class AlertFeed(ComponentBase):
                     onset_minutes = int((onset - midnight_utc).total_seconds() / 60)
                     expires_minutes = int((expires - midnight_utc).total_seconds() / 60)
                     if expires_minutes >= minutes_now:
-                        self.log("Info: AlertFeed: Active alert: {} severity {} certainty {} urgency {} from {} to {} applying keep {}".format(alert.get("event"), severity, certainty, urgency, onset, expires, keep))
+                        self.log("Info: AlertFeed: Active weather alert: {}, severity {}, certainty {}, urgency {} from {} to {}, applying battery keep {}%".format(alert.get("event"), severity, certainty, urgency, onset, expires, keep))
                         for minute in range(onset_minutes, expires_minutes):
                             if minute not in alert_active_keep:
                                 alert_active_keep[minute] = keep
@@ -226,7 +226,7 @@ class AlertFeed(ComponentBase):
 
     async def download_alert_data(self, url):
         """
-        Download octopus free session data directly from a URL
+        Download Weather Alert data directly from a URL
         """
         # Check the cache first
         now = datetime.now()
@@ -235,7 +235,7 @@ class AlertFeed(ComponentBase):
             pdata = self.alert_cache[url]["data"]
             age = now - stamp
             if age.seconds < (30 * 60):
-                self.log("AlertFeed: Return cached alert data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+                self.log("AlertFeed: Return cached weather alert data from URL {}, age {} minutes".format(url, dp1(age.seconds / 60)))
                 self.update_success_timestamp()
                 return pdata
 
@@ -245,11 +245,11 @@ class AlertFeed(ComponentBase):
                 async with session.get(url) as response:
                     status_code = response.status
                     if status_code not in [200, 201]:
-                        self.log("Warn: AlertFeed: Error downloading alert data from URL {}, code {}".format(url, status_code))
+                        self.log("Warn: AlertFeed: Error downloading weather alert data from URL {}, error code {}".format(url, status_code))
                         return None
 
                     text = await response.text()
-                    self.log("AlertFeed: Downloaded alert data from {} size {} bytes".format(url, len(text)))
+                    self.log("AlertFeed: Downloaded weather alert data from URL {}, size {} bytes".format(url, len(text)))
 
                     # Return new data
                     self.alert_cache[url] = {}
@@ -258,7 +258,7 @@ class AlertFeed(ComponentBase):
                     self.update_success_timestamp()
                     return text
         except (aiohttp.ClientError, Exception) as e:
-            self.log("Warn: AlertFeed: Exception downloading alert data from URL {}: {}".format(url, e))
+            self.log("Warn: AlertFeed: Exception downloading weather alert data from URL {}: {}".format(url, e))
             return None
 
     def parse_alert_data(self, xml):
@@ -272,7 +272,7 @@ class AlertFeed(ComponentBase):
         try:
             root = etree.fromstring(xml)
         except Exception as e:
-            self.log("Warn: Failed to extract alerts from xml data exception: {}".format(e))
+            self.log("Warn: Failed to extract weather alerts from XML data exception: {}".format(e))
 
         if root:
             for entry in root:

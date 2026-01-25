@@ -112,7 +112,7 @@ but is set to prevent discharging into the car (requires **switch.predbat_car_ch
 
 - **Read-Only (Axle)** - Predbat is in [read-only mode for the duration of an Axle VPP export event](energy-rates.md#axle-vpp), and will automatically return to a normal execution mode at the end of the Axle event.
 
-- **[Alert]** will be appended to the Predbat status if an [Alert is active](apps-yaml.md#alert-system).
+- **[Alert]** will be appended to the Predbat status if an [Alert is active](apps-yaml.md#weather-alert-system).
 
 - **Calibration** - The inverter is calibrating the batteries.
 On GivEnergy systems the battery state of charge (SoC) level has to be calibrated by performing a full battery discharge and then a full charge

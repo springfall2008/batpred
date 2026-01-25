@@ -1,4 +1,4 @@
-# Predbat Components Documentation
+# Predbat Components
 
 This document provides a comprehensive overview of all Predbat components, their purposes, and configuration options.
 
@@ -44,7 +44,7 @@ Stores and manages all historical data for Predbat, including energy usage, sens
 
 #### When to enable (db)
 
-- You want to retain data longer than Home Assistant keeps or you want to run Predbat without Home Assistant
+- You want to retain data longer than Home Assistant keeps or you want to run Predbat without Home Assistant.  Under normal use you should not need to configure DB manager and the component will be disabled.
 
 #### Configuration Options (db)
 
@@ -571,7 +571,7 @@ Monitors weather alert feeds (MeteoAlarm) for severe weather warnings that might
 
 - Checks for alerts every 30 minutes
 - Processes weather warnings for your area
-- Can be configured with custom alert URLs and filters
+- Can be configured with custom alert URLs and filters in `apps.yaml`
 
 #### Configuration Options (alert_feed)
 
@@ -581,7 +581,7 @@ Monitors weather alert feeds (MeteoAlarm) for severe weather warnings that might
 
 #### Configuration example
 
-See the main configuration documentation for more details
+See the [Weather Alert](apps-yaml.md#weather-alert-system) for more details
 
 ---
 

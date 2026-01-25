@@ -88,12 +88,6 @@ pred_bat:
   soc_max:
     - "13.5"  # ensure this matches your usable kWh
 
-  # ---- Powerwall controls via Teslemetry (must be writable) ----
-  allow_charge_from_grid:
-    - switch.my_home_allow_charging_from_grid
-  allow_export:
-    - select.my_home_allow_export
-
   # --- Predbat service hooks (Tesla / Teslemetry) ---
   # These hooks are called when Predbat wants to change the current
   # state of charge/discharge. They can tie-in to other HA entities.
@@ -347,10 +341,6 @@ pred_bat:
   # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
   #notify_devices:
   #  - mobile_app_treforsiphone12_2
-
-  # Set the frequency in minutes that this plugin is run
-  # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
-  run_every: 5
 
   # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
