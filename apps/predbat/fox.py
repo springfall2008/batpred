@@ -304,7 +304,7 @@ class FoxAPI(ComponentBase):
                     await self.get_schedule_settings_ha(sn)
                     await self.get_scheduler(sn)
                     await self.compute_schedule(sn)
-                    
+
         # Refresh total metrics every 15 minutes
         if first or (seconds % (15 * 60) == 0):
             for device in self.device_list:
