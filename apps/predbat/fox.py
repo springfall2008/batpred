@@ -1262,6 +1262,33 @@ class FoxAPI(ComponentBase):
                     attributes["state_class"] = "total"
                 self.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
 
+            # Publish battery flow sensor
+            charge_power = self.device_values.get(sn, {}).get("batChargePower", {}).get("value", 0)
+            discharge_power = self.device_values.get(sn, {}).get("batDischargePower", {}).get("value", 0)
+            
+            try:
+                charge_power = float(charge_power) if charge_power is not None else 0.0
+                discharge_power = float(discharge_power) if discharge_power is not None else 0.0
+            except (ValueError, TypeError):
+                charge_power = 0.0
+                discharge_power = 0.0
+            
+            # Calculate battery flow: positive = discharge, negative = charge
+            battery_flow = discharge_power - charge_power
+            
+            self.dashboard_item(
+                entity_name_sensor + "_" + sn.lower() + "_battery_flow",
+                state=battery_flow,
+                attributes={
+                    "friendly_name": f"Fox {sn} Battery Flow",
+                    "unit_of_measurement": "kW",
+                    "device_class": "power",
+                    "state_class": "measurement",
+                    "icon": "mdi:battery-arrow-up-down"
+                },
+                app="fox"
+            )
+
             # Publish schedule settings
             await self.publish_schedule_settings_ha(sn)
 
