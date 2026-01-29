@@ -1250,6 +1250,14 @@ class FoxAPI(ComponentBase):
                 # Set device and state class
                 if units in ["kWh", "Wh"]:
                     attributes["device_class"] = "energy"
+                if units in ["kW"]:
+                    attributes["device_class"] = "power"
+                if units in ["V"]:
+                    attributes["device_class"] = "voltage"
+                if units in ["A"]:
+                    attributes["device_class"] = "current"
+                if units in ["kW", "W", "V", "A"]:
+                    attributes["state_class"] = "measurement"
                 if item_name.lower() in ["generation", "energythroughput", "gridconsumption", "loads", "feedin", "chargeenergytotal", "dischargeenergytotal", "pvenergytotal"]:
                     attributes["state_class"] = "total"
                 self.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
