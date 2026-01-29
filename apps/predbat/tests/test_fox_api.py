@@ -52,7 +52,8 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.available_variables = {}
         self.device_values = {}
         self.device_settings = {}
-        self.device_production = {}
+        self.device_production_month = {}
+        self.device_production_year = {}
         self.device_battery_charging_time = {}
         self.device_scheduler = {}
         self.device_current_schedule = {}
@@ -2012,11 +2013,11 @@ def test_api_get_real_time_data(my_predbat):
     return False
 
 
-def test_api_get_device_production(my_predbat):
+def test_api_get_device_production_year(my_predbat):
     """
-    Test get_device_production API endpoint
+    Test get_device_production API endpoint with dimension 'year'
     """
-    print("  - test_api_get_device_production")
+    print("  - test_api_get_device_production_year")
 
     fox = MockFoxAPIWithRequests()
     deviceSN = "TEST123456"
@@ -2030,10 +2031,94 @@ def test_api_get_device_production(my_predbat):
         ],
     )
 
-    result = asyncio.run(fox.get_device_production(deviceSN))
+    result = asyncio.run(fox.get_device_production_year(deviceSN))
 
-    assert deviceSN in fox.device_production
-    assert len(fox.device_production[deviceSN]) == 3
+    assert deviceSN in fox.device_production_year
+    assert len(fox.device_production_year[deviceSN]) == 3
+
+    return False
+
+
+def test_api_get_device_production_month(my_predbat):
+    """
+    Test get_device_production API endpoint with dimension 'month'
+    """
+    print("  - test_api_get_device_production_month")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.set_mock_response(
+        "/op/v0/device/report/query",
+        [
+            {
+                "unit": "kWh",
+                "values": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.1000000000003638,
+                    0.3999999999996362,
+                    0.5,
+                    0.3999999999996362,
+                    0.3999999999996362,
+                    0.3000000000010914,
+                    1.1000000000003638,
+                    1.5,
+                    1.2999999999992724,
+                    0.7000000000007276,
+                    0.5,
+                    0.4000000000014552,
+                    0.5,
+                    2.600000000000364,
+                    0.5,
+                    0.7999999999992724,
+                    0.7000000000007276,
+                    0.5,
+                    0.0,
+                ],
+                "variable": "generation",
+            },
+            {"unit": "kWh", "values": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8999999999996362, 1.199999999999818, 0.6999999999998181, 0.3000000000001819, 0.0, 0.0, 0.0, 1.800000000000182, 0.0, 0.0, 0.0, 0.0, 0.0], "variable": "feedin"},
+            {
+                "unit": "kWh",
+                "values": [
+                    11.399999999999636,
+                    1.3000000000010914,
+                    5.100000000000364,
+                    6.800000000001091,
+                    6.799999999999272,
+                    1.6000000000003638,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.09999999999854481,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.2000000000007276,
+                ],
+                "variable": "gridConsumption",
+            },
+        ],
+    )
+
+    result = asyncio.run(fox.get_device_production_year(deviceSN))
+
+    assert deviceSN in fox.device_production_year
+    assert len(fox.device_production_year[deviceSN]) == 3
 
     return False
 
@@ -5210,7 +5295,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_set_scheduler(my_predbat)
         failed |= test_api_set_scheduler_enabled(my_predbat)
         failed |= test_api_get_real_time_data(my_predbat)
-        failed |= test_api_get_device_production(my_predbat)
+        failed |= test_api_get_device_production_year(my_predbat)
+        failed |= test_api_get_device_production_month(my_predbat)
         failed |= test_api_get_device_power_generation(my_predbat)
         failed |= test_api_request_failure(my_predbat)
         failed |= test_api_set_device_setting_failure(my_predbat)
