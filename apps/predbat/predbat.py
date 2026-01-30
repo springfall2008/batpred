@@ -27,7 +27,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.32.12"
+THIS_VERSION = "v8.32.13"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py"]
@@ -832,12 +832,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             savings_total_last_updated = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat", attribute="last_updated")
             savings_total_start_date = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat", attribute="start_date")
             todays_date = self.now_utc_real.strftime("%Y-%m-%d")
+
+            # If there is no date its a new install so we will save tomorrow as the first point
+            if not savings_total_last_updated:
+                savings_total_last_updated = todays_date
             if not savings_total_start_date:
                 savings_total_start_date = todays_date
-
-            # As last updated date is new we assume if we already have data then its been updated for today
-            if not savings_total_last_updated and savings_total_predbat > 0.0:
-                savings_total_last_updated = todays_date
 
             savings_total_pvbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_pvbat")
             try:
