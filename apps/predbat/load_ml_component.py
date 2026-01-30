@@ -1,0 +1,445 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2025 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# ML Load Forecaster Component - ComponentBase wrapper for LoadPredictor
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+
+import asyncio
+import os
+from datetime import datetime, timezone, timedelta
+from component_base import ComponentBase
+from load_predictor import LoadPredictor, MODEL_VERSION, PREDICT_HORIZON, STEP_MINUTES
+from const import TIME_FORMAT
+
+# Training intervals
+RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
+PREDICTION_INTERVAL_SECONDS = 15 * 60    # 15 minutes between predictions
+
+
+class LoadMLComponent(ComponentBase):
+    """
+    ML Load Forecaster component that predicts household load for the next 48 hours.
+    
+    This component:
+    - Fetches load history from configured sensor
+    - Optionally fills gaps using load_power sensor
+    - Subtracts configured sensors (e.g., car charging) from load
+    - Trains/fine-tunes an MLP model on historical load data
+    - Generates predictions in the same format as load_forecast
+    - Falls back to empty predictions when validation fails or model is stale
+    """
+    
+    def initialize(self, ml_enable, ml_learning_rate=0.001, ml_epochs_initial=50, 
+                   ml_epochs_update=2, ml_min_days=1, ml_validation_threshold=2.0,
+                   ml_time_decay_days=7, ml_max_load_kw=23.0, ml_max_model_age_hours=48):
+        """
+        Initialize the ML load forecaster component.
+        
+        Args:
+            ml_enable: Whether ML forecasting is enabled
+            ml_learning_rate: Learning rate for optimizer
+            ml_epochs_initial: Epochs for initial training
+            ml_epochs_update: Epochs for fine-tuning updates
+            ml_min_days: Minimum days of data required for training
+            ml_validation_threshold: Max acceptable validation MAE (kWh)
+            ml_time_decay_days: Time constant for sample weighting
+            ml_max_load_kw: Maximum load for clipping predictions
+            ml_max_model_age_hours: Maximum model age before fallback
+        """
+        self.ml_enable = ml_enable
+        self.ml_load_sensor = self.get_arg("load_today", default=[], indirect=False)
+        self.ml_load_power_sensor = self.get_arg("load_power", default=[], indirect=False)
+        self.ml_subtract_sensors = self.get_arg("car_charging_energy", default=[], indirect=False)
+        self.ml_learning_rate = ml_learning_rate
+        self.ml_epochs_initial = ml_epochs_initial
+        self.ml_epochs_update = ml_epochs_update
+        self.ml_min_days = ml_min_days
+        self.ml_validation_threshold = ml_validation_threshold
+        self.ml_time_decay_days = ml_time_decay_days
+        self.ml_max_load_kw = ml_max_load_kw
+        self.ml_max_model_age_hours = ml_max_model_age_hours
+        
+        # Data state
+        self.load_data = None
+        self.load_data_age_days = 0
+        self.data_ready = False
+        self.data_lock = asyncio.Lock()
+        self.last_data_fetch = None
+        
+        # Model state
+        self.predictor = None
+        self.model_valid = False
+        self.model_status = "not_initialized"
+        self.last_train_time = None
+        self.initial_training_done = False
+        
+        # Predictions cache
+        self.current_predictions = {}
+        
+        # Model file path
+        self.model_filepath = None
+        
+        # Validate configuration
+        if self.ml_enable and not self.ml_load_sensor:
+            self.log("Error: ML Component: ml_load_sensor must be configured when ml_enable is True")
+            self.ml_enable = False
+        
+        # Initialize predictor
+        self._init_predictor()
+    
+    def _init_predictor(self):
+        """Initialize or reinitialize the predictor."""
+        self.predictor = LoadPredictor(
+            log_func=self.log,
+            learning_rate=self.ml_learning_rate,
+            max_load_kw=self.ml_max_load_kw
+        )
+        
+        # Determine model save path
+        if self.config_root:
+            self.model_filepath = os.path.join(self.config_root, "predbat_ml_model.npz")
+        else:
+            self.model_filepath = None
+        
+        # Try to load existing model
+        if self.model_filepath and os.path.exists(self.model_filepath):
+            if self.predictor.load(self.model_filepath):
+                self.log("ML Component: Loaded existing model")
+                # Check if model is still valid
+                is_valid, reason = self.predictor.is_valid(
+                    validation_threshold=self.ml_validation_threshold,
+                    max_age_hours=self.ml_max_model_age_hours
+                )
+                if is_valid:
+                    self.model_valid = True
+                    self.model_status = "active"
+                    self.initial_training_done = True
+                else:
+                    self.log("ML Component: Loaded model is invalid ({}), will retrain".format(reason))
+                    self.model_status = "fallback_" + reason
+    
+    async def _fetch_load_data(self):
+        """
+        Fetch and process load data from configured sensors.
+        
+        Returns:
+            Tuple of (load_minutes_dict, age_days) or (None, 0) on failure
+        """
+        if not self.ml_load_sensor:
+            return None, 0
+        
+        try:
+            # Determine how many days of history to fetch (7 days minimum)
+            days_to_fetch = max(28, self.ml_min_days)
+            
+            # Fetch load sensor history
+            self.log("ML Component: Fetching {} days of load history from {}".format(days_to_fetch, self.ml_load_sensor))
+            
+            load_minutes, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_today", days_to_fetch, required_unit="kWh", load_scaling=self.get_arg("load_scaling", 1.0), interpolate=True)            
+            if not load_minutes:
+                self.log("Warn: ML Component: Failed to convert load history to minute data")
+                return None, 0
+            
+            if self.get_arg("load_power", default=None, indirect=False):
+                load_power_data, _ = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
+                load_minutes = self.fill_load_from_power(load_minutes, load_power_data)
+            
+
+            car_charging_energy = None
+            if self.get_arg("car_charging_energy", default=None, indirect=False):
+                car_charging_energy = self.base.minute_data_import_export(self.now_utc, "car_charging_energy", scale=self.get_arg("car_charging_energy_scale", 1.0), required_unit="kWh")
+
+            max_minute = max(load_minutes.keys()) if load_minutes else 0
+
+            # Subtract configured sensors (e.g., car charging)
+            if car_charging_energy:
+                for minute in range(1, max_minute + 1, 1):
+                    car_delta = car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - 1, 0.0)
+                    load_minutes[minute] = max(0.0, load_minutes[minute] - car_delta)
+
+            # Calculate age of data
+            age_days = max_minute / (24 * 60)
+            
+            self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(
+                len(load_minutes), age_days))
+            
+            return load_minutes, age_days
+            
+        except Exception as e:
+            self.log("Error: ML Component: Failed to fetch load data: {}".format(e))
+            import traceback
+            self.log("Error: ML Component: {}".format(traceback.format_exc()))
+            return None, 0
+    
+    def update_load_data(self, load_minutes_dict, load_minutes_age_days=0):
+        """
+        Callback from fetch.py to update load data.
+        
+        This should be called after load data has been cleaned (modal filter, power fill).
+        
+        Args:
+            load_minutes_dict: Dict of {minute: cumulative_kwh} going backwards in time
+            load_minutes_age_days: Age of the data in days
+        """
+        if not self.ml_enable:
+            return
+        
+        if load_minutes_dict:
+            # Deep copy to avoid reference issues
+            self.load_data = dict(load_minutes_dict)
+            self.load_data_age_days = load_minutes_age_days
+            self.data_ready = True
+            self.log("ML Component: Received {} load data points, {} days of history".format(
+                len(self.load_data), load_minutes_age_days))
+        else:
+            self.log("Warn: ML Component: Received empty load data")
+    
+    def get_predictions(self, now_utc, midnight_utc, exog_features=None):
+        """
+        Get current predictions for integration with load_forecast.
+        
+        Called from fetch.py to retrieve ML predictions.
+        
+        Args:
+            now_utc: Current UTC timestamp
+            midnight_utc: Today's midnight UTC timestamp
+            exog_features: Optional dict with future exogenous data
+            
+        Returns:
+            Dict of {minute: cumulative_kwh} or empty dict on fallback
+        """
+        if not self.ml_enable:
+            return {}
+        
+        if not self.data_ready:
+            self.log("ML Component: No load data available for prediction")
+            return {}
+        
+        if not self.model_valid:
+            self.log("ML Component: Model not valid ({}), returning empty predictions".format(self.model_status))
+            return {}
+        
+        # Generate predictions using current model
+        try:
+            predictions = self.predictor.predict(
+                self.load_data,
+                now_utc,
+                midnight_utc,
+                exog_features
+            )
+            
+            if predictions:
+                self.current_predictions = predictions
+                self.log("ML Component: Generated {} predictions (total {:.2f} kWh over 48h)".format(
+                    len(predictions), max(predictions.values()) if predictions else 0))
+            
+            return predictions
+            
+        except Exception as e:
+            self.log("Error: ML Component: Prediction failed: {}".format(e))
+            return {}
+    
+    async def run(self, seconds, first):
+        """
+        Main component loop - handles data fetching, training and prediction cycles.
+        
+        Args:
+            seconds: Seconds since component start
+            first: True if this is the first run
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.ml_enable:
+            self.api_started = True
+            return True
+        
+        # Fetch fresh load data periodically (every 15 minutes)
+        should_fetch = first or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
+        
+        if should_fetch:
+            async with self.data_lock:
+                load_data, age_days = await self._fetch_load_data()
+                if load_data:
+                    self.load_data = load_data
+                    self.load_data_age_days = age_days
+                    self.data_ready = True
+                    self.last_data_fetch = self.now_utc
+                else:
+                    self.log("Warn: ML Component: Failed to fetch load data")
+        
+        # Check if we have data
+        if not self.data_ready:
+            if first:
+                self.log("ML Component: Waiting for load data from sensors")
+            return True  # Not an error, just waiting
+        
+        # Check if we have enough data
+        if self.load_data_age_days < self.ml_min_days:
+            self.model_status = "insufficient_data"
+            self.model_valid = False
+            if first:
+                self.log("ML Component: Insufficient data ({:.1f} days, need {})".format(
+                    self.load_data_age_days, self.ml_min_days))
+            return True
+        
+        # Determine if training is needed
+        should_train = False
+        is_initial = False
+        
+        if not self.initial_training_done:
+            # First training
+            should_train = True
+            is_initial = True
+            self.log("ML Component: Starting initial training")
+        elif seconds % RETRAIN_INTERVAL_SECONDS == 0:
+            # Periodic fine-tuning every 2 hours
+            should_train = True
+            is_initial = False
+            self.log("ML Component: Starting fine-tune training (2h interval)")
+        
+        if should_train:
+            await self._do_training(is_initial)
+        
+        # Update model validity status
+        self._update_model_status()
+        
+        if seconds % PREDICTION_INTERVAL_SECONDS == 0:
+            self.get_predictions(self.now_utc, self.midnight_utc)
+            self.log("ML Component: Prediction cycle completed")
+
+        # Publish entity with current state
+        self._publish_entity()
+        
+        self.update_success_timestamp()
+        return True
+    
+    async def _do_training(self, is_initial):
+        """
+        Perform model training.
+        
+        Args:
+            is_initial: True for full training, False for fine-tuning
+        """
+        async with self.data_lock:
+            if not self.load_data:
+                self.log("Warn: ML Component: No data for training")
+                return
+            
+            # Warn if limited data
+            if self.load_data_age_days < 3:
+                self.log("Warn: ML Component: Training with only {} days of data, recommend 3+ days for better accuracy".format(
+                    self.load_data_age_days))
+            
+            try:
+                # Run training in executor to avoid blocking
+                epochs = self.ml_epochs_initial if is_initial else self.ml_epochs_update
+                
+                val_mae = self.predictor.train(
+                    self.load_data,
+                    self.now_utc,
+                    is_initial=is_initial,
+                    epochs=epochs,
+                    time_decay_days=self.ml_time_decay_days
+                )
+                
+                if val_mae is not None:
+                    self.last_train_time = datetime.now(timezone.utc)
+                    self.initial_training_done = True
+                    
+                    # Check validation threshold
+                    if val_mae <= self.ml_validation_threshold:
+                        self.model_valid = True
+                        self.model_status = "active"
+                        self.log("ML Component: Training successful, val_mae={:.4f} kWh".format(val_mae))
+                    else:
+                        self.model_valid = False
+                        self.model_status = "fallback_validation"
+                        self.log("Warn: ML Component: Validation MAE ({:.4f}) exceeds threshold ({:.4f})".format(
+                            val_mae, self.ml_validation_threshold))
+                    
+                    # Save model
+                    if self.model_filepath:
+                        self.predictor.save(self.model_filepath)
+                else:
+                    self.log("Warn: ML Component: Training failed")
+                    
+            except Exception as e:
+                self.log("Error: ML Component: Training exception: {}".format(e))
+                import traceback
+                self.log("Error: " + traceback.format_exc())
+    
+    def _update_model_status(self):
+        """Update model validity status based on current state."""
+        if not self.predictor or not self.predictor.model_initialized:
+            self.model_valid = False
+            self.model_status = "not_initialized"
+            return
+        
+        is_valid, reason = self.predictor.is_valid(
+            validation_threshold=self.ml_validation_threshold,
+            max_age_hours=self.ml_max_model_age_hours
+        )
+        
+        if is_valid:
+            self.model_valid = True
+            self.model_status = "active"
+        else:
+            self.model_valid = False
+            self.model_status = "fallback_" + reason
+    
+    def _publish_entity(self):
+        """Publish the load_forecast_ml entity with current predictions."""
+        # Convert predictions to timestamp format for entity
+        results = {}
+        if self.current_predictions:
+            for minute, value in self.current_predictions.items():
+                timestamp = self.midnight_utc + timedelta(minutes=minute + self.minutes_now)
+                timestamp_str = timestamp.strftime(TIME_FORMAT)
+                results[timestamp_str] = round(value, 4)
+        
+        # Get model age
+        model_age_hours = self.predictor.get_model_age_hours() if self.predictor else None
+        
+        # Calculate total predicted load
+        total_kwh = max(self.current_predictions.values()) if self.current_predictions else 0
+        
+        self.dashboard_item(
+            self.prefix + ".load_forecast_ml",
+            state=round(total_kwh, 2),
+            attributes={
+                "results": results,
+                "mae_kwh": round(self.predictor.validation_mae, 4) if self.predictor and self.predictor.validation_mae else None,
+                "last_trained": self.last_train_time.isoformat() if self.last_train_time else None,
+                "model_age_hours": round(model_age_hours, 1) if model_age_hours else None,
+                "training_days": self.load_data_age_days,
+                "status": self.model_status,
+                "model_version": MODEL_VERSION,
+                "epochs_trained": self.predictor.epochs_trained if self.predictor else 0,
+                "friendly_name": "ML Load Forecast",
+                "state_class": "measurement",
+                "unit_of_measurement": "kWh",
+                "icon": "mdi:chart-line",
+            }
+        )
+    
+    def last_updated_time(self):
+        """Return last successful update time for component health check."""
+        return self.last_success_timestamp
+    
+    def is_alive(self):
+        """Check if component is alive and functioning."""
+        if not self.ml_enable:
+            return True
+        
+        if self.last_success_timestamp is None:
+            return False
+        
+        age = datetime.now(timezone.utc) - self.last_success_timestamp
+        return age < timedelta(minutes=10)
