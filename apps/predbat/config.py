@@ -2101,4 +2101,13 @@ APPS_SCHEMA = {
     "forecast_solar_max_age": {"type": "float"},
     "enable_coarse_fine_levels": {"type": "boolean"},
     "load_power_fill_enable": {"type": "boolean"},
+    "ml_enable": {"type": "boolean"},
+    "ml_learning_rate": {"type": "float"},
+    "ml_epochs_initial": {"type": "int"},
+    "ml_epochs_update": {"type": "int"},
+    "ml_min_days": {"type": "int"},
+    "ml_validation_threshold": {"type": "float"},
+    "ml_time_decay_days": {"type": "int"},
+    "ml_max_load_kw": {"type": "float"},
+    "ml_max_model_age_hours": {"type": "int"},
 }
