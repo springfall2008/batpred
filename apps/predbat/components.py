@@ -23,6 +23,7 @@ from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from web_mcp import PredbatMCPServer
+from load_ml_component import LoadMLComponent
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
@@ -253,6 +254,23 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "config": "solis_automatic", "default": False},
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
             "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
+    "load_ml": {
+        "class": LoadMLComponent,
+        "name": "ML Load Forecaster",
+        "args": {
+            "ml_enable": {"required_true": True, "config": "ml_enable"},
+            "ml_learning_rate": {"required": False, "config": "ml_learning_rate", "default": 0.001},
+            "ml_epochs_initial": {"required": False, "config": "ml_epochs_initial", "default": 50},
+            "ml_epochs_update": {"required": False, "config": "ml_epochs_update", "default": 2},
+            "ml_min_days": {"required": False, "config": "ml_min_days", "default": 1},
+            "ml_validation_threshold": {"required": False, "config": "ml_validation_threshold", "default": 2.0},
+            "ml_time_decay_days": {"required": False, "config": "ml_time_decay_days", "default": 7},
+            "ml_max_load_kw": {"required": False, "config": "ml_max_load_kw", "default": 23.0},
+            "ml_max_model_age_hours": {"required": False, "config": "ml_max_model_age_hours", "default": 48},
         },
         "phase": 1,
         "can_restart": True,

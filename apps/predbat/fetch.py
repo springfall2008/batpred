@@ -9,12 +9,12 @@
 # pylint: disable=attribute-defined-outside-init
 # pyright: reportAttributeAccessIssue=false
 
+import json
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
-
 
 class Fetch:
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
@@ -1063,6 +1063,25 @@ class Fetch:
         if self.load_minutes and not self.load_forecast_only:
             self.previous_days_modal_filter(self.load_minutes)
             self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
+
+            # Dump raw filtered load data
+            raw_load_data = {}
+            total_load = 0
+            for minute in range(max(self.days_previous) * 24 * 60 - 5, -5, -5):
+                load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(self.load_minutes, minute, historical=True, step=5)
+                total_load += load_yesterday_raw
+                raw_load_data[minute] = total_load
+
+            with open("load_minutes_debug.json", "w") as f:
+                json.dump(raw_load_data, f, indent=4)
+
+            # Pass cleaned load data to ML component and get predictions
+            if self.components:
+                ml_component = self.components.get_component("load_ml")
+                if ml_component and self.load_minutes:
+                    # Update ML component with cleaned load data
+                    ml_component.update_load_data(raw_load_data, self.load_minutes_age)
+
 
         # Load today vs actual
         if self.load_minutes:
