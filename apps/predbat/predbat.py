@@ -775,6 +775,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             plan_age_minutes = plan_age.seconds / 60.0
 
             if (plan_age_minutes + RUN_EVERY) > self.calculate_plan_every:
+                recompute = True
                 self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} minutes before the next run".format(dp1(plan_age_minutes), self.calculate_plan_every))
                 plan_random_delay = self.get_arg("plan_random_delay", 0)
                 if plan_random_delay > 0:
@@ -867,7 +868,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                 cost_total_car = 0
 
             # Increment total at 1am once we have today's data stable (cloud data can lag)
-            if self.minutes_now > 60 and savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and recompute and not self.set_read_only:
+            if self.minutes_now > 60 and savings_total_last_updated and savings_total_last_updated != todays_date and scheduled and not self.set_read_only:
                 savings_total_predbat += self.savings_today_predbat
                 savings_total_pvbat += self.savings_today_pvbat
                 savings_total_soc = self.savings_today_predbat_soc
