@@ -347,10 +347,6 @@ pred_bat:
   #notify_devices:
   #  - mobile_app_treforsiphone12_2
 
-  # Set the frequency in minutes that this plugin is run
-  # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
-  run_every: 5
-
   # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
   battery_scaling: 1.0

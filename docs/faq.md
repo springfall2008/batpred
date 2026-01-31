@@ -121,7 +121,7 @@ And this should prevent the issue
 
 ## The plan doesn't charge or discharge when I expect it to
 
-Predbat can only work on the information it's given, although it does run every 5 minutes when it re-evaluates the plan and adjusts if necessary.
+Predbat can only work on the information it's given, although it does run every 5 minutes to execute the plan, and updates and re-evaluates the plan every 10 minutes, adjusting if necessary.
 
 The plan Predbat produces assumes that your average load and PV forecasts are accurate and Predbat will aim to give you the maximum return.
 

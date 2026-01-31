@@ -1630,12 +1630,20 @@ as the slug-id (Home Assistant add-on identifier) is different between GivTCP v2
 
 Some batteries tail off their charge rate at high SoC% or their discharge rate at low SoC%, and these optional configuration items enable you to model this tail-off in Predbat.
 Note that the charge/discharge curves *only* affect the accuracy of the charging/discharging model Predbat applies in the forward battery plan,
-Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve.
+Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve so not having these curves only has an impact on plan accuracy.
 
 If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in `apps.yaml`,
 or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant.
 
-If the battery has not recently been fully charged or fully discharged then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
+If the battery has not recently been fully charged or fully discharged *at a charge/discharge rate that is at least 95% of your maximum charge/discharge rate* then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
+For some inverters you may not be able to practically charge/discharge at full rates so you'll keep getting the curve warning every time Predbat starts. Simply create dummy curves to stop this warning, e.g:
+
+```yaml
+  battery_charge_power_curve:
+    100 : 1.0
+  battery_discharge_power_curve:
+    1 : 1.0
+```
 
 - **battery_charge_power_curve** - This optional configuration item enables you to model in Predbat a tail-off in charging at high SoC%.
 
@@ -1830,23 +1838,11 @@ gaps in the curve above 20 will use 20 degrees, and gaps below 0 will use 0 degr
     0: 0.00
 ```
 
-## Alert System
+## Weather Alert System
 
 Predbat can take data directly from the Meteo-Alarm feed and use it to trigger keeping your battery charged so you have power in the event of a power cut.
 
-Please look at their web site for more details. The `apps.yaml` must be configured to select the URL for your country.
-
-The event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax.
-Any unset values are ignored.
-
-Your location (from Home Assistant) is used to filter alerts that apply only to your area. If this does not work or if you want to change the location,
-you can also set **latitude** and **longitude** in the alerts section of the `apps.yaml`.
-
-Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
-This works by using a much stronger version of best_soc_keep but only for that time period.
-
-Your Predbat status will also have [Alert] in it during the alert time period and the triangle alert symbol will show on your HTML plan for the time period
-of the alert.
+Please look at the [Meteo Alarm](https://meteoalarm.org/) for more details. The `apps.yaml` must be configured to select the URL for your country and the events you want Predbat to retain your battery level for.``
 
 ```yaml
   # Alert feeds - customise to your country, the alert types, severity and keep value
@@ -1858,6 +1854,21 @@ of the alert.
     certainty: "Possible|Likely|Expected"
     keep: 40
 ```
+
+The event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax. Any unset values are ignored.
+
+Your location (from Home Assistant) is used to filter alerts that apply only to your area. If this does not work or if you want to change the location,
+you can also set **latitude** and **longitude** in the alerts section of the `apps.yaml`.
+
+Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
+This works by using a much stronger version of best_soc_keep but only for that time period.
+
+Your Predbat status will also have [Alert] in it during the alert time period and the triangle alert symbol will show on your HTML plan for the time period of the alert.
+
+Predbat records details of any weather alerts in the entity **sensor.predbat_alertfeed_status** which has a state value of the textual description of the alert.  The entity has two attributes:
+
+- **keep** - set to the SoC keep percentage figure specified in `apps.yaml` (or the default 100) during the alert time period so can be used in an automation trigger if you want to take additional actions in Home Assistant
+- **alerts** - set to a list of dictionaries of details of any current or future alert events that match your alert criteria in `apps.yaml`.  Each list entry contains event severity, certainty, urgency, area, time period, title, etc.
 
 ![image](https://github.com/user-attachments/assets/4d1e0a59-c6f8-4fb1-9c89-51aedfa77755)
 
@@ -1965,7 +1976,7 @@ so only 15 minutes of load will be predicted for tomorrow 3pm.
 and has to use Sunday's 3:30pm load for tomorrow's prediction.
 - Ditto the predicted load for tomorrow's (Tuesday) 4:00pm slot comes from Sunday 4pm.
 
-As today rolls forward and Predbat keeps on updating the forward plan every 5 minutes the prediction will be updated with the correct previous_day history as and when it exists.
+As today rolls forward and Predbat keeps on updating the forward plan each time it runs, the prediction will be updated with the correct previous_day history as and when it exists.
 
 It's recommended therefore that days_previous isn't set to 1, or if it is, that you understand the way this has to work and the consequences.
 If you want to set days_previous to take an average of the house load over all the days of the last week it's suggested that it be set as:

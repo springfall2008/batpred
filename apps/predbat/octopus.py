@@ -2066,8 +2066,8 @@ class Octopus:
                     new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
                     if octopus_slot_low_rate and source != "bump-charge":
                         new_slot["average"] = self.rate_min  # Assume price in min
-                    new_slot["cost"] = new_slot["average"] * kwh
-                    new_slot["soc"] = car_soc
+                    new_slot["cost"] = dp2(new_slot["average"] * kwh)
+                    new_slot["soc"] = dp2(car_soc)
                     new_slots.append(new_slot)
 
                     if end_minutes_original > end_minutes:
@@ -2079,7 +2079,7 @@ class Octopus:
                         if octopus_slot_low_rate and source != "bump-charge":
                             new_slot["average"] = self.rate_min  # Assume price in min
                         new_slot["cost"] = 0.0
-                        new_slot["soc"] = car_soc
+                        new_slot["soc"] = dp2(car_soc)
                         new_slots.append(new_slot)
 
                 else:
@@ -2091,8 +2091,8 @@ class Octopus:
                     new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
                     if octopus_slot_low_rate and source != "bump-charge":
                         new_slot["average"] = self.rate_min  # Assume price in min
-                    new_slot["cost"] = new_slot["average"] * kwh
-                    new_slot["soc"] = car_soc
+                    new_slot["cost"] = dp2(new_slot["average"] * kwh)
+                    new_slot["soc"] = dp2(car_soc)
                     new_slots.append(new_slot)
         return new_slots
 
@@ -2155,7 +2155,7 @@ class Octopus:
                         assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
                     self.log(
-                        "Octopus Intelligent slot at {}-{} assumed price {} amount {} kWh location {} source {} octopus_slot_low_rate {}".format(
+                        "Octopus Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
                             self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                         )
                     )

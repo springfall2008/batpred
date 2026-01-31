@@ -315,7 +315,7 @@ set the switch **switch.predbat_set_read_only** to Off and Predbat will start co
 ## Updating Predbat
 
 Note that any future updates to Predbat will not overwrite the `apps.yaml` configuration file that you have tailored to your setup.
-If new Predbat releases introduce new features to apps.yaml you may therefore need to manually copy across the new apps.yaml settings from the [Template apps.yaml](apps-yaml.md#templates).
+If new Predbat releases introduce new features to `apps.yaml` you may therefore need to manually copy across the new settings from the [Template apps.yaml](apps-yaml.md#templates).
 
 ## Update via Home Assistant
 
@@ -328,6 +328,10 @@ Predbat can now be updated using the Home Assistant update feature. When a new r
 Click on the update and select Install:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e708899d-a4aa-4bd4-b7d1-1c6687dd7e23)
+
+Note that clicking the 'Skip' button give an error about auto-update being enabled for Predbat and that the update cannot be skipped.  This warning appears because of Predbat's built-in auto-update feature and can be safely ignored.
+If you wish to skip or ignore a Predbat update then you don't need to do anything; Predbat will not auto-update (despite what HA says) unless you turn on Predbat's auto-update (see below) or choose a version to install.
+Predbat will remain running on the current version until you choose to update.
 
 ## Predbat built-in update
 
@@ -342,6 +346,23 @@ Alternatively, if you turn On **switch.predbat_auto_update**, Predbat will autom
 
 Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
 or by turning on the **switch.predbat_auto_update** to auto-update Predbat.
+
+## Manually installing a Predbat release
+
+The Predbat version selector **select.predbat_update** contains the last 25 release of Predbat, but sometimes if Predbat has stopped working,
+or if you wish to downgrade to an older version that is not on the drop-down menu, then you can manually install a Predbat release.
+
+Go to [Predbat releases on GitHub](https://github.com/springfall2008/batpred/releases) and find the release you wish to install.
+
+From the Assets list, download the source code (zip) file:
+
+![image](images/predbat-release.png)
+
+- Unzip the source code file you have downloaded
+- Navigate to the release sub folder, then `apps`, and finally the `predbat` sub-folder
+- Shutdown Predbat
+- Copy all the .py files from the `predbat` sub-folder into your Predbat application folder in Home Assistant  and overwrite the existing .py files. If you are running the Predbat add-on then the destination folder will be `/addon_configs/6adb4f0d_predbat`
+- Restart Predbat
 
 ## Upgrading from AppDaemon to Predbat add-on
 
