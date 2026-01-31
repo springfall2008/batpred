@@ -35,6 +35,8 @@ OCTOPUS_DAY_RATE_START_MINUTE = 30
 OCTOPUS_DAY_RATE_END_HOUR = 0
 OCTOPUS_DAY_RATE_END_MINUTE = 30
 
+OCTOPUS_MAX_RETRIES = 5
+
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(4 * 60, 11 * 60, 30)]
 
@@ -1156,6 +1158,22 @@ class OctopusAPI(ComponentBase):
             self.log("Octopus API: tariff {} not available, using zero".format(tariff_type))
             return {n: 0 for n in range(0, 60 * 24)}
 
+    async def async_read_response_retry(self, response, url, ignore_errors=False):
+        """
+        Read response with retry on failure
+        """
+        max_retries = OCTOPUS_MAX_RETRIES
+        for attempt in range(max_retries):
+            data_as_json = await self.async_read_response(response, url, ignore_errors=ignore_errors)
+            if data_as_json is not None:
+                return data_as_json
+            else:
+                if attempt < max_retries - 1:
+                    self.log(f"Octopus API: Retrying read response for {url} (attempt {attempt + 2} of {max_retries})")
+                    await asyncio.sleep(2**attempt)  # Exponential backoff
+        self.failures_total += 1
+        return None
+
     async def async_read_response(self, response, url, ignore_errors=False):
         """Reads the response, logging any json errors"""
 
@@ -1194,6 +1212,7 @@ class OctopusAPI(ComponentBase):
                 if error_code == "KT-CT-1199":
                     msg = f'Warn: Octopus API: Rate limit error in request ({url}): {data_as_json["errors"]}'
                     self.log(msg)
+                    await asyncio.sleep(5)  # Sleep briefly to avoid hammering
                     return None
 
         # Return the response as-is - let caller handle other errors (including auth errors that need retry)
@@ -1216,7 +1235,7 @@ class OctopusAPI(ComponentBase):
 
         try:
             async with client.post(url, headers=headers, json=payload) as token_response:
-                token_response_body = await self.async_read_response(token_response, url)
+                token_response_body = await self.async_read_response_retry(token_response, url)
                 if (
                     token_response_body is not None
                     and "data" in token_response_body
@@ -1253,7 +1272,7 @@ class OctopusAPI(ComponentBase):
             headers = {"Authorization": f"JWT {self.graphql_token}", integration_context_header: request_context}
             async with client.post(url, json=payload, headers=headers) as response:
                 # Process response (which reads the text)
-                response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
+                response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
 
                 # Check for auth errors and retry once
                 if response_body and "errors" in response_body and _retry_count == 0:

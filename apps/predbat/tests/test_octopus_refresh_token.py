@@ -116,7 +116,7 @@ async def test_octopus_refresh_token(my_predbat):
 
     # Mock methods (should not be called)
     api.api.async_create_client_session = AsyncMock()
-    api.async_read_response = AsyncMock()
+    api.async_read_response_retry = AsyncMock()
     api.save_octopus_cache = AsyncMock()
 
     result = await api.async_refresh_token()
@@ -149,7 +149,7 @@ async def test_octopus_refresh_token(my_predbat):
     mock_response_body = {"data": {"obtainKrakenToken": {"token": new_token}}}
 
     api.api.async_create_client_session = AsyncMock(return_value=mock_session)
-    api.async_read_response = AsyncMock(return_value=mock_response_body)
+    api.async_read_response_retry = AsyncMock(return_value=mock_response_body)
     api.save_octopus_cache = AsyncMock()
 
     result = await api.async_refresh_token()
@@ -172,7 +172,7 @@ async def test_octopus_refresh_token(my_predbat):
     mock_response_body = {"data": {"obtainKrakenToken": None}}  # Invalid response
 
     api.api.async_create_client_session = AsyncMock(return_value=mock_session)
-    api.async_read_response = AsyncMock(return_value=mock_response_body)
+    api.async_read_response_retry = AsyncMock(return_value=mock_response_body)
     api.save_octopus_cache = AsyncMock()
 
     result = await api.async_refresh_token()
