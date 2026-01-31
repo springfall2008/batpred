@@ -81,7 +81,7 @@ async def test_octopus_read_response_retry(my_predbat):
     # Mock async_read_response to fail once, then succeed
     api.async_read_response = AsyncMock(side_effect=[None, successful_data])
 
-    with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await api.async_read_response_retry(response, url, ignore_errors=False)
 
         if result != successful_data:
@@ -114,7 +114,7 @@ async def test_octopus_read_response_retry(my_predbat):
     side_effects = [None] * (OCTOPUS_MAX_RETRIES - 1) + [successful_data]
     api.async_read_response = AsyncMock(side_effect=side_effects)
 
-    with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await api.async_read_response_retry(response, url, ignore_errors=False)
 
         if result != successful_data:
@@ -142,7 +142,7 @@ async def test_octopus_read_response_retry(my_predbat):
     # Mock async_read_response to always fail
     api.async_read_response = AsyncMock(return_value=None)
 
-    with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await api.async_read_response_retry(response, url, ignore_errors=False)
 
         if result is not None:
@@ -170,11 +170,11 @@ async def test_octopus_read_response_retry(my_predbat):
     # Mock async_read_response to always fail
     api.async_read_response = AsyncMock(return_value=None)
 
-    with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await api.async_read_response_retry(response, url, ignore_errors=False)
 
         # Expected backoff: 2^0=1, 2^1=2, 2^2=4, 2^3=8 seconds (for 5 attempts)
-        expected_sleeps = [2 ** i for i in range(OCTOPUS_MAX_RETRIES - 1)]
+        expected_sleeps = [2**i for i in range(OCTOPUS_MAX_RETRIES - 1)]
         actual_sleeps = [call[0][0] for call in mock_sleep.call_args_list]
 
         if actual_sleeps != expected_sleeps:
@@ -200,7 +200,7 @@ async def test_octopus_read_response_retry(my_predbat):
         failed = True
     else:
         call_kwargs = api.async_read_response.call_args[1]
-        if 'ignore_errors' not in call_kwargs or call_kwargs['ignore_errors'] != True:
+        if "ignore_errors" not in call_kwargs or call_kwargs["ignore_errors"] != True:
             print(f"ERROR: ignore_errors=True not passed through correctly")
             failed = True
         else:
@@ -225,7 +225,7 @@ async def test_octopus_read_response_retry(my_predbat):
     # Mock async_read_response to return None (rate limit), then succeed
     api.async_read_response = AsyncMock(side_effect=[None, successful_data])
 
-    with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await api.async_read_response_retry(response, url, ignore_errors=False)
 
         if result != successful_data:
@@ -251,7 +251,7 @@ async def test_octopus_read_response_retry(my_predbat):
     # Mock async_read_response to return None (auth error), then succeed
     api.async_read_response = AsyncMock(side_effect=[None, successful_data])
 
-    with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         result = await api.async_read_response_retry(auth_error_response, url, ignore_errors=False)
 
         if result != successful_data:
