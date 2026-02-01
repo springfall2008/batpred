@@ -137,7 +137,7 @@ class LoadMLComponent(ComponentBase):
                 load_power_data, _ = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
 
-            car_charging_energy = None
+            car_charging_energy = {}
             if self.get_arg("car_charging_energy", default=None, indirect=False):
                 car_charging_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "car_charging_energy", scale=self.get_arg("car_charging_energy_scale", 1.0), required_unit="kWh")
 
@@ -145,16 +145,24 @@ class LoadMLComponent(ComponentBase):
             load_minutes_new = {}
 
             # Subtract configured sensors (e.g., car charging)
-            if car_charging_energy:
-                total_load_energy = 0
-                for minute in range(max_minute, -5, -5):
+            total_load_energy = 0
+            car_delta = 0.0
+            for minute in range(max_minute, -5, -5):
+                if car_charging_energy:
                     car_delta = abs(car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - 5, car_charging_energy.get(minute, 0.0)))
+                if car_delta > 0:
+                    # When car is enable spread over 5 minutes due to alignment between car and house load data
                     load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - 5, load_minutes.get(minute, 0.0)))
                     load_delta = max(0.0, load_delta - car_delta)
-                    # Spread over the next 5 minutes
                     for m in range(minute, minute - 5, -1):
                         load_minutes_new[m] = total_load_energy + load_delta / 5.0
-                    total_load_energy += load_delta                        
+                    total_load_energy += load_delta
+                else:
+                    # Otherwise just copy load data
+                    for m in range(minute, minute - 5, -1):
+                        load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - 1, load_minutes.get(minute, 0.0)))
+                        load_minutes_new[m] = total_load_energy
+                        total_load_energy += load_delta
 
             # Calculate age of data
             age_days = max_minute / (24 * 60)

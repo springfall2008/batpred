@@ -179,8 +179,6 @@ localfolder
 lockstep
 logdata
 loglines
-Lookback
-LOOKBACK
 lookback
 luxpower
 markdownlint
