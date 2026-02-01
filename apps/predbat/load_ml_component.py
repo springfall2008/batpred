@@ -142,19 +142,26 @@ class LoadMLComponent(ComponentBase):
                 car_charging_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "car_charging_energy", scale=self.get_arg("car_charging_energy_scale", 1.0), required_unit="kWh")
 
             max_minute = max(load_minutes.keys()) if load_minutes else 0
+            load_minutes_new = {}
 
             # Subtract configured sensors (e.g., car charging)
             if car_charging_energy:
-                for minute in range(1, max_minute + 1, 1):
-                    car_delta = car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - 1, 0.0)
-                    load_minutes[minute] = max(0.0, load_minutes[minute] - car_delta)
+                total_load_energy = 0
+                for minute in range(max_minute, -5, -5):
+                    car_delta = abs(car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - 5, car_charging_energy.get(minute, 0.0)))
+                    load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - 5, load_minutes.get(minute, 0.0)))
+                    load_delta = max(0.0, load_delta - car_delta)
+                    # Spread over the next 5 minutes
+                    for m in range(minute, minute - 5, -1):
+                        load_minutes_new[m] = total_load_energy + load_delta / 5.0
+                    total_load_energy += load_delta                        
 
             # Calculate age of data
             age_days = max_minute / (24 * 60)
 
-            self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes), age_days))
+            self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), age_days))
 
-            return load_minutes, age_days, load_minutes_now
+            return load_minutes_new, age_days, load_minutes_now
 
         except Exception as e:
             self.log("Error: ML Component: Failed to fetch load data: {}".format(e))
@@ -276,7 +283,7 @@ class LoadMLComponent(ComponentBase):
         # Update model validity status
         self._update_model_status()
 
-        if seconds % PREDICTION_INTERVAL_SECONDS == 0:
+        if should_fetch:
             self._get_predictions(self.now_utc, self.midnight_utc)
             # Publish entity with current state
             self._publish_entity()
