@@ -2,12 +2,13 @@
 """Debug script to analyze what the model is learning"""
 import json
 import sys
-sys.path.insert(0, '../apps/predbat')
+
+sys.path.insert(0, "../apps/predbat")
 from load_predictor import LoadPredictor
 from datetime import datetime, timezone
 
 # Load data
-with open('load_minutes_debug.json', 'r') as f:
+with open("load_minutes_debug.json", "r") as f:
     load_data = {int(k): float(v) for k, v in json.load(f).items()}
 
 # Train model
@@ -31,5 +32,5 @@ print(f"\nFirst layer weight magnitudes (input importance):")
 w1 = predictor.weights[0]  # Shape: (16, 32)
 for i in range(16):
     mag = float((w1[i, :] ** 2).sum() ** 0.5)
-    feat_name = f"lookback_{i}" if i < 12 else ["sin_minute", "cos_minute", "sin_day", "cos_day"][i-12]
+    feat_name = f"lookback_{i}" if i < 12 else ["sin_minute", "cos_minute", "sin_day", "cos_day"][i - 12]
     print(f"  {feat_name:15s}: {mag:.4f}")

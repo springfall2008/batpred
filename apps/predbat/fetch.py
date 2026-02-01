@@ -9,12 +9,12 @@
 # pylint: disable=attribute-defined-outside-init
 # pyright: reportAttributeAccessIssue=false
 
-import json
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
+
 
 class Fetch:
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
@@ -507,7 +507,7 @@ class Fetch:
         else:
             return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
-    def minute_data_import_export(self, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True):
+    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True):
         """
         Download one or more entities for import/export data
         """
@@ -529,7 +529,7 @@ class Fetch:
                 continue
 
             try:
-                history = self.get_history_wrapper(entity_id=entity_id, days=self.max_days_previous)
+                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
             except (ValueError, TypeError) as exc:
                 self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
@@ -537,7 +537,7 @@ class Fetch:
             if history and len(history) > 0:
                 import_today, _ = minute_data(
                     history[0],
-                    self.max_days_previous,
+                    max_days_previous,
                     now_utc,
                     "state",
                     "last_updated",
@@ -674,8 +674,14 @@ class Fetch:
                 self.iboost_today = dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
                 self.log("iBoost energy today from sensor reads {} kWh".format(self.iboost_today))
 
+        # Fetch ML forecast if enabled
+        load_ml_forecast = {}
+        if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
+            load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc)
+            self.load_forecast_only = True  # Use only ML forecast for load if enabled
+
         # Fetch extra load forecast
-        self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc)
+        self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc, load_ml_forecast)
 
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):
@@ -712,28 +718,28 @@ class Fetch:
 
             # Load import today data
             if "import_today" in self.args:
-                self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
+                self.import_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
                 self.import_today_now = get_now_from_cumulative(self.import_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
-                self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
+                self.export_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
                 self.export_today_now = get_now_from_cumulative(self.export_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
-                self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
+                self.pv_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "pv_today", required_unit="kWh")
                 self.pv_today_now = get_now_from_cumulative(self.pv_today, self.minutes_now, backwards=True)
             else:
                 self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous PV data")
 
         # Battery temperature
         if "battery_temperature_history" in self.args:
-            self.battery_temperature_history = self.minute_data_import_export(self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
+            self.battery_temperature_history = self.minute_data_import_export(self.max_days_previous, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
             data = []
             for minute in range(0, 24 * 60, 5):
                 data.append({minute: self.battery_temperature_history.get(minute, 0)})
@@ -1059,29 +1065,10 @@ class Fetch:
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
 
-        # Apply modal filter to historical data
         if self.load_minutes and not self.load_forecast_only:
+            # Apply modal filter to historical data
             self.previous_days_modal_filter(self.load_minutes)
             self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
-
-            # Dump raw filtered load data
-            raw_load_data = {}
-            total_load = 0
-            for minute in range(max(self.days_previous) * 24 * 60 - 5, -5, -5):
-                load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(self.load_minutes, minute, historical=True, step=5)
-                total_load += load_yesterday_raw
-                raw_load_data[minute] = total_load
-
-            with open("load_minutes_debug.json", "w") as f:
-                json.dump(raw_load_data, f, indent=4)
-
-            # Pass cleaned load data to ML component and get predictions
-            if self.components:
-                ml_component = self.components.get_component("load_ml")
-                if ml_component and self.load_minutes:
-                    # Update ML component with cleaned load data
-                    ml_component.update_load_data(raw_load_data, self.load_minutes_age)
-
 
         # Load today vs actual
         if self.load_minutes:
@@ -1222,17 +1209,17 @@ class Fetch:
             self.log("GECloudData load_last_period from immediate sensor is {} kW".format(dp2(self.load_last_period)))
 
         if "import_today" in self.args:
-            import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
+            import_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
             self.import_today_now = get_now_from_cumulative(import_today, self.minutes_now, backwards=True)
 
         # Load export today data
         if "export_today" in self.args:
-            export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
+            export_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
             self.export_today_now = get_now_from_cumulative(export_today, self.minutes_now, backwards=True)
 
         # PV today data
         if "pv_today" in self.args:
-            pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
+            pv_today = self.minute_data_import_export(self.max_days_previous, self.now_utc, "pv_today", required_unit="kWh")
             self.pv_today_now = get_now_from_cumulative(pv_today, self.minutes_now, backwards=True)
 
         self.log("Downloaded {} datapoints from GECloudData going back {} days".format(len(self.load_minutes), self.load_minutes_age))
@@ -1788,12 +1775,50 @@ class Fetch:
                 )
             )
 
-    def fetch_extra_load_forecast(self, now_utc):
+    def fetch_ml_load_forecast(self, now_utc):
+        """
+        Fetches ML load forecast from sensor
+        and returns it as a minute_data dictionary
+        """
+        # Use ML Model for load prediction
+        load_ml_forecast = self.get_state_wrapper("sensor." + self.prefix + "_load_ml_forecast", attribute="results")
+        if load_ml_forecast:
+            self.log("Loading ML load forecast from sensor.sensor.{}_load_ml_forecast".format(self.prefix))
+            # Convert format from dict to array
+            if isinstance(load_ml_forecast, dict):
+                data_array = []
+                for key, value in load_ml_forecast.items():
+                    data_array.append({"energy": value, "last_updated": key})
+
+                # Load data
+                load_forecast, _ = minute_data(
+                    data_array,
+                    self.forecast_days + 1,
+                    self.midnight_utc,
+                    "energy",
+                    "last_updated",
+                    backwards=False,
+                    clean_increment=False,
+                    smoothing=True,
+                    divide_by=1.0,
+                    scale=self.load_scaling,
+                )
+
+                if load_forecast:
+                    self.log("Loaded the ML load forecast; from midnight {}kWh to now {}kWh to midnight {}kwh".format(load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
+                    return load_forecast
+        return {}
+
+    def fetch_extra_load_forecast(self, now_utc, ml_forecast=None):
         """
         Fetch extra load forecast, this is future load data
         """
         load_forecast_final = {}
         load_forecast_array = []
+
+        # Add ML forecast if available
+        if ml_forecast:
+            load_forecast_array.append(ml_forecast)
 
         if "load_forecast" in self.args:
             entity_ids = self.get_arg("load_forecast", indirect=False)
@@ -1874,7 +1899,7 @@ class Fetch:
         state = self.get_state_wrapper(entity_id=entity_id)
         if state is not None:
             try:
-                carbon_history = self.minute_data_import_export(self.now_utc, entity_id, required_unit="g/kWh", increment=False, smoothing=False)
+                carbon_history = self.minute_data_import_export(self.max_days_previous, self.now_utc, entity_id, required_unit="g/kWh", increment=False, smoothing=False)
             except (ValueError, TypeError):
                 self.log("Warn: No carbon intensity history in sensor {}".format(entity_id))
         else:
@@ -2185,7 +2210,7 @@ class Fetch:
         """
         self.car_charging_energy = {}
         if "car_charging_energy" in self.args:
-            self.car_charging_energy = self.minute_data_import_export(now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
+            self.car_charging_energy = self.minute_data_import_export(self.max_days_previous, now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
         else:
             self.log("Car charging hold {}, threshold {}kWh".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy

@@ -2570,6 +2570,42 @@ chart.render();
                 {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
+        elif chart == "LoadML":
+            # Get historical load data for last 24 hours
+            load_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_forecast", 1, required=False), attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=True)
+            load_today_h1_raw = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_forecast", 1, required=False), attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False)
+            load_today_h8_raw = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_forecast", 1, required=False), attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False)
+
+            # Shift h1 predictions back by 1 hour to align with when they were predicting
+            load_today_h1 = {}
+            for timestamp_str, value in load_today_h1_raw.items():
+                try:
+                    dt = datetime.strptime(timestamp_str, TIME_FORMAT)
+                    shifted_dt = dt - timedelta(hours=1)
+                    load_today_h1[shifted_dt.strftime(TIME_FORMAT)] = value
+                except:
+                    pass
+
+            # Shift h8 predictions back by 8 hours to align with when they were predicting
+            load_today_h8 = {}
+            for timestamp_str, value in load_today_h8_raw.items():
+                try:
+                    dt = datetime.strptime(timestamp_str, TIME_FORMAT)
+                    shifted_dt = dt - timedelta(hours=8)
+                    load_today_h8[shifted_dt.strftime(TIME_FORMAT)] = value
+                except:
+                    pass
+
+            # Get ML forecast from load_forecast_ml entity results
+            load_ml_forecast = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
+
+            series_data = [
+                {"name": "Load (Actual)", "data": load_today, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Forecast (1h ago)", "data": load_today_h1, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
+                {"name": "Forecast (8h ago)", "data": load_today_h8, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
+                {"name": "Load (ML Forecast)", "data": load_ml_forecast, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323"},
+            ]
+            text += self.render_chart(series_data, "kWh", "ML Load Forecast", now_str)
         else:
             text += "<br><h2>Unknown chart type</h2>"
 
@@ -2594,6 +2630,7 @@ chart.render();
         active_inday = ""
         active_pv = ""
         active_pv7 = ""
+        active_loadml = ""
 
         if chart == "Battery":
             active_battery = "active"
@@ -2609,6 +2646,8 @@ chart.render();
             active_pv = "active"
         elif chart == "PV7":
             active_pv7 = "active"
+        elif chart == "LoadML":
+            active_loadml = "active"
 
         text += '<div class="charts-menu">'
         text += "<h3>Charts</h3> "
@@ -2619,6 +2658,9 @@ chart.render();
         text += f'<a href="./charts?chart=InDay" class="{active_inday}">InDay</a>'
         text += f'<a href="./charts?chart=PV" class="{active_pv}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{active_pv7}">PV7</a>'
+        # Only show LoadML chart if ML is enabled
+        if self.base.get_arg("load_ml_enable", False):
+            text += f'<a href="./charts?chart=LoadML" class="{active_loadml}">LoadML</a>'
         text += "</div>"
 
         text += '<div id="chart"></div>'

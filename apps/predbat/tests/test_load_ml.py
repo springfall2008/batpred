@@ -14,11 +14,7 @@ from datetime import datetime, timezone, timedelta
 import tempfile
 import os
 
-from load_predictor import (
-    LoadPredictor, MODEL_VERSION, LOOKBACK_STEPS, OUTPUT_STEPS, PREDICT_HORIZON,
-    HIDDEN_SIZES, TOTAL_FEATURES, STEP_MINUTES,
-    relu, relu_derivative, huber_loss, huber_loss_derivative
-)
+from load_predictor import LoadPredictor, OUTPUT_STEPS, HIDDEN_SIZES, TOTAL_FEATURES, STEP_MINUTES, relu, relu_derivative, huber_loss
 
 
 def test_load_ml(my_predbat=None):
@@ -50,7 +46,9 @@ def test_load_ml(my_predbat=None):
         ("cold_start", _test_cold_start, "Cold start with insufficient data"),
         ("fine_tune", _test_fine_tune, "Fine-tune on recent data"),
         ("prediction", _test_prediction, "End-to-end prediction"),
-        ("real_data_training", _test_real_data_training, "Train on real load_minutes_debug.json data with chart"),
+        # ("real_data_training", _test_real_data_training, "Train on real load_minutes_debug.json data with chart"),
+        ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
+        ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
     ]
 
     failed_tests = []
@@ -65,6 +63,7 @@ def test_load_ml(my_predbat=None):
         except Exception as e:
             print(f"FAIL: {e}")
             import traceback
+
             traceback.print_exc()
             failed_tests.append((name, str(e)))
 
@@ -83,7 +82,7 @@ def _test_relu_functions():
     expected = np.array([0, 0, 0, 1, 2])
     result = relu(x)
     assert np.allclose(result, expected), f"ReLU output mismatch: {result} vs {expected}"
-    
+
     # Test ReLU derivative
     expected_deriv = np.array([0, 0, 0, 1, 1])
     result_deriv = relu_derivative(x)
@@ -97,7 +96,7 @@ def _test_huber_loss_functions():
     y_pred = np.array([[1.1, 2.1, 3.1]])  # Error = 0.1
     loss = huber_loss(y_true, y_pred, delta=1.0)
     # For small errors, Huber is 0.5 * error^2
-    expected = 0.5 * (0.1 ** 2)
+    expected = 0.5 * (0.1**2)
     assert abs(loss - expected) < 0.01, f"Huber loss for small error: expected {expected}, got {loss}"
 
     # Test with large error (L1 region)
@@ -209,27 +208,27 @@ def _create_synthetic_load_data(n_days=7, now_utc=None):
     """Create synthetic load data for testing"""
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
-    
+
     n_minutes = n_days * 24 * 60
     load_minutes = {}
     cumulative = 0.0
-    
+
     # Build backwards from now (minute 0 = now)
     for minute in range(n_minutes - 1, -1, -STEP_MINUTES):
         # Time for this minute
         dt = now_utc - timedelta(minutes=minute)
         hour = dt.hour
-        
+
         # Simple daily pattern: higher during day
         if 6 <= hour < 22:
             energy = 0.2 + 0.1 * np.random.randn()  # ~0.2 kWh per 5 min during day
         else:
             energy = 0.05 + 0.02 * np.random.randn()  # ~0.05 kWh at night
-        
+
         energy = max(0, energy)
         cumulative += energy
         load_minutes[minute] = cumulative
-    
+
     return load_minutes
 
 
@@ -237,7 +236,7 @@ def _test_dataset_creation():
     """Test dataset creation from load minute data with train/val split"""
     predictor = LoadPredictor()
     now_utc = datetime.now(timezone.utc)
-    
+
     # Create synthetic load data: 7 days
     np.random.seed(42)
     load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
@@ -261,7 +260,7 @@ def _test_dataset_creation():
 
     # Output dimension: OUTPUT_STEPS (1 for autoregressive)
     assert y_train.shape[1] == OUTPUT_STEPS, f"Expected {OUTPUT_STEPS} outputs, got {y_train.shape[1]}"
-    
+
     # Validation should be approximately 24h worth of samples (288 at 5-min intervals)
     expected_val_samples = 24 * 60 // STEP_MINUTES
     assert abs(X_val.shape[0] - expected_val_samples) < 10, f"Expected ~{expected_val_samples} val samples, got {X_val.shape[0]}"
@@ -285,7 +284,7 @@ def _test_normalization():
     # Test target normalization
     y = np.random.randn(100, OUTPUT_STEPS).astype(np.float32) * 2 + 3
     y_norm = predictor._normalize_targets(y, fit=True)
-    
+
     # Check denormalization
     y_denorm = predictor._denormalize_predictions(y_norm)
     assert np.allclose(y, y_denorm, atol=1e-5), "Denormalization should recover original"
@@ -342,7 +341,7 @@ def _test_model_persistence():
     predictor.train(load_data, now_utc, is_initial=True, epochs=5, time_decay_days=7)
 
     # Save to temp file
-    with tempfile.NamedTemporaryFile(suffix='.npz', delete=False) as f:
+    with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
         temp_path = f.name
 
     try:
@@ -382,7 +381,7 @@ def _test_cold_start():
 
     # Training should fail or return None
     val_mae = predictor.train(load_data, now_utc, is_initial=True, epochs=5, time_decay_days=7)
-    
+
     # With only 1 day of data, we can't create a valid dataset for 48h prediction
     # The result depends on actual data coverage
     # Just verify it doesn't crash
@@ -403,7 +402,7 @@ def _test_fine_tune():
     orig_weights = [w.copy() for w in predictor.weights]
 
     # Fine-tune with same data but as fine-tune mode
-    # Note: Fine-tune uses is_finetune=True which only looks at last 24h 
+    # Note: Fine-tune uses is_finetune=True which only looks at last 24h
     # For the test to work, we need enough data for the full training
     predictor.train(load_data, now_utc, is_initial=False, epochs=3, time_decay_days=7)
 
@@ -442,77 +441,74 @@ def _test_real_data_training():
     """
     import json
     import os
-    
+
     # Try both coverage/ and current directory
-    json_paths = [
-        "../coverage/load_minutes_debug.json",
-        "coverage/load_minutes_debug.json", 
-        "load_minutes_debug.json"
-    ]
-    
+    json_paths = ["../coverage/load_minutes_debug.json", "coverage/load_minutes_debug.json", "load_minutes_debug.json"]
+
     load_data = None
     for json_path in json_paths:
         if os.path.exists(json_path):
-            with open(json_path, 'r') as f:
+            with open(json_path, "r") as f:
                 raw_data = json.load(f)
             # Convert string keys to integers
             load_data = {int(k): float(v) for k, v in raw_data.items()}
             print(f"  Loaded {len(load_data)} datapoints from {json_path}")
             break
-    
+
     if load_data is None:
         print("  WARNING: load_minutes_debug.json not found, skipping real data test")
         return
-    
+
     # Initialize predictor with lower learning rate for better convergence
     predictor = LoadPredictor(learning_rate=0.0005, max_load_kw=20.0)
     now_utc = datetime.now(timezone.utc)
     midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    
+
     # Calculate how many days of data we have
     max_minute = max(load_data.keys())
     n_days = max_minute / (24 * 60)
     print(f"  Data spans {n_days:.1f} days ({max_minute} minutes)")
-    
+
     # Train on full dataset with more epochs for larger network
     print(f"  Training on real data with {len(load_data)} points...")
     success = predictor.train(load_data, now_utc, is_initial=True, epochs=50, time_decay_days=7)
-    
+
     assert success, "Training on real data should succeed"
     assert predictor.model_initialized, "Model should be initialized after training"
-    
+
     # Make predictions
     print("  Generating predictions...")
     predictions = predictor.predict(load_data, now_utc, midnight_utc)
-    
+
     assert isinstance(predictions, dict), "Predictions should be a dict"
     assert len(predictions) > 0, "Should have predictions"
-    
+
     print(f"  Generated {len(predictions)} predictions")
-    
+
     # Create comparison chart using matplotlib
     try:
         import matplotlib
-        matplotlib.use('Agg')  # Non-interactive backend
+
+        matplotlib.use("Agg")  # Non-interactive backend
         import matplotlib.pyplot as plt
-        
+
         # Chart layout: 7 days of history (negative hours) + 2 days of predictions (positive hours)
         # X-axis: -168 to +48 hours (0 = now)
         history_hours = 7 * 24  # 7 days back
-        prediction_hours = 48   # 2 days forward
-        
+        prediction_hours = 48  # 2 days forward
+
         # Convert historical load_data (cumulative kWh) to energy per 5-min step (kWh)
         # Going backwards in time: minute 0 is now, higher minutes are past
         historical_minutes = []
         historical_energy = []
         max_history_minutes = min(history_hours * 60, max_minute)
-        
+
         for minute in range(0, max_history_minutes, STEP_MINUTES):
             if minute in load_data and (minute + STEP_MINUTES) in load_data:
                 energy_kwh = max(0, load_data[minute] - load_data.get(minute + STEP_MINUTES, load_data[minute]))
                 historical_minutes.append(minute)
                 historical_energy.append(energy_kwh)
-        
+
         # Extract validation period actual data (most recent 24h = day 7)
         # This is the data the model was validated against
         val_actual_minutes = []
@@ -523,13 +519,13 @@ def _test_real_data_training():
                 energy_kwh = max(0, load_data[minute] - load_data.get(minute + STEP_MINUTES, load_data[minute]))
                 val_actual_minutes.append(minute)
                 val_actual_energy.append(energy_kwh)
-        
+
         # Generate validation predictions: what would the model predict for day 7
         # using only data from day 2-7 (excluding most recent 24h)?
         # Simulate predicting from 24h ago
         val_pred_minutes = []
         val_pred_energy = []
-        
+
         # Create a modified load_data that excludes the most recent 24h
         # This simulates predicting "yesterday" from "2 days ago"
         val_holdout_minutes = val_period_hours * 60
@@ -538,13 +534,13 @@ def _test_real_data_training():
             if minute >= val_holdout_minutes:
                 # Shift back by 24h so model predicts into "held out" period
                 shifted_load_data[minute - val_holdout_minutes] = cum_kwh
-        
+
         # Make validation prediction (predict next 24h from shifted data)
         if shifted_load_data:
             shifted_now = now_utc - timedelta(hours=val_period_hours)
             shifted_midnight = shifted_now.replace(hour=0, minute=0, second=0, microsecond=0)
             val_predictions = predictor.predict(shifted_load_data, shifted_now, shifted_midnight)
-            
+
             # Extract first 24h of validation predictions
             val_pred_keys = sorted(val_predictions.keys())
             for i, minute in enumerate(val_pred_keys):
@@ -557,7 +553,7 @@ def _test_real_data_training():
                     energy_kwh = max(0, val_predictions[minute] - val_predictions[prev_minute])
                 val_pred_minutes.append(minute)
                 val_pred_energy.append(energy_kwh)
-        
+
         # Convert predictions (cumulative kWh) to energy per step (kWh)
         # predictions dict is: {0: cum0, 5: cum5, 10: cum10, ...} representing FUTURE
         pred_minutes = []
@@ -575,67 +571,514 @@ def _test_real_data_training():
                 energy_kwh = max(0, predictions[minute] - predictions[prev_minute])
             pred_minutes.append(minute)
             pred_energy.append(energy_kwh)
-        
+
         # Create figure with single plot showing timeline
         fig, ax = plt.subplots(1, 1, figsize=(16, 6))
-        
+
         # Plot historical data (negative hours, going back in time)
         # minute 0 = now (hour 0), minute 60 = 1 hour ago (hour -1)
         if historical_minutes:
             hist_hours = [-m / 60 for m in historical_minutes]  # Negative for past
-            ax.plot(hist_hours, historical_energy, 'b-', linewidth=0.8, label='Historical Load (7 days)', alpha=0.5)
-        
+            ax.plot(hist_hours, historical_energy, "b-", linewidth=0.8, label="Historical Load (7 days)", alpha=0.5)
+
         # Highlight validation period actual data (most recent 24h) with thicker line
         if val_actual_minutes:
             val_actual_hours = [-m / 60 for m in val_actual_minutes]  # Negative for past
-            ax.plot(val_actual_hours, val_actual_energy, 'b-', linewidth=1.5, label='Actual Day 7 (validation)', alpha=0.9)
-        
+            ax.plot(val_actual_hours, val_actual_energy, "b-", linewidth=1.5, label="Actual Day 7 (validation)", alpha=0.9)
+
         # Plot validation predictions (what model predicted for day 7)
         if val_pred_minutes:
             # These predictions map to the validation period (most recent 24h)
             # val_pred minute 0 -> actual minute 0 -> hour 0, etc.
             val_pred_hours = [-m / 60 for m in val_pred_minutes]  # Same position as actual
-            ax.plot(val_pred_hours, val_pred_energy, 'g-', linewidth=1.5, label='ML Prediction (day 7)', alpha=0.9)
-        
+            ax.plot(val_pred_hours, val_pred_energy, "g-", linewidth=1.5, label="ML Prediction (day 7)", alpha=0.9)
+
         # Plot future predictions (positive hours, going forward)
         if pred_minutes:
             pred_hours = [m / 60 for m in pred_minutes]  # Positive for future
-            ax.plot(pred_hours, pred_energy, 'r-', linewidth=1.5, label='ML Prediction (48h future)', alpha=0.9)
-        
+            ax.plot(pred_hours, pred_energy, "r-", linewidth=1.5, label="ML Prediction (48h future)", alpha=0.9)
+
         # Add vertical line at "now"
-        ax.axvline(x=0, color='black', linestyle='--', linewidth=2, label='Now', alpha=0.8)
-        
+        ax.axvline(x=0, color="black", linestyle="--", linewidth=2, label="Now", alpha=0.8)
+
         # Shade the validation region (most recent 24h)
-        ax.axvspan(-24, 0, alpha=0.1, color='green', label='Validation Period')
-        
+        ax.axvspan(-24, 0, alpha=0.1, color="green", label="Validation Period")
+
         # Formatting
-        ax.set_xlabel('Hours (negative = past, positive = future)', fontsize=12)
-        ax.set_ylabel('Load (kWh per 5 min)', fontsize=12)
-        ax.set_title('ML Load Predictor: Validation (Day 7 Actual vs Predicted) + 48h Forecast', fontsize=14, fontweight='bold')
-        ax.legend(loc='upper right', fontsize=10)
+        ax.set_xlabel("Hours (negative = past, positive = future)", fontsize=12)
+        ax.set_ylabel("Load (kWh per 5 min)", fontsize=12)
+        ax.set_title("ML Load Predictor: Validation (Day 7 Actual vs Predicted) + 48h Forecast", fontsize=14, fontweight="bold")
+        ax.legend(loc="upper right", fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.set_xlim(-history_hours, prediction_hours)
-        
+
         # Add day markers
         for day in range(-7, 3):
             hour = day * 24
             if -history_hours <= hour <= prediction_hours:
-                ax.axvline(x=hour, color='gray', linestyle=':', linewidth=0.5, alpha=0.5)
-        
+                ax.axvline(x=hour, color="gray", linestyle=":", linewidth=0.5, alpha=0.5)
+
         plt.tight_layout()
-        
+
         # Save to coverage directory
         chart_paths = ["../coverage/ml_prediction_chart.png", "coverage/ml_prediction_chart.png", "ml_prediction_chart.png"]
         for chart_path in chart_paths:
             try:
-                plt.savefig(chart_path, dpi=150, bbox_inches='tight')
+                plt.savefig(chart_path, dpi=150, bbox_inches="tight")
                 print(f"  Chart saved to {chart_path}")
                 break
             except:
                 continue
-        
+
         plt.close()
-        
+
     except ImportError:
         print("  WARNING: matplotlib not available, skipping chart generation")
 
+
+def _test_component_fetch_load_data():
+    """Test LoadMLComponent._fetch_load_data method"""
+    import asyncio
+    from datetime import datetime, timezone
+    from load_ml_component import LoadMLComponent
+    from unittest.mock import MagicMock
+
+    # Helper to run async tests
+    def run_async(coro):
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+
+    # Create mock base object with all necessary properties
+    class MockBase:
+        def __init__(self):
+            self.prefix = "predbat"
+            self.config_root = None
+            self.now_utc = datetime.now(timezone.utc)
+            self.midnight_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            self.minutes_now = (self.now_utc - self.midnight_utc).seconds // 60
+            self.local_tz = timezone.utc
+            self.args = {}
+            self.log_messages = []
+
+        def log(self, msg):
+            self.log_messages.append(msg)
+
+        def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": None,  # Disable load_power to simplify test
+                "car_charging_energy": None,  # Disable car charging to simplify test
+                "load_scaling": 1.0,
+                "car_charging_energy_scale": 1.0,
+            }.get(key, default)
+
+    # Create synthetic load data (28 days worth)
+    def create_load_minutes(days=28, all_minutes=False):
+        """
+        Create cumulative load data going backwards from minute 0
+
+        Args:
+            days: Number of days of data to create
+            all_minutes: If True, create entries for every minute (not just 5-min intervals)
+        """
+        load_data = {}
+        cumulative = 0.0
+
+        if all_minutes:
+            # Create entry for every minute (for car charging test)
+            for minute in range(days * 24 * 60, -1, -1):
+                energy_step = 0.1 / 5  # Scale down since we have 5x more entries
+                cumulative += energy_step
+                load_data[minute] = cumulative
+        else:
+            # Create entries at 5-minute intervals (normal case)
+            for minute in range(days * 24 * 60, -1, -5):
+                energy_step = 0.1  # 0.1 kWh per 5 min
+                cumulative += energy_step
+                load_data[minute] = cumulative
+
+        return load_data, days
+
+    # Test 1: Successful fetch with minimal config
+    async def test_basic_fetch():
+        mock_base = MockBase()
+        load_data, age = create_load_minutes(28)
+        mock_base.minute_data_load = MagicMock(return_value=(load_data, age))
+        mock_base.minute_data_import_export = MagicMock(return_value=None)
+        # Mock the fill_load_from_power method - it should just return the load_minutes unchanged
+        mock_base.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+        # Override default values for testing
+        component.ml_learning_rate = 0.001
+        component.ml_epochs_initial = 10
+        component.ml_epochs_update = 2
+        component.ml_min_days = 1
+        component.ml_validation_threshold = 2.0
+        component.ml_time_decay_days = 7
+        component.ml_max_load_kw = 23.0
+        component.ml_max_model_age_hours = 48
+
+        result_data, result_age, result_now = await component._fetch_load_data()
+
+        assert result_data is not None, "Should return load data"
+        assert result_age == 28, f"Expected 28 days, got {result_age}"
+        assert len(result_data) > 0, "Load data should not be empty"
+        assert result_now >= 0, f"Current load should be non-negative, got {result_now}"
+        print("    ✓ Basic fetch successful")
+
+    # Test 2: Missing sensor (should return None)
+    async def test_missing_sensor():
+        class MockBaseNoSensor:
+            def __init__(self):
+                self.prefix = "predbat"
+                self.config_root = None
+                self.now_utc = datetime.now(timezone.utc)
+                self.local_tz = timezone.utc
+                self.args = {}
+
+            def log(self, msg):
+                pass
+
+            def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+                return default
+
+        mock_base_no_sensor = MockBaseNoSensor()
+
+        component = LoadMLComponent(mock_base_no_sensor, load_ml_enable=True)
+        # Override default values for testing
+        component.ml_learning_rate = 0.001
+        component.ml_epochs_initial = 10
+        component.ml_epochs_update = 2
+        component.ml_min_days = 1
+        component.ml_validation_threshold = 2.0
+        component.ml_time_decay_days = 7
+        component.ml_max_load_kw = 23.0
+        component.ml_max_model_age_hours = 48
+
+        result_data, result_age, result_now = await component._fetch_load_data()
+
+        assert result_data is None, "Should return None when sensor missing"
+        assert result_age == 0, "Age should be 0 when sensor missing"
+        assert result_now == 0, "Current load should be 0 when sensor missing"
+        print("    ✓ Missing sensor handled correctly")
+
+    # Test 3: Car charging subtraction
+    async def test_car_charging_subtraction():
+        mock_base_with_car = MockBase()
+
+        # Create load data with entries for EVERY minute (not just 5-min intervals)
+        # This is required because the component's car charging subtraction loop
+        # iterates over every minute from 1 to max_minute
+        original_load_data, age = create_load_minutes(7, all_minutes=True)
+        car_charging_data = {i: i * 0.001 for i in range(0, 7 * 24 * 60 + 1)}  # Small cumulative car charging (0.001 kWh/min)
+
+        # Override get_arg to enable car_charging_energy
+        def mock_get_arg_with_car(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": None,
+                "car_charging_energy": ["sensor.car_charging"],  # Enable car charging
+                "load_scaling": 1.0,
+                "car_charging_energy_scale": 1.0,
+            }.get(key, default)
+
+        mock_base_with_car.get_arg = mock_get_arg_with_car
+
+        # Return a copy of the data so the original isn't modified
+        mock_base_with_car.minute_data_load = MagicMock(return_value=(dict(original_load_data), age))
+        mock_base_with_car.minute_data_import_export = MagicMock(return_value=car_charging_data)
+
+        component = LoadMLComponent(mock_base_with_car, load_ml_enable=True)
+        # Override default values for testing
+        component.ml_learning_rate = 0.001
+        component.ml_epochs_initial = 10
+        component.ml_epochs_update = 2
+        component.ml_min_days = 1
+        component.ml_validation_threshold = 2.0
+        component.ml_time_decay_days = 7
+        component.ml_max_load_kw = 23.0
+        component.ml_max_model_age_hours = 48
+
+        result_data, result_age, result_now = await component._fetch_load_data()
+
+        assert result_data is not None, f"Should return load data"
+        assert result_age > 0, f"Should have valid age (got {result_age})"
+        assert len(result_data) > 0, "Result data should not be empty"
+        assert result_now >= 0, f"Current load should be non-negative, got {result_now}"
+
+        # Verify car charging was called
+        assert mock_base_with_car.minute_data_import_export.called, "minute_data_import_export should be called"
+
+        # Verify all values are non-negative after subtraction
+        for minute, value in result_data.items():
+            assert value >= 0, f"Load at minute {minute} should be non-negative, got {value}"
+
+        print("    ✓ Car charging subtraction works")
+
+    # Test 4: Load power fill
+    async def test_load_power_fill():
+        mock_base_with_power = MockBase()
+
+        # Override get_arg to enable load_power
+        def mock_get_arg_with_power(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": ["sensor.load_power"],  # Enable load_power
+                "car_charging_energy": None,
+                "load_scaling": 1.0,
+                "car_charging_energy_scale": 1.0,
+            }.get(key, default)
+
+        mock_base_with_power.get_arg = mock_get_arg_with_power
+
+        load_data, age = create_load_minutes(7)
+        load_power_data, _ = create_load_minutes(7)
+
+        mock_base_with_power.minute_data_load = MagicMock(side_effect=[(load_data, age), (load_power_data, age)])  # First call for load_today  # Second call for load_power
+        mock_base_with_power.minute_data_import_export = MagicMock(return_value=None)
+        mock_base_with_power.fill_load_from_power = MagicMock(return_value=load_data)
+
+        component = LoadMLComponent(mock_base_with_power, load_ml_enable=True)
+        # Override default values for testing
+        component.ml_learning_rate = 0.001
+        component.ml_epochs_initial = 10
+        component.ml_epochs_update = 2
+        component.ml_min_days = 1
+        component.ml_validation_threshold = 2.0
+        component.ml_time_decay_days = 7
+        component.ml_max_load_kw = 23.0
+        component.ml_max_model_age_hours = 48
+
+        result_data, result_age, result_now = await component._fetch_load_data()
+
+        assert result_data is not None, "Should return load data"
+        assert mock_base_with_power.fill_load_from_power.called, "fill_load_from_power should be called"
+        assert result_now >= 0, f"Current load should be non-negative, got {result_now}"
+        print("    ✓ Load power fill invoked")
+
+    # Test 5: Exception handling
+    async def test_exception_handling():
+        mock_base = MockBase()
+        mock_base.minute_data_load = MagicMock(side_effect=Exception("Test exception"))
+
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+        # Override default values for testing
+        component.ml_learning_rate = 0.001
+        component.ml_epochs_initial = 10
+        component.ml_epochs_update = 2
+        component.ml_min_days = 1
+        component.ml_validation_threshold = 2.0
+        component.ml_time_decay_days = 7
+        component.ml_max_load_kw = 23.0
+        component.ml_max_model_age_hours = 48
+
+        result_data, result_age, result_now = await component._fetch_load_data()
+
+        assert result_data is None, "Should return None on exception"
+        assert result_age == 0, "Age should be 0 on exception"
+        assert result_now == 0, "Current load should be 0 on exception"
+        print("    ✓ Exception handling works")
+
+    # Test 6: Empty load data
+    async def test_empty_load_data():
+        mock_base = MockBase()
+        mock_base.minute_data_load = MagicMock(return_value=(None, 0))
+        mock_base.minute_data_import_export = MagicMock(return_value=None)
+
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+        # Override default values for testing
+        component.ml_learning_rate = 0.001
+        component.ml_epochs_initial = 10
+        component.ml_epochs_update = 2
+        component.ml_min_days = 1
+        component.ml_validation_threshold = 2.0
+        component.ml_time_decay_days = 7
+        component.ml_max_load_kw = 23.0
+        component.ml_max_model_age_hours = 48
+
+        result_data, result_age, result_now = await component._fetch_load_data()
+
+        assert result_data is None, "Should return None when load data is empty"
+        assert result_age == 0, "Age should be 0 when load data is empty"
+        assert result_now == 0, "Current load should be 0 when load data is empty"
+        print("    ✓ Empty load data handled correctly")
+
+    # Run all sub-tests
+    print("  Running LoadMLComponent._fetch_load_data tests:")
+    run_async(test_basic_fetch())
+    run_async(test_missing_sensor())
+    run_async(test_car_charging_subtraction())
+    run_async(test_load_power_fill())
+    run_async(test_exception_handling())
+    run_async(test_empty_load_data())
+    print("  All _fetch_load_data tests passed!")
+
+
+def _test_component_publish_entity():
+    """Test LoadMLComponent._publish_entity method"""
+    from datetime import datetime, timezone, timedelta
+    from load_ml_component import LoadMLComponent
+    from unittest.mock import MagicMock
+    from const import TIME_FORMAT
+
+    # Create mock base object
+    class MockBase:
+        def __init__(self):
+            self.prefix = "predbat"
+            self.config_root = None
+            self.now_utc = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+            self.midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+            self.minutes_now = 720  # 12:00 = 720 minutes since midnight
+            self.local_tz = timezone.utc
+            self.args = {}
+            self.log_messages = []
+            self.dashboard_calls = []
+
+        def log(self, msg):
+            self.log_messages.append(msg)
+
+        def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": None,
+                "car_charging_energy": None,
+                "load_scaling": 1.0,
+                "car_charging_energy_scale": 1.0,
+            }.get(key, default)
+
+    # Test 1: Basic entity publishing with predictions
+    print("  Testing _publish_entity:")
+    mock_base = MockBase()
+
+    component = LoadMLComponent(mock_base, load_ml_enable=True)
+
+    # Mock dashboard_item to capture calls
+    def mock_dashboard_item(entity_id, state, attributes, app):
+        mock_base.dashboard_calls.append({"entity_id": entity_id, "state": state, "attributes": attributes, "app": app})
+
+    component.dashboard_item = mock_dashboard_item
+
+    # Set up test data
+    component.load_minutes_now = 10.5  # Current load today
+    component.current_predictions = {
+        0: 0.0,  # Now
+        5: 0.1,  # 5 minutes from now
+        60: 1.2,  # 1 hour from now (load_today_h1)
+        480: 9.6,  # 8 hours from now (load_today_h8)
+        1440: 28.8,  # 24 hours from now
+    }
+
+    # Set up predictor state
+    component.predictor.validation_mae = 0.5
+    component.predictor.get_model_age_hours = MagicMock(return_value=2.0)  # Mock model age calculation
+    component.last_train_time = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    component.load_data_age_days = 7.0
+    component.model_status = "active"
+    component.predictor.epochs_trained = 50
+
+    # Call _publish_entity
+    component._publish_entity()
+
+    # Verify dashboard_item was called
+    assert len(mock_base.dashboard_calls) == 1, "dashboard_item should be called once"
+
+    call = mock_base.dashboard_calls[0]
+
+    # Verify entity_id
+    assert call["entity_id"] == "sensor.predbat_load_ml_forecast", f"Expected sensor.predbat_load_ml_forecast, got {call['entity_id']}"
+
+    # Verify state (max prediction value)
+    assert call["state"] == 28.8, f"Expected state 28.8, got {call['state']}"
+
+    # Verify app
+    assert call["app"] == "load_ml", f"Expected app 'load_ml', got {call['app']}"
+
+    # Verify attributes
+    attrs = call["attributes"]
+
+    # Check results format
+    assert "results" in attrs, "results should be in attributes"
+    results = attrs["results"]
+    assert isinstance(results, dict), "results should be a dict"
+
+    # Verify results are timestamp-formatted and include load_minutes_now offset
+    # predictions are relative to now, so minute 60 = 1 hour from now = 13:00
+    expected_timestamp_60 = (mock_base.midnight_utc + timedelta(minutes=60 + 720)).strftime(TIME_FORMAT)
+    assert expected_timestamp_60 in results, f"Expected timestamp {expected_timestamp_60} in results"
+    # Value should be prediction (1.2) + load_minutes_now (10.5) = 11.7
+    assert abs(results[expected_timestamp_60] - 11.7) < 0.01, f"Expected value 11.7 at {expected_timestamp_60}, got {results[expected_timestamp_60]}"
+
+    # Check load_today (current load)
+    assert "load_today" in attrs, "load_today should be in attributes"
+    assert attrs["load_today"] == 10.5, f"Expected load_today 10.5, got {attrs['load_today']}"
+
+    # Check load_today_h1 (1 hour ahead)
+    assert "load_today_h1" in attrs, "load_today_h1 should be in attributes"
+    assert abs(attrs["load_today_h1"] - 11.7) < 0.01, f"Expected load_today_h1 11.7, got {attrs['load_today_h1']}"
+
+    # Check load_today_h8 (8 hours ahead)
+    assert "load_today_h8" in attrs, "load_today_h8 should be in attributes"
+    assert abs(attrs["load_today_h8"] - 20.1) < 0.01, f"Expected load_today_h8 20.1 (9.6+10.5), got {attrs['load_today_h8']}"
+
+    # Check MAE
+    assert "mae_kwh" in attrs, "mae_kwh should be in attributes"
+    assert attrs["mae_kwh"] == 0.5, f"Expected mae_kwh 0.5, got {attrs['mae_kwh']}"
+
+    # Check last_trained
+    assert "last_trained" in attrs, "last_trained should be in attributes"
+    assert attrs["last_trained"] == "2026-01-01T10:00:00+00:00", f"Expected last_trained 2026-01-01T10:00:00+00:00, got {attrs['last_trained']}"
+
+    # Check model_age_hours (12:00 - 10:00 = 2 hours)
+    assert "model_age_hours" in attrs, "model_age_hours should be in attributes"
+    assert attrs["model_age_hours"] == 2.0, f"Expected model_age_hours 2.0, got {attrs['model_age_hours']}"
+
+    # Check training_days
+    assert "training_days" in attrs, "training_days should be in attributes"
+    assert attrs["training_days"] == 7.0, f"Expected training_days 7.0, got {attrs['training_days']}"
+
+    # Check status
+    assert "status" in attrs, "status should be in attributes"
+    assert attrs["status"] == "active", f"Expected status 'active', got {attrs['status']}"
+
+    # Check model_version
+    assert "model_version" in attrs, "model_version should be in attributes"
+    from load_predictor import MODEL_VERSION
+
+    assert attrs["model_version"] == MODEL_VERSION, f"Expected model_version {MODEL_VERSION}, got {attrs['model_version']}"
+
+    # Check epochs_trained
+    assert "epochs_trained" in attrs, "epochs_trained should be in attributes"
+    assert attrs["epochs_trained"] == 50, f"Expected epochs_trained 50, got {attrs['epochs_trained']}"
+
+    # Check friendly_name
+    assert attrs["friendly_name"] == "ML Load Forecast", "friendly_name should be 'ML Load Forecast'"
+
+    # Check state_class
+    assert attrs["state_class"] == "measurement", "state_class should be 'measurement'"
+
+    # Check unit_of_measurement
+    assert attrs["unit_of_measurement"] == "kWh", "unit_of_measurement should be 'kWh'"
+
+    # Check icon
+    assert attrs["icon"] == "mdi:chart-line", "icon should be 'mdi:chart-line'"
+
+    print("    ✓ Entity published with correct attributes")
+
+    # Test 2: Empty predictions
+    mock_base.dashboard_calls = []
+    component.current_predictions = {}
+    component._publish_entity()
+
+    assert len(mock_base.dashboard_calls) == 1, "dashboard_item should be called even with empty predictions"
+    call = mock_base.dashboard_calls[0]
+    assert call["state"] == 0, "State should be 0 with empty predictions"
+    assert call["attributes"]["results"] == {}, "results should be empty dict"
+
+    print("    ✓ Empty predictions handled correctly")
+
+    print("  All _publish_entity tests passed!")

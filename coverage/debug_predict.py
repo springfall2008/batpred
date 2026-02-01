@@ -1,40 +1,41 @@
 #!/usr/bin/env python3
 """Debug the prediction issue"""
 import sys
-sys.path.insert(0, '../apps/predbat')
+
+sys.path.insert(0, "../apps/predbat")
 
 import json
 import numpy as np
 from datetime import datetime, timezone, timedelta
-from load_predictor import LoadPredictor, LOOKBACK_STEPS, STEP_MINUTES, PREDICT_HORIZON
+from load_predictor import LoadPredictor, LOOKBACK_STEPS, STEP_MINUTES
 
 # Load data
-with open('load_minutes_debug.json', 'r') as f:
+with open("load_minutes_debug.json", "r") as f:
     load_data = {int(k): float(v) for k, v in json.load(f).items()}
 
 # Quick mode - just check final energies
-if len(sys.argv) > 1 and sys.argv[1] == '--quick':
+if len(sys.argv) > 1 and sys.argv[1] == "--quick":
     predictor = LoadPredictor(learning_rate=0.001, max_load_kw=20.0)
     now_utc = datetime.now(timezone.utc)
     midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    
+
     predictor.train(load_data, now_utc, is_initial=True, epochs=30, time_decay_days=7)
     predictions = predictor.predict(load_data, now_utc, midnight_utc)
-    
+
     pred_keys = sorted(predictions.keys())
     energies = []
     for i, minute in enumerate(pred_keys):
         if i == 0:
             energies.append(predictions[minute])
         else:
-            energies.append(predictions[minute] - predictions[pred_keys[i-1]])
-    
-    print('Energy stats:')
-    print(f'  Min: {min(energies):.4f}, Max: {max(energies):.4f}, Mean: {np.mean(energies):.4f}')
-    print(f'  Steps 0-20: {[round(e, 4) for e in energies[0:20]]}')
-    print(f'  Steps 200-220: {[round(e, 4) for e in energies[200:220]]}')
-    print(f'  Steps 400-420: {[round(e, 4) for e in energies[400:420]]}')
-    print(f'  Steps 550-576: {[round(e, 4) for e in energies[550:576]]}')
+            energies.append(predictions[minute] - predictions[pred_keys[i - 1]])
+
+    print("Energy stats:")
+    print(f"  Min: {min(energies):.4f}, Max: {max(energies):.4f}, Mean: {np.mean(energies):.4f}")
+    print(f"  Steps 0-20: {[round(e, 4) for e in energies[0:20]]}")
+    print(f"  Steps 200-220: {[round(e, 4) for e in energies[200:220]]}")
+    print(f"  Steps 400-420: {[round(e, 4) for e in energies[400:420]]}")
+    print(f"  Steps 550-576: {[round(e, 4) for e in energies[550:576]]}")
     sys.exit(0)
 
 # Train model
@@ -78,29 +79,27 @@ for step_idx in range(200):  # First 200 steps (16+ hours)
     minute_of_day = target_time.hour * 60 + target_time.minute
     day_of_week = target_time.weekday()
     time_features = predictor._create_time_features(minute_of_day, day_of_week)
-    
+
     # Combine features
     features = np.concatenate([np.array(lookback_buffer, dtype=np.float32), time_features])
-    
+
     # Normalize
     features_norm = predictor._normalize_features(features.reshape(1, -1), fit=False)
-    
+
     # Forward pass
     pred_norm, _, _ = predictor._forward(features_norm)
-    
+
     # Denormalize
     pred_energy = predictor._denormalize_predictions(pred_norm[0])
-    
+
     # Clip
     pred_clipped = predictor._clip_predictions(pred_energy)
     energy_value = float(pred_clipped[0])
-    
-    print(f"Step {step_idx}: lb_mean={np.mean(lookback_buffer):.4f}, "
-          f"pred_norm={pred_norm[0][0]:.4f}, pred_denorm={pred_energy[0]:.4f}, "
-          f"pred_clipped={energy_value:.4f}")
-    
+
+    print(f"Step {step_idx}: lb_mean={np.mean(lookback_buffer):.4f}, " f"pred_norm={pred_norm[0][0]:.4f}, pred_denorm={pred_energy[0]:.4f}, " f"pred_clipped={energy_value:.4f}")
+
     predictions_energy.append(energy_value)
-    
+
     # Update lookback buffer
     lookback_buffer.insert(0, energy_value)
     lookback_buffer.pop()
@@ -139,7 +138,7 @@ zeros = [(i, e) for i, e in enumerate(pred_energy_list) if e < 0.01]
 print(f"\nSteps with energy < 0.01: {len(zeros)}")
 if zeros:
     print(f"First 10: {zeros[:10]}")
-    
+
 # Stats
 print(f"\nOverall stats:")
 print(f"  Min: {min(pred_energy_list):.4f}")
