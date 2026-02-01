@@ -1072,7 +1072,7 @@ mode: single
 
 **Enable Freeze Charging**
 
-- Ensure **`switch.predbat_set_charge_freeze`** is turned On.
+- Ensure **`switch.predbat_set_charge_freeze`** is turned On. Note that as this is an expert mode option, Predbat's [Expert Mode](customisation.md#expert-mode) must be turned on first.
 
 After Predbat recomputes, you may see some light grey **FrzChrg** slots in the state column of the plan.
 To disable Freeze Charging simply turn the switch Off. Predbat will no longer schedule any FrzChrg slots.
@@ -2574,6 +2574,8 @@ The default options passed in are:
 #### charge_freeze_service
 
 If defined will be called for freeze charge, otherwise, charge_start_service is used for freeze charge also.
+
+Note that **switch.predbat_set_charge_freeze** must be turned on for Predbat to plan Freeze Charge activity, and as this is an expert mode option, Predbat's [Expert Mode](customisation.md#expert-mode) must be turned on first.
 
 #### charge_stop_service
 
