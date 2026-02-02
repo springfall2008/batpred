@@ -1229,7 +1229,7 @@ CONFIG_ITEMS = [
         "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "iboost_enable",
-        "default": 1000,
+        "default": 100,
     },
     {
         "name": "iboost_rate_threshold_export",
@@ -1241,7 +1241,7 @@ CONFIG_ITEMS = [
         "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "iboost_enable",
-        "default": 1000,
+        "default": 100,
     },
     {
         "name": "iboost_smart",
