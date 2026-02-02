@@ -48,6 +48,24 @@ class RateStore(PersistentStore):
         # Key: date string "YYYY-MM-DD", Value: rate data dict
         self.rate_cache = {}
         
+        # Load and finalize rates for today and yesterday
+        today = datetime.now()
+        yesterday = today - timedelta(days=1)
+        self.load_rates(today)
+        self.load_rates(yesterday)
+        
+        # Finalize past slots
+        finalized_today = self.finalize_slots(today, base.minutes_now)
+        finalized_yesterday = self.finalize_slots(yesterday, 24 * 60)  # Finalize all yesterday slots
+        if finalized_today > 0 or finalized_yesterday > 0:
+            self.log("Finalized {} slots for today and {} slots for yesterday".format(finalized_today, finalized_yesterday))
+        
+        # Cleanup old rate files
+        retention_days = base.get_arg("rate_retention_days", 7)
+        removed = self.cleanup_old_files(retention_days)
+        if removed > 0:
+            self.log("Cleaned up {} old rate files".format(removed))
+        
     def _get_filepath(self, date):
         """
         Get filepath for rate file for given date.
