@@ -41,7 +41,7 @@ def get_now_from_cumulative(data, minutes_now, backwards):
     return max(value, 0)
 
 
-def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, intermediate=False):
+def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, intermediate=False, offset_minutes=0):
     """
     Remove data from before today
     """
@@ -54,18 +54,19 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             timekey = datetime.strptime(key, TIME_FORMAT_SECONDS)
         else:
             timekey = datetime.strptime(key, TIME_FORMAT)
-        if last_time and (timekey - last_time).seconds < group * 60:
+        if last_time and (timekey - last_time).total_seconds() < group * 60:
             continue
-        if intermediate and last_time and ((timekey - last_time).seconds > group * 60):
+        if intermediate and last_time and ((timekey - last_time).total_seconds() > group * 60):
             # Large gap, introduce intermediate data point
             seconds_gap = int((timekey - last_time).total_seconds())
             for i in range(1, seconds_gap // int(group * 60)):
-                new_time = last_time + timedelta(seconds=i * group * 60)
-                results[new_time.strftime(TIME_FORMAT)] = prev_value
+                new_time = last_time + timedelta(seconds=i * group * 60) + timedelta(minutes=offset_minutes)
+                results[new_time.isoformat()] = prev_value
         if not prune or (timekey > midnight_utc):
             if prune_future and (timekey > now_utc):
                 continue
-            results[key] = data[key]
+            new_time = timekey + timedelta(minutes=offset_minutes)
+            results[new_time.isoformat()] = data[key]
             last_time = timekey
             prev_value = data[key]
     return results

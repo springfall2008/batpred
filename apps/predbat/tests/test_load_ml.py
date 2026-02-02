@@ -984,22 +984,24 @@ def _test_component_publish_entity():
     # Call _publish_entity
     component._publish_entity()
 
-    # Verify dashboard_item was called
-    assert len(mock_base.dashboard_calls) == 1, "dashboard_item should be called once"
+    # Verify dashboard_item was called (now twice - for main entity and accuracy entity)
+    assert len(mock_base.dashboard_calls) == 2, "dashboard_item should be called twice"
 
     call = mock_base.dashboard_calls[0]
+    call2 = mock_base.dashboard_calls[1]
 
     # Verify entity_id
     assert call["entity_id"] == "sensor.predbat_load_ml_forecast", f"Expected sensor.predbat_load_ml_forecast, got {call['entity_id']}"
-
+    assert call2["entity_id"] == "sensor.predbat_load_ml_stats", f"Expected sensor.predbat_load_ml_stats, got {call2['entity_id']}"
     # Verify state (max prediction value)
-    assert call["state"] == 28.8, f"Expected state 28.8, got {call['state']}"
+    assert call2["state"] == 28.8, f"Expected state 28.8, got {call['state']}"
 
     # Verify app
-    assert call["app"] == "load_ml", f"Expected app 'load_ml', got {call['app']}"
+    assert call2["app"] == "load_ml", f"Expected app 'load_ml', got {call['app']}"
 
     # Verify attributes
     attrs = call["attributes"]
+    attrs2 = call2["attributes"]
 
     # Check results format
     assert "results" in attrs, "results should be in attributes"
@@ -1014,58 +1016,58 @@ def _test_component_publish_entity():
     assert abs(results[expected_timestamp_60] - 11.7) < 0.01, f"Expected value 11.7 at {expected_timestamp_60}, got {results[expected_timestamp_60]}"
 
     # Check load_today (current load)
-    assert "load_today" in attrs, "load_today should be in attributes"
-    assert attrs["load_today"] == 10.5, f"Expected load_today 10.5, got {attrs['load_today']}"
+    assert "load_today" in attrs2, "load_today should be in attributes"
+    assert attrs2["load_today"] == 10.5, f"Expected load_today 10.5, got {attrs2['load_today']}"
 
     # Check load_today_h1 (1 hour ahead)
-    assert "load_today_h1" in attrs, "load_today_h1 should be in attributes"
-    assert abs(attrs["load_today_h1"] - 11.7) < 0.01, f"Expected load_today_h1 11.7, got {attrs['load_today_h1']}"
+    assert "load_today_h1" in attrs2, "load_today_h1 should be in attributes"
+    assert abs(attrs2["load_today_h1"] - 11.7) < 0.01, f"Expected load_today_h1 11.7, got {attrs2['load_today_h1']}"
 
     # Check load_today_h8 (8 hours ahead)
-    assert "load_today_h8" in attrs, "load_today_h8 should be in attributes"
-    assert abs(attrs["load_today_h8"] - 20.1) < 0.01, f"Expected load_today_h8 20.1 (9.6+10.5), got {attrs['load_today_h8']}"
-
+    assert "load_today_h8" in attrs2, "load_today_h8 should be in attributes"
+    assert abs(attrs2["load_today_h8"] - 20.1) < 0.01, f"Expected load_today_h8 20.1 (9.6+10.5), got {attrs2['load_today_h8']}"
     # Check MAE
-    assert "mae_kwh" in attrs, "mae_kwh should be in attributes"
-    assert attrs["mae_kwh"] == 0.5, f"Expected mae_kwh 0.5, got {attrs['mae_kwh']}"
+    assert "mae_kwh" in attrs2, "mae_kwh should be in attributes"
+    assert attrs2["mae_kwh"] == 0.5, f"Expected mae_kwh 0.5, got {attrs2['mae_kwh']}"
 
     # Check last_trained
-    assert "last_trained" in attrs, "last_trained should be in attributes"
-    assert attrs["last_trained"] == "2026-01-01T10:00:00+00:00", f"Expected last_trained 2026-01-01T10:00:00+00:00, got {attrs['last_trained']}"
+    assert "last_trained" in attrs2, "last_trained should be in attributes"
+    assert attrs2["last_trained"] == "2026-01-01T10:00:00+00:00", f"Expected last_trained 2026-01-01T10:00:00+00:00, got {attrs2['last_trained']}"
 
     # Check model_age_hours (12:00 - 10:00 = 2 hours)
-    assert "model_age_hours" in attrs, "model_age_hours should be in attributes"
-    assert attrs["model_age_hours"] == 2.0, f"Expected model_age_hours 2.0, got {attrs['model_age_hours']}"
+    assert "model_age_hours" in attrs2, "model_age_hours should be in attributes"
+    assert attrs2["model_age_hours"] == 2.0, f"Expected model_age_hours 2.0, got {attrs2['model_age_hours']}"
 
     # Check training_days
-    assert "training_days" in attrs, "training_days should be in attributes"
-    assert attrs["training_days"] == 7.0, f"Expected training_days 7.0, got {attrs['training_days']}"
+    assert "training_days" in attrs2, "training_days should be in attributes"
+    assert attrs2["training_days"] == 7.0, f"Expected training_days 7.0, got {attrs2['training_days']}"
 
     # Check status
-    assert "status" in attrs, "status should be in attributes"
-    assert attrs["status"] == "active", f"Expected status 'active', got {attrs['status']}"
+    assert "status" in attrs2, "status should be in attributes"
+    assert attrs2["status"] == "active", f"Expected status 'active', got {attrs2['status']}"
 
     # Check model_version
-    assert "model_version" in attrs, "model_version should be in attributes"
+    assert "model_version" in attrs2, "model_version should be in attributes"
     from load_predictor import MODEL_VERSION
 
-    assert attrs["model_version"] == MODEL_VERSION, f"Expected model_version {MODEL_VERSION}, got {attrs['model_version']}"
+    assert attrs2["model_version"] == MODEL_VERSION, f"Expected model_version {MODEL_VERSION}, got {attrs2['model_version']}"
 
     # Check epochs_trained
-    assert "epochs_trained" in attrs, "epochs_trained should be in attributes"
-    assert attrs["epochs_trained"] == 50, f"Expected epochs_trained 50, got {attrs['epochs_trained']}"
+    assert "epochs_trained" in attrs2, "epochs_trained should be in attributes"
+    assert attrs2["epochs_trained"] == 50, f"Expected epochs_trained 50, got {attrs2['epochs_trained']}"
 
     # Check friendly_name
     assert attrs["friendly_name"] == "ML Load Forecast", "friendly_name should be 'ML Load Forecast'"
-
+    assert attrs2["friendly_name"] == "ML Load Stats", "friendly_name should be 'ML Load Stats'"
     # Check state_class
-    assert attrs["state_class"] == "measurement", "state_class should be 'measurement'"
+    assert attrs2["state_class"] == "measurement", "state_class should be 'measurement'"
 
     # Check unit_of_measurement
-    assert attrs["unit_of_measurement"] == "kWh", "unit_of_measurement should be 'kWh'"
+    assert attrs2["unit_of_measurement"] == "kWh", "unit_of_measurement should be 'kWh'"
 
     # Check icon
     assert attrs["icon"] == "mdi:chart-line", "icon should be 'mdi:chart-line'"
+    assert attrs2["icon"] == "mdi:chart-line", "icon should be 'mdi:chart-line'"
 
     print("    ✓ Entity published with correct attributes")
 
@@ -1074,9 +1076,10 @@ def _test_component_publish_entity():
     component.current_predictions = {}
     component._publish_entity()
 
-    assert len(mock_base.dashboard_calls) == 1, "dashboard_item should be called even with empty predictions"
+    assert len(mock_base.dashboard_calls) == 2, "dashboard_item should be called even with empty predictions"
     call = mock_base.dashboard_calls[0]
-    assert call["state"] == 0, "State should be 0 with empty predictions"
+    call2 = mock_base.dashboard_calls[1]
+    assert call2["state"] == 0, "State should be 0 with empty predictions"
     assert call["attributes"]["results"] == {}, "results should be empty dict"
 
     print("    ✓ Empty predictions handled correctly")

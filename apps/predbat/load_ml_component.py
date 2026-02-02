@@ -382,12 +382,22 @@ class LoadMLComponent(ComponentBase):
 
         self.dashboard_item(
             "sensor." + self.prefix + "_load_ml_forecast",
-            state=round(total_kwh, 2),
+            state=self.model_status,
             attributes={
                 "results": results,
+                "friendly_name": "ML Load Forecast",
+                "icon": "mdi:chart-line",
+            },
+            app="load_ml",
+        )
+        self.dashboard_item(
+            "sensor." + self.prefix + "_load_ml_stats",
+            state=round(total_kwh, 2),
+            attributes={
                 "load_today": dp2(self.load_minutes_now),
                 "load_today_h1": dp2(self.current_predictions.get(1 * 60, 0.0) + self.load_minutes_now),
                 "load_today_h8": dp2(self.current_predictions.get(8 * 60, 0.0) + self.load_minutes_now),
+                "load_total": dp2(total_kwh),
                 "mae_kwh": round(self.predictor.validation_mae, 4) if self.predictor and self.predictor.validation_mae else None,
                 "last_trained": self.last_train_time.isoformat() if self.last_train_time else None,
                 "model_age_hours": round(model_age_hours, 1) if model_age_hours else None,
@@ -395,7 +405,7 @@ class LoadMLComponent(ComponentBase):
                 "status": self.model_status,
                 "model_version": MODEL_VERSION,
                 "epochs_trained": self.predictor.epochs_trained if self.predictor else 0,
-                "friendly_name": "ML Load Forecast",
+                "friendly_name": "ML Load Stats",
                 "state_class": "measurement",
                 "unit_of_measurement": "kWh",
                 "icon": "mdi:chart-line",
