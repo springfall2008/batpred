@@ -518,7 +518,7 @@ Predbat can also [optimise your grid charging based on the Carbon footprint](cus
 
 ### UK Grid Carbon intensity (HA Integration)
 
-If you prefer you can instead install this integration: <https://github.com/jfparis/sensor.carbon_intensity_uk>
+If you prefer you can instead install this integration: <https://github.com/jfparis/sensor.carbon_intensity_uk>. There have been reports that this integration might not be working any more.
 
 Once it is active update apps.yaml to link Predbat to the Sensor (if it's not already in your template):
 

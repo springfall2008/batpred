@@ -1227,6 +1227,8 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **futurerate_url** - URL of future energy market prices for Agile users
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
+- **carbon_postcode** - Postcode to retrieve Carbon intensity grid information for
+- **carbon_automatic** - Retrieve Carbon intensity information automatically based upon postcode
 - **carbon_intensity** - Carbon intensity of the grid in half-hour slots from an integration.
 - **octopus_api_key** - Sets API key to communicate directly with octopus. *Recommended: store in `secrets.yaml` and use `!secret octopus_api_key`*
 - **octopus_account** - Sets Octopus account number
