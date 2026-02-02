@@ -678,7 +678,10 @@ This is useful when you know you need a certain battery level at a particular ti
 
 The SoC target percentage will be that configured in **input_number.predbat_manual_soc_value** (default 100%) which can be adjusted prior to making a selection.
 
-For example, if you want the battery to be at 100% by 05:30, select that time slot. Predbat will plan charging to ensure the battery reaches the target SOC by that time.
+For example, if you want the battery to be at 100% by 05:30, select that time slot. Predbat will plan charging to ensure the battery reaches the target SoC by that time.
+
+Note that the manual SoC target is a _minimum_ SoC level for that time slot.
+If based upon your predicted load, solar generation and energy costs Predbat determines that your battery needs to be charged to a higher SoC level to minimise your costs, Predbat will charge to that required level.
 
 If this selector is used in an automation you can set the time and SoC together by making a selection in the format HH:MM=percentage e.g. 05:30=100
 
