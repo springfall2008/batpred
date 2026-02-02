@@ -2574,10 +2574,10 @@ chart.render();
             # Get historical load data for last 24 hours
             load_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=False)
             load_today_h1 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=-60
             )
             load_today_h8 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=480
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=-480
             )
 
             # Get ML forecast from load_forecast_ml entity results
@@ -2585,8 +2585,8 @@ chart.render();
 
             series_data = [
                 {"name": "Load (Actual)", "data": load_today, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8"},
-                {"name": "Forecast (1h ago)", "data": load_today_h1, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
-                {"name": "Forecast (8h ago)", "data": load_today_h8, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
+                {"name": "Forecast (+1h)", "data": load_today_h1, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
+                {"name": "Forecast (+8h)", "data": load_today_h8, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
                 {"name": "Load (ML Forecast)", "data": load_ml_forecast, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323"},
             ]
             text += self.render_chart(series_data, "kWh", "ML Load Forecast", now_str)
