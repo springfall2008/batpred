@@ -375,10 +375,20 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate={}):
                     if export:
                         base.rate_export[minute] = base.rate_export.get(minute, 0) + pence_per_kwh
                         rate_replicate[minute] = "saving"
+                        
+                        # Track Axle override in rate store
+                        if base.rate_store:
+                            today = datetime.now()
+                            base.rate_store.update_auto_override(today, minute, None, base.rate_export[minute], "Axle")
                     else:
                         base.rate_import[minute] = base.rate_import.get(minute, 0) + pence_per_kwh
                         base.load_scaling_dynamic[minute] = base.load_scaling_saving
                         rate_replicate[minute] = "saving"
+                        
+                        # Track Axle override in rate store
+                        if base.rate_store:
+                            today = datetime.now()
+                            base.rate_store.update_auto_override(today, minute, base.rate_import[minute], None, "Axle")
 
 
 def fetch_axle_active(base):
