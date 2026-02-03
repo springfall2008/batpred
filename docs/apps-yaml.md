@@ -1294,6 +1294,9 @@ Note that this must be configured to point to an 'energy today' sensor in kWh no
 *IMPORTANT:* Predbat will subtract all car_charging_energy from your historic house load so if  car_charging_energy is not configured with the correct sensor,
 your car charging energy sensor does not accurately report your car charging data (e.g. it falsely reports charging data when not actually charging), or your house load sensor already excludes car charging,
 then this will really mess up your predbat plan as Predbat will exclude all car_charging_energy from your load predictions and you could end up with erroneous or zero house load predictions.  Do check the entity!<BR><BR>
+*NOTE:* The car charging energy sensor must be a daily incrementing kWh sensor. Check the history of your sensor in Home Assistant, that it increments through the day when your car is charging, resets to zero at midnight,
+and does not dip down in value or reset to zero other than at midnight. Some car charger energy sensors do not behave as Predbat requires them to do; for example, they may show cumulative energy per charge, not cumulative charge energy today.<BR>
+You may need to wrap the car charger energy sensor into a daily resetting utility meter to create a sensor that behaves correctly.<BR><BR>
 *TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
 e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.<BR>
 car_charging_energy can be set to a list of energy sensors, one per line if you have multiple EV car chargers, or want to exclude multiple loads such as heat pump load, e.g.:
