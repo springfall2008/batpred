@@ -1002,6 +1002,13 @@ class Fetch:
         # Set rate thresholds
         if self.rate_import or self.rate_export:
             self.set_rate_thresholds()
+            
+        # Finalize past slots (5+ minutes past slot start)
+        if self.rate_store:
+            today = datetime.now()
+            finalized = self.rate_store.finalize_slots(today, self.minutes_now)
+            if finalized > 0:
+                self.log("Finalized {} rate slots".format(finalized))
 
         # Find discharging windows
         if self.rate_export:
@@ -1404,6 +1411,14 @@ class Fetch:
                 continue
             rates[minute] = rate
             rate_replicate[minute] = "manual"
+            
+            # Track manual override in rate store
+            if self.rate_store:
+                today = datetime.now()
+                if is_import:
+                    self.rate_store.update_manual_override(today, minute, rate, None)
+                else:
+                    self.rate_store.update_manual_override(today, minute, None, rate)
 
         return rates
 
