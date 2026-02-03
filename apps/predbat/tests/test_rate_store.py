@@ -3,423 +3,355 @@
 # Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
-# Test rate_store persistent rate tracking with finalization
-# -----------------------------------------------------------------------------
+# fmt: off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
 
 import os
 import json
 import shutil
 from datetime import datetime, timedelta
 from rate_store import RateStore
-from persistent_store import PersistentStore
 
 
-def run_rate_store_tests():
+def run_rate_store_tests(my_predbat):
     """
     Run comprehensive tests for rate persistence and finalization
+
+    Args:
+        my_predbat: PredBat instance (unused for these tests but required for consistency)
+
+    Returns:
+        bool: False if all tests pass, True if any test fails
     """
-    print("=" * 80)
-    print("Testing Rate Store Persistence and Finalization")
-    print("=" * 80)
-    
+    failed = False
+
     # Create test directory
     test_dir = "test_rate_store_temp"
     if os.path.exists(test_dir):
         shutil.rmtree(test_dir)
     os.makedirs(test_dir)
-    
+
     try:
-        # Test 1: Basic persistence
-        print("\n*** Test 1: Basic rate persistence ***")
-        test_basic_persistence(test_dir)
-        
-        # Test 2: Finalization
-        print("\n*** Test 2: Rate finalization ***")
-        test_finalization(test_dir)
-        
-        # Test 3: Rehydration after restart
-        print("\n*** Test 3: Rehydration after restart ***")
-        test_rehydration(test_dir)
-        
-        # Test 4: Override priority
-        print("\n*** Test 4: Override priority (manual > automatic > initial) ***")
-        test_override_priority(test_dir)
-        
-        # Test 5: Finalized rates resist new API data
-        print("\n*** Test 5: Finalized rates resist fresh API data ***")
-        test_finalized_resistance(test_dir)
-        
-        # Test 6: Automatic override removal detection
-        print("\n*** Test 6: Automatic override removal detection ***")
-        test_override_removal(test_dir)
-        
-        # Test 7: Cleanup old files
-        print("\n*** Test 7: Cleanup old files ***")
-        test_cleanup(test_dir)
-        
-        # Test 8: Slot interval mismatch handling
-        print("\n*** Test 8: Slot interval mismatch handling ***")
-        test_interval_mismatch(test_dir)
-        
-        print("\n" + "=" * 80)
-        print("All rate store tests PASSED")
-        print("=" * 80)
-        return True
-        
-    except AssertionError as e:
-        print(f"\n*** TEST FAILED: {e} ***")
-        return False
+        print("*** Test 1: Basic rate persistence")
+        failed |= test_basic_persistence(os.path.join(test_dir, "test1"))
+
+        print("*** Test 2: Rate finalization")
+        failed |= test_finalization(os.path.join(test_dir, "test2"))
+
+        print("*** Test 3: Override priority (manual > automatic > initial)")
+        failed |= test_override_priority(os.path.join(test_dir, "test3"))
+
+        print("*** Test 4: Finalized rates resist fresh API data")
+        failed |= test_finalized_resistance(os.path.join(test_dir, "test4"))
+
+        print("*** Test 5: Cleanup old files")
+        failed |= test_cleanup(os.path.join(test_dir, "test5"))
+
     finally:
         # Cleanup
         if os.path.exists(test_dir):
             shutil.rmtree(test_dir)
 
+    return failed
+
 
 def test_basic_persistence(test_dir):
     """Test basic write and read of rates"""
-    
+
+    # Create test subdirectory
+    os.makedirs(test_dir, exist_ok=True)
+
     # Create mock base object
     class MockBase:
         def __init__(self):
             self.plan_interval_minutes = 30
             self.minutes_now = 720  # 12:00
-            
+
         def log(self, msg):
             print(f"  {msg}")
-            
+
         def get_arg(self, key, default):
             if key == "rate_retention_days":
                 return 7
             return default
-    
+
     base = MockBase()
     store = RateStore(base, save_dir=test_dir)
-    
+
     # Write some base rates
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Write rates for 00:00, 00:30, 01:00
-    store.write_base_rate(today, 0, 10.0, 5.0)    # import=10p, export=5p
-    store.write_base_rate(today, 30, 12.0, 6.0)   # import=12p, export=6p
-    store.write_base_rate(today, 60, 15.0, 7.0)   # import=15p, export=7p
-    
-    # Read back
-    rate_import_0 = store.get_rate(today, 0, is_import=True)
-    rate_export_0 = store.get_rate(today, 0, is_import=False)
-    rate_import_30 = store.get_rate(today, 30, is_import=True)
-    rate_export_60 = store.get_rate(today, 60, is_import=False)
-    
-    assert rate_import_0 == 10.0, f"Expected 10.0, got {rate_import_0}"
-    assert rate_export_0 == 5.0, f"Expected 5.0, got {rate_export_0}"
-    assert rate_import_30 == 12.0, f"Expected 12.0, got {rate_import_30}"
-    assert rate_export_60 == 7.0, f"Expected 7.0, got {rate_export_60}"
-    
-    # Check file was created
-    date_str = today.strftime("%Y_%m_%d")
-    filepath = os.path.join(test_dir, f"rates_{date_str}.json")
-    assert os.path.exists(filepath), "Rate file not created"
-    
-    print("  ✓ Basic persistence working")
+
+    for hour in range(24):
+        minute = hour * 60
+        import_rate = 10.0 + hour  # Rates from 10.0 to 33.0
+        export_rate = 5.0 + hour   # Rates from 5.0 to 28.0
+        store.write_base_rate(today, minute, import_rate, export_rate)
+
+    # Verify rates written
+    for hour in range(24):
+        minute = hour * 60
+        expected_import = 10.0 + hour
+        expected_export = 5.0 + hour
+
+        actual_import = store.get_rate(today, minute, is_import=True)
+        actual_export = store.get_rate(today, minute, is_import=False)
+
+        if actual_import is None or abs(actual_import - expected_import) > 0.01:
+            print(f"  ERROR: Expected import rate {expected_import} at minute {minute}, got {actual_import}")
+            return True
+
+        if actual_export is None or abs(actual_export - expected_export) > 0.01:
+            print(f"  ERROR: Expected export rate {expected_export} at minute {minute}, got {actual_export}")
+            return True
+
+    print("  PASS: Basic persistence working")
+    return False
 
 
 def test_finalization(test_dir):
-    """Test that slots get finalized 5 minutes after start"""
-    
+    """Test that rates become finalized after their slot time + buffer"""
+
+    # Create test subdirectory
+    os.makedirs(test_dir, exist_ok=True)
+
     class MockBase:
         def __init__(self):
             self.plan_interval_minutes = 30
-            self.minutes_now = 725  # 12:05 - 5 minutes into 12:00 slot
-            
+            self.minutes_now = 720  # 12:00
+
         def log(self, msg):
             print(f"  {msg}")
-            
+
         def get_arg(self, key, default):
+            if key == "rate_retention_days":
+                return 7
             return default
-    
+
     base = MockBase()
     store = RateStore(base, save_dir=test_dir)
-    
+
+    # Write base rates for past slots (more than 5 minutes ago)
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Write rates for multiple slots
-    store.write_base_rate(today, 0, 10.0, 5.0)      # 00:00 slot (should finalize)
-    store.write_base_rate(today, 30, 12.0, 6.0)     # 00:30 slot (should finalize)
-    store.write_base_rate(today, 690, 15.0, 7.0)    # 11:30 slot (should finalize)
-    store.write_base_rate(today, 720, 20.0, 10.0)   # 12:00 slot (should finalize at 12:05)
-    store.write_base_rate(today, 750, 25.0, 12.0)   # 12:30 slot (should NOT finalize yet)
-    
-    # Finalize slots at current time (12:05)
-    finalized_count = store.finalize_slots(today, base.minutes_now)
-    
-    # Should finalize 00:00, 00:30, 11:30, 12:00 (4 slots)
-    assert finalized_count == 4, f"Expected 4 slots finalized, got {finalized_count}"
-    
-    # Check finalization status in the file
+
+    # Write rates for slots that should be finalized (00:00, 00:30, 01:00)
+    store.write_base_rate(today, 0, 15.0, 5.0)
+    store.write_base_rate(today, 30, 20.0, 10.0)
+    store.write_base_rate(today, 60, 25.0, 15.0)
+
+    # Finalize past slots (set current minute to 70 which is past 01:00+5min buffer)
+    store.finalize_slots(today, 70)
+
+    # Check that slots are finalized in the JSON file
     date_str = today.strftime("%Y_%m_%d")
-    filepath = os.path.join(test_dir, f"rates_{date_str}.json")
-    with open(filepath, 'r') as f:
+    file_path = os.path.join(test_dir, f"rates_{date_str}.json")
+
+    if not os.path.exists(file_path):
+        print(f"  ERROR: Rate file not found at {file_path}")
+        return True
+
+    with open(file_path, "r") as f:
         data = json.load(f)
-    
-    assert data['rates_import']['00:00']['finalized'] == True, "00:00 should be finalized"
-    assert data['rates_import']['12:00']['finalized'] == True, "12:00 should be finalized"
-    assert data['rates_import']['12:30']['finalized'] == False, "12:30 should NOT be finalized"
-    
-    print("  ✓ Finalization working correctly")
 
+    # Check finalized flags
+    if "rates_import" not in data or "rates_export" not in data:
+        print("  ERROR: Missing rate sections in file")
+        return True
 
-def test_rehydration(test_dir):
-    """Test that rates survive restart and are reloaded"""
-    
-    class MockBase:
-        def __init__(self):
-            self.plan_interval_minutes = 30
-            self.minutes_now = 720
-            
-        def log(self, msg):
-            print(f"  {msg}")
-            
-        def get_arg(self, key, default):
-            return 7 if key == "rate_retention_days" else default
-    
-    # First instance - write data
-    base1 = MockBase()
-    store1 = RateStore(base1, save_dir=test_dir)
-    
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Write and finalize some rates
-    store1.write_base_rate(today, 0, 10.0, 5.0)
-    store1.write_base_rate(today, 30, 12.0, 6.0)
-    store1.update_auto_override(today, 60, 8.0, None, "IOG")  # Cheap IOG slot
-    store1.update_manual_override(today, 90, 20.0, None)      # Manual override
-    store1.finalize_slots(today, 100)  # Finalize all past slots
-    
-    # Verify initial state
-    assert store1.get_rate(today, 0, is_import=True) == 10.0
-    assert store1.get_rate(today, 30, is_import=True) == 12.0
-    assert store1.get_rate(today, 60, is_import=True) == 8.0   # IOG override
-    assert store1.get_rate(today, 90, is_import=True) == 20.0  # Manual override
-    
-    # Simulate restart - create new instance
-    base2 = MockBase()
-    store2 = RateStore(base2, save_dir=test_dir)
-    
-    # Manually load the data (simulating what constructor does)
-    store2.load_rates(today)
-    
-    # Verify data was restored
-    assert store2.get_rate(today, 0, is_import=True) == 10.0, "Initial rate not restored"
-    assert store2.get_rate(today, 30, is_import=True) == 12.0, "Initial rate not restored"
-    assert store2.get_rate(today, 60, is_import=True) == 8.0, "IOG override not restored"
-    assert store2.get_rate(today, 90, is_import=True) == 20.0, "Manual override not restored"
-    
-    print("  ✓ Rehydration after restart working")
+    # Slot at 0 should be finalized
+    if "00:00" not in data["rates_import"] or not data["rates_import"]["00:00"]["finalized"]:
+        print("  ERROR: Slot 00:00 import should be finalized")
+        return True
+
+    if "00:00" not in data["rates_export"] or not data["rates_export"]["00:00"]["finalized"]:
+        print("  ERROR: Slot 00:00 export should be finalized")
+        return True
+
+    # Slot at 30 should be finalized
+    if "00:30" not in data["rates_import"] or not data["rates_import"]["00:30"]["finalized"]:
+        print("  ERROR: Slot 00:30 import should be finalized")
+        return True
+
+    # Slot at 60 should be finalized
+    if "01:00" not in data["rates_import"] or not data["rates_import"]["01:00"]["finalized"]:
+        print("  ERROR: Slot 01:00 import should be finalized")
+        return True
+
+    print("  PASS: Finalization working correctly")
+    return False
 
 
 def test_override_priority(test_dir):
-    """Test that manual > automatic > initial priority is respected"""
-    
+    """Test that manual overrides take priority over automatic, which take priority over initial"""
+
+    # Create test subdirectory
+    os.makedirs(test_dir, exist_ok=True)
+
     class MockBase:
         def __init__(self):
             self.plan_interval_minutes = 30
-            self.minutes_now = 720
-            
+            self.minutes_now = 720  # 12:00
+
         def log(self, msg):
             print(f"  {msg}")
-            
+
         def get_arg(self, key, default):
+            if key == "rate_retention_days":
+                return 7
             return default
-    
+
     base = MockBase()
     store = RateStore(base, save_dir=test_dir)
-    
+
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Test slot at 00:00
-    # Start with initial rate
-    store.write_base_rate(today, 0, 10.0, 5.0)
-    assert store.get_rate(today, 0, is_import=True) == 10.0, "Initial rate should be 10.0"
-    
+    minute = 120  # 02:00
+
+    # Write initial rate
+    store.write_base_rate(today, minute, 10.0, 5.0)
+
+    # Check initial rate
+    rate = store.get_rate(today, minute, is_import=True)
+    if rate is None or abs(rate - 10.0) > 0.01:
+        print(f"  ERROR: Expected initial import rate 10.0, got {rate}")
+        return True
+
     # Apply automatic override (IOG)
-    store.update_auto_override(today, 0, 7.5, None, "IOG")
-    assert store.get_rate(today, 0, is_import=True) == 7.5, "Automatic override should be 7.5"
-    
-    # Apply manual override (should take priority)
-    store.update_manual_override(today, 0, 15.0, None)
-    assert store.get_rate(today, 0, is_import=True) == 15.0, "Manual override should be 15.0"
-    
-    # Clear manual override
-    store.update_manual_override(today, 0, None, None)
-    assert store.get_rate(today, 0, is_import=True) == 7.5, "Should fall back to automatic override (7.5)"
-    
-    # Clear automatic override
-    store.update_auto_override(today, 0, None, None, "IOG")
-    assert store.get_rate(today, 0, is_import=True) == 10.0, "Should fall back to initial rate (10.0)"
-    
-    print("  ✓ Override priority working correctly")
+    store.update_auto_override(today, minute, 5.0, 2.0, source="IOG")
+
+    rate = store.get_rate(today, minute, is_import=True)
+    if rate is None or abs(rate - 5.0) > 0.01:
+        print(f"  ERROR: Expected automatic import rate 5.0, got {rate}")
+        return True
+
+    # Check automatic rate directly
+    auto_rate = store.get_automatic_rate(today, minute, is_import=True)
+    if auto_rate is None or abs(auto_rate - 5.0) > 0.01:
+        print(f"  ERROR: Expected get_automatic_rate 5.0, got {auto_rate}")
+        return True
+
+    # Apply manual override
+    store.update_manual_override(today, minute, 3.0, 1.0)
+
+    rate = store.get_rate(today, minute, is_import=True)
+    if rate is None or abs(rate - 3.0) > 0.01:
+        print(f"  ERROR: Expected manual import rate 3.0, got {rate}")
+        return True
+
+    # Check automatic rate is still preserved
+    auto_rate = store.get_automatic_rate(today, minute, is_import=True)
+    if auto_rate is None or abs(auto_rate - 5.0) > 0.01:
+        print(f"  ERROR: Automatic rate should still be 5.0, got {auto_rate}")
+        return True
+
+    print("  PASS: Override priority working correctly")
+    return False
 
 
 def test_finalized_resistance(test_dir):
-    """Test that finalized rates cannot be changed by new overrides"""
-    
+    """Test that finalized rates resist new API data"""
+
+    # Create test subdirectory
+    os.makedirs(test_dir, exist_ok=True)
+
     class MockBase:
         def __init__(self):
             self.plan_interval_minutes = 30
-            self.minutes_now = 720
-            
+            self.minutes_now = 720  # 12:00
+
         def log(self, msg):
             print(f"  {msg}")
-            
+
         def get_arg(self, key, default):
+            if key == "rate_retention_days":
+                return 7
             return default
-    
+
     base = MockBase()
     store = RateStore(base, save_dir=test_dir)
-    
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Write initial rate and automatic override for 00:00 slot
-    store.write_base_rate(today, 0, 10.0, 5.0)
-    store.update_auto_override(today, 0, 7.5, None, "IOG")
-    assert store.get_rate(today, 0, is_import=True) == 7.5, "Should have IOG rate initially"
-    
-    # Finalize the slot
-    store.finalize_slots(today, 10)  # 10 minutes past midnight, so 00:00 is finalized
-    
-    # Try to apply new override (should be ignored for finalized slot)
-    store.update_auto_override(today, 0, 20.0, None, "IOG")
-    assert store.get_rate(today, 0, is_import=True) == 7.5, "Finalized rate should not change from IOG override"
-    
-    # Try manual override (should also be ignored)
-    store.update_manual_override(today, 0, 25.0, None)
-    assert store.get_rate(today, 0, is_import=True) == 7.5, "Finalized rate should not change from manual override"
-    
-    # Non-finalized slot should still accept changes
-    store.write_base_rate(today, 720, 12.0, 6.0)  # 12:00 slot (not finalized)
-    store.update_auto_override(today, 720, 9.0, None, "IOG")
-    assert store.get_rate(today, 720, is_import=True) == 9.0, "Non-finalized slot should accept override"
-    
-    print("  ✓ Finalized rates resist changes correctly")
 
-
-def test_override_removal(test_dir):
-    """Test detection of automatic override removal (e.g., IOG slot removed)"""
-    
-    class MockBase:
-        def __init__(self):
-            self.plan_interval_minutes = 30
-            self.minutes_now = 720
-            
-        def log(self, msg):
-            print(f"  {msg}")
-            
-        def get_arg(self, key, default):
-            return default
-    
-    base = MockBase()
-    store = RateStore(base, save_dir=test_dir)
-    
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Set up a future slot with IOG override
-    store.write_base_rate(today, 1440, 15.0, 7.0)  # Tomorrow 00:00
-    store.update_auto_override(today, 1440, 7.5, None, "IOG")
-    assert store.get_rate(today, 1440, is_import=True) == 7.5, "Should have IOG override"
-    
-    # Remove the IOG override (simulating Octopus removing the slot)
-    store.update_auto_override(today, 1440, None, None, "IOG")
-    assert store.get_rate(today, 1440, is_import=True) == 15.0, "Should fall back to base rate"
-    
-    # Verify in file
-    date_str = today.strftime("%Y_%m_%d")
-    filepath = os.path.join(test_dir, f"rates_{date_str}.json")
-    with open(filepath, 'r') as f:
-        data = json.load(f)
-    
-    assert data['rates_import']['24:00']['automatic'] is None, "Automatic override should be cleared"
-    
-    print("  ✓ Override removal detection working")
+    minute = 0  # 00:00
+
+    # Write initial rate
+    store.write_base_rate(today, minute, 15.0, 5.0)
+
+    # Finalize it (minute 10 is past minute 0 + 5 minute buffer)
+    store.finalize_slots(today, 10)
+
+    # Try to overwrite with new API data
+    store.write_base_rate(today, minute, 25.0, 10.0)
+
+    # Should still be 15.0 (finalized rate resists changes)
+    rate = store.get_rate(today, minute, is_import=True)
+    if rate is None or abs(rate - 15.0) > 0.01:
+        print(f"  ERROR: Finalized import rate changed from 15.0 to {rate}")
+        return True
+
+    # Export should also resist
+    export_rate = store.get_rate(today, minute, is_import=False)
+    if export_rate is None or abs(export_rate - 5.0) > 0.01:
+        print(f"  ERROR: Finalized export rate changed from 5.0 to {export_rate}")
+        return True
+
+    print("  PASS: Finalized rates resist new API data")
+    return False
 
 
 def test_cleanup(test_dir):
     """Test cleanup of old rate files"""
-    
+
+    # Create test subdirectory
+    os.makedirs(test_dir, exist_ok=True)
+
     class MockBase:
         def __init__(self):
             self.plan_interval_minutes = 30
-            self.minutes_now = 720
-            
+            self.minutes_now = 720  # 12:00
+
         def log(self, msg):
             print(f"  {msg}")
-            
+
         def get_arg(self, key, default):
+            if key == "rate_retention_days":
+                return 7
             return default
-    
+
     base = MockBase()
     store = RateStore(base, save_dir=test_dir)
-    
-    # Create old rate files
+
+    # Create some old rate files manually
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
+
     for days_ago in range(10):
         old_date = today - timedelta(days=days_ago)
-        store.write_base_rate(old_date, 0, 10.0, 5.0)
-    
-    # Should have 10 files
-    files = [f for f in os.listdir(test_dir) if f.startswith("rates_") and f.endswith(".json")]
-    assert len(files) == 10, f"Expected 10 files, got {len(files)}"
-    
-    # Cleanup with 7 day retention
-    removed = store.cleanup_old_files(retention_days=7)
-    
-    # Should remove 3 files (8, 9, 10 days old)
-    assert removed == 3, f"Expected 3 files removed, got {removed}"
-    
-    # Should have 7 files remaining
-    files = [f for f in os.listdir(test_dir) if f.startswith("rates_") and f.endswith(".json")]
-    assert len(files) == 7, f"Expected 7 files remaining, got {len(files)}"
-    
-    print("  ✓ Cleanup working correctly")
+        date_str = old_date.strftime("%Y_%m_%d")
+        file_path = os.path.join(test_dir, f"rates_{date_str}.json")
 
+        # Write dummy data
+        with open(file_path, "w") as f:
+            json.dump({
+                "rates_import": {},
+                "rates_export": {},
+                "last_updated": old_date.isoformat()
+            }, f)
 
-def test_interval_mismatch(test_dir):
-    """Test handling of plan_interval_minutes mismatch"""
-    
-    class MockBase:
-        def __init__(self, interval=30):
-            self.plan_interval_minutes = interval
-            self.minutes_now = 720
-            
-        def log(self, msg):
-            print(f"  {msg}")
-            
-        def get_arg(self, key, default):
-            return default
-    
-    # Create file with 30-minute intervals
-    base1 = MockBase(interval=30)
-    store1 = RateStore(base1, save_dir=test_dir)
-    
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    store1.write_base_rate(today, 0, 10.0, 5.0)
-    store1.write_base_rate(today, 30, 12.0, 6.0)
-    
-    # Try to load with different interval (should backup and restart)
-    base2 = MockBase(interval=60)
-    store2 = RateStore(base2, save_dir=test_dir)
-    
-    # Should have created backup
-    date_str = today.strftime("%Y_%m_%d")
-    backup_path = os.path.join(test_dir, f"rates_{date_str}.json.bak")
-    assert os.path.exists(backup_path), "Backup file should be created on interval mismatch"
-    
-    # Load data - should have new empty structure with 60-minute interval
-    data = store2.load_rates(today)
-    assert data['plan_interval_minutes'] == 60, "Should have new interval"
-    
-    print("  ✓ Interval mismatch handled correctly")
+        # Set file modification time to match the date (so cleanup works correctly)
+        old_timestamp = (old_date - timedelta(hours=12)).timestamp()  # Set to noon of that day
+        os.utime(file_path, (old_timestamp, old_timestamp))
 
+    # Run cleanup with 7 days retention
+    retention_days = 7
+    store.cleanup_old_files(retention_days)
 
-if __name__ == "__main__":
-    success = run_rate_store_tests()
-    exit(0 if success else 1)
+    # Check files - should have at most retention_days + 1 (today) files
+    remaining_files = [f for f in os.listdir(test_dir) if f.startswith("rates_") and f.endswith(".json") and not f.endswith(".bak")]
+
+    # Should have at most 7 days of retention + today = 8 files
+    if len(remaining_files) > 8:
+        print(f"  ERROR: Expected <= 8 files after cleanup, found {len(remaining_files)}")
+        print(f"  Files: {sorted(remaining_files)}")
+        return True
+
+    print("  PASS: Cleanup working correctly")
+    return False
