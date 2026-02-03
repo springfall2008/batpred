@@ -1716,13 +1716,17 @@ class Output:
             hour_load += load_energy
 
             if self.rate_import:
-                hour_cost += self.rate_import.get(minute, 0) * energy_import
-                hour_cost_import += self.rate_import.get(minute, 0) * energy_import
-                hour_cost_car += self.rate_import.get(minute, 0) * energy_car
+                # Use rate_store for historical rates to prevent retrospective changes
+                import_rate = self.rate_store.get_rate(datetime.now(), minute, is_import=True) if self.rate_store else self.rate_import.get(minute, 0)
+                hour_cost += import_rate * energy_import
+                hour_cost_import += import_rate * energy_import
+                hour_cost_car += import_rate * energy_car
 
             if self.rate_export:
-                hour_cost -= self.rate_export.get(minute, 0) * energy_export
-                hour_cost_export -= self.rate_export.get(minute, 0) * energy_export
+                # Use rate_store for historical rates to prevent retrospective changes
+                export_rate = self.rate_store.get_rate(datetime.now(), minute, is_import=False) if self.rate_store else self.rate_export.get(minute, 0)
+                hour_cost -= export_rate * energy_export
+                hour_cost_export -= export_rate * energy_export
 
             if self.carbon_enable:
                 hour_carbon_g += self.carbon_history.get(minute_back, 0) * energy_import
@@ -1774,16 +1778,20 @@ class Output:
             day_import += energy
             day_car += car_energy
             if self.rate_import:
-                day_cost += self.rate_import.get(minute, 0) * energy
-                day_cost_import += self.rate_import.get(minute, 0) * energy
-                day_cost_nosc += self.rate_import.get(minute, 0) * energy
-                day_cost_car += self.rate_import.get(minute, 0) * car_energy
+                # Use rate_store for historical rates to prevent retrospective changes
+                import_rate = self.rate_store.get_rate(datetime.now(), minute, is_import=True) if self.rate_store else self.rate_import.get(minute, 0)
+                day_cost += import_rate * energy
+                day_cost_import += import_rate * energy
+                day_cost_nosc += import_rate * energy
+                day_cost_car += import_rate * car_energy
 
             day_export += energy_export
             if self.rate_export:
-                day_cost -= self.rate_export.get(minute, 0) * energy_export
-                day_cost_nosc -= self.rate_export.get(minute, 0) * energy_export
-                day_cost_export -= self.rate_export.get(minute, 0) * energy_export
+                # Use rate_store for historical rates to prevent retrospective changes
+                export_rate = self.rate_store.get_rate(datetime.now(), minute, is_import=False) if self.rate_store else self.rate_export.get(minute, 0)
+                day_cost -= export_rate * energy_export
+                day_cost_nosc -= export_rate * energy_export
+                day_cost_export -= export_rate * energy_export
 
             if self.carbon_enable:
                 carbon_g += self.carbon_history.get(minute_back, 0) * energy
