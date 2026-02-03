@@ -1494,7 +1494,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
             self.load_user_config(quiet=False, register=False)
             self.validate_config()
             self.comparison = Compare(self)
-            
+
             self.rate_store = RateStore(self)
 
             self.components.initialize(phase=1)

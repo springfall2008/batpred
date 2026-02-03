@@ -950,7 +950,7 @@ class Fetch:
         if self.rate_import:
             self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
-            
+
             # Persist base import rates to storage (only non-replicated/non-override data)
             if self.rate_store:
                 today = datetime.now()
@@ -960,13 +960,13 @@ class Fetch:
                         # Get corresponding export rate or use 0
                         export_rate = self.rate_export.get(minute, 0) if self.rate_export else 0
                         self.rate_store.write_base_rate(today, minute, self.rate_import[minute], export_rate)
-                
+
                 # Rehydrate finalized rates from storage - these take priority over fresh API data
                 for minute in range(0, self.minutes_now):
                     finalized_rate = self.rate_store.get_rate(today, minute, is_import=True)
                     if finalized_rate is not None:
                         self.rate_import[minute] = finalized_rate
-            
+
             self.rate_import_no_io = self.rate_import.copy()
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
@@ -983,7 +983,7 @@ class Fetch:
         if self.rate_export:
             self.rate_scan_export(self.rate_export, print=False)
             self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
-            
+
             # Persist base export rates to storage (only non-replicated/non-override data)
             if self.rate_store:
                 today = datetime.now()
@@ -993,13 +993,13 @@ class Fetch:
                         # Get corresponding import rate or use 0
                         import_rate = self.rate_import.get(minute, 0) if self.rate_import else 0
                         self.rate_store.write_base_rate(today, minute, import_rate, self.rate_export[minute])
-                
+
                 # Rehydrate finalized rates from storage - these take priority over fresh API data
                 for minute in range(0, self.minutes_now):
                     finalized_rate = self.rate_store.get_rate(today, minute, is_import=False)
                     if finalized_rate is not None:
                         self.rate_export[minute] = finalized_rate
-            
+
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
@@ -1014,7 +1014,7 @@ class Fetch:
         # Set rate thresholds
         if self.rate_import or self.rate_export:
             self.set_rate_thresholds()
-            
+
         # Finalize past slots (5+ minutes past slot start)
         if self.rate_store:
             today = datetime.now()
@@ -1423,7 +1423,7 @@ class Fetch:
                 continue
             rates[minute] = rate
             rate_replicate[minute] = "manual"
-            
+
             # Track manual override in rate store
             if self.rate_store:
                 today = datetime.now()

@@ -1947,7 +1947,7 @@ class Octopus:
                         if minute in self.rate_export:
                             self.rate_export[minute] += rate
                             rate_replicate[minute] = "saving"
-                            
+
                             # Track saving session override in rate store
                             if self.rate_store:
                                 today = datetime.now()
@@ -1957,7 +1957,7 @@ class Octopus:
                             self.rate_import[minute] += rate
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
                             rate_replicate[minute] = "saving"
-                            
+
                             # Track saving session override in rate store
                             if self.rate_store:
                                 today = datetime.now()
@@ -2156,7 +2156,7 @@ class Octopus:
                                     slots_per_day[day_offset] += 1
                                     slots_added_set.add(slot_start)
                                     rates[minute] = assumed_price
-                                    
+
                                     # Track IOG override in rate store
                                     if self.rate_store:
                                         today = datetime.now()
@@ -2166,7 +2166,7 @@ class Octopus:
                                 # For minutes within a 30-min slot, only apply if the slot was added
                                 if slot_start in slots_added_set:
                                     rates[minute] = assumed_price
-                                    
+
                                     # Track IOG override in rate store
                                     if self.rate_store:
                                         today = datetime.now()
