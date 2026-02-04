@@ -17,7 +17,7 @@ from rate_store import RateStore
 
 def run_rate_store_tests(my_predbat):
     """
-    Run comprehensive tests for rate persistence and finalization
+    Run comprehensive tests for rate persistence and finalisation
 
     Args:
         my_predbat: PredBat instance (unused for these tests but required for consistency)
@@ -37,14 +37,14 @@ def run_rate_store_tests(my_predbat):
         print("*** Test 1: Basic rate persistence")
         failed |= test_basic_persistence(os.path.join(test_dir, "test1"))
 
-        print("*** Test 2: Rate finalization")
-        failed |= test_finalization(os.path.join(test_dir, "test2"))
+        print("*** Test 2: Rate finalisation")
+        failed |= test_finalisation(os.path.join(test_dir, "test2"))
 
         print("*** Test 3: Override priority (manual > automatic > initial)")
         failed |= test_override_priority(os.path.join(test_dir, "test3"))
 
-        print("*** Test 4: Finalized rates resist fresh API data")
-        failed |= test_finalized_resistance(os.path.join(test_dir, "test4"))
+        print("*** Test 4: Finalised rates resist fresh API data")
+        failed |= test_finalised_resistance(os.path.join(test_dir, "test4"))
 
         print("*** Test 5: Cleanup old files")
         failed |= test_cleanup(os.path.join(test_dir, "test5"))
@@ -110,8 +110,8 @@ def test_basic_persistence(test_dir):
     return False
 
 
-def test_finalization(test_dir):
-    """Test that rates become finalized after their slot time + buffer"""
+def test_finalisation(test_dir):
+    """Test that rates become finalised after their slot time + buffer"""
 
     # Create test subdirectory
     os.makedirs(test_dir, exist_ok=True)
@@ -135,13 +135,13 @@ def test_finalization(test_dir):
     # Write base rates for past slots (more than 5 minutes ago)
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Write rates for slots that should be finalized (00:00, 00:30, 01:00)
+    # Write rates for slots that should be finalised (00:00, 00:30, 01:00)
     store.write_base_rate(today, 0, 15.0, 5.0)
     store.write_base_rate(today, 30, 20.0, 10.0)
     store.write_base_rate(today, 60, 25.0, 15.0)
 
-    # Finalize past slots (set current minute to 70 which is past 01:00+5min buffer)
-    store.finalize_slots(today, 70)
+    # Finalise past slots (set current minute to 70 which is past 01:00+5min buffer)
+    store.finalise_slots(today, 70)
 
     # Check that slots are finalized in the JSON file
     date_str = today.strftime("%Y_%m_%d")
@@ -154,31 +154,31 @@ def test_finalization(test_dir):
     with open(file_path, "r") as f:
         data = json.load(f)
 
-    # Check finalized flags
+    # Check finalised flags
     if "rates_import" not in data or "rates_export" not in data:
         print("  ERROR: Missing rate sections in file")
         return True
 
-    # Slot at 0 should be finalized
-    if "00:00" not in data["rates_import"] or not data["rates_import"]["00:00"]["finalized"]:
-        print("  ERROR: Slot 00:00 import should be finalized")
+    # Slot at 0 should be finalised
+    if "00:00" not in data["rates_import"] or not data["rates_import"]["00:00"]["finalised"]:
+        print("  ERROR: Slot 00:00 import should be finalised")
         return True
 
-    if "00:00" not in data["rates_export"] or not data["rates_export"]["00:00"]["finalized"]:
-        print("  ERROR: Slot 00:00 export should be finalized")
+    if "00:00" not in data["rates_export"] or not data["rates_export"]["00:00"]["finalised"]:
+        print("  ERROR: Slot 00:00 export should be finalised")
         return True
 
-    # Slot at 30 should be finalized
-    if "00:30" not in data["rates_import"] or not data["rates_import"]["00:30"]["finalized"]:
-        print("  ERROR: Slot 00:30 import should be finalized")
+    # Slot at 30 should be finalised
+    if "00:30" not in data["rates_import"] or not data["rates_import"]["00:30"]["finalised"]:
+        print("  ERROR: Slot 00:30 import should be finalised")
         return True
 
-    # Slot at 60 should be finalized
-    if "01:00" not in data["rates_import"] or not data["rates_import"]["01:00"]["finalized"]:
-        print("  ERROR: Slot 01:00 import should be finalized")
+    # Slot at 60 should be finalised
+    if "01:00" not in data["rates_import"] or not data["rates_import"]["01:00"]["finalised"]:
+        print("  ERROR: Slot 01:00 import should be finalised")
         return True
 
-    print("  PASS: Finalization working correctly")
+    print("  PASS: Finalisation working correctly")
     return False
 
 
@@ -248,8 +248,8 @@ def test_override_priority(test_dir):
     return False
 
 
-def test_finalized_resistance(test_dir):
-    """Test that finalized rates resist new API data"""
+def test_finalised_resistance(test_dir):
+    """Test that finalised rates resist new API data"""
 
     # Create test subdirectory
     os.makedirs(test_dir, exist_ok=True)
@@ -276,25 +276,25 @@ def test_finalized_resistance(test_dir):
     # Write initial rate
     store.write_base_rate(today, minute, 15.0, 5.0)
 
-    # Finalize it (minute 10 is past minute 0 + 5 minute buffer)
-    store.finalize_slots(today, 10)
+    # Finalise it (minute 10 is past minute 0 + 5 minute buffer)
+    store.finalise_slots(today, 10)
 
     # Try to overwrite with new API data
     store.write_base_rate(today, minute, 25.0, 10.0)
 
-    # Should still be 15.0 (finalized rate resists changes)
+    # Should still be 15.0 (finalised rate resists changes)
     rate = store.get_rate(today, minute, is_import=True)
     if rate is None or abs(rate - 15.0) > 0.01:
-        print(f"  ERROR: Finalized import rate changed from 15.0 to {rate}")
+        print(f"  ERROR: Finalised import rate changed from 15.0 to {rate}")
         return True
 
     # Export should also resist
     export_rate = store.get_rate(today, minute, is_import=False)
     if export_rate is None or abs(export_rate - 5.0) > 0.01:
-        print(f"  ERROR: Finalized export rate changed from 5.0 to {export_rate}")
+        print(f"  ERROR: Finalised export rate changed from 5.0 to {export_rate}")
         return True
 
-    print("  PASS: Finalized rates resist new API data")
+    print("  PASS: Finalised rates resist new API data")
     return False
 
 

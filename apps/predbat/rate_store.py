@@ -27,7 +27,7 @@ class RateStore(PersistentStore):
     - initial: Base rate from API at first retrieval
     - automatic: Override from external services (IOG, Axle, saving sessions)
     - manual: User override from manual selectors
-    - finalized: Lock flag set 5 minutes past slot start time
+    - finalised: Lock flag set 5 minutes past slot start time
 
     File structure: predbat_save/rates_YYYY_MM_DD.json
     """
@@ -54,11 +54,11 @@ class RateStore(PersistentStore):
         self.load_rates(today)
         self.load_rates(yesterday)
 
-        # Finalize past slots
-        finalized_today = self.finalize_slots(today, base.minutes_now)
-        finalized_yesterday = self.finalize_slots(yesterday, 24 * 60)  # Finalize all yesterday slots
-        if finalized_today > 0 or finalized_yesterday > 0:
-            self.log("Finalized {} slots for today and {} slots for yesterday".format(finalized_today, finalized_yesterday))
+        # Finalise past slots
+        finalised_today = self.finalise_slots(today, base.minutes_now)
+        finalised_yesterday = self.finalise_slots(yesterday, 24 * 60)  # Finalise all yesterday slots
+        if finalised_today > 0 or finalised_yesterday > 0:
+            self.log("Finalised {} slots for today and {} slots for yesterday".format(finalised_today, finalised_yesterday))
 
         # Cleanup old rate files
         retention_days = base.get_arg("rate_retention_days", 7)
@@ -142,13 +142,13 @@ class RateStore(PersistentStore):
         Create empty slot structure.
 
         Returns:
-            Dict with initial/automatic/manual/finalized fields
+            Dict with initial/automatic/manual/finalised fields
         """
         return {
             'initial': None,
             'automatic': None,
             'manual': None,
-            'finalized': False
+            'finalised': False
         }
 
     def load_rates(self, date):
@@ -256,7 +256,7 @@ class RateStore(PersistentStore):
     def update_auto_override(self, date, minute, rate_import, rate_export, source):
         """
         Update automatic override rate for a slot (IOG, Axle, saving sessions).
-        Only updates non-finalized slots.
+        Only updates non-finalised slots.
 
         Args:
             date: datetime object for the date
@@ -278,9 +278,8 @@ class RateStore(PersistentStore):
         if slot_time not in data['rates_export']:
             data['rates_export'][slot_time] = self._init_empty_slot()
 
-        # Check if slot is finalized
-        if data['rates_import'][slot_time]['finalized']:
-            # Don't modify finalized slots
+        if data['rates_import'][slot_time]['finalised']:
+            # Don't modify finalised slots
             return
 
         # Store override with source tracking
@@ -311,7 +310,7 @@ class RateStore(PersistentStore):
     def update_manual_override(self, date, minute, rate_import, rate_export):
         """
         Update manual override rate for a slot (from user selectors).
-        Only updates non-finalized slots.
+        Only updates non-finalised slots.
 
         Args:
             date: datetime object for the date
@@ -332,9 +331,9 @@ class RateStore(PersistentStore):
         if slot_time not in data['rates_export']:
             data['rates_export'][slot_time] = self._init_empty_slot()
 
-        # Check if slot is finalized
-        if data['rates_import'][slot_time]['finalized']:
-            # Don't modify finalized slots
+        # Check if slot is finalised
+        if data['rates_import'][slot_time]['finalised']:
+            # Don't modify finalised slots
             return
 
         # Store manual override
@@ -344,39 +343,39 @@ class RateStore(PersistentStore):
         # Save immediately
         self.save_rates(date)
 
-    def finalize_slots(self, date, current_minute):
+    def finalise_slots(self, date, current_minute):
         """
-        Finalize all slots that have passed their start time by 5+ minutes.
-        Finalized slots cannot be modified by overrides.
+        Finalise all slots that have passed their start time by 5+ minutes.
+        Finalised slots cannot be modified by overrides.
 
         Args:
             date: datetime object for the date
             current_minute: Current minute offset from midnight
 
         Returns:
-            Number of slots finalized
+            Number of slots finalised
         """
         # Load rate data
         data = self.load_rates(date)
 
-        finalized_count = 0
+        finalised_count = 0
 
         # Process all slots
         for slot_time in data['rates_import'].keys():
             slot_minute = self._time_to_minutes(slot_time)
 
-            # Check if slot should be finalized
-            # Finalize if current time is 5+ minutes past slot start
+            # Check if slot should be finalised
+            # Finalise if current time is 5+ minutes past slot start
             if current_minute >= slot_minute + 5:
-                if not data['rates_import'][slot_time]['finalized']:
-                    data['rates_import'][slot_time]['finalized'] = True
-                    data['rates_export'][slot_time]['finalized'] = True
-                    finalized_count += 1
+                if not data['rates_import'][slot_time]['finalised']:
+                    data['rates_import'][slot_time]['finalised'] = True
+                    data['rates_export'][slot_time]['finalised'] = True
+                    finalised_count += 1
 
-        if finalized_count > 0:
+        if finalised_count > 0:
             self.save_rates(date)
 
-        return finalized_count
+        return finalised_count
 
     def get_rate(self, date, minute, is_import=True):
         """
