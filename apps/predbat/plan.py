@@ -77,7 +77,7 @@ class Plan:
             state=dp3(self.load_last_period),
             attributes={"friendly_name": "Last period load", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:home-lightning-bolt", "status": self.load_last_status},
         )
-        self.log("Dynamic load last period {:.2f}kW, status {}, threshold_battery {}kWh, threshold_car {}kWh,".format(self.load_last_period, self.load_last_status, threshold_battery, threshold_car))
+        self.log("Dynamic load last period {:.2f}kW, status {}, threshold_battery {}kWh, threshold_car {}kWh,".format(self.load_last_period, self.load_last_status, threshold_battery, dp1(threshold_car)))
 
         # Is the car currently planned to charge?
         load_car_slot = False

@@ -37,7 +37,7 @@ class Fetch:
             pv_factor_round = pv_factor
             if pv_factor_round:
                 pv_factor_round = dp1(pv_factor_round)
-            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(dp1(pv_total), dp1(pv_total10), pv_factor_round))
+            self.log("PV Forecast {}kWh and 10% Forecast {}kWh; PV cloud factor {}".format(dp1(pv_total), dp1(pv_total10), pv_factor_round))
             return pv_factor
         else:
             return None
@@ -1753,7 +1753,7 @@ class Fetch:
 
         if self.num_cars > 0:
             self.log(
-                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}%, rate {}W, exclusive {}".format(
+                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}%, rate {}kW, exclusive {}".format(
                     self.num_cars,
                     self.car_charging_from_battery,
                     self.car_charging_planned,
@@ -1762,8 +1762,8 @@ class Fetch:
                     self.car_charging_plan_max_price,
                     self.currency_symbols[1],
                     self.car_charging_plan_time,
-                    self.car_charging_battery_size,
-                    self.car_charging_limit,
+                    dp1(self.car_charging_battery_size),
+                    dp1(self.car_charging_limit),
                     self.car_charging_rate,
                     self.car_charging_exclusive,
                 )

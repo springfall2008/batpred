@@ -577,7 +577,7 @@ class Inverter:
                 for minute in battery_power:
                     battery_power[minute] = -battery_power[minute]
             min_len = min(len(soc_percent), len(battery_power))
-            self.log("Find battery size has {} days of data, max days {}".format(min_len / 60 / 24.0, self.base.max_days_previous))
+            self.log("Find battery size has {} days of data, max days {}".format(dp0(min_len / 60 / 24.0), self.base.max_days_previous))
 
             estimate_battery_sizes = []
 
@@ -667,7 +667,7 @@ class Inverter:
                         percent_change = clipped_end_soc - clipped_start_soc
 
                         self.log(
-                            "Charging clipped start at {} percent {} end {} percent {}, percent change {}".format(
+                            "Charging clipped start at {} with SoC {}%, end at {} with SoC {}%; SoC change {}%".format(
                                 clipped_start_minute,
                                 clipped_start_soc,
                                 clipped_end_minute,
@@ -685,7 +685,7 @@ class Inverter:
                                 power_added += minute_power / 60.0  # W to Wh
                                 sample_count += 1
 
-                            self.log("  Power added over {} samples is {} Wh".format(sample_count, power_added))
+                            self.log("  Power added over {} samples is {}kWh".format(sample_count, dp1(power_added / 1000)))
 
                             if power_added > 0:
                                 estimated_battery_size = (power_added / percent_change) * 100.0 / 1000.0  # Convert Wh to kWh
@@ -698,7 +698,7 @@ class Inverter:
                 average_battery_size = dp2(average_battery_size)
                 # Add in charging loss factor, assume the inverter loss is not counted in the charge rate sensor (as it's AC side)
                 average_battery_size *= self.base.battery_loss * self.base.inverter_loss
-                self.log("Estimated battery size is {} kWh from {} samples (assumed charging loss factor {})".format(average_battery_size, len(estimate_battery_sizes), self.base.battery_loss * self.base.inverter_loss))
+                self.log("Estimated battery size is {}kWh from {} samples (assumed charging loss factor {})".format(dp2(average_battery_size), len(estimate_battery_sizes), dp1(self.base.battery_loss * self.base.inverter_loss)))
                 return average_battery_size
             else:
                 self.log("Warn: Unable to find any suitable charge periods to estimate battery size")
