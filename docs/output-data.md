@@ -490,7 +490,7 @@ Add a card of type 'markdown' to your dashboard to display a simple dashboard of
 ```yaml
 type: markdown
 content: >-
-  {% set dd = ((as_timestamp(now()) - as_timestamp("2024-12-22 17:20:00")/86400) | int %}
+  {% set dd = ((as_timestamp(now()) - as_timestamp("2024-12-22 17:20:00"))/86400) | int %}
   {% set tw = (states('predbat.inverter_register_writes') | int) %}
   {{ dd }} days, total {{ tw }} inverter writes
 
