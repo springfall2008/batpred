@@ -271,8 +271,8 @@ COMPONENT_LIST = {
         "name": "ML Load Forecaster",
         "event_filter": "predbat_load_ml_",
         "args": {
-            "load_ml_enable": {"required_true": True, "config": "load_ml_enable"},
-            "load_ml_source": {"required": False, "config": "load_ml_source"},
+            "load_ml_enable": {"required_true": True, "config": "load_ml_enable", "default": False},
+            "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
         },
         "phase": 1,
         "can_restart": True,
