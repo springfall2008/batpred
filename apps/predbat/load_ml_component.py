@@ -47,6 +47,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_source = load_ml_source
         self.ml_load_sensor = self.get_arg("load_today", default=[], indirect=False)
         self.ml_load_power_sensor = self.get_arg("load_power", default=[], indirect=False)
+        self.ml_pv_sensor = self.get_arg("pv_today", default=[], indirect=False)
         self.ml_subtract_sensors = self.get_arg("car_charging_energy", default=[], indirect=False)
         self.car_charging_hold = self.get_arg("car_charging_hold", True)
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
@@ -65,6 +66,7 @@ class LoadMLComponent(ComponentBase):
         # Data state
         self.load_data = None
         self.load_data_age_days = 0
+        self.pv_data = None
         self.data_ready = False
         self.data_lock = asyncio.Lock()
         self.last_data_fetch = None
@@ -102,7 +104,8 @@ class LoadMLComponent(ComponentBase):
 
         # Try to load existing model
         if self.model_filepath and os.path.exists(self.model_filepath):
-            if self.predictor.load(self.model_filepath):
+            load_success = self.predictor.load(self.model_filepath)
+            if load_success:
                 self.log("ML Component: Loaded existing model")
                 # Check if model is still valid
                 is_valid, reason = self.predictor.is_valid(validation_threshold=self.ml_validation_threshold, max_age_hours=self.ml_max_model_age_hours)
@@ -113,16 +116,21 @@ class LoadMLComponent(ComponentBase):
                 else:
                     self.log("ML Component: Loaded model is invalid ({}), will retrain".format(reason))
                     self.model_status = "fallback_" + reason
+            else:
+                # Model load failed (version mismatch, architecture change, etc.)
+                # Reinitialize predictor to ensure clean state
+                self.log("ML Component: Failed to load model, reinitializing predictor")
+                self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw)
 
     async def _fetch_load_data(self):
         """
         Fetch and process load data from configured sensors.
 
         Returns:
-            Tuple of (load_minutes_dict, age_days, load_minutes_now) or (None, 0, 0) on failure
+            Tuple of (load_minutes_dict, age_days, load_minutes_now, pv_data) or (None, 0, 0, None) on failure
         """
         if not self.ml_load_sensor:
-            return None, 0, 0
+            return None, 0, 0, None
 
         try:
             # Determine how many days of history to fetch (7 days minimum)
@@ -134,7 +142,7 @@ class LoadMLComponent(ComponentBase):
             load_minutes, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_today", days_to_fetch, required_unit="kWh", load_scaling=self.get_arg("load_scaling", 1.0), interpolate=True)
             if not load_minutes:
                 self.log("Warn: ML Component: Failed to convert load history to minute data")
-                return None, 0, 0
+                return None, 0, 0, None
 
             if self.get_arg("load_power", default=None, indirect=False):
                 load_power_data, _ = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
@@ -179,15 +187,21 @@ class LoadMLComponent(ComponentBase):
             # Calculate age of data
             age_days = max_minute / (24 * 60)
 
+            # PV Data
+            if self.ml_pv_sensor:
+                pv_data, _ = self.base.minute_data_load(self.now_utc, "pv_today", days_to_fetch, required_unit="kWh", load_scaling=1.0, interpolate=True)
+            else:
+                pv_data = {}
+
             self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), age_days))
-            return load_minutes_new, age_days, load_minutes_now
+            return load_minutes_new, age_days, load_minutes_now, pv_data
 
         except Exception as e:
             self.log("Error: ML Component: Failed to fetch load data: {}".format(e))
             import traceback
 
             self.log("Error: ML Component: {}".format(traceback.format_exc()))
-            return None, 0, 0
+            return None, 0, 0, None
 
     def get_current_prediction(self):
         """
@@ -225,7 +239,7 @@ class LoadMLComponent(ComponentBase):
 
         # Generate predictions using current model
         try:
-            predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, exog_features)
+            predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, exog_features=exog_features)
 
             if predictions:
                 self.current_predictions = predictions
@@ -257,13 +271,25 @@ class LoadMLComponent(ComponentBase):
 
         if should_fetch:
             async with self.data_lock:
-                load_data, age_days, load_minutes_now = await self._fetch_load_data()
+                load_data, age_days, load_minutes_now, pv_data = await self._fetch_load_data()
                 if load_data:
                     self.load_data = load_data
                     self.load_data_age_days = age_days
                     self.load_minutes_now = load_minutes_now
                     self.data_ready = True
                     self.last_data_fetch = self.now_utc
+                    pv_data = pv_data
+                    pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
+                    # PV Data has the historical PV data (minute is the number of minutes in the past)
+                    # PV forecast has the predicted PV generation for the next 24 hours (minute is the number of minutes from midnight forward
+                    # Combine the two into a new dict where negative minutes are in the future and positive in the past
+                    self.pv_data = pv_data
+                    current_value = pv_data.get(0, 0)
+                    if pv_forecast_minute:
+                        max_minute = max(pv_forecast_minute.keys()) + PREDICT_STEP
+                        for minute in range(self.minutes_now + PREDICT_STEP, max_minute, PREDICT_STEP):
+                            current_value += pv_forecast_minute.get(minute, current_value)
+                            pv_data[-minute + self.minutes_now] = current_value
                 else:
                     self.log("Warn: ML Component: Failed to fetch load data")
 
@@ -331,7 +357,7 @@ class LoadMLComponent(ComponentBase):
                 # Run training in executor to avoid blocking
                 epochs = self.ml_epochs_initial if is_initial else self.ml_epochs_update
 
-                val_mae = self.predictor.train(self.load_data, self.now_utc, is_initial=is_initial, epochs=epochs, time_decay_days=self.ml_time_decay_days)
+                val_mae = self.predictor.train(self.load_data, self.now_utc, pv_minutes=self.pv_data, is_initial=is_initial, epochs=epochs, time_decay_days=self.ml_time_decay_days)
 
                 if val_mae is not None:
                     self.last_train_time = datetime.now(timezone.utc)

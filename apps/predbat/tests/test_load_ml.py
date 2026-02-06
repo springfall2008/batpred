@@ -38,14 +38,18 @@ def test_load_ml(my_predbat=None):
         ("backward_pass", _test_backward_pass, "Backward pass gradient computation"),
         ("cyclical_features", _test_cyclical_features, "Cyclical time feature encoding"),
         ("load_to_energy", _test_load_to_energy, "Convert cumulative load to energy per step"),
+        ("pv_energy_conversion", _test_pv_energy_conversion, "Convert PV data including future forecasts"),
         ("dataset_creation", _test_dataset_creation, "Dataset creation from load data"),
+        ("dataset_with_pv", _test_dataset_with_pv, "Dataset creation with PV features"),
         ("normalization", _test_normalization, "Z-score normalization correctness"),
         ("adam_optimizer", _test_adam_optimizer, "Adam optimizer step"),
         ("training_convergence", _test_training_convergence, "Training convergence on synthetic data"),
+        ("training_with_pv", _test_training_with_pv, "Training with PV input features"),
         ("model_persistence", _test_model_persistence, "Model save/load with version check"),
         ("cold_start", _test_cold_start, "Cold start with insufficient data"),
         ("fine_tune", _test_fine_tune, "Fine-tune on recent data"),
         ("prediction", _test_prediction, "End-to-end prediction"),
+        ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         # ("real_data_training", _test_real_data_training, "Train on real load_minutes_debug.json data with chart"),
         ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
         ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
@@ -204,6 +208,95 @@ def _test_load_to_energy():
     assert abs(energy_per_step.get(15, -1) - 0.5) < 1e-6, "Energy 15-20 should be 0.5"
 
 
+def _test_pv_energy_conversion():
+    """Test conversion of PV data including future forecasts (negative minutes)"""
+    predictor = LoadPredictor()
+
+    # Create PV data with both historical (positive) and future (negative) minutes
+    # Historical: minute 0-20 (backwards in time)
+    # Future: minute -5 to -20 (forward in time)
+    pv_minutes = {
+        # Historical (cumulative decreasing as we go back in time)
+        0: 10.0,
+        5: 9.0,
+        10: 8.0,
+        15: 7.0,
+        20: 6.0,
+        # Future forecasts (cumulative increasing as we go forward)
+        -5: 11.0,
+        -10: 12.5,
+        -15: 14.0,
+        -20: 15.0,
+    }
+
+    pv_energy_per_step = predictor._load_to_energy_per_step(pv_minutes)
+
+    # Historical energy (positive minutes, going backwards)
+    # Energy from 0-5: 10 - 9 = 1
+    assert abs(pv_energy_per_step.get(0, -1) - 1.0) < 1e-6, "PV energy 0-5 should be 1.0"
+    # Energy from 5-10: 9 - 8 = 1
+    assert abs(pv_energy_per_step.get(5, -1) - 1.0) < 1e-6, "PV energy 5-10 should be 1.0"
+
+    # Future energy (negative minutes, going forward)
+    # Energy from -20 to -15: 15.0 - 14.0 = 1.0
+    assert abs(pv_energy_per_step.get(-20, -1) - 1.0) < 1e-6, f"PV future energy -20 to -15 should be 1.0, got {pv_energy_per_step.get(-20, -1)}"
+    # Energy from -15 to -10: 14.0 - 12.5 = 1.5
+    assert abs(pv_energy_per_step.get(-15, -1) - 1.5) < 1e-6, f"PV future energy -15 to -10 should be 1.5, got {pv_energy_per_step.get(-15, -1)}"
+    # Energy from -10 to -5: 12.5 - 11.0 = 1.5
+    assert abs(pv_energy_per_step.get(-10, -1) - 1.5) < 1e-6, f"PV future energy -10 to -5 should be 1.5, got {pv_energy_per_step.get(-10, -1)}"
+    # Energy from -5 to 0: 11.0 - 10.0 = 1.0
+    assert abs(pv_energy_per_step.get(-5, -1) - 1.0) < 1e-6, f"PV future energy -5 to 0 should be 1.0, got {pv_energy_per_step.get(-5, -1)}"
+
+
+def _create_synthetic_pv_data(n_days=7, now_utc=None, forecast_hours=48):
+    """Create synthetic PV data for testing (historical + forecast)"""
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+
+    pv_minutes = {}
+    cumulative = 0.0
+
+    # Historical PV (positive minutes, backwards from now)
+    n_minutes = n_days * 24 * 60
+    # Start from a multiple of STEP_MINUTES and go down to 0
+    start_minute = (n_minutes // STEP_MINUTES) * STEP_MINUTES
+    for minute in range(start_minute, -STEP_MINUTES, -STEP_MINUTES):
+        dt = now_utc - timedelta(minutes=minute)
+        hour = dt.hour
+
+        # PV generation pattern: 0 at night, peak at midday
+        if 6 <= hour < 18:
+            # Peak around noon (hour 12)
+            hour_offset = abs(hour - 12)
+            energy = max(0, 0.5 - hour_offset * 0.08 + 0.05 * np.random.randn())
+        else:
+            energy = 0.0
+
+        energy = max(0, energy)
+        cumulative += energy
+        pv_minutes[minute] = cumulative
+
+    # Future PV forecast (negative minutes, forward from now)
+    forecast_cumulative = pv_minutes[0]  # Start from current cumulative
+    for step in range(1, (forecast_hours * 60 // STEP_MINUTES) + 1):
+        minute = -step * STEP_MINUTES
+        dt = now_utc + timedelta(minutes=step * STEP_MINUTES)
+        hour = dt.hour
+
+        # Same pattern for forecast
+        if 6 <= hour < 18:
+            hour_offset = abs(hour - 12)
+            energy = max(0, 0.5 - hour_offset * 0.08 + 0.05 * np.random.randn())
+        else:
+            energy = 0.0
+
+        energy = max(0, energy)
+        forecast_cumulative += energy
+        pv_minutes[minute] = forecast_cumulative
+
+    return pv_minutes
+
+
 def _create_synthetic_load_data(n_days=7, now_utc=None):
     """Create synthetic load data for testing"""
     if now_utc is None:
@@ -214,7 +307,9 @@ def _create_synthetic_load_data(n_days=7, now_utc=None):
     cumulative = 0.0
 
     # Build backwards from now (minute 0 = now)
-    for minute in range(n_minutes - 1, -1, -STEP_MINUTES):
+    # Start from a multiple of STEP_MINUTES and go down to 0
+    start_minute = (n_minutes // STEP_MINUTES) * STEP_MINUTES
+    for minute in range(start_minute, -STEP_MINUTES, -STEP_MINUTES):
         # Time for this minute
         dt = now_utc - timedelta(minutes=minute)
         hour = dt.hour
@@ -264,6 +359,38 @@ def _test_dataset_creation():
     # Validation should be approximately 24h worth of samples (288 at 5-min intervals)
     expected_val_samples = 24 * 60 // STEP_MINUTES
     assert abs(X_val.shape[0] - expected_val_samples) < 10, f"Expected ~{expected_val_samples} val samples, got {X_val.shape[0]}"
+
+
+def _test_dataset_with_pv():
+    """Test dataset creation includes PV features correctly"""
+    predictor = LoadPredictor()
+    # Use a fixed daytime hour to ensure PV generation
+    now_utc = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)  # Noon on summer day
+
+    # Create synthetic load and PV data
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+    pv_data = _create_synthetic_pv_data(n_days=7, now_utc=now_utc, forecast_hours=0)  # Historical only for training
+
+    # Create dataset with PV data
+    X_train, y_train, train_weights, X_val, y_val = predictor._create_dataset(load_data, now_utc, pv_minutes=pv_data, time_decay_days=7)
+
+    # Should have valid samples
+    assert X_train is not None, "Training X should not be None"
+    assert X_train.shape[0] > 0, "Training should have samples"
+
+    # Feature dimension should include PV features: LOOKBACK_STEPS (load) + LOOKBACK_STEPS (PV) + 4 (time) = TOTAL_FEATURES
+    from load_predictor import NUM_LOAD_FEATURES, NUM_PV_FEATURES, NUM_TIME_FEATURES
+
+    expected_features = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TIME_FEATURES
+    assert X_train.shape[1] == expected_features, f"Expected {expected_features} features with PV, got {X_train.shape[1]}"
+    assert X_train.shape[1] == TOTAL_FEATURES, f"TOTAL_FEATURES should be {expected_features}, is {TOTAL_FEATURES}"
+
+    # Verify PV features are not all zeros (unless no PV data provided)
+    # PV features are in the middle section: indices NUM_LOAD_FEATURES to NUM_LOAD_FEATURES+NUM_PV_FEATURES
+    pv_feature_section = X_train[:, NUM_LOAD_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES]
+    # At least some PV values should be non-zero (during daylight hours)
+    assert np.any(pv_feature_section > 0), "PV features should contain some non-zero values"
 
 
 def _test_normalization():
@@ -322,12 +449,36 @@ def _test_training_convergence():
     load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
 
     # Train with few epochs
-    val_mae = predictor.train(load_data, now_utc, is_initial=True, epochs=10, time_decay_days=7)
+    val_mae = predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=10, time_decay_days=7)
 
     # Training should complete and return a validation MAE
     assert val_mae is not None, "Training should return validation MAE"
     assert predictor.model_initialized, "Model should be initialized after training"
     assert predictor.epochs_trained > 0, "Should have trained some epochs"
+
+
+def _test_training_with_pv():
+    """Test that training works correctly with PV input features"""
+    predictor = LoadPredictor(learning_rate=0.01)
+    now_utc = datetime.now(timezone.utc)
+
+    # Create load and PV data
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+    pv_data = _create_synthetic_pv_data(n_days=7, now_utc=now_utc, forecast_hours=0)  # Historical only for training
+
+    # Train with PV data
+    val_mae = predictor.train(load_data, now_utc, pv_minutes=pv_data, is_initial=True, epochs=10, time_decay_days=7)
+
+    # Training should complete successfully
+    assert val_mae is not None, "Training with PV should return validation MAE"
+    assert predictor.model_initialized, "Model should be initialized after training with PV"
+    assert predictor.epochs_trained > 0, "Should have trained some epochs with PV data"
+
+    # Verify the model can accept correct input size (with PV features)
+    test_input = np.random.randn(1, TOTAL_FEATURES).astype(np.float32)
+    output, _, _ = predictor._forward(test_input)
+    assert output.shape == (1, OUTPUT_STEPS), "Model should produce correct output shape with PV features"
 
 
 def _test_model_persistence():
@@ -338,7 +489,7 @@ def _test_model_persistence():
     # Train briefly
     np.random.seed(42)
     load_data = _create_synthetic_load_data(n_days=5, now_utc=now_utc)
-    predictor.train(load_data, now_utc, is_initial=True, epochs=5, time_decay_days=7)
+    predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=5, time_decay_days=7)
 
     # Save to temp file
     with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
@@ -380,7 +531,7 @@ def _test_cold_start():
     load_data = _create_synthetic_load_data(n_days=1, now_utc=now_utc)
 
     # Training should fail or return None
-    val_mae = predictor.train(load_data, now_utc, is_initial=True, epochs=5, time_decay_days=7)
+    val_mae = predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=5, time_decay_days=7)
 
     # With only 1 day of data, we can't create a valid dataset for 48h prediction
     # The result depends on actual data coverage
@@ -396,7 +547,7 @@ def _test_fine_tune():
     # Initial training on 7 days
     np.random.seed(42)
     load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
-    predictor.train(load_data, now_utc, is_initial=True, epochs=5, time_decay_days=7)
+    predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=5, time_decay_days=7)
 
     # Store original weights
     orig_weights = [w.copy() for w in predictor.weights]
@@ -404,7 +555,7 @@ def _test_fine_tune():
     # Fine-tune with same data but as fine-tune mode
     # Note: Fine-tune uses is_finetune=True which only looks at last 24h
     # For the test to work, we need enough data for the full training
-    predictor.train(load_data, now_utc, is_initial=False, epochs=3, time_decay_days=7)
+    predictor.train(load_data, now_utc, pv_minutes=None, is_initial=False, epochs=3, time_decay_days=7)
 
     # Even if fine-tune has insufficient data, initial training should have worked
     # The test validates that fine-tune doesn't crash and model is still valid
@@ -420,10 +571,10 @@ def _test_prediction():
     # Train on synthetic data
     np.random.seed(42)
     load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
-    predictor.train(load_data, now_utc, is_initial=True, epochs=10, time_decay_days=7)
+    predictor.train(load_data, now_utc, pv_minutes=None, is_initial=True, epochs=10, time_decay_days=7)
 
     # Make prediction
-    predictions = predictor.predict(load_data, now_utc, midnight_utc)
+    predictions = predictor.predict(load_data, now_utc, midnight_utc, pv_minutes=None)
 
     # Should return dict with minute keys
     if predictions:  # May return empty dict if validation fails
@@ -433,6 +584,37 @@ def _test_prediction():
         # All values should be non-negative
         for minute, val in predictions.items():
             assert val >= 0, f"Prediction at minute {minute} should be non-negative"
+
+
+def _test_prediction_with_pv():
+    """Test end-to-end prediction with PV forecast data"""
+    predictor = LoadPredictor(learning_rate=0.01)
+    now_utc = datetime.now(timezone.utc)
+    midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Create load and PV data (with 48h forecast)
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+    pv_data = _create_synthetic_pv_data(n_days=7, now_utc=now_utc, forecast_hours=48)  # Include forecast
+
+    # Train with PV data
+    predictor.train(load_data, now_utc, pv_minutes=pv_data, is_initial=True, epochs=10, time_decay_days=7)
+
+    # Make prediction with PV forecast
+    predictions = predictor.predict(load_data, now_utc, midnight_utc, pv_minutes=pv_data)
+
+    # Should return predictions
+    if predictions:
+        assert isinstance(predictions, dict), "Predictions should be a dict"
+        assert len(predictions) > 0, "Should have predictions with PV data"
+
+        # Verify all values are non-negative
+        for minute, val in predictions.items():
+            assert val >= 0, f"Prediction at minute {minute} should be non-negative"
+
+        # Verify predictions span 48 hours (576 steps at 5-min intervals)
+        max_minute = max(predictions.keys())
+        assert max_minute >= 2800, f"Predictions should span ~48h (2880 min), got {max_minute} min"
 
 
 def _test_real_data_training():
@@ -469,16 +651,21 @@ def _test_real_data_training():
     n_days = max_minute / (24 * 60)
     print(f"  Data spans {n_days:.1f} days ({max_minute} minutes)")
 
+    # Generate synthetic PV data matching the load data timespan
+    print(f"  Generating synthetic PV data for {n_days:.1f} days...")
+    pv_data = _create_synthetic_pv_data(n_days=int(n_days) + 1, now_utc=now_utc, forecast_hours=48)
+    print(f"  Generated {len(pv_data)} PV datapoints")
+
     # Train on full dataset with more epochs for larger network
-    print(f"  Training on real data with {len(load_data)} points...")
-    success = predictor.train(load_data, now_utc, is_initial=True, epochs=50, time_decay_days=7)
+    print(f"  Training on real load data + synthetic PV with {len(load_data)} points...")
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, is_initial=True, epochs=50, time_decay_days=7)
 
     assert success, "Training on real data should succeed"
     assert predictor.model_initialized, "Model should be initialized after training"
 
     # Make predictions
-    print("  Generating predictions...")
-    predictions = predictor.predict(load_data, now_utc, midnight_utc)
+    print("  Generating predictions with PV forecasts...")
+    predictions = predictor.predict(load_data, now_utc, midnight_utc, pv_minutes=pv_data)
 
     assert isinstance(predictions, dict), "Predictions should be a dict"
     assert len(predictions) > 0, "Should have predictions"
@@ -539,7 +726,14 @@ def _test_real_data_training():
         if shifted_load_data:
             shifted_now = now_utc - timedelta(hours=val_period_hours)
             shifted_midnight = shifted_now.replace(hour=0, minute=0, second=0, microsecond=0)
-            val_predictions = predictor.predict(shifted_load_data, shifted_now, shifted_midnight)
+
+            # Create shifted PV data for validation prediction
+            shifted_pv_data = {}
+            for minute, cum_kwh in pv_data.items():
+                if minute >= val_holdout_minutes:
+                    shifted_pv_data[minute - val_holdout_minutes] = cum_kwh
+
+            val_predictions = predictor.predict(shifted_load_data, shifted_now, shifted_midnight, pv_minutes=shifted_pv_data)
 
             # Extract first 24h of validation predictions
             val_pred_keys = sorted(val_predictions.keys())
@@ -572,8 +766,39 @@ def _test_real_data_training():
             pred_minutes.append(minute)
             pred_energy.append(energy_kwh)
 
+        # Convert PV data to energy per step for plotting
+        # Historical PV (positive minutes, going back in time)
+        pv_historical_minutes = []
+        pv_historical_energy = []
+        for minute in range(0, max_history_minutes, STEP_MINUTES):
+            if minute in pv_data and (minute + STEP_MINUTES) in pv_data:
+                energy_kwh = max(0, pv_data[minute] - pv_data.get(minute + STEP_MINUTES, pv_data[minute]))
+                pv_historical_minutes.append(minute)
+                pv_historical_energy.append(energy_kwh)
+
+        # Future PV forecasts (negative minutes in pv_data dict, representing future)
+        pv_forecast_minutes = []
+        pv_forecast_energy = []
+        for minute in range(-prediction_hours * 60, 0, STEP_MINUTES):
+            if minute in pv_data and (minute + STEP_MINUTES) in pv_data:
+                energy_kwh = max(0, pv_data[minute] - pv_data.get(minute + STEP_MINUTES, pv_data[minute]))
+                pv_forecast_minutes.append(minute)
+                pv_forecast_energy.append(energy_kwh)
+
         # Create figure with single plot showing timeline
         fig, ax = plt.subplots(1, 1, figsize=(16, 6))
+
+        # Plot PV data first (in background)
+        # Historical PV (negative hours, going back in time)
+        if pv_historical_minutes:
+            pv_hist_hours = [-m / 60 for m in pv_historical_minutes]  # Negative for past
+            ax.plot(pv_hist_hours, pv_historical_energy, "orange", linewidth=0.8, label="Historical PV (7 days)", alpha=0.3, linestyle="--")
+
+        # Future PV forecasts (positive hours, going forward)
+        if pv_forecast_minutes:
+            # Convert negative minutes to positive hours for future
+            pv_forecast_hours = [-m / 60 for m in pv_forecast_minutes]  # Negative minutes become positive hours
+            ax.plot(pv_forecast_hours, pv_forecast_energy, "orange", linewidth=1.2, label="PV Forecast (48h)", alpha=0.5, linestyle="--")
 
         # Plot historical data (negative hours, going back in time)
         # minute 0 = now (hour 0), minute 60 = 1 hour ago (hour -1)
@@ -607,7 +832,7 @@ def _test_real_data_training():
         # Formatting
         ax.set_xlabel("Hours (negative = past, positive = future)", fontsize=12)
         ax.set_ylabel("Load (kWh per 5 min)", fontsize=12)
-        ax.set_title("ML Load Predictor: Validation (Day 7 Actual vs Predicted) + 48h Forecast", fontsize=14, fontweight="bold")
+        ax.set_title("ML Load Predictor with PV Input: Validation (Day 7) + 48h Forecast", fontsize=14, fontweight="bold")
         ax.legend(loc="upper right", fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.set_xlim(-history_hours, prediction_hours)
@@ -723,7 +948,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
 
         assert result_data is not None, "Should return load data"
         assert result_age == 28, f"Expected 28 days, got {result_age}"
@@ -760,7 +985,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
 
         assert result_data is None, "Should return None when sensor missing"
         assert result_age == 0, "Age should be 0 when sensor missing"
@@ -804,7 +1029,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
 
         assert result_data is not None, f"Should return load data"
         assert result_age > 0, f"Should have valid age (got {result_age})"
@@ -854,7 +1079,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
 
         assert result_data is not None, "Should return load data"
         assert mock_base_with_power.fill_load_from_power.called, "fill_load_from_power should be called"
@@ -877,7 +1102,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
 
         assert result_data is None, "Should return None on exception"
         assert result_age == 0, "Age should be 0 on exception"
@@ -901,7 +1126,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
 
         assert result_data is None, "Should return None when load data is empty"
         assert result_age == 0, "Age should be 0 when load data is empty"
