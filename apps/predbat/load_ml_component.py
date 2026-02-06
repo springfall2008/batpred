@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
 from utils import get_now_from_cumulative, dp2
 from load_predictor import LoadPredictor, MODEL_VERSION
-from const import TIME_FORMAT
+from const import TIME_FORMAT, PREDICT_STEP
 
 # Training intervals
 RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
@@ -48,6 +48,11 @@ class LoadMLComponent(ComponentBase):
         self.ml_load_sensor = self.get_arg("load_today", default=[], indirect=False)
         self.ml_load_power_sensor = self.get_arg("load_power", default=[], indirect=False)
         self.ml_subtract_sensors = self.get_arg("car_charging_energy", default=[], indirect=False)
+        self.car_charging_hold = self.get_arg("car_charging_hold", True)
+        self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
+        self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
+        self.car_charging_rate = float(self.get_arg("car_charging_rate", 7.5)) / 60.0
+
         self.ml_learning_rate = 0.001
         self.ml_epochs_initial = 50
         self.ml_epochs_update = 2
@@ -131,35 +136,42 @@ class LoadMLComponent(ComponentBase):
                 self.log("Warn: ML Component: Failed to convert load history to minute data")
                 return None, 0, 0
 
-            load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
-
             if self.get_arg("load_power", default=None, indirect=False):
                 load_power_data, _ = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
 
+            # Get current cumulative load value
+            load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
+
             car_charging_energy = {}
             if self.get_arg("car_charging_energy", default=None, indirect=False):
-                car_charging_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "car_charging_energy", scale=self.get_arg("car_charging_energy_scale", 1.0), required_unit="kWh")
+                car_charging_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
 
             max_minute = max(load_minutes.keys()) if load_minutes else 0
+            max_minute = (max_minute // 5) * 5  # Align to 5-minute intervals
             load_minutes_new = {}
 
             # Subtract configured sensors (e.g., car charging)
             total_load_energy = 0
             car_delta = 0.0
-            for minute in range(max_minute, -5, -5):
-                if car_charging_energy:
-                    car_delta = abs(car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - 5, car_charging_energy.get(minute, 0.0)))
+            STEP = PREDICT_STEP
+            for minute in range(max_minute, -STEP, -STEP):
+                if self.car_charging_hold and car_charging_energy:
+                    car_delta = abs(car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - STEP, car_charging_energy.get(minute, 0.0)))
+                elif self.car_charging_hold:
+                    load_now = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
+                    if load_now >= self.car_charging_threshold * STEP:
+                        car_delta = self.car_charging_rate * STEP
                 if car_delta > 0:
                     # When car is enable spread over 5 minutes due to alignment between car and house load data
-                    load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - 5, load_minutes.get(minute, 0.0)))
+                    load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
                     load_delta = max(0.0, load_delta - car_delta)
-                    for m in range(minute, minute - 5, -1):
-                        load_minutes_new[m] = total_load_energy + load_delta / 5.0
+                    for m in range(minute, minute - STEP, -1):
+                        load_minutes_new[m] = total_load_energy + load_delta / STEP
                     total_load_energy += load_delta
                 else:
                     # Otherwise just copy load data
-                    for m in range(minute, minute - 5, -1):
+                    for m in range(minute, minute - STEP, -1):
                         load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - 1, load_minutes.get(minute, 0.0)))
                         load_minutes_new[m] = total_load_energy
                         total_load_energy += load_delta
@@ -168,7 +180,6 @@ class LoadMLComponent(ComponentBase):
             age_days = max_minute / (24 * 60)
 
             self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), age_days))
-
             return load_minutes_new, age_days, load_minutes_now
 
         except Exception as e:
@@ -368,11 +379,22 @@ class LoadMLComponent(ComponentBase):
         """Publish the load_forecast_ml entity with current predictions."""
         # Convert predictions to timestamp format for entity
         results = {}
+        reset_amount = 0
+        load_today_h1 = 0
+        load_today_h8 = 0
         if self.current_predictions:
             for minute, value in self.current_predictions.items():
                 timestamp = self.midnight_utc + timedelta(minutes=minute + self.minutes_now)
                 timestamp_str = timestamp.strftime(TIME_FORMAT)
-                results[timestamp_str] = round(value + self.load_minutes_now, 4)
+                # Reset at midnight
+                if minute > 0 and ((minute + self.minutes_now) % (24 * 60) == 0):
+                    reset_amount = value + self.load_minutes_now
+                output_value = round(value - reset_amount + self.load_minutes_now, 4)
+                results[timestamp_str] = output_value
+                if minute == 60:
+                    load_today_h1 = output_value
+                if minute == 60 * 8:
+                    load_today_h8 = output_value
 
         # Get model age
         model_age_hours = self.predictor.get_model_age_hours() if self.predictor else None
@@ -395,8 +417,8 @@ class LoadMLComponent(ComponentBase):
             state=round(total_kwh, 2),
             attributes={
                 "load_today": dp2(self.load_minutes_now),
-                "load_today_h1": dp2(self.current_predictions.get(1 * 60, 0.0) + self.load_minutes_now),
-                "load_today_h8": dp2(self.current_predictions.get(8 * 60, 0.0) + self.load_minutes_now),
+                "load_today_h1": dp2(load_today_h1),
+                "load_today_h8": dp2(load_today_h8),
                 "load_total": dp2(total_kwh),
                 "mae_kwh": round(self.predictor.validation_mae, 4) if self.predictor and self.predictor.validation_mae else None,
                 "last_trained": self.last_train_time.isoformat() if self.last_train_time else None,

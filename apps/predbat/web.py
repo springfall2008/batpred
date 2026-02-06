@@ -2574,10 +2574,10 @@ chart.render();
             # Get historical load data for last 24 hours
             load_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=False)
             load_today_h1 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=-60
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1
             )
             load_today_h8 = prune_today(
-                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=-480
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8
             )
 
             # Get ML forecast from load_forecast_ml entity results
