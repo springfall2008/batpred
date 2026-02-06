@@ -20,7 +20,7 @@ from const import TIME_FORMAT, PREDICT_STEP
 
 # Training intervals
 RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
-PREDICTION_INTERVAL_SECONDS = 15 * 60  # 15 minutes between predictions
+PREDICTION_INTERVAL_SECONDS = 30 * 60  # 30 minutes between predictions
 
 
 class LoadMLComponent(ComponentBase):
