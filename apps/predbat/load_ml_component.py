@@ -14,7 +14,7 @@ import asyncio
 import os
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
-from utils import get_now_from_cumulative, dp2
+from utils import get_now_from_cumulative, dp2, minute_data
 from load_predictor import LoadPredictor, MODEL_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
 
@@ -130,7 +130,7 @@ class LoadMLComponent(ComponentBase):
             Tuple of (load_minutes_dict, age_days, load_minutes_now, pv_data) or (None, 0, 0, None) on failure
         """
         if not self.ml_load_sensor:
-            return None, 0, 0, None
+            return None, 0, 0, None, None
 
         try:
             # Determine how many days of history to fetch (7 days minimum)
@@ -142,7 +142,7 @@ class LoadMLComponent(ComponentBase):
             load_minutes, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_today", days_to_fetch, required_unit="kWh", load_scaling=self.get_arg("load_scaling", 1.0), interpolate=True)
             if not load_minutes:
                 self.log("Warn: ML Component: Failed to convert load history to minute data")
-                return None, 0, 0, None
+                return None, 0, 0, None, None
 
             if self.get_arg("load_power", default=None, indirect=False):
                 load_power_data, _ = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
@@ -193,8 +193,30 @@ class LoadMLComponent(ComponentBase):
             else:
                 pv_data = {}
 
+            # Temperature predictions
+            temperature_info = self.get_state_wrapper("sensor." + self.prefix + "_temperature", attribute="results")
+            temperature_data = {}
+            if isinstance(temperature_info, dict):
+                data_array = []
+                for key, value in temperature_info.items():
+                    data_array.append({"state": value, "last_updated": key})
+
+                # Load data
+                temperature_data, _ = minute_data(
+                    data_array,
+                    days_to_fetch,
+                    self.midnight_utc,
+                    "state",
+                    "last_updated",
+                    backwards=False,
+                    clean_increment=False,
+                    smoothing=True,
+                    divide_by=1.0,
+                    scale=1.0,
+                )
+
             self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), age_days))
-            return load_minutes_new, age_days, load_minutes_now, pv_data
+            return load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data
 
         except Exception as e:
             self.log("Error: ML Component: Failed to fetch load data: {}".format(e))
@@ -271,7 +293,7 @@ class LoadMLComponent(ComponentBase):
 
         if should_fetch:
             async with self.data_lock:
-                load_data, age_days, load_minutes_now, pv_data = await self._fetch_load_data()
+                load_data, age_days, load_minutes_now, pv_data, temperature_data = await self._fetch_load_data()
                 if load_data:
                     self.load_data = load_data
                     self.load_data_age_days = age_days
@@ -290,6 +312,7 @@ class LoadMLComponent(ComponentBase):
                         for minute in range(self.minutes_now + PREDICT_STEP, max_minute, PREDICT_STEP):
                             current_value += pv_forecast_minute.get(minute, current_value)
                             pv_data[-minute + self.minutes_now] = current_value
+                    self.temperature_data = temperature_data
                 else:
                     self.log("Warn: ML Component: Failed to fetch load data")
 

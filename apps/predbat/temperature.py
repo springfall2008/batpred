@@ -199,7 +199,7 @@ class TemperatureAPI(ComponentBase):
                     "icon": "mdi:thermometer",
                     "unit_of_measurement": "°C",
                     "last_updated": last_updated_str,
-                    "forecast": forecast,
+                    "results": forecast,
                     "timezone_offset": timezone_offset,
                     "data_points": len(forecast)
                 },
