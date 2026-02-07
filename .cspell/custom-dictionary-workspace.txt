@@ -7,6 +7,7 @@ AIO
 AIO's
 aiohttp
 Alertfeed
+allclose
 Anson
 apexcharts
 appdaemon
@@ -19,6 +20,11 @@ autoflake
 automations
 autopep
 autoupdate
+axvline
+axvspan
+backprop
+Backpropagate
+backpropagation
 Basepath
 Batpred
 battemperature
@@ -62,6 +68,7 @@ dayname
 daynumber
 daysymbol
 dend
+denorm
 devcontainer
 devcontainers
 dexport
@@ -91,6 +98,7 @@ energythroughput
 epod
 euids
 evse
+exog
 exportlimit
 fdpwr
 fdsoc
@@ -163,12 +171,17 @@ kvar
 kvarh
 kwargs
 kwhb
+labelcolor
 linebreak
+linestyle
+loadml
+loadmlpower
 loadspower
 localfolder
 lockstep
 logdata
 loglines
+lookback
 luxpower
 markdownlint
 matplotlib
@@ -254,6 +267,7 @@ pylint
 pyproject
 pytest
 pytz
+randn
 rarr
 recp
 Redownload
@@ -271,6 +285,7 @@ rstart
 rtype
 ruamel
 saverestore
+savez
 scalarstring
 searr
 securetoken
@@ -327,11 +342,13 @@ timekey
 timelapse
 timenow
 timeobj
+timestep
 timestr
 timezone
 tojson
 Trefor
 treforsiphone
+twinx
 unsmoothed
 unstaged
 useid
@@ -349,6 +366,7 @@ wrongsha
 xaxis
 xaxistooltip
 xlabel
+xlim
 xload
 xticks
 yaxis

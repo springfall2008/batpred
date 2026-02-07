@@ -12,6 +12,7 @@ nav:
     - energy-rates.md
     - apps-yaml.md
     - components.md
+    - load-ml.md
     - car-charging.md
     - configuration-guide.md
     - customisation.md

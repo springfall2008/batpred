@@ -66,7 +66,7 @@ def test_minute_data_import_export(my_predbat):
     # Test with array containing real entities and '0' fixed value
     entity_ids = ["sensor.import_1", "0", "sensor.import_2"]
 
-    result = my_predbat.minute_data_import_export(now_utc=now, key=entity_ids[0], scale=1.0, required_unit="kWh")  # Pass first entity directly
+    result = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key=entity_ids[0], scale=1.0, required_unit="kWh")  # Pass first entity directly
 
     # Verify we got data from entity1
     if len(result) == 0:
@@ -76,7 +76,7 @@ def test_minute_data_import_export(my_predbat):
     # Now test with the config approach using an array
     my_predbat.args["import_today_test"] = entity_ids
 
-    result = my_predbat.minute_data_import_export(now_utc=now, key="import_today_test", scale=1.0, required_unit="kWh")
+    result = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="import_today_test", scale=1.0, required_unit="kWh")
 
     # Verify data was accumulated from both real entities
     if len(result) == 0:
@@ -99,7 +99,7 @@ def test_minute_data_import_export(my_predbat):
 
     my_predbat.args["import_today_test2"] = ["0", "1", "5"]
 
-    result = my_predbat.minute_data_import_export(now_utc=now, key="import_today_test2", scale=1.0, required_unit="kWh")
+    result = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="import_today_test2", scale=1.0, required_unit="kWh")
 
     if len(result) != 0:
         print("ERROR: Test 2 failed - should return empty dict for fixed values only, got {} entries".format(len(result)))
@@ -110,7 +110,7 @@ def test_minute_data_import_export(my_predbat):
 
     my_predbat.args["import_today_test3"] = [None, "", "sensor.import_1"]
 
-    result = my_predbat.minute_data_import_export(now_utc=now, key="import_today_test3", scale=1.0, required_unit="kWh")
+    result = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="import_today_test3", scale=1.0, required_unit="kWh")
 
     # Should only get data from sensor.import_1
     if len(result) == 0:
@@ -120,9 +120,9 @@ def test_minute_data_import_export(my_predbat):
     # Test 4: Verify scaling works with accumulated data
     print("Test 4: Scaling with accumulated data")
 
-    result_scaled = my_predbat.minute_data_import_export(now_utc=now, key="import_today_test", scale=2.0, required_unit="kWh")
+    result_scaled = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="import_today_test", scale=2.0, required_unit="kWh")
 
-    result_unscaled = my_predbat.minute_data_import_export(now_utc=now, key="import_today_test", scale=1.0, required_unit="kWh")
+    result_unscaled = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="import_today_test", scale=1.0, required_unit="kWh")
 
     if 0 in result_scaled and 0 in result_unscaled:
         expected_scaled = result_unscaled[0] * 2.0
@@ -136,7 +136,7 @@ def test_minute_data_import_export(my_predbat):
     # Test 5: Single entity passed directly (not from config)
     print("Test 5: Single entity passed directly")
 
-    result = my_predbat.minute_data_import_export(now_utc=now, key="sensor.import_1", scale=1.0, required_unit="kWh")
+    result = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="sensor.import_1", scale=1.0, required_unit="kWh")
 
     if len(result) == 0:
         print("ERROR: Test 5 failed - no data returned for direct entity")
@@ -147,7 +147,7 @@ def test_minute_data_import_export(my_predbat):
 
     my_predbat.args["import_today_test6"] = ["sensor.nonexistent", "sensor.import_1"]
 
-    result = my_predbat.minute_data_import_export(now_utc=now, key="import_today_test6", scale=1.0, required_unit="kWh")
+    result = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="import_today_test6", scale=1.0, required_unit="kWh")
 
     # Should still get data from sensor.import_1
     if len(result) == 0:
@@ -159,7 +159,7 @@ def test_minute_data_import_export(my_predbat):
 
     my_predbat.args["import_today_test7"] = "sensor.import_1"
 
-    result = my_predbat.minute_data_import_export(now_utc=now, key="import_today_test7", scale=1.0, required_unit="kWh")
+    result = my_predbat.minute_data_import_export(max_days_previous=2, now_utc=now, key="import_today_test7", scale=1.0, required_unit="kWh")
 
     if len(result) == 0:
         print("ERROR: Test 7 failed - no data returned for single string entity")
