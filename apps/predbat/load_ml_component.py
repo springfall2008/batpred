@@ -408,6 +408,7 @@ class LoadMLComponent(ComponentBase):
         reset_amount = 0
         load_today_h1 = 0
         load_today_h8 = 0
+        # Future predictions
         if self.current_predictions:
             for minute, value in self.current_predictions.items():
                 timestamp = self.midnight_utc + timedelta(minutes=minute + self.minutes_now)

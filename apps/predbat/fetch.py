@@ -1805,7 +1805,7 @@ class Fetch:
                 )
 
                 if load_forecast:
-                    self.log("Loaded the ML load forecast; from midnight {}kWh to now {}kWh to midnight {}kwh".format(load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
+                    self.log("Loaded the ML load forecast; now {}kWh to midnight {}kwh".format(load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60 - PREDICT_STEP, 0)))
                     return load_forecast
         return {}
 

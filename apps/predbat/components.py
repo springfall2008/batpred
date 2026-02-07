@@ -14,6 +14,7 @@ from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
+from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
 from solis import SolisAPI
@@ -218,6 +219,17 @@ COMPONENT_LIST = {
         "args": {
             "postcode": {"required": True, "config": "carbon_postcode"},
             "automatic": {"required": False, "config": "carbon_automatic", "default": False},
+        },
+        "phase": 1,
+    },
+    "temperature": {
+        "class": TemperatureAPI,
+        "name": "External Temperature API",
+        "args": {
+            "temperature_enable": {"required_true": True, "config": "temperature_enable", "default": False},
+            "temperature_latitude": {"required": False, "config": "temperature_latitude", "default": None},
+            "temperature_longitude": {"required": False, "config": "temperature_longitude", "default": None},
+            "temperature_url": {"required": False, "config": "temperature_url", "default": "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m"},
         },
         "phase": 1,
     },

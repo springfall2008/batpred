@@ -97,6 +97,7 @@ from tests.test_ohme import test_ohme
 from tests.test_component_base import test_component_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
+from tests.test_temperature import test_temperature
 
 
 # Mock the components and plugin system
@@ -247,6 +248,8 @@ def main():
         ("solis", run_solis_tests, "Solis Cloud API tests (V1/V2 time window writes, change detection)", False),
         # ML Load Forecaster tests
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", False),
+        # External Temperature API tests
+        ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
