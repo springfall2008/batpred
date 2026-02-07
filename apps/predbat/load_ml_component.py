@@ -308,7 +308,6 @@ class LoadMLComponent(ComponentBase):
                     self.load_minutes_now = load_minutes_now
                     self.data_ready = True
                     self.last_data_fetch = self.now_utc
-                    pv_data = pv_data
                     pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
                     # PV Data has the historical PV data (minute is the number of minutes in the past)
                     # PV forecast has the predicted PV generation for the next 24 hours (minute is the number of minutes from midnight forward
