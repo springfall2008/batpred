@@ -6648,9 +6648,52 @@ if (activeItem) {
 }
 }
 
+// Live status update functionality
+let statusUpdateInterval = null;
+
+function updateLiveStatus() {
+    fetch('./api/status')
+        .then(response => response.json())
+        .then(data => {
+            // Update calculating/idle icon
+            const statusIcon = document.getElementById('status-icon');
+            if (statusIcon) {
+                if (data.calculating) {
+                    statusIcon.innerHTML = '<span class="mdi mdi-sync mdi-spin calculating-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="Calculation in progress..."></span>';
+                } else {
+                    statusIcon.innerHTML = '<span class="mdi mdi-check-circle idle-icon" style="color: #4CAF50; font-size: 24px; margin-left: 10px; margin-right: 10px;" title="System idle"></span>';
+                }
+            }
+
+            // Update battery status
+            const batteryStatus = document.getElementById('battery-status');
+            if (batteryStatus && data.battery_html) {
+                batteryStatus.innerHTML = data.battery_html;
+            }
+        })
+        .catch(error => {
+            console.error('Error updating status:', error);
+        });
+}
+
+function startStatusUpdates() {
+    // Initial update
+    updateLiveStatus();
+    // Update every 5 seconds
+    statusUpdateInterval = setInterval(updateLiveStatus, 5000);
+}
+
+function stopStatusUpdates() {
+    if (statusUpdateInterval) {
+        clearInterval(statusUpdateInterval);
+        statusUpdateInterval = null;
+    }
+}
+
 // Initialize menu on page load
 document.addEventListener("DOMContentLoaded", function() {
 setActiveMenuItem();
+startStatusUpdates();
 
 // For each menu item, add click handler to set it as active
 const menuLinks = document.querySelectorAll('.menu-bar a');
@@ -6708,10 +6751,10 @@ setTimeout(function() {
             onclick="flyBat()"
             style="cursor: pointer;"
     >
-    """
+    <span id="status-icon">"""
         + status_icon
-        + """
-    <div class="battery-wrapper">
+        + """</span>
+    <div class="battery-wrapper" id="battery-status">
         """
         + battery_status_icon
         + """

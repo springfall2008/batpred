@@ -678,7 +678,8 @@ class Fetch:
         load_ml_forecast = {}
         if self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False):
             load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc)
-            self.load_forecast_only = True  # Use only ML forecast for load if enabled
+            if load_ml_forecast:
+                self.load_forecast_only = True  # Use only ML forecast for load if enabled and we have data
 
         # Fetch extra load forecast
         self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc, load_ml_forecast)

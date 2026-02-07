@@ -17,6 +17,7 @@ from component_base import ComponentBase
 from utils import get_now_from_cumulative, dp2, minute_data
 from load_predictor import LoadPredictor, MODEL_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
+import traceback
 
 # Training intervals
 RETRAIN_INTERVAL_SECONDS = 2 * 60 * 60  # 2 hours between training cycles
@@ -227,9 +228,6 @@ class LoadMLComponent(ComponentBase):
 
         except Exception as e:
             self.log("Error: ML Component: Failed to fetch load data: {}".format(e))
-            print("Error: ML Component: Failed to fetch load data: {}".format(e))
-            import traceback
-
             self.log("Error: ML Component: {}".format(traceback.format_exc()))
             return None, 0, 0, None, None
 
@@ -411,8 +409,6 @@ class LoadMLComponent(ComponentBase):
 
             except Exception as e:
                 self.log("Error: ML Component: Training exception: {}".format(e))
-                import traceback
-
                 self.log("Error: " + traceback.format_exc())
 
     def _update_model_status(self):

@@ -142,6 +142,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
+        app.router.add_get("/api/status", self.html_api_get_status)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -1793,6 +1794,24 @@ chart.render();
             return web.Response(content_type="application/json", text='{"result": "ok"}')
         else:
             return web.Response(content_type="application/json", text='{"result": "error"}')
+
+    async def html_api_get_status(self, request):
+        """
+        Get current Predbat status (calculating state and battery info)
+        """
+        try:
+            calculating = self.get_arg("active", False)
+            if self.base.update_pending:
+                calculating = True
+
+            battery_icon = self.get_battery_status_icon()
+
+            status_data = {"calculating": calculating, "battery_html": battery_icon}
+
+            return web.Response(content_type="application/json", text=json.dumps(status_data))
+        except Exception as e:
+            self.log("Error getting status: {}".format(e))
+            return web.Response(status=500, content_type="application/json", text=json.dumps({"error": str(e)}))
 
     async def html_api_ping(self, request):
         """

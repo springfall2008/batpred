@@ -179,7 +179,7 @@ class LoadPredictor:
 
         return current, activations, pre_activations
 
-    def _backward(self, y_true, activations, pre_activations):
+    def _backward(self, y_true, activations, pre_activations, sample_weights=None):
         """
         Backward pass using backpropagation.
 
@@ -187,6 +187,7 @@ class LoadPredictor:
             y_true: True target values
             activations: Layer activations from forward pass
             pre_activations: Pre-activation values from forward pass
+            sample_weights: Optional per-sample weights for weighted loss
 
         Returns:
             Gradients for weights and biases
@@ -195,6 +196,10 @@ class LoadPredictor:
 
         # Output layer gradient (MSE loss derivative)
         delta = mse_loss_derivative(y_true, activations[-1])
+
+        # Apply sample weights to gradient if provided
+        if sample_weights is not None:
+            delta = delta * sample_weights.reshape(-1, 1)
 
         weight_grads = []
         bias_grads = []
@@ -711,16 +716,13 @@ class LoadPredictor:
                 # Forward pass
                 y_pred, activations, pre_activations = self._forward(X_batch)
 
-                # Apply sample weights to loss (approximate by weighting gradient)
-                weighted_y_batch = y_batch * batch_weights.reshape(-1, 1)
-                weighted_y_pred = y_pred * batch_weights.reshape(-1, 1)
-
+                # Compute unweighted loss for monitoring
                 batch_loss = mse_loss(y_batch, y_pred)
                 epoch_loss += batch_loss
                 num_batches += 1
 
-                # Backward pass
-                weight_grads, bias_grads = self._backward(y_batch, activations, pre_activations)
+                # Backward pass with sample weights applied to gradient
+                weight_grads, bias_grads = self._backward(y_batch, activations, pre_activations, sample_weights=batch_weights)
 
                 # Adam update
                 self._adam_update(weight_grads, bias_grads)
