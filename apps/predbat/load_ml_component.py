@@ -439,6 +439,10 @@ class LoadMLComponent(ComponentBase):
         reset_amount = 0
         load_today_h1 = 0
         load_today_h8 = 0
+        load_today_now = 0
+        power_today_now = 0
+        power_today_h1 = 0
+        power_today_h8 = 0
         # Future predictions
         if self.current_predictions:
             for minute, value in self.current_predictions.items():
@@ -449,10 +453,14 @@ class LoadMLComponent(ComponentBase):
                     reset_amount = value + self.load_minutes_now
                 output_value = round(value - reset_amount + self.load_minutes_now, 4)
                 results[timestamp_str] = output_value
+                if minute == 0:
+                    power_today_now = value / PREDICT_STEP * 60.0
                 if minute == 60:
                     load_today_h1 = output_value
+                    power_today_h1 = value / PREDICT_STEP * 60.0
                 if minute == 60 * 8:
                     load_today_h8 = output_value
+                    power_today_h8 = value / PREDICT_STEP * 60.0
 
         # Get model age
         model_age_hours = self.predictor.get_model_age_hours() if self.predictor else None
@@ -478,6 +486,9 @@ class LoadMLComponent(ComponentBase):
                 "load_today_h1": dp2(load_today_h1),
                 "load_today_h8": dp2(load_today_h8),
                 "load_total": dp2(total_kwh),
+                "power_today_now": dp2(power_today_now),
+                "power_today_h1": dp2(power_today_h1),
+                "power_today_h8": dp2(power_today_h8),
                 "mae_kwh": round(self.predictor.validation_mae, 4) if self.predictor and self.predictor.validation_mae else None,
                 "last_trained": self.last_train_time.isoformat() if self.last_train_time else None,
                 "model_age_hours": round(model_age_hours, 1) if model_age_hours else None,

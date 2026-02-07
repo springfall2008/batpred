@@ -57,7 +57,7 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string, history_attribute, prune_today
+from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
@@ -2590,6 +2590,65 @@ chart.render();
                 {"name": "Load (ML Forecast)", "data": load_ml_forecast, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323"},
             ]
             text += self.render_chart(series_data, "kWh", "ML Load Forecast", now_str)
+        elif chart == "LoadMLPower":
+            # Get historical load power
+            load_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 1, required=False))
+            load_power = prune_today(load_power_hist, self.now_utc, self.midnight_utc, prune=False)
+
+            # Get ML predicted load energy (cumulative) and convert to power (kW)
+            load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
+            load_ml_forecast_power = {}
+
+            # Sort timestamps and calculate deltas to get energy per interval
+            if load_ml_forecast_energy:
+                from datetime import datetime
+
+                sorted_timestamps = sorted(load_ml_forecast_energy.keys())
+                prev_energy = 0
+                prev_timestamp = None
+                for timestamp in sorted_timestamps:
+                    energy = load_ml_forecast_energy[timestamp]
+                    energy_delta = max(energy - prev_energy, 0)
+
+                    # Calculate actual interval in hours between this and previous timestamp
+                    if prev_timestamp:
+                        # Parse timestamps and calculate difference in hours
+                        curr_dt = datetime.strptime(timestamp, TIME_FORMAT)
+                        prev_dt = datetime.strptime(prev_timestamp, TIME_FORMAT)
+                        interval_hours = (curr_dt - prev_dt).total_seconds() / 3600.0
+                        load_ml_forecast_power[timestamp] = dp4(energy_delta / interval_hours)
+
+                    prev_energy = energy
+                    prev_timestamp = timestamp
+
+            # Get historical PV power
+            pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 1, required=False))
+            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=False)
+
+            # Get temperature prediction data and limit to 48 hours forward
+            temperature_forecast = prune_today(self.get_entity_results("sensor." + self.prefix + "_temperature"), self.now_utc, self.midnight_utc, prune=False, prune_future=True, prune_future_days=2)
+
+            series_data = [
+                {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
+                {"name": "Load Power (ML Predicted)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
+                {"name": "Load Power (Used)", "data": load_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW"},
+                {"name": "PV Power (Actual)", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
+                {"name": "PV Power (Predicted)", "data": pv_power_best, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#ffa500", "unit": "kW"},
+                {"name": "Temperature", "data": temperature_forecast, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#ff6b6b", "unit": "°C"},
+            ]
+
+            # Configure secondary axis for temperature
+            secondary_axis = [
+                {
+                    "title": "°C",
+                    "series_name": "Temperature",
+                    "decimals": 1,
+                    "opposite": True,
+                    "labels_formatter": "return val.toFixed(1) + '°C';",
+                }
+            ]
+
+            text += self.render_chart(series_data, "kW", "ML Load & PV Power with Temperature", now_str, extra_yaxis=secondary_axis)
         else:
             text += "<br><h2>Unknown chart type</h2>"
 
@@ -2615,6 +2674,7 @@ chart.render();
         active_pv = ""
         active_pv7 = ""
         active_loadml = ""
+        active_loadmlpower = ""
 
         if chart == "Battery":
             active_battery = "active"
@@ -2632,6 +2692,8 @@ chart.render();
             active_pv7 = "active"
         elif chart == "LoadML":
             active_loadml = "active"
+        elif chart == "LoadMLPower":
+            active_loadmlpower = "active"
 
         text += '<div class="charts-menu">'
         text += "<h3>Charts</h3> "
@@ -2645,6 +2707,7 @@ chart.render();
         # Only show LoadML chart if ML is enabled
         if self.base.get_arg("load_ml_enable", False):
             text += f'<a href="./charts?chart=LoadML" class="{active_loadml}">LoadML</a>'
+            text += f'<a href="./charts?chart=LoadMLPower" class="{active_loadmlpower}">LoadMLPower</a>'
         text += "</div>"
 
         text += '<div id="chart"></div>'

@@ -175,6 +175,7 @@ labelcolor
 linebreak
 linestyle
 loadml
+loadmlpower
 loadspower
 localfolder
 lockstep

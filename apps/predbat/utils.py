@@ -41,7 +41,7 @@ def get_now_from_cumulative(data, minutes_now, backwards):
     return max(value, 0)
 
 
-def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, intermediate=False, offset_minutes=0):
+def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, prune_future_days=0, intermediate=False, offset_minutes=0):
     """
     Remove data from before today
     """
@@ -63,7 +63,7 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
                 new_time = last_time + timedelta(seconds=i * group * 60) + timedelta(minutes=offset_minutes)
                 results[new_time.isoformat()] = prev_value
         if not prune or (timekey > midnight_utc):
-            if prune_future and (timekey > now_utc):
+            if prune_future and (timekey > (now_utc + timedelta(days=prune_future_days))):
                 continue
             new_time = timekey + timedelta(minutes=offset_minutes)
             results[new_time.isoformat()] = data[key]

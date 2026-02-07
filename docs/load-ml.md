@@ -106,15 +106,13 @@ predbat:
   load_ml_enable: True
   # Use the output data in Predbat (can be False to explore the use without using the data)
   load_ml_source: True
-
-  # Required: sensor for historical load data
-  load_today:
-    - sensor.my_house_load_energy
-
-  # Optional: sensor for instantaneous load power (used to fill gaps)
-  load_power:
-    - sensor.my_house_load_power
 ```
+
+For best results:
+
+- Ensure you have a least a weeks worth of data before enabling load_ml_source.
+- Make sure you do not have PredAI enabled at the same time
+- Disable in day adjustment (switch.predbat_calculate_inday_adjustment) as the AI model will do that for you.
 
 ### Recommended: Enable Temperature Predictions
 
