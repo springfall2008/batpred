@@ -1503,11 +1503,11 @@ def _test_component_publish_entity():
     # Set up test data
     component.load_minutes_now = 10.5  # Current load today
     component.current_predictions = {
-        0: 0.0,  # Now
-        5: 0.1,  # 5 minutes from now
-        60: 1.2,  # 1 hour from now (load_today_h1)
-        480: 9.6,  # 8 hours from now (load_today_h8)
-        1440: 28.8,  # 24 hours from now
+        0: 0.1,  # Now (delta from "before predictions" to now = 0.1)
+        5: 0.2,  # 5 minutes from now
+        60: 1.3,  # 1 hour from now (load_today_h1)
+        480: 9.7,  # 8 hours from now (load_today_h8)
+        1440: 28.9,  # 24 hours from now
     }
 
     # Set up predictor state
@@ -1531,10 +1531,10 @@ def _test_component_publish_entity():
     assert call["entity_id"] == "sensor.predbat_load_ml_forecast", f"Expected sensor.predbat_load_ml_forecast, got {call['entity_id']}"
     assert call2["entity_id"] == "sensor.predbat_load_ml_stats", f"Expected sensor.predbat_load_ml_stats, got {call2['entity_id']}"
     # Verify state (max prediction value)
-    assert call2["state"] == 28.8, f"Expected state 28.8, got {call['state']}"
+    assert call2["state"] == 28.9, f"Expected state 28.9, got {call2['state']}"
 
     # Verify app
-    assert call2["app"] == "load_ml", f"Expected app 'load_ml', got {call['app']}"
+    assert call2["app"] == "load_ml", f"Expected app 'load_ml', got {call2['app']}"
 
     # Verify attributes
     attrs = call["attributes"]
@@ -1549,8 +1549,8 @@ def _test_component_publish_entity():
     # predictions are relative to now, so minute 60 = 1 hour from now = 13:00
     expected_timestamp_60 = (mock_base.midnight_utc + timedelta(minutes=60 + 720)).strftime(TIME_FORMAT)
     assert expected_timestamp_60 in results, f"Expected timestamp {expected_timestamp_60} in results"
-    # Value should be prediction (1.2) + load_minutes_now (10.5) = 11.7
-    assert abs(results[expected_timestamp_60] - 11.7) < 0.01, f"Expected value 11.7 at {expected_timestamp_60}, got {results[expected_timestamp_60]}"
+    # Value should be prediction (1.3) + load_minutes_now (10.5) = 11.8
+    assert abs(results[expected_timestamp_60] - 11.8) < 0.01, f"Expected value 11.8 at {expected_timestamp_60}, got {results[expected_timestamp_60]}"
 
     # Check load_today (current load)
     assert "load_today" in attrs2, "load_today should be in attributes"
@@ -1558,11 +1558,11 @@ def _test_component_publish_entity():
 
     # Check load_today_h1 (1 hour ahead)
     assert "load_today_h1" in attrs2, "load_today_h1 should be in attributes"
-    assert abs(attrs2["load_today_h1"] - 11.7) < 0.01, f"Expected load_today_h1 11.7, got {attrs2['load_today_h1']}"
+    assert abs(attrs2["load_today_h1"] - 11.8) < 0.01, f"Expected load_today_h1 11.8, got {attrs2['load_today_h1']}"
 
     # Check load_today_h8 (8 hours ahead)
     assert "load_today_h8" in attrs2, "load_today_h8 should be in attributes"
-    assert abs(attrs2["load_today_h8"] - 20.1) < 0.01, f"Expected load_today_h8 20.1 (9.6+10.5), got {attrs2['load_today_h8']}"
+    assert abs(attrs2["load_today_h8"] - 20.2) < 0.01, f"Expected load_today_h8 20.2 (9.7+10.5), got {attrs2['load_today_h8']}"
     # Check MAE
     assert "mae_kwh" in attrs2, "mae_kwh should be in attributes"
     assert attrs2["mae_kwh"] == 0.5, f"Expected mae_kwh 0.5, got {attrs2['mae_kwh']}"
@@ -1592,6 +1592,28 @@ def _test_component_publish_entity():
     # Check epochs_trained
     assert "epochs_trained" in attrs2, "epochs_trained should be in attributes"
     assert attrs2["epochs_trained"] == 50, f"Expected epochs_trained 50, got {attrs2['epochs_trained']}"
+
+    # Check power_today values (instantaneous power in kW)
+    assert "power_today_now" in attrs2, "power_today_now should be in attributes"
+    assert "power_today_h1" in attrs2, "power_today_h1 should be in attributes"
+    assert "power_today_h8" in attrs2, "power_today_h8 should be in attributes"
+
+    # power_today_now: delta from start (prev_value=0) to minute 0 (0.1 kWh) / 5 min * 60 = 1.2 kW
+    expected_power_now = (0.1 - 0.0) / 5 * 60
+    assert abs(attrs2["power_today_now"] - expected_power_now) < 0.01, f"Expected power_today_now {expected_power_now:.2f}, got {attrs2['power_today_now']}"
+
+    # power_today_h1: delta from minute 55 to minute 60
+    # We need to interpolate - predictions are sparse, so the actual delta will depend on what's in the dict
+    # For minute 60, prev_value in the loop would be the value at minute 55 (or closest)
+    # Since we don't have minute 55 in our test data, prev_value when reaching minute 60 will be from minute 5
+    # So delta = (1.3 - 0.2) / 5 * 60 = 13.2 kW
+    expected_power_h1 = (1.3 - 0.2) / 5 * 60
+    assert abs(attrs2["power_today_h1"] - expected_power_h1) < 0.01, f"Expected power_today_h1 {expected_power_h1:.2f}, got {attrs2['power_today_h1']}"
+
+    # power_today_h8: delta from minute 475 to minute 480
+    # prev_value would be from minute 60, so delta = (9.7 - 1.3) / 5 * 60 = 100.8 kW
+    expected_power_h8 = (9.7 - 1.3) / 5 * 60
+    assert abs(attrs2["power_today_h8"] - expected_power_h8) < 0.01, f"Expected power_today_h8 {expected_power_h8:.2f}, got {attrs2['power_today_h8']}"
 
     # Check friendly_name
     assert attrs["friendly_name"] == "ML Load Forecast", "friendly_name should be 'ML Load Forecast'"

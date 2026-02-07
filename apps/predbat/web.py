@@ -2592,12 +2592,20 @@ chart.render();
             text += self.render_chart(series_data, "kWh", "ML Load Forecast", now_str)
         elif chart == "LoadMLPower":
             # Get historical load power
-            load_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 1, required=False))
+            load_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 7, required=False))
             load_power = prune_today(load_power_hist, self.now_utc, self.midnight_utc, prune=False)
 
             # Get ML predicted load energy (cumulative) and convert to power (kW)
             load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
             load_ml_forecast_power = {}
+
+            power_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today"), self.now_utc, self.midnight_utc, prune=False)
+            power_today_h1 = prune_today(
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1
+            )
+            power_today_h8 = prune_today(
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8
+            )
 
             # Sort timestamps and calculate deltas to get energy per interval
             if load_ml_forecast_energy:
@@ -2626,12 +2634,15 @@ chart.render();
             pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=False)
 
             # Get temperature prediction data and limit to 48 hours forward
-            temperature_forecast = prune_today(self.get_entity_results("sensor." + self.prefix + "_temperature"), self.now_utc, self.midnight_utc, prune=False, prune_future=True, prune_future_days=2)
+            temperature_forecast = prune_today(self.get_entity_results("sensor." + self.prefix + "_temperature"), self.now_utc, self.midnight_utc, prune_future=True, prune_future_days=2, prune=True, prune_past_days=7)
 
             series_data = [
                 {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
-                {"name": "Load Power (ML Predicted)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
+                {"name": "Load Power (ML Predicted Future)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
                 {"name": "Load Power (Used)", "data": load_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW"},
+                {"name": "Load Power ML History", "data": power_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW"},
+                {"name": "Load Power ML History +1h", "data": power_today_h1, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW"},
+                {"name": "Load Power ML History +8h", "data": power_today_h8, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW"},
                 {"name": "PV Power (Actual)", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
                 {"name": "PV Power (Predicted)", "data": pv_power_best, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#ffa500", "unit": "kW"},
                 {"name": "Temperature", "data": temperature_forecast, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#ff6b6b", "unit": "°C"},

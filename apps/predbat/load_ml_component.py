@@ -445,6 +445,7 @@ class LoadMLComponent(ComponentBase):
         power_today_h8 = 0
         # Future predictions
         if self.current_predictions:
+            prev_value = 0
             for minute, value in self.current_predictions.items():
                 timestamp = self.midnight_utc + timedelta(minutes=minute + self.minutes_now)
                 timestamp_str = timestamp.strftime(TIME_FORMAT)
@@ -453,14 +454,16 @@ class LoadMLComponent(ComponentBase):
                     reset_amount = value + self.load_minutes_now
                 output_value = round(value - reset_amount + self.load_minutes_now, 4)
                 results[timestamp_str] = output_value
+                delta_value = (value - prev_value) / PREDICT_STEP * 60.0
                 if minute == 0:
-                    power_today_now = value / PREDICT_STEP * 60.0
+                    power_today_now = delta_value
                 if minute == 60:
                     load_today_h1 = output_value
-                    power_today_h1 = value / PREDICT_STEP * 60.0
+                    power_today_h1 = delta_value
                 if minute == 60 * 8:
                     load_today_h8 = output_value
-                    power_today_h8 = value / PREDICT_STEP * 60.0
+                    power_today_h8 = delta_value
+                prev_value = value
 
         # Get model age
         model_age_hours = self.predictor.get_model_age_hours() if self.predictor else None
