@@ -230,9 +230,9 @@ def _test_temperature_sensor_creation(my_predbat):
 
     # Verify attributes
     sensor_attrs = temp_component.dashboard_items[sensor_entity]["attributes"]
-    forecast = sensor_attrs.get("forecast")
-    if forecast is None:
-        print("    ERROR: Forecast attribute not set")
+    results = sensor_attrs.get("results")
+    if results is None:
+        print("    ERROR: results attribute not set")
         return 1
 
     # Check forecast has correct HA timestamp format
@@ -244,14 +244,14 @@ def _test_temperature_sensor_creation(my_predbat):
     ]
 
     for key in expected_keys:
-        if key not in forecast:
-            print("    ERROR: Missing forecast key: {}".format(key))
-            print("      Available keys: {}".format(list(forecast.keys())))
+        if key not in results:
+            print("    ERROR: Missing results key: {}".format(key))
+            print("      Available keys: {}".format(list(results.keys())))
             return 1
 
     # Verify temperature values
-    if forecast["2026-02-07T00:00:00+00:00"] != 8.2:
-        print("    ERROR: Incorrect forecast value for first hour")
+    if results["2026-02-07T00:00:00+00:00"] != 8.2:
+        print("    ERROR: Incorrect results value for first hour")
         return 1
 
     print("    PASS: Sensor created with correct state and forecast")
@@ -346,7 +346,7 @@ def _test_temperature_negative_timezone_offset(my_predbat):
         print("    ERROR: Sensor not created")
         return 1
 
-    forecast = temp_component.dashboard_items[sensor_entity]["attributes"].get("forecast", {})
+    forecast = temp_component.dashboard_items[sensor_entity]["attributes"].get("results", {})
     if not forecast:
         print("    ERROR: Forecast not found in sensor attributes")
         return 1

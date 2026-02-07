@@ -171,6 +171,7 @@ kvar
 kvarh
 kwargs
 kwhb
+labelcolor
 linebreak
 linestyle
 loadml
@@ -346,6 +347,7 @@ timezone
 tojson
 Trefor
 treforsiphone
+twinx
 unsmoothed
 unstaged
 useid

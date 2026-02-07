@@ -41,15 +41,18 @@ def test_load_ml(my_predbat=None):
         ("pv_energy_conversion", _test_pv_energy_conversion, "Convert PV data including future forecasts"),
         ("dataset_creation", _test_dataset_creation, "Dataset creation from load data"),
         ("dataset_with_pv", _test_dataset_with_pv, "Dataset creation with PV features"),
+        ("dataset_with_temp", _test_dataset_with_temp, "Dataset creation with temperature features"),
         ("normalization", _test_normalization, "Z-score normalization correctness"),
         ("adam_optimizer", _test_adam_optimizer, "Adam optimizer step"),
         ("training_convergence", _test_training_convergence, "Training convergence on synthetic data"),
         ("training_with_pv", _test_training_with_pv, "Training with PV input features"),
+        ("training_with_temp", _test_training_with_temp, "Training with temperature input features"),
         ("model_persistence", _test_model_persistence, "Model save/load with version check"),
         ("cold_start", _test_cold_start, "Cold start with insufficient data"),
         ("fine_tune", _test_fine_tune, "Fine-tune on recent data"),
         ("prediction", _test_prediction, "End-to-end prediction"),
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
+        ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
         # ("real_data_training", _test_real_data_training, "Train on real load_minutes_debug.json data with chart"),
         ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
         ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
@@ -297,6 +300,58 @@ def _create_synthetic_pv_data(n_days=7, now_utc=None, forecast_hours=48):
     return pv_minutes
 
 
+def _create_synthetic_temp_data(n_days=7, now_utc=None, forecast_hours=48):
+    """Create synthetic temperature data for testing (historical + forecast)"""
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+
+    temp_minutes = {}
+
+    # Historical temperature (positive minutes, backwards from now)
+    n_minutes = n_days * 24 * 60
+    start_minute = (n_minutes // STEP_MINUTES) * STEP_MINUTES
+    for minute in range(start_minute, -STEP_MINUTES, -STEP_MINUTES):
+        dt = now_utc - timedelta(minutes=minute)
+        hour = dt.hour + dt.minute / 60.0  # Fractional hour for smooth variation
+
+        # Smooth sinusoidal daily temperature pattern
+        # Temperature peaks around 1pm (hour 13) and minimum around 1am (hour 1)
+        # Using cosine wave shifted so maximum is at hour 13
+        hours_since_peak = (hour - 13.0) % 24.0
+        daily_cycle = np.cos(2 * np.pi * hours_since_peak / 24.0)
+
+        # Base temp 6°C, amplitude 4°C, so range is 2°C to 10°C
+        # Add small multi-day variation (0.5°C amplitude over 3-day cycle)
+        day_num = minute / (24 * 60)
+        multi_day_variation = 0.5 * np.sin(2 * np.pi * day_num / 3.0)
+
+        temp = 6.0 + 4.0 * daily_cycle + multi_day_variation
+
+        temp = max(-10.0, min(40.0, temp))  # Reasonable bounds
+        temp_minutes[minute] = temp
+
+    # Future temperature forecast (negative minutes, forward from now)
+    for step in range(1, (forecast_hours * 60 // STEP_MINUTES) + 1):
+        minute = -step * STEP_MINUTES
+        dt = now_utc + timedelta(minutes=step * STEP_MINUTES)
+        hour = dt.hour + dt.minute / 60.0  # Fractional hour for smooth variation
+
+        # Same smooth pattern for forecast
+        hours_since_peak = (hour - 13.0) % 24.0
+        daily_cycle = np.cos(2 * np.pi * hours_since_peak / 24.0)
+
+        # Continue the multi-day variation into the future
+        day_num = -minute / (24 * 60)  # Negative minute means future
+        multi_day_variation = 0.5 * np.sin(2 * np.pi * day_num / 3.0)
+
+        temp = 6.0 + 4.0 * daily_cycle + multi_day_variation
+
+        temp = max(-10.0, min(40.0, temp))
+        temp_minutes[minute] = temp
+
+    return temp_minutes
+
+
 def _create_synthetic_load_data(n_days=7, now_utc=None):
     """Create synthetic load data for testing"""
     if now_utc is None:
@@ -379,10 +434,10 @@ def _test_dataset_with_pv():
     assert X_train is not None, "Training X should not be None"
     assert X_train.shape[0] > 0, "Training should have samples"
 
-    # Feature dimension should include PV features: LOOKBACK_STEPS (load) + LOOKBACK_STEPS (PV) + 4 (time) = TOTAL_FEATURES
-    from load_predictor import NUM_LOAD_FEATURES, NUM_PV_FEATURES, NUM_TIME_FEATURES
+    # Feature dimension should include PV features: LOOKBACK_STEPS (load) + LOOKBACK_STEPS (PV) + LOOKBACK_STEPS (temp) + 4 (time) = TOTAL_FEATURES
+    from load_predictor import NUM_LOAD_FEATURES, NUM_PV_FEATURES, NUM_TEMP_FEATURES, NUM_TIME_FEATURES
 
-    expected_features = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TIME_FEATURES
+    expected_features = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_TIME_FEATURES
     assert X_train.shape[1] == expected_features, f"Expected {expected_features} features with PV, got {X_train.shape[1]}"
     assert X_train.shape[1] == TOTAL_FEATURES, f"TOTAL_FEATURES should be {expected_features}, is {TOTAL_FEATURES}"
 
@@ -391,6 +446,48 @@ def _test_dataset_with_pv():
     pv_feature_section = X_train[:, NUM_LOAD_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES]
     # At least some PV values should be non-zero (during daylight hours)
     assert np.any(pv_feature_section > 0), "PV features should contain some non-zero values"
+
+    # Temperature features should be all zeros since we didn't provide temp_minutes
+    temp_feature_section = X_train[:, NUM_LOAD_FEATURES + NUM_PV_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES]
+    assert np.all(temp_feature_section == 0), "Temperature features should be zero when no temp data provided"
+
+
+def _test_dataset_with_temp():
+    """Test dataset creation includes temperature features correctly"""
+    predictor = LoadPredictor()
+    now_utc = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Create synthetic load and temperature data
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+    temp_data = _create_synthetic_temp_data(n_days=7, now_utc=now_utc, forecast_hours=0)  # Historical only
+
+    # Create dataset with temperature data
+    X_train, y_train, train_weights, X_val, y_val = predictor._create_dataset(load_data, now_utc, temp_minutes=temp_data, time_decay_days=7)
+
+    # Should have valid samples
+    assert X_train is not None, "Training X should not be None"
+    assert X_train.shape[0] > 0, "Training should have samples"
+
+    # Feature dimension should include temperature features
+    from load_predictor import NUM_LOAD_FEATURES, NUM_PV_FEATURES, NUM_TEMP_FEATURES, NUM_TIME_FEATURES
+
+    expected_features = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_TIME_FEATURES
+    assert X_train.shape[1] == expected_features, f"Expected {expected_features} features with temp, got {X_train.shape[1]}"
+    assert X_train.shape[1] == TOTAL_FEATURES, f"TOTAL_FEATURES should be {expected_features}, is {TOTAL_FEATURES}"
+
+    # Verify temperature features are not all zeros
+    # Temperature features are after load and PV: indices NUM_LOAD_FEATURES+NUM_PV_FEATURES to NUM_LOAD_FEATURES+NUM_PV_FEATURES+NUM_TEMP_FEATURES
+    temp_feature_section = X_train[:, NUM_LOAD_FEATURES + NUM_PV_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES]
+    # At least some temperature values should be non-zero
+    assert np.any(temp_feature_section != 0), "Temperature features should contain non-zero values"
+    # Check temperature values are in reasonable range (after normalization they won't be in Celsius range)
+    assert np.min(temp_feature_section) > -50, "Temperature features should be reasonable"
+    assert np.max(temp_feature_section) < 50, "Temperature features should be reasonable"
+
+    # PV features should be all zeros since we didn't provide pv_minutes
+    pv_feature_section = X_train[:, NUM_LOAD_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES]
+    assert np.all(pv_feature_section == 0), "PV features should be zero when no PV data provided"
 
 
 def _test_normalization():
@@ -479,6 +576,30 @@ def _test_training_with_pv():
     test_input = np.random.randn(1, TOTAL_FEATURES).astype(np.float32)
     output, _, _ = predictor._forward(test_input)
     assert output.shape == (1, OUTPUT_STEPS), "Model should produce correct output shape with PV features"
+
+
+def _test_training_with_temp():
+    """Test that training works correctly with temperature input features"""
+    predictor = LoadPredictor(learning_rate=0.01)
+    now_utc = datetime.now(timezone.utc)
+
+    # Create load and temperature data
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+    temp_data = _create_synthetic_temp_data(n_days=7, now_utc=now_utc, forecast_hours=0)  # Historical only for training
+
+    # Train with temperature data
+    val_mae = predictor.train(load_data, now_utc, temp_minutes=temp_data, is_initial=True, epochs=10, time_decay_days=7)
+
+    # Training should complete successfully
+    assert val_mae is not None, "Training with temperature should return validation MAE"
+    assert predictor.model_initialized, "Model should be initialized after training with temperature"
+    assert predictor.epochs_trained > 0, "Should have trained some epochs with temperature data"
+
+    # Verify the model can accept correct input size (with temperature features)
+    test_input = np.random.randn(1, TOTAL_FEATURES).astype(np.float32)
+    output, _, _ = predictor._forward(test_input)
+    assert output.shape == (1, OUTPUT_STEPS), "Model should produce correct output shape with temperature features"
 
 
 def _test_model_persistence():
@@ -617,6 +738,37 @@ def _test_prediction_with_pv():
         assert max_minute >= 2800, f"Predictions should span ~48h (2880 min), got {max_minute} min"
 
 
+def _test_prediction_with_temp():
+    """Test end-to-end prediction with temperature forecast data"""
+    predictor = LoadPredictor(learning_rate=0.01)
+    now_utc = datetime.now(timezone.utc)
+    midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Create load and temperature data (with 48h forecast)
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+    temp_data = _create_synthetic_temp_data(n_days=7, now_utc=now_utc, forecast_hours=48)  # Include forecast
+
+    # Train with temperature data
+    predictor.train(load_data, now_utc, temp_minutes=temp_data, is_initial=True, epochs=10, time_decay_days=7)
+
+    # Make prediction with temperature forecast
+    predictions = predictor.predict(load_data, now_utc, midnight_utc, temp_minutes=temp_data)
+
+    # Should return predictions
+    if predictions:
+        assert isinstance(predictions, dict), "Predictions should be a dict"
+        assert len(predictions) > 0, "Should have predictions with temperature data"
+
+        # Verify all values are non-negative
+        for minute, val in predictions.items():
+            assert val >= 0, f"Prediction at minute {minute} should be non-negative"
+
+        # Verify predictions span 48 hours (576 steps at 5-min intervals)
+        max_minute = max(predictions.keys())
+        assert max_minute >= 2800, f"Predictions should span ~48h (2880 min), got {max_minute} min"
+
+
 def _test_real_data_training():
     """
     Test training on real load_minutes_debug.json data and generate comparison chart
@@ -624,21 +776,31 @@ def _test_real_data_training():
     import json
     import os
 
-    # Try both coverage/ and current directory
-    json_paths = ["../coverage/load_minutes_debug.json", "coverage/load_minutes_debug.json", "load_minutes_debug.json"]
+    # Try to load the input_train_data.json which has real PV and temperature
+    input_train_paths = ["../coverage/input_train_data.json", "coverage/input_train_data.json", "input_train_data.json"]
 
     load_data = None
-    for json_path in json_paths:
+    pv_data = None
+    temp_data = None
+
+    for json_path in input_train_paths:
         if os.path.exists(json_path):
             with open(json_path, "r") as f:
-                raw_data = json.load(f)
-            # Convert string keys to integers
-            load_data = {int(k): float(v) for k, v in raw_data.items()}
-            print(f"  Loaded {len(load_data)} datapoints from {json_path}")
-            break
+                train_data = json.load(f)
+            # Format: [load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data]
+            if len(train_data) >= 5:
+                # Convert string keys to integers
+                load_data = {int(k): float(v) for k, v in train_data[0].items()}
+                pv_data = {int(k): float(v) for k, v in train_data[3].items()} if train_data[3] else {}
+                temp_data = {int(k): float(v) for k, v in train_data[4].items()} if train_data[4] else {}
+                print(f"  Loaded training data from {json_path}")
+                print(f"    Load: {len(load_data)} datapoints")
+                print(f"    PV: {len(pv_data)} datapoints")
+                print(f"    Temperature: {len(temp_data)} datapoints")
+                break
 
     if load_data is None:
-        print("  WARNING: load_minutes_debug.json not found, skipping real data test")
+        print("  WARNING: No training data found, skipping real data test")
         return
 
     # Initialize predictor with lower learning rate for better convergence
@@ -651,21 +813,28 @@ def _test_real_data_training():
     n_days = max_minute / (24 * 60)
     print(f"  Data spans {n_days:.1f} days ({max_minute} minutes)")
 
-    # Generate synthetic PV data matching the load data timespan
-    print(f"  Generating synthetic PV data for {n_days:.1f} days...")
-    pv_data = _create_synthetic_pv_data(n_days=int(n_days) + 1, now_utc=now_utc, forecast_hours=48)
-    print(f"  Generated {len(pv_data)} PV datapoints")
+    # Generate synthetic data only if real data wasn't loaded
+    if pv_data is None or len(pv_data) == 0:
+        print(f"  Generating synthetic PV data for {n_days:.1f} days...")
+        pv_data = _create_synthetic_pv_data(n_days=int(n_days) + 1, now_utc=now_utc, forecast_hours=48)
+        print(f"  Generated {len(pv_data)} PV datapoints")
+
+    if temp_data is None or len(temp_data) == 0:
+        print(f"  Generating synthetic temperature data for {n_days:.1f} days...")
+        temp_data = _create_synthetic_temp_data(n_days=int(n_days) + 1, now_utc=now_utc, forecast_hours=48)
+        print(f"  Generated {len(temp_data)} temperature datapoints")
 
     # Train on full dataset with more epochs for larger network
-    print(f"  Training on real load data + synthetic PV with {len(load_data)} points...")
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, is_initial=True, epochs=50, time_decay_days=7)
+    data_source = "real" if (pv_data and len(pv_data) > 100 and temp_data and len(temp_data) > 100) else "synthetic"
+    print(f"  Training on real load + {data_source} PV/temperature with {len(load_data)} points...")
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, is_initial=True, epochs=50, time_decay_days=7)
 
     assert success, "Training on real data should succeed"
     assert predictor.model_initialized, "Model should be initialized after training"
 
     # Make predictions
-    print("  Generating predictions with PV forecasts...")
-    predictions = predictor.predict(load_data, now_utc, midnight_utc, pv_minutes=pv_data)
+    print("  Generating predictions with PV + temperature forecasts...")
+    predictions = predictor.predict(load_data, now_utc, midnight_utc, pv_minutes=pv_data, temp_minutes=temp_data)
 
     assert isinstance(predictions, dict), "Predictions should be a dict"
     assert len(predictions) > 0, "Should have predictions"
@@ -733,7 +902,13 @@ def _test_real_data_training():
                 if minute >= val_holdout_minutes:
                     shifted_pv_data[minute - val_holdout_minutes] = cum_kwh
 
-            val_predictions = predictor.predict(shifted_load_data, shifted_now, shifted_midnight, pv_minutes=shifted_pv_data)
+            # Create shifted temperature data for validation prediction
+            shifted_temp_data = {}
+            for minute, temp in temp_data.items():
+                if minute >= val_holdout_minutes:
+                    shifted_temp_data[minute - val_holdout_minutes] = temp
+
+            val_predictions = predictor.predict(shifted_load_data, shifted_now, shifted_midnight, pv_minutes=shifted_pv_data, temp_minutes=shifted_temp_data)
 
             # Extract first 24h of validation predictions
             val_pred_keys = sorted(val_predictions.keys())
@@ -785,8 +960,30 @@ def _test_real_data_training():
                 pv_forecast_minutes.append(minute)
                 pv_forecast_energy.append(energy_kwh)
 
+        # Extract temperature data (non-cumulative, so we use raw values)
+        # Historical temperature (positive minutes in temp_data dict, going back in time)
+        temp_historical_minutes = []
+        temp_historical_celsius = []
+        for minute in range(0, max_history_minutes, STEP_MINUTES):
+            if minute in temp_data:
+                temp_celsius = temp_data[minute]
+                temp_historical_minutes.append(minute)
+                temp_historical_celsius.append(temp_celsius)
+
+        # Future temperature forecasts (negative minutes in temp_data dict, representing future)
+        temp_forecast_minutes = []
+        temp_forecast_celsius = []
+        for minute in range(-prediction_hours * 60, 0, STEP_MINUTES):
+            if minute in temp_data:
+                temp_celsius = temp_data[minute]
+                temp_forecast_minutes.append(minute)
+                temp_forecast_celsius.append(temp_celsius)
+
         # Create figure with single plot showing timeline
         fig, ax = plt.subplots(1, 1, figsize=(16, 6))
+
+        # Create secondary y-axis for temperature
+        ax2 = ax.twinx()
 
         # Plot PV data first (in background)
         # Historical PV (negative hours, going back in time)
@@ -799,6 +996,18 @@ def _test_real_data_training():
             # Convert negative minutes to positive hours for future
             pv_forecast_hours = [-m / 60 for m in pv_forecast_minutes]  # Negative minutes become positive hours
             ax.plot(pv_forecast_hours, pv_forecast_energy, "orange", linewidth=1.2, label="PV Forecast (48h)", alpha=0.5, linestyle="--")
+
+        # Plot temperature data on secondary y-axis
+        # Historical temperature (negative hours, going back in time)
+        if temp_historical_minutes:
+            temp_hist_hours = [-m / 60 for m in temp_historical_minutes]  # Negative for past
+            ax2.plot(temp_hist_hours, temp_historical_celsius, "purple", linewidth=0.8, label="Historical Temp (7 days)", alpha=0.4, linestyle="-.")
+
+        # Future temperature forecasts (positive hours, going forward)
+        if temp_forecast_minutes:
+            # Convert negative minutes to positive hours for future
+            temp_forecast_hours = [-m / 60 for m in temp_forecast_minutes]  # Negative minutes become positive hours
+            ax2.plot(temp_forecast_hours, temp_forecast_celsius, "purple", linewidth=1.2, label="Temp Forecast (48h)", alpha=0.6, linestyle="-.")
 
         # Plot historical data (negative hours, going back in time)
         # minute 0 = now (hour 0), minute 60 = 1 hour ago (hour -1)
@@ -832,8 +1041,14 @@ def _test_real_data_training():
         # Formatting
         ax.set_xlabel("Hours (negative = past, positive = future)", fontsize=12)
         ax.set_ylabel("Load (kWh per 5 min)", fontsize=12)
-        ax.set_title("ML Load Predictor with PV Input: Validation (Day 7) + 48h Forecast", fontsize=14, fontweight="bold")
-        ax.legend(loc="upper right", fontsize=10)
+        ax2.set_ylabel("Temperature (°C)", fontsize=12, color="purple")
+        ax2.tick_params(axis="y", labelcolor="purple")
+        ax.set_title("ML Load Predictor with PV + Temperature Input: Validation (Day 7) + 48h Forecast", fontsize=14, fontweight="bold")
+
+        # Combine legends from both axes
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.set_xlim(-history_hours, prediction_hours)
 
@@ -901,6 +1116,14 @@ def _test_component_fetch_load_data():
                 "car_charging_energy_scale": 1.0,
             }.get(key, default)
 
+        def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+            """Mock get_state_wrapper - returns None for temperature by default"""
+            return default
+
+        def fetch_pv_forecast(self):
+            """Mock fetch_pv_forecast - returns empty forecasts"""
+            return {}, {}
+
     # Create synthetic load data (28 days worth)
     def create_load_minutes(days=28, all_minutes=False):
         """
@@ -948,7 +1171,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
 
         assert result_data is not None, "Should return load data"
         assert result_age == 28, f"Expected 28 days, got {result_age}"
@@ -985,7 +1208,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
 
         assert result_data is None, "Should return None when sensor missing"
         assert result_age == 0, "Age should be 0 when sensor missing"
@@ -1029,7 +1252,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
 
         assert result_data is not None, f"Should return load data"
         assert result_age > 0, f"Should have valid age (got {result_age})"
@@ -1079,7 +1302,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
 
         assert result_data is not None, "Should return load data"
         assert mock_base_with_power.fill_load_from_power.called, "fill_load_from_power should be called"
@@ -1102,7 +1325,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
 
         assert result_data is None, "Should return None on exception"
         assert result_age == 0, "Age should be 0 on exception"
@@ -1126,12 +1349,99 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
 
         assert result_data is None, "Should return None when load data is empty"
         assert result_age == 0, "Age should be 0 when load data is empty"
         assert result_now == 0, "Current load should be 0 when load data is empty"
         print("    ✓ Empty load data handled correctly")
+
+    # Test 7: Temperature data fetch with future predictions only
+    async def test_temperature_data_fetch():
+        from datetime import timedelta
+
+        mock_base_with_temp = MockBase()
+
+        # Create mock temperature data (dict with timestamp strings as keys)
+        # This simulates future temperature predictions from sensor.predbat_temperature attribute "results"
+        base_time = mock_base_with_temp.now_utc
+        temp_predictions = {}
+        for hours_ahead in range(1, 49):  # 48 hours of predictions
+            timestamp = base_time + timedelta(hours=hours_ahead)
+            timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
+            temp_predictions[timestamp_str] = 15.0 + (hours_ahead % 12)  # Simulated temperature pattern
+
+        # Override get_state_wrapper using MagicMock to return temperature predictions
+        def mock_get_state_wrapper_side_effect(entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+            if entity_id == "sensor.predbat_temperature" and attribute == "results":
+                return temp_predictions
+            return default
+
+        mock_base_with_temp.get_state_wrapper = MagicMock(side_effect=mock_get_state_wrapper_side_effect)
+
+        load_data, age = create_load_minutes(7)
+
+        # Mock minute_data_load to return load data
+        mock_base_with_temp.minute_data_load = MagicMock(return_value=(load_data, age))
+        mock_base_with_temp.minute_data_import_export = MagicMock(return_value={})
+        mock_base_with_temp.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base_with_temp, load_ml_enable=True)
+        component.ml_learning_rate = 0.001
+        component.ml_epochs_initial = 10
+        component.ml_epochs_update = 2
+        component.ml_min_days = 1
+        component.ml_validation_threshold = 2.0
+        component.ml_time_decay_days = 7
+        component.ml_max_load_kw = 23.0
+        component.ml_max_model_age_hours = 48
+
+        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+
+        assert result_data is not None, "Should return load data"
+        assert result_temp is not None, "Should return temperature data"
+        assert isinstance(result_temp, dict), "Temperature data should be a dict"
+        assert len(result_temp) > 0, "Temperature data should not be empty"
+
+        # Verify we have future temperature data (positive minutes from midnight)
+        # Note: minute_data with backwards=False returns positive minute keys
+        # These represent minutes from midnight forward (future predictions)
+        assert len(result_temp) > 0, "Should have future temperature predictions"
+
+        # Verify get_state_wrapper was called correctly
+        assert mock_base_with_temp.get_state_wrapper.called, "get_state_wrapper should be called"
+
+        print("    ✓ Temperature data fetch (future predictions) works")
+
+    # Test 8: Temperature data with no predictions (None return)
+    async def test_temperature_no_data():
+        mock_base_no_temp = MockBase()
+
+        load_data, age = create_load_minutes(7)
+        mock_base_no_temp.minute_data_load = MagicMock(return_value=(load_data, age))
+        mock_base_no_temp.minute_data_import_export = MagicMock(return_value={})
+        mock_base_no_temp.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        # get_state_wrapper returns None (default behavior)
+
+        component = LoadMLComponent(mock_base_no_temp, load_ml_enable=True)
+        component.ml_learning_rate = 0.001
+        component.ml_epochs_initial = 10
+        component.ml_epochs_update = 2
+        component.ml_min_days = 1
+        component.ml_validation_threshold = 2.0
+        component.ml_time_decay_days = 7
+        component.ml_max_load_kw = 23.0
+        component.ml_max_model_age_hours = 48
+
+        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+
+        assert result_data is not None, "Should return load data"
+        assert result_temp is not None, "Should return temperature data (empty dict)"
+        assert isinstance(result_temp, dict), "Temperature data should be a dict"
+        assert len(result_temp) == 0, "Temperature data should be empty when no predictions available"
+
+        print("    ✓ Temperature data with no predictions handled correctly")
 
     # Run all sub-tests
     print("  Running LoadMLComponent._fetch_load_data tests:")
@@ -1141,6 +1451,8 @@ def _test_component_fetch_load_data():
     run_async(test_load_power_fill())
     run_async(test_exception_handling())
     run_async(test_empty_load_data())
+    run_async(test_temperature_data_fetch())
+    run_async(test_temperature_no_data())
     print("  All _fetch_load_data tests passed!")
 
 

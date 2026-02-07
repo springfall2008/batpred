@@ -67,6 +67,7 @@ class LoadMLComponent(ComponentBase):
         self.load_data = None
         self.load_data_age_days = 0
         self.pv_data = None
+        self.temperature_data = None
         self.data_ready = False
         self.data_lock = asyncio.Lock()
         self.last_data_fetch = None
@@ -133,8 +134,8 @@ class LoadMLComponent(ComponentBase):
             return None, 0, 0, None, None
 
         try:
-            # Determine how many days of history to fetch (7 days minimum)
-            days_to_fetch = max(28, self.ml_min_days)
+            # Determine how many days of history to fetch, up to 7 days back
+            days_to_fetch = max(7, self.ml_min_days)
 
             # Fetch load sensor history
             self.log("ML Component: Fetching {} days of load history from {}".format(days_to_fetch, self.ml_load_sensor))
@@ -194,36 +195,43 @@ class LoadMLComponent(ComponentBase):
                 pv_data = {}
 
             # Temperature predictions
-            temperature_info = self.get_state_wrapper("sensor." + self.prefix + "_temperature", attribute="results")
+            temp_entity = "sensor." + self.prefix + "_temperature"
+            temperature_info = self.get_state_wrapper(temp_entity, attribute="results")
             temperature_data = {}
             if isinstance(temperature_info, dict):
                 data_array = []
                 for key, value in temperature_info.items():
                     data_array.append({"state": value, "last_updated": key})
 
-                # Load data
+                # Load data from past and future predictions, base backwards around now_utc
+                # We also get the last 7 days in the past to help the model learn the daily pattern
                 temperature_data, _ = minute_data(
                     data_array,
                     days_to_fetch,
-                    self.midnight_utc,
+                    self.now_utc,
                     "state",
                     "last_updated",
-                    backwards=False,
+                    backwards=True,
                     clean_increment=False,
                     smoothing=True,
                     divide_by=1.0,
                     scale=1.0,
                 )
+                self.log("ML Temperature data points: {}".format(len(temperature_data)))
 
             self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), age_days))
+            # with open("input_train_data.json", "w") as f:
+            #    import json
+            #    json.dump([load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data], f, indent=2)
             return load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data
 
         except Exception as e:
             self.log("Error: ML Component: Failed to fetch load data: {}".format(e))
+            print("Error: ML Component: Failed to fetch load data: {}".format(e))
             import traceback
 
             self.log("Error: ML Component: {}".format(traceback.format_exc()))
-            return None, 0, 0, None
+            return None, 0, 0, None, None
 
     def get_current_prediction(self):
         """
@@ -261,7 +269,7 @@ class LoadMLComponent(ComponentBase):
 
         # Generate predictions using current model
         try:
-            predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, exog_features=exog_features)
+            predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, exog_features=exog_features)
 
             if predictions:
                 self.current_predictions = predictions
@@ -380,7 +388,7 @@ class LoadMLComponent(ComponentBase):
                 # Run training in executor to avoid blocking
                 epochs = self.ml_epochs_initial if is_initial else self.ml_epochs_update
 
-                val_mae = self.predictor.train(self.load_data, self.now_utc, pv_minutes=self.pv_data, is_initial=is_initial, epochs=epochs, time_decay_days=self.ml_time_decay_days)
+                val_mae = self.predictor.train(self.load_data, self.now_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, is_initial=is_initial, epochs=epochs, time_decay_days=self.ml_time_decay_days)
 
                 if val_mae is not None:
                     self.last_train_time = datetime.now(timezone.utc)

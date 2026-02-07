@@ -229,7 +229,7 @@ COMPONENT_LIST = {
             "temperature_enable": {"required_true": True, "config": "temperature_enable", "default": False},
             "temperature_latitude": {"required": False, "config": "temperature_latitude", "default": None},
             "temperature_longitude": {"required": False, "config": "temperature_longitude", "default": None},
-            "temperature_url": {"required": False, "config": "temperature_url", "default": "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m"},
+            "temperature_url": {"required": False, "config": "temperature_url", "default": "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m&past_days=7"},
         },
         "phase": 1,
     },

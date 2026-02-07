@@ -16,11 +16,11 @@ import os
 from datetime import datetime, timezone, timedelta
 
 # Architecture constants (not user-configurable)
-MODEL_VERSION = 4  # Bumped for PV
+MODEL_VERSION = 5  # Bumped for temperature feature
 LOOKBACK_STEPS = 288  # 24 hours at 5-min intervals
 OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 576  # 48 hours of predictions (576 * 5 min)
-HIDDEN_SIZES = [256, 256, 128, 64]  # Deeper network with more capacity
+HIDDEN_SIZES = [512, 256, 128, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Smaller batches for better gradient estimates
 FINETUNE_HOURS = 24  # Hours of data for fine-tuning
 STEP_MINUTES = 5  # Minutes per step
@@ -29,7 +29,8 @@ STEP_MINUTES = 5  # Minutes per step
 NUM_TIME_FEATURES = 4  # sin/cos minute-of-day, sin/cos day-of-week (for TARGET time)
 NUM_LOAD_FEATURES = LOOKBACK_STEPS  # Historical load values
 NUM_PV_FEATURES = LOOKBACK_STEPS  # Historical PV generation values
-TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TIME_FEATURES
+NUM_TEMP_FEATURES = LOOKBACK_STEPS  # Historical temperature values
+TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_TIME_FEATURES
 
 
 def relu(x):
@@ -377,7 +378,7 @@ class LoadPredictor:
 
         return smoothed
 
-    def _create_dataset(self, load_minutes, now_utc, pv_minutes=None, is_finetune=False, time_decay_days=7, validation_holdout_hours=24):
+    def _create_dataset(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, is_finetune=False, time_decay_days=7, validation_holdout_hours=24):
         """
         Create training dataset from load_minutes dict.
 
@@ -391,6 +392,7 @@ class LoadPredictor:
             load_minutes: Dict of {minute: cumulative_kwh} going backwards in time
             now_utc: Current UTC timestamp
             pv_minutes: Dict of {minute: cumulative_kwh} PV generation (backwards for history, negative for future)
+            temp_minutes: Dict of {minute: temperature_celsius} Temperature (backwards for history, negative for future)
             is_finetune: If True, only use last 24 hours; else use full data with time-decay
             time_decay_days: Time constant for exponential decay weighting
             validation_holdout_hours: Hours of most recent data to hold out for validation
@@ -402,6 +404,8 @@ class LoadPredictor:
         # Convert to energy per step
         energy_per_step = self._load_to_energy_per_step(load_minutes)
         pv_energy_per_step = self._load_to_energy_per_step(pv_minutes) if pv_minutes else {}
+        # Temperature is not cumulative, so just use the raw values (already in correct format)
+        temp_values = temp_minutes if temp_minutes else {}
 
         if not energy_per_step:
             return None, None, None, None, None
@@ -445,6 +449,7 @@ class LoadPredictor:
             # Extract lookback window (24 hours of history before the target)
             lookback_values = []
             pv_lookback_values = []
+            temp_lookback_values = []
             valid_sample = True
 
             for lb_offset in range(LOOKBACK_STEPS):
@@ -453,6 +458,8 @@ class LoadPredictor:
                     lookback_values.append(energy_per_step[lb_minute])
                     # Add PV generation for the same time period (0 if no PV data)
                     pv_lookback_values.append(pv_energy_per_step.get(lb_minute, 0.0))
+                    # Add temperature for the same time period (0 if no temp data)
+                    temp_lookback_values.append(temp_values.get(lb_minute, 0.0))
                 else:
                     valid_sample = False
                     break
@@ -471,8 +478,8 @@ class LoadPredictor:
             day_of_week = target_time.weekday()
             time_features = self._create_time_features(minute_of_day, day_of_week)
 
-            # Combine features: [load_lookback..., pv_lookback..., time_features...]
-            features = np.concatenate([np.array(lookback_values, dtype=np.float32), np.array(pv_lookback_values, dtype=np.float32), time_features])
+            # Combine features: [load_lookback..., pv_lookback..., temp_lookback..., time_features...]
+            features = np.concatenate([np.array(lookback_values, dtype=np.float32), np.array(pv_lookback_values, dtype=np.float32), np.array(temp_lookback_values, dtype=np.float32), time_features])
 
             X_train_list.append(features)
             y_train_list.append(np.array([target_value], dtype=np.float32))
@@ -494,6 +501,7 @@ class LoadPredictor:
             # Extract lookback window
             lookback_values = []
             pv_lookback_values = []
+            temp_lookback_values = []
             valid_sample = True
 
             for lb_offset in range(LOOKBACK_STEPS):
@@ -501,6 +509,7 @@ class LoadPredictor:
                 if lb_minute in energy_per_step:
                     lookback_values.append(energy_per_step[lb_minute])
                     pv_lookback_values.append(pv_energy_per_step.get(lb_minute, 0.0))
+                    temp_lookback_values.append(temp_values.get(lb_minute, 0.0))
                 else:
                     valid_sample = False
                     break
@@ -519,7 +528,7 @@ class LoadPredictor:
             day_of_week = target_time.weekday()
             time_features = self._create_time_features(minute_of_day, day_of_week)
 
-            features = np.concatenate([np.array(lookback_values, dtype=np.float32), np.array(pv_lookback_values, dtype=np.float32), time_features])
+            features = np.concatenate([np.array(lookback_values, dtype=np.float32), np.array(pv_lookback_values, dtype=np.float32), np.array(temp_lookback_values, dtype=np.float32), time_features])
 
             X_val_list.append(features)
             y_val_list.append(np.array([target_value], dtype=np.float32))
@@ -626,7 +635,7 @@ class LoadPredictor:
 
         return predictions
 
-    def train(self, load_minutes, now_utc, pv_minutes=None, is_initial=True, epochs=50, time_decay_days=7, patience=5):
+    def train(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, is_initial=True, epochs=50, time_decay_days=7, patience=5):
         """
         Train or fine-tune the model.
 
@@ -637,6 +646,7 @@ class LoadPredictor:
             load_minutes: Dict of {minute: cumulative_kwh}
             now_utc: Current UTC timestamp
             pv_minutes: Dict of {minute: cumulative_kwh} PV generation (backwards for history, negative for future)
+            temp_minutes: Dict of {minute: temperature_celsius} Temperature (backwards for history, negative for future)
             is_initial: If True, full training; else fine-tuning on last 24h
             epochs: Number of training epochs
             time_decay_days: Time constant for sample weighting
@@ -648,7 +658,7 @@ class LoadPredictor:
         self.log("ML Predictor: Starting {} training with {} epochs".format("initial" if is_initial else "fine-tune", epochs))
 
         # Create dataset with train/validation split
-        result = self._create_dataset(load_minutes, now_utc, pv_minutes=pv_minutes, is_finetune=not is_initial, time_decay_days=time_decay_days)
+        result = self._create_dataset(load_minutes, now_utc, pv_minutes=pv_minutes, temp_minutes=temp_minutes, is_finetune=not is_initial, time_decay_days=time_decay_days)
 
         if result[0] is None:
             self.log("Warn: ML Predictor: Failed to create dataset")
@@ -743,7 +753,7 @@ class LoadPredictor:
 
         return best_val_loss
 
-    def predict(self, load_minutes, now_utc, midnight_utc, pv_minutes=None, exog_features=None):
+    def predict(self, load_minutes, now_utc, midnight_utc, pv_minutes=None, temp_minutes=None, exog_features=None):
         """
         Generate predictions for the next 48 hours using autoregressive approach.
 
@@ -759,6 +769,7 @@ class LoadPredictor:
             now_utc: Current UTC timestamp
             midnight_utc: Today's midnight UTC timestamp
             pv_minutes: Dict of {minute: cumulative_kwh} PV generation (backwards for history, negative for future)
+            temp_minutes: Dict of {minute: temperature_celsius} Temperature (backwards for history, negative for future)
             exog_features: Optional dict with future exogenous data
 
         Returns:
@@ -771,6 +782,8 @@ class LoadPredictor:
         # Convert to energy per step for extracting lookback
         energy_per_step = self._load_to_energy_per_step(load_minutes)
         pv_energy_per_step = self._load_to_energy_per_step(pv_minutes) if pv_minutes else {}
+        # Temperature is not cumulative, so just use the raw values
+        temp_values = temp_minutes if temp_minutes else {}
 
         if not energy_per_step:
             self.log("Warn: ML Predictor: No load data available for prediction")
@@ -784,6 +797,7 @@ class LoadPredictor:
         # This will be updated as we make predictions (autoregressive)
         lookback_buffer = []
         pv_lookback_buffer = []
+        temp_lookback_buffer = []
         for lb_offset in range(LOOKBACK_STEPS):
             lb_minute = lb_offset * STEP_MINUTES
             if lb_minute in energy_per_step:
@@ -792,6 +806,8 @@ class LoadPredictor:
                 lookback_buffer.append(0)  # Fallback to zero
             # Add PV generation (0 if no data)
             pv_lookback_buffer.append(pv_energy_per_step.get(lb_minute, 0.0))
+            # Add temperature (0 if no data)
+            temp_lookback_buffer.append(temp_values.get(lb_minute, 0.0))
 
         # Autoregressive prediction loop: predict one step at a time
         predictions_energy = []
@@ -811,9 +827,11 @@ class LoadPredictor:
             # For future predictions, use forecast; for past, it's already in pv_energy_per_step
             future_minute = -(step_idx + 1) * STEP_MINUTES  # Negative = future
             next_pv_value = pv_energy_per_step.get(future_minute, 0.0)
+            # Get temperature value for the next step from forecast (negative minutes are future)
+            next_temp_value = temp_values.get(future_minute, 0.0)
 
-            # Combine features: [load_lookback..., pv_lookback..., time_features...]
-            features = np.concatenate([np.array(lookback_buffer, dtype=np.float32), np.array(pv_lookback_buffer, dtype=np.float32), time_features])
+            # Combine features: [load_lookback..., pv_lookback..., temp_lookback..., time_features...]
+            features = np.concatenate([np.array(lookback_buffer, dtype=np.float32), np.array(pv_lookback_buffer, dtype=np.float32), np.array(temp_lookback_buffer, dtype=np.float32), time_features])
             features = self._add_exog_features(features, exog_features)
 
             # Normalize and forward pass
@@ -849,6 +867,10 @@ class LoadPredictor:
             # Update PV lookback buffer with next forecast value
             pv_lookback_buffer.insert(0, next_pv_value)
             pv_lookback_buffer.pop()  # Remove oldest value
+
+            # Update temperature lookback buffer with next forecast value
+            temp_lookback_buffer.insert(0, next_temp_value)
+            temp_lookback_buffer.pop()  # Remove oldest value
 
         # Convert to cumulative kWh format (incrementing into future)
         # Format matches fetch_extra_load_forecast output
