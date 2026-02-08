@@ -238,7 +238,7 @@ If validation MAE exceeds the threshold (default 2.0 kWh), predictions are disab
 
 The Predbat WebUI has two charts associated with LoadML:
 
-The LoadML chart shows the corrolation between your actual load and the predictions by charting this against the prediction 1 hour in the future and 8 hours in the future. 
+The LoadML chart shows the corrolation between your actual load and the predictions by charting this against the prediction 1 hour in the future and 8 hours in the future.
 
 <img width="1602" height="971" alt="image" src="https://github.com/user-attachments/assets/731ef153-01e4-4ed1-bc5b-df1305d84f41" />
 
