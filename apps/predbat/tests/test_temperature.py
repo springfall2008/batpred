@@ -396,7 +396,7 @@ def _test_fetch_temperature_data_success(my_predbat):
         mock_response = MagicMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(return_value=mock_response_data)
-        
+
         # Mock the context manager for response
         mock_response.__aenter__ = AsyncMock(return_value=mock_response)
         mock_response.__aexit__ = AsyncMock(return_value=None)
@@ -404,7 +404,7 @@ def _test_fetch_temperature_data_success(my_predbat):
         # Mock session.get to return our mock response
         mock_session = MagicMock()
         mock_session.get = MagicMock(return_value=mock_response)
-        
+
         # Mock the context manager for session
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
@@ -458,7 +458,7 @@ def _test_fetch_temperature_data_http_error_with_retry(my_predbat):
                 # Second call succeeds
                 mock_response.status = 200
                 mock_response.json = AsyncMock(return_value={"current": {"temperature_2m": 10.0}})
-            
+
             mock_response.__aenter__ = AsyncMock(return_value=mock_response)
             mock_response.__aexit__ = AsyncMock(return_value=None)
             return mock_response
