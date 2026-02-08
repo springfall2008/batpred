@@ -307,6 +307,8 @@ class AxleAPI(ComponentBase):
             except Exception as e:
                 self.log(f"Warn: Axle API: Exception during fetch: {e}")
                 self.failures_total += 1
+        elif (seconds % 60) == 0:  # Every minute, update state to reflect if event is active or not
+            self.publish_axle_event()
 
         return True
 

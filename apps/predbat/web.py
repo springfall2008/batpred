@@ -2679,6 +2679,38 @@ chart.render();
             ]
 
             text += self.render_chart(series_data, "kW", "ML Load & PV Power with Temperature", now_str, extra_yaxis=secondary_axis)
+        elif chart == "Savings":
+            # Get daily savings data (historical)
+            savings_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            savings_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+
+            # Get cumulative/total savings over time (historical)
+            savings_total_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_predbat", 28, required=False), daily=True, pounds=True)
+            savings_total_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_pvbat", 28, required=False), daily=True, pounds=True)
+
+            series_data = [
+                # Daily savings (bars) on primary axis
+                {"name": "Daily Predbat Saving", "data": savings_predbat_hist, "opacity": "1.0", "stroke_width": "2", "chart_type": "bar", "color": "#f5a442", "unit": self.currency_symbols[0]},
+                {"name": "Daily PV/Battery Saving", "data": savings_pvbat_hist, "opacity": "1.0", "stroke_width": "2", "chart_type": "bar", "color": "#3291a8", "unit": self.currency_symbols[0]},
+                {"name": "Daily Actual Cost", "data": cost_yesterday_hist, "opacity": "1.0", "stroke_width": "2", "chart_type": "bar", "color": "#eb2323", "unit": self.currency_symbols[0]},
+                # Cumulative savings (lines) on secondary axis
+                {"name": "Total Predbat Saving", "data": savings_total_predbat_hist, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": self.currency_symbols[0]},
+                {"name": "Total PV/Battery Saving", "data": savings_total_pvbat_hist, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#15eb8b", "unit": self.currency_symbols[0]},
+            ]
+
+            # Configure secondary axis for cumulative totals
+            secondary_axis = [
+                {
+                    "title": f"Total Savings ({self.currency_symbols[0]})",
+                    "series_names": ["Total Predbat Saving", "Total PV/Battery Saving"],
+                    "decimals": 0,
+                    "opposite": True,
+                    "labels_formatter": f"return val.toFixed(0);",
+                }
+            ]
+
+            text += self.render_chart(series_data, f"Daily Savings ({self.currency_symbols[0]})", "Cost Savings Analysis", now_str, daily_chart=False, extra_yaxis=secondary_axis)
         else:
             text += "<br><h2>Unknown chart type</h2>"
 
@@ -2695,49 +2727,20 @@ chart.render();
         text += "<body>\n"
         text += get_charts_css()
 
-        # Define which chart is active
-        active_battery = ""
-        active_power = ""
-        active_cost = ""
-        active_rates = ""
-        active_inday = ""
-        active_pv = ""
-        active_pv7 = ""
-        active_loadml = ""
-        active_loadmlpower = ""
-
-        if chart == "Battery":
-            active_battery = "active"
-        elif chart == "Power":
-            active_power = "active"
-        elif chart == "Cost":
-            active_cost = "active"
-        elif chart == "Rates":
-            active_rates = "active"
-        elif chart == "InDay":
-            active_inday = "active"
-        elif chart == "PV":
-            active_pv = "active"
-        elif chart == "PV7":
-            active_pv7 = "active"
-        elif chart == "LoadML":
-            active_loadml = "active"
-        elif chart == "LoadMLPower":
-            active_loadmlpower = "active"
-
         text += '<div class="charts-menu">'
         text += "<h3>Charts</h3> "
-        text += f'<a href="./charts?chart=Battery" class="{active_battery}">Battery</a>'
-        text += f'<a href="./charts?chart=Power" class="{active_power}">Power</a>'
-        text += f'<a href="./charts?chart=Cost" class="{active_cost}">Cost</a>'
-        text += f'<a href="./charts?chart=Rates" class="{active_rates}">Rates</a>'
-        text += f'<a href="./charts?chart=InDay" class="{active_inday}">InDay</a>'
-        text += f'<a href="./charts?chart=PV" class="{active_pv}">PV</a>'
-        text += f'<a href="./charts?chart=PV7" class="{active_pv7}">PV7</a>'
+        text += f'<a href="./charts?chart=Battery" class="{"active" if chart == "Battery" else ""}">Battery</a>'
+        text += f'<a href="./charts?chart=Power" class="{"active" if chart == "Power" else ""}">Power</a>'
+        text += f'<a href="./charts?chart=Cost" class="{"active" if chart == "Cost" else ""}">Cost</a>'
+        text += f'<a href="./charts?chart=Rates" class="{"active" if chart == "Rates" else ""}">Rates</a>'
+        text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
+        text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
+        text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
+        text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         # Only show LoadML chart if ML is enabled
         if self.base.get_arg("load_ml_enable", False):
-            text += f'<a href="./charts?chart=LoadML" class="{active_loadml}">LoadML</a>'
-            text += f'<a href="./charts?chart=LoadMLPower" class="{active_loadmlpower}">LoadMLPower</a>'
+            text += f'<a href="./charts?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
+            text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
         text += '<div id="chart"></div>'
