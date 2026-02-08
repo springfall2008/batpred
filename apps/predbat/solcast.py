@@ -65,8 +65,8 @@ class SolarAPI(ComponentBase):
         fetch_age = 9999
         same_day = False
         if self.last_fetched_timestamp:
-            fetch_age = (datetime.now() - self.last_fetched_timestamp).total_seconds() / 60
-            same_day = self.last_fetched_timestamp.date() == datetime.now().date()
+            fetch_age = (self.now_utc_exact - self.last_fetched_timestamp).total_seconds() / 60
+            same_day = self.last_fetched_timestamp.date() == self.now_utc_exact.date()
 
         if seconds % (self.plan_interval_minutes * 60) == 0:  # Every plan_interval_minutes
             await self.fetch_pv_forecast()
