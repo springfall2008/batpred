@@ -2960,7 +2960,7 @@ chart.render();
                     data = yaml.load(f)
             except Exception as e:
                 return web.json_response({"success": False, "message": f"Error reading apps.yaml: {str(e)}"})
-            
+
             # Navigate to the predbat section
             if ROOT_YAML_KEY not in data:
                 return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
@@ -4149,7 +4149,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     data = yaml.load(f)
             except Exception as e:
                 return web.json_response({"success": False, "message": f"Error reading apps.yaml: {str(e)}"}, status=500)
-            
+
             if not data:
                 data = {}
 
