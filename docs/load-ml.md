@@ -234,6 +234,16 @@ If validation MAE exceeds the threshold (default 2.0 kWh), predictions are disab
 
 ## Monitoring and Troubleshooting
 
+### Charts
+
+The Predbat WebUI has two charts associated with LoadML:
+
+The LoadML chart shows the corrolation between your actual load and the predictions by charting this against the prediction 1 hour in the future and 8 hours in the future. 
+
+<img width="1602" height="971" alt="image" src="https://github.com/user-attachments/assets/731ef153-01e4-4ed1-bc5b-df1305d84f41" />
+
+The LoadMLPower chart shows a similar view as power, but also plots PV production, predicted PV production and temperature predictions.
+
 ### Check Model Status
 
 View model status in Predbat logs:
