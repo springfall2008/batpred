@@ -9,8 +9,8 @@ nav:
     - 'Install summary': installation-summary.md
     - 'Install details': install.md
     - inverter-setup.md
-    - energy-rates.md
     - apps-yaml.md
+    - energy-rates.md
     - components.md
     - car-charging.md
     - configuration-guide.md

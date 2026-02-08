@@ -214,7 +214,7 @@ pred_bat:
   # the default is 1.0 (full power)
   # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
   #
-  # Predbat can compute this curve automatically if you have enough data, restart the add-on and look in the logfile for the data
+  # Predbat can compute this curve automatically if you have enough data, restart the app and look in the logfile for the data
   # once set here Predbat will no longer re-compute the curve.
   # Can also be set to 'auto' to just use the calculation curve, not recommended if you are using low power charging mode.
   #battery_charge_power_curve:

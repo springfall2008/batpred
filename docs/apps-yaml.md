@@ -4,19 +4,19 @@ The basic Predbat configuration is defined in the `apps.yaml` file.
 
 Depending on how you installed Predbat the `apps.yaml` file will be held in one of three different directories in Home Assistant:
 
-- if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), `apps.yaml` will be in the directory `/addon_configs/6adb4f0d_predbat`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), `apps.yaml` will be in the directory `/addon_configs/6adb4f0d_predbat`,
 
-- with the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
+- with the [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
 
-- if the combined AppDaemon/Predbat add-on installation method was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`.
+- if the combined AppDaemon/Predbat app installation method was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`.
 
-You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
+You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps)
 to edit the `apps.yaml` file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
 This section of the documentation describes what the different configuration items in `apps.yaml` do.
 
 When you edit `apps.yaml`, the change will automatically be detected and Predbat will be reloaded with the updated file.
-You don't need to restart the Predbat or AppDaemon add-on for your edits to take effect.
+You don't need to restart the Predbat or AppDaemon app for your edits to take effect.
 
 ## Warning! apps.yaml file format
 
@@ -97,9 +97,9 @@ Create a `secrets.yaml` file in one of these locations (checked in order, only t
 
 1. Path specified in `PREDBAT_SECRETS_FILE` environment variable
 2. `secrets.yaml` in the same directory as your `apps.yaml`
-3. `/config/secrets.yaml` (standard Home Assistant location)
+3. `/homeassistant/secrets.yaml` (standard Home Assistant location)
 
-The `secrets.yaml` file contains key-value pairs of your secrets:
+The `secrets.yaml` file contains key-value pairs of your secrets, e.g.:
 
 ```yaml
 octopus_api_key: "sk_live_abc123xyz..."
@@ -108,15 +108,20 @@ solcast_api_key: "def456uvw..."
 
 ### Referencing secrets in apps.yaml
 
-Use the `!secret` tag followed by the secret key name in your `apps.yaml`:
+Use the `!secret` tag followed by the secret key name in your `apps.yaml`. You only need to enter the keys you are using:
 
 ```yaml
 pred_bat:
   module: predbat
   class: PredBat
 
-  octopus_api_key: !secret octopus_api_key
-  solcast_api_key: !secret solcast_api_key
+  ha_key: !secret ha_key  # Home Assistant Long-Lived Access Token
+  octopus_api_key: !secret octopus_api_key  # Octopus API key (if using Octopus direct)
+  solcast_api_key: !secret solcast_api_key  # Solcast API key (if using Solcast direct)
+  forecast_solar_api_key: !secret forecast_solar_api_key  # Forecast.solar API key (if using Forecast.solar)
+  ge_cloud_key: !secret ge_cloud_key  # GivEnergy API key (if using GE Cloud)
+  fox_key: !secret fox_key  # Fox ESS API key and username (if using Fox Cloud)
+  axle_api_key: !secret axle_api_key  # Axle API key (if using Axle VPP)
 ```
 
 When Predbat loads, it will automatically replace `!secret octopus_api_key` with the actual value from `secrets.yaml`.
@@ -174,7 +179,7 @@ Once you have made all other required changes to `apps.yaml` this line should be
 
 Predbat can speak directly to Home Assistant rather than going via AppDaemon.
 
-If you are using a standard Predbat add-on then this will be automatic and you should normally not need to set this.
+If you are using a standard Predbat app then this will be automatic and you should normally not need to set this.
 If you find you get issues where Predbat cannot communicate with Home Assistant after running for a long period of time and you get web socket errors, then creating a HA access key as described below can resolve this.
 
 If you run Predbat in a Docker container then you will need to set the URL or IP address of Home Assistant and an access key.
@@ -232,7 +237,7 @@ This significantly reduces planning time while maintaining near-optimal results.
 
 ### Web interface
 
-Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat add-on.
+Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat app.
 
 ```yaml
   web_port: 5052
@@ -1608,8 +1613,8 @@ If set to 0 then Demand (Eco) mode will be used as the baseline, or if non-zero 
 
 ## Automatic restarts
 
-If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly.
-In this case, you can tell Predbat how to restart the add-on using a service.
+If the app that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly.
+In this case, you can tell Predbat how to restart the app using a service.
 
 Right now only communication loss with GE inverters is detectable but in the future other systems will be supported.
 
@@ -1629,7 +1634,7 @@ The auto_restart itself is a list of commands to run to trigger a restart.
 ```
 
 NB: If you are running GivTCP v2 then the line '533ea71a_givtcp' must be replaced with 'a6a2857d_givtcp'
-as the slug-id (Home Assistant add-on identifier) is different between GivTCP v2 and v3.
+as the slug-id (Home Assistant app identifier) is different between GivTCP v2 and v3.
 
 ## Battery charge/discharge curves
 
@@ -1660,7 +1665,7 @@ The default is 1.0 (full power) charge to 100%.
 Modelling the charge curve becomes important if you have limited charging slots (e.g. only a few hours a night) or you wish to make accurate use of the
 [low power charging mode](customisation.md#inverter-control-options) (**switch.predbat_set_charge_low_power**).
 
-If the battery_charge_power_curve option is *not* set in `apps.yaml` and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon add-on,
+If the battery_charge_power_curve option is *not* set in `apps.yaml` and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon app,
 or an edit being made to `apps.yaml`), then Predbat will automatically calculate the charging curve for you from historical battery charging information.
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
@@ -1714,7 +1719,7 @@ Enter the discharging curve as a series of steps of % of max discharge rate for 
 
 The default is 1.0 (full power) discharge to 0%.
 
-If the battery_discharge_power_curve option is *not* set in `apps.yaml` and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon add-on,
+If the battery_discharge_power_curve option is *not* set in `apps.yaml` and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon app,
 or an edit being made to `apps.yaml`), then Predbat will automatically calculate the discharging curve for you from historical battery discharging information.
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery discharging curve and copy/paste it into your `apps.yaml` file.

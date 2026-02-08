@@ -2,7 +2,7 @@
 
 ## I've installed Predbat but I don't see the correct entities
 
-- First look at predbat.status in Home Assistant and the Predbat/AppDaemon add-on log (which can be found in the list of log files in the System/Log area of the GUI).
+- First look at predbat.status in Home Assistant and the Predbat/AppDaemon app log (which can be found in the list of log files in the System/Log area of the GUI).
 See if any errors are warnings are found. If you see an error something is likely configured incorrectly,
 check your entity settings are correct.
 - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the [Solcast instructions](install.md#solcast-install)).
@@ -255,7 +255,7 @@ If you get this warning message in the Predbat log file or you see that the 'PV 
 - Check that there are no errors relating to Solcast in the Home Assistant log (go to Settings / System / Logs and view the 'Home Assistant Core' log).
 If you see an error 429 message in the log then this is as a result of  Solcast's rate limiting for Hobbyist accounts.
 The only fix is to re-run the 'Solcast update' automation and hope that Solcast isn't as busy when you re-run.
-- Verify the solar forecast has been populated in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
+- Verify the solar forecast has been populated in Home Assistant by going to 'Settings' / 'Developer Tools' / 'States', filtering on 'solcast',
 and check that you can see the half-hourly solar forecasts in the Solcast entities
 - If you can see the Solcast entities but there are no forecast PV figures, try running the 'Solcast update' automation you created, and check again the Solcast entities
 - If the Solcast entities are still not populated, try reloading the Solcast integration (go to System / Devices & Services / Integrations tab, click on 'Solcast PV Forecast',
@@ -324,7 +324,7 @@ In particular, you will see the GivTCP inverter time entity changing every polli
 
 Possible fixes:
 
-- restart the GivTCP add-on
+- restart the GivTCP app
 - restart Home Assistant (although usually restarting GivTCP is enough)
 - power the inverter off, turn off the panels and battery first, then the inverter, then follow the reverse sequence to power the inverter back on again.
 This forces the inverter to reconnect to your wifi

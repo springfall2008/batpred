@@ -2896,7 +2896,7 @@ chart.render();
                 return web.json_response({"success": False, "message": f"Error writing to apps.yaml: {str(e)}"})
 
         except ImportError:
-            return web.json_response({"success": False, "message": "ruamel.yaml library not available, update Predbat add-on first."})
+            return web.json_response({"success": False, "message": "ruamel.yaml library not available, update Predbat app first."})
         except Exception as e:
             return web.json_response({"success": False, "message": f"Unexpected error: {str(e)}"})
 

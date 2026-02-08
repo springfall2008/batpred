@@ -118,7 +118,7 @@ If you are on the Octopus Intelligent GO tariff the integration can be used to m
 
 **Octopus Intelligent GO**
 
-Replace XXX with your device ID which can be found by going to 'Developer Tools', Selecting 'Actions', Selecting 'Ohme: List Charge Slots'
+Replace XXX with your device ID which can be found by going to 'Settings' / 'Developer Tools' / 'Actions' then selecting 'Ohme: List Charge Slots'
 then selecting your Device from the drop down menu. Then click on 'Go to YAML mode' and copy the long string after config_entry:
 
 ![image](https://github.com/user-attachments/assets/fce4bce1-c6f7-49fe-96bc-7d062977059b)

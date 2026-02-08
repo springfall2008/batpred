@@ -171,7 +171,7 @@ pred_bat:
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
   # the default is 1.0 (full power)
   #
-  # Predbat can compute this curve automatically if you have enough data, restart the add-on and look in the logfile for the data
+  # Predbat can compute this curve automatically if you have enough data, restart the app and look in the logfile for the data
   # once set here Predbat will no longer re-compute the curve.
   # Can also be set to 'auto' to just use the calculation curve, not recommended if you are using low power charging mode.
   #

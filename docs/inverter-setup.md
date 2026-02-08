@@ -55,33 +55,33 @@ Note that support for all these inverters is in various stages of development. P
 
 ## GivEnergy with GivTCP
 
-It's recommended that you first watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=d06Mqeplvns).
+It's recommended that you first watch the [Installing GivTCP and Mosquitto Apps video from Speak to the Geek](https://www.youtube.com/watch?v=d06Mqeplvns).
 
-1. Install Mosquitto Broker add-on:
+1. Install Mosquitto Broker app:
 
-- Go to Settings / Add-ons / Add-on Store (bottom right)
-- Scroll down the add-on store list, to find 'Mosquitto broker', click on the add-on, then click 'INSTALL'
-- Once the Mosquitto broker has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on, and click 'START' to start the add-on
+- Go to Settings / Apps / Install app (bottom right)
+- Scroll down the apps list, to find 'Mosquitto broker', click on the app, then click 'INSTALL'
+- Once the Mosquitto broker has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on, and click 'START' to start the app
 - Next, configure Mosquitto broker by going to Settings / Devices and Services / Integrations.
 Mosquitto broker should appear as a Discovered integration so click the blue 'CONFIGURE' button, then SUBMIT to complete configuring Mosquitto broker
 
-2. Install the GivTCP add-on:
+2. Install the GivTCP app:
 
-- Go to Settings / Add-ons / Add-on Store
+- Go to Settings / Apps / Install app
 - Click the three dots in the top right corner, then Repositories
 - You'll need to add the GivTCP repository as an additional custom repository so paste/type
 '[https://github.com/britkat1980/ha-addons](https://github.com/britkat1980/ha-addons')' into the text box and click 'Add' the 'Close'<BR>
 NB: this URL is for GivTCP v3, not v2 as covered in the video.
-- Click the back button and then re-navigate to Settings / Add-ons / Add-on Store so Home Assistant picks up the GivTCP add-on from the custom repository
-- Scroll down the add-on store list, to find 'GivTCP-V3', you should see the three addons; the production version, the latest beta and the latest dev versions.
-Click on the 'GivTCP' add-on, then click 'INSTALL'
+- Click the back button and then re-navigate to Settings / Apps / Install app so Home Assistant picks up the GivTCP app from the custom repository
+- Scroll down the app list, to find 'GivTCP-V3', you should see the three addons; the production version, the latest beta and the latest dev versions.
+Click on the 'GivTCP' app, then click 'INSTALL'
 - Once GivTCP has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on
 
 3. Configure GivTCP:
 
-- All configuration for GivTCP is done via the add-on's Web interface
-- On the GivTCP add-on, click 'START' to start the add-on
-- Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
+- All configuration for GivTCP is done via the app Web interface
+- On the GivTCP app, click 'START' to start the app
+- Once the app has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
 - If you have a single AIO then for Predbat to be able to communicate via REST to the AIO, it MUST be the first device configured in GivTCP.  Conversely if you have a gateway and multiple AIO's then the gateway MUST be the first device in GivTCP
 - If you have multiple inverters you may wish to change the default device prefixes that GivTCP assigns ('givtcp', 'givtcp2', 'givtcp3', etc)

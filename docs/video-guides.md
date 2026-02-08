@@ -8,7 +8,7 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 
 - [Setting Up Home Assistant Basics, File Editor, SSH, HACS, Octopus, eWelink](https://youtu.be/zMDLxynHExs?si=QLCDs30bIo3C3Edx)
 - [Installing MQTT and GivTCP on Home Assistant](https://youtu.be/kdqXo2TQWNk?si=jSDL_8jtGR6m-Xtf)
-- [Predbat installation - Predbat, Solcast, Dashboard, Charts and Plans - Add On Method](https://youtu.be/QMvRIbAcpk8)
+- [Predbat installation - Predbat, Solcast, Dashboard, Charts and Plans - App Method](https://youtu.be/QMvRIbAcpk8)
 
 - [Configuration of apps.yaml](https://youtu.be/VE15l3maDOk)
 - [Configuration of Predbat inside Home Assistant](https://youtu.be/qsLWDd5SLkY)
@@ -25,7 +25,7 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 - [Multiple cars](https://www.youtube.com/watch?v=F7L5tpgyqOs)
 - [How to Tune your system for better performance](https://youtu.be/fW8nG-7mJic)
 - [Issues with Solcast free accounts and Home Assistant](https://youtu.be/K0KOMqoN-WI)
-- [How to Install Predbat with the new Add On](https://youtu.be/PvGyENVJup8)
+- [How to Install Predbat with the new App](https://youtu.be/PvGyENVJup8)
 
 ## Features
 

@@ -20,13 +20,13 @@ Each Predbat configuration item is named *input_number.predbat_xxx*, *switch.pre
 Each time Predbat runs it auto-generates a dashboard with the filename **predbat_dashboard.yaml** that can be used as a starter for your own Predbat dashboard.
 Depending on how you installed Predbat this predbat_dashboard.yaml file will be held in one of three different directories in Home Assistant:
 
-- if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), it will be in the directory `/addon_configs/6adb4f0d_predbat/`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), it will be in the directory `/addon_configs/6adb4f0d_predbat/`,
 
 or,
 
-- with the deprecated [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/config/appdaemon/apps/batpred/config/`.
+- with the deprecated [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/config/appdaemon/apps/batpred/config/`.
 
-You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-ons) to open
+You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps) to open
 the predbat_dashboard.yaml file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
 Once opened, select and copy all the contents of the `predbat_dashboard.yaml` file and add the contents to a new dashboard page:
@@ -255,7 +255,7 @@ The plan is contained in the 'html' attribute, and its recommended to [Create th
 
 The sensor also contains the 'text' attribute which gives a HTML formatted brief text description of the Predbat plan, and the 'raw' attribute which repeats the plan data but in raw (unformatted) JSON format.
 
-If you are using the Predbat add-on or docker then the Predbat plan can also be viewed via the ['Plan' view of the Predbat web interface](web-interface#plan-view), and the text description via the ['Dash' view](web-interface.md#dash-view).
+If you are using the Predbat app or docker then the Predbat plan can also be viewed via the ['Plan' view of the Predbat web interface](web-interface#plan-view), and the text description via the ['Dash' view](web-interface.md#dash-view).
 
 ### Graphing the Predbat predictions
 
@@ -640,26 +640,26 @@ or if you want to verify that Predbat is running OK.
 
 There is a lot of output in the logfile, this is normal!
 
-If you are using the Predbat add-on then the logfile can easily be viewed via the 'Log' tab of the [Predbat web interface](web-interface.md#log-view).
+If you are using the Predbat app then the logfile can easily be viewed via the 'Log' tab of the [Predbat web interface](web-interface.md#log-view).
 
 To directly view the physical logfile, it can be found in one of three different directories in Home Assistant with slightly different filenames depending on how you installed Predbat:
 
-- if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), the logfile will be `/addon_configs/6adb4f0d_predbat/predbat.log`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), the logfile will be `/addon_configs/6adb4f0d_predbat/predbat.log`,
 
-- if the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/homeassistant/appdaemon/appdaemon.log`, or
+- if the [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/homeassistant/appdaemon/appdaemon.log`, or
 
-- if the combined AppDaemon/Predbat add-on installation method was used, it's `/addon_configs/46f69597_appdaemon-predbat/predbat.log`.
+- if the combined AppDaemon/Predbat app installation method was used, it's `/addon_configs/46f69597_appdaemon-predbat/predbat.log`.
 
-You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-ons)
-to view Predbat's logfile if you are not using the Predbat add-on.
+You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps)
+to view Predbat's logfile if you are not using the Predbat app.
 See [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
 ## Automated monitoring that Predbat and GivTCP are running OK
 
 With Predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
-you may find these automations useful to monitor that everything is running OK, and if not, to try restarting the failing add-on, and raise an alert on your mobile device running the Home Assistant Companion app.
+you may find these automations useful to monitor that everything is running OK, and if not, to try restarting the failing app, and raise an alert on your mobile device running the Home Assistant Companion app.
 
-Two monitors are provided, one for Predbat and one for GivTCP (for GivEnergy inverters).  Both monitors are written on the basis that Predbat/GivTCP are running as add-on's within the Home Assistant Supervisor.
+Two monitors are provided, one for Predbat and one for GivTCP (for GivEnergy inverters).  Both monitors are written on the basis that Predbat/GivTCP are running as apps within the Home Assistant Supervisor.
 If you are running Predbat within Docker then the automation won't work as written.
 
 The GivTCP monitor is for use with a GivEnergy inverter, if you have a different inverter type then you may be able to use the GivTCP monitor as a basis for developing a similar inverter-specific error detection automation for your inverter.
@@ -679,8 +679,8 @@ This automation will raise an alert if any of the following occur:
 - No last_updated_time received from the inverter for more than 15 minutes
 - Inverter temperature less than 5 degrees for more than 15 minutes (should never happen)
 - The battery goes offline to the inverter for more than 15 minutes
-- GivTCP add-on is not running
-- Mosquitto broker add-on is not running
+- GivTCP app is not running
+- Mosquitto broker app is not running
 
 The script will need to be customised for your inverter ID, battery ID and mobile details,
 and can be extended for multiple inverters and batteries by duplicating the triggers and adding appropriate battery and inverter IDs.
@@ -731,7 +731,7 @@ triggers:
     for:
       minutes: 15
     variables:
-      alert_text: GivTCP add-on is not running
+      alert_text: GivTCP app is not running
       restart_app: GivTCP
   - trigger: state
     entity_id:
@@ -740,7 +740,7 @@ triggers:
     for:
       minutes: 15
     variables:
-      alert_text: Mosquitto Broker add-on is not running
+      alert_text: Mosquitto Broker app is not running
       restart_app: Mosquitto
 actions:
   - action: notify.mobile_app_<your mobile device id>
@@ -766,7 +766,7 @@ actions:
           - condition: template
             value_template: "{{ restart_app == 'GivTCP' }}"
         sequence:
-          - alias: Restart GivTCP add-on
+          - alias: Restart GivTCP app
             action: hassio.addon_restart
             data:
               addon: 533ea71a_givtcp
@@ -774,7 +774,7 @@ actions:
           - condition: template
             value_template: "{{ restart_app == 'Mosquitto' }}"
         sequence:
-          - alias: Restart Mosquitto add-on
+          - alias: Restart Mosquitto app
             action: hassio.addon_restart
             data:
               addon: core_mosquitto
@@ -783,16 +783,16 @@ trace:
 mode: single
 ```
 
-The last two triggers (GivTCP and Mosquitto running) trigger if any of these add-ons that Predbat is dependent upon are not running.
-You will need to enable a binary sensor for each add-on to be able to use these triggers in the automation:
+The last two triggers (GivTCP and Mosquitto running) trigger if any of these apps that Predbat is dependent upon are not running.
+You will need to enable a binary sensor for each app to be able to use these triggers in the automation:
 
 - Navigate to Settings / Devices and Services / Devices and search for 'GivTCP'
-- Click on the GivTCP add-on, and under 'Sensors', click 'XX entities not shown'
+- Click on the GivTCP app, and under 'Sensors', click 'XX entities not shown'
 - Click the 'Running' sensor, then the cogwheel, and Enable the sensor
 
-Repeat these steps for the 'Mosquitto' add-on.
+Repeat these steps for the 'Mosquitto' app.
 
-As an extension to the above, if you don't want the automation to restart the failing add-on and instead just send an alert that there is a problem, delete the 'choose' code above.
+As an extension to the above, if you don't want the automation to restart the failing app and instead just send an alert that there is a problem, delete the 'choose' code above.
 Restarting GivTCP does however lose the current GivTCP log-in Home Assistant.
 
 NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp'.
@@ -802,10 +802,10 @@ NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' wit
 This automation will raise an alert if Predbat's status turns to *Error* for more than 5 minutes.
 
 In normal operation, Predbat will automatically run and update its plan and forecast every 5 minutes. If the automation detects that Predbat has not done this for 20 minutes,
-then an alert will be raised and the automation will restart the Predbat add-on to try to resolve a 'hung Predbat' issue.
+then an alert will be raised and the automation will restart the Predbat app to try to resolve a 'hung Predbat' issue.
 
-In the same way for the GivTCP and Mosquitto add-ons above, the last trigger requires you to enable a binary sensor that detects that the Predbat/AppDaemon add-on is running.
-Follow the same steps to enable the binary sensor for either the 'Predbat' or (deprecated) 'AppDaemon' add-on depending on which Predbat installation method you followed.
+In the same way for the GivTCP and Mosquitto apps above, the last trigger requires you to enable a binary sensor that detects that the Predbat/AppDaemon app is running.
+Follow the same steps to enable the binary sensor for either the 'Predbat' or (deprecated) 'AppDaemon' app depending on which Predbat installation method you followed.
 
 The script will need to be customised for your mobile details.
 
@@ -849,13 +849,13 @@ triggers:
         }}', restarting
       restart_predbat: "Y"
   - trigger: state
-    alias: Predbat add-on not running for 15 minutes
+    alias: Predbat app not running for 15 minutes
     entity_id: binary_sensor.predbat_running
     to: "off"
     for:
       minutes: 15
     variables:
-      alert_text: Predbat add-on is not running, restarting
+      alert_text: Predbat app is not running, restarting
       restart_predbat: "Y"
   - trigger: state
     alias: predbat_active stuck on for 20 minutes
@@ -922,11 +922,11 @@ actions:
       - action: hassio.addon_restart
         data:
           addon: 6adb4f0d_predbat
-        alias: Restart Predbat add-on
+        alias: Restart Predbat app
 mode: single
 ```
 
-NB: If you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon' and change 'binary_sensor.predbat_running' to 'binary_sensor.appdaemon_running'.
+NB: If you are using AppDaemon rather than the Predbat app, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon' and change 'binary_sensor.predbat_running' to 'binary_sensor.appdaemon_running'.
 
 An error alert looks like this:
 

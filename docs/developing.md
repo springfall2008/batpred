@@ -26,7 +26,7 @@ Predbat now has some unit-level tests, to run them on your local machine:
 2. Copy `apps.yaml` to your test area
 3. Copy the files from github <https://github.com/springfall2008/batpred/tree/main/coverage> to this area
 4. Extract cases.tgz
-5. Have /Volumes/add_configs/6adb4f0d_predbat point to your Predbat add-on directory or edit run_all to change the path
+5. Have /Volumes/add_configs/6adb4f0d_predbat point to your Predbat app directory or edit run_all to change the path
 6. Run run_all
 
 If the tests fail then debug them.
@@ -292,7 +292,7 @@ added to the `on` section of`.github/workflows/linting.yml`,
 the GitHub Actions in that file will run.
 
 In particular, the [pre-commit.ci lite](https://pre-commit.ci/lite.html)
-action will run. This uses the code [here](https://github.com/pre-commit-ci/lite-action)
+action will run. This uses the [pre-commit code](https://github.com/pre-commit-ci/lite-action)
 to run the same checks that get run locally
 (as described in the `.pre-commit-config.yaml` file).
 

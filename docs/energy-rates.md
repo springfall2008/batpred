@@ -7,7 +7,7 @@ or daily/half-hourly/quarter-hour rates that track electricity market prices (e.
 
 Energy rates are all configured in the `apps.yaml` file that's stored in a directory name that depends on [what type of Predbat installation method you have used](apps-yaml.md#appsyaml-settings).
 
-You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-ons)
+You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps)
 to edit this file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
 There are four different ways of configuring your Energy rates in `apps.yaml`, using [Octopus Energy Direct](#octopus-energy-direct),
@@ -102,7 +102,7 @@ Repeat this for the other events.
 
 The gas rates are only required if you have a gas boiler, and an iBoost, and are [using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas](customisation.md#iboost-energy-rate-filtering)
 
-Verify that the integration is working correctly in Home Assistant by going to Developer Tools / States, and entering 'octopus' in the 'Filter entities' box.
+Verify that the integration is working correctly in Home Assistant by going to 'Settings' / 'Developer Tools' / 'States', and entering 'octopus' in the 'Filter entities' box.
 Confirm that the Octopus entities are being populated correctly.
 
 ### Configuring Predbat to use the Octopus Energy integration

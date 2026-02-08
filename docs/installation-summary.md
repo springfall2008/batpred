@@ -5,8 +5,8 @@ Please see the sections below for how to achieve each step. This is just a check
 1. Before you start, it is recommended that you watch the [step-by-step installation](video-guides.md#basic-installation) videos,
 see the [video guides](video-guides.md) section for those and other videos
 2. Make sure the right [inverter control module](install.md#inverter-control-install) is installed and running
-3. Install a file editor (either the File editor or Studio Code Server add-on) to enable you to edit configuration files if you haven't already - [Editing configuration files](install.md#editing-configuration-files-in-home-assistant)
-4. Install - [Predbat add-on install](install.md#predbat-add-on-install) for HAOS, or as a [Docker install](install.md#docker-install)
+3. Install a file editor (either the File editor or Studio Code Server app) to enable you to edit configuration files if you haven't already - [Editing configuration files](install.md#editing-configuration-files-in-home-assistant)
+4. Install - [Predbat app install](install.md#predbat-app-install) for HAOS, or as a [Docker install](install.md#docker-install)
 5. Decide on and setup a Solar Forecast. It's recommended that you use [Solcast](install.md#solcast-install), or you can use [Forecast.solar](install.md#predbat-direct-to-forecastsolar).<BR>For Solcast:
     - Register for a Solcast hobbyist account if you haven't already [Solcast install](install.md#solcast-install) and either:
     - [Configure Predbat to call Solcast](install.md#predbat-direct-solcast-method) for the Solar forecast, or
