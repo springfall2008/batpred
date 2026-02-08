@@ -808,7 +808,13 @@ class HAInterface(ComponentBase):
         data = {}
         for key in kwargs:
             data[key] = kwargs[key]
-        domain, service = service.split("/")
+        if "/" in service:
+            domain, service = service.split("/")
+        elif "." in service:
+            domain, service = service.split(".")
+        else:
+            domain = ""
+
         if self.websocket_active:
             return self.call_service_websocket_command(domain, service, data)
         else:

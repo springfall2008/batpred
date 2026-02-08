@@ -1788,7 +1788,7 @@ chart.render();
         JSON API
         """
         json_data = await request.json()
-        entity_id = json.get("entity_id", None)
+        entity_id = json_data.get("entity_id", None)
         state = json_data.get("state", None)
         attributes = json_data.get("attributes", {})
         if entity_id:
