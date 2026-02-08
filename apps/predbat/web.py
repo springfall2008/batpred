@@ -25,6 +25,7 @@ import traceback
 import threading
 import io
 from io import StringIO
+import hashlib
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
@@ -127,6 +128,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/compare", self.html_compare_post)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
+        app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/rate_override", self.html_rate_override)
         app.router.add_post("/restart", self.html_restart)
@@ -3338,6 +3340,9 @@ chart.render();
         except Exception as e:
             file_error = f"Error reading apps.yaml: {str(e)}"
 
+        # Calculate MD5 checksum of the content for external change detection
+        file_checksum = hashlib.md5(apps_yaml_content.encode("utf-8")).hexdigest() if apps_yaml_content else ""
+
         text += get_editor_css()
         text += """
 
@@ -3347,10 +3352,10 @@ chart.render();
         <div id="lintStatus" style="margin-top: 8px;"></div>
 """
 
-        text += """
+        text += f"""
     </div>
 
-    <form id="editorForm" class="editor-form" method="post" action="./apps_editor">
+    <form id="editorForm" class="editor-form" method="post" action="./apps_editor" data-file-checksum="{file_checksum}">
         <!-- We use a regular textarea that CodeMirror will replace -->
         <textarea class="editor-textarea" name="apps_content" id="appsContent" placeholder="Loading apps.yaml content...">"""
 
@@ -3386,6 +3391,19 @@ chart.render();
 </div>"""
 
         return web.Response(content_type="text/html", text=text)
+
+    async def html_apps_editor_checksum(self, request):
+        """
+        Return the current checksum and content of apps.yaml for external change detection
+        """
+        try:
+            apps_yaml_path = "apps.yaml"
+            with open(apps_yaml_path, "r") as f:
+                content = f.read()
+            checksum = hashlib.md5(content.encode("utf-8")).hexdigest()
+            return web.json_response({"checksum": checksum, "content": content})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
 
     async def html_apps_editor_post(self, request):
         """
@@ -3746,14 +3764,46 @@ chart.render();
         text += get_entity_modal_js()
         text += get_component_edit_modal_js()
 
-        text += "<h2>Component Status</h2>\n"
-        text += "<div class='components-grid'>\n"
-
         # Get all component information
         all_components = self.base.components.get_all()
         active_components = self.base.components.get_active()
 
+        # Count components by status
+        error_components = []
+        active_healthy_components = []
+        disabled_components = []
+
         for component_name in all_components:
+            is_alive = self.base.components.is_alive(component_name)
+            is_active = component_name in active_components
+
+            if is_active and not is_alive:
+                error_components.append(component_name)
+            elif is_active and is_alive:
+                active_healthy_components.append(component_name)
+            else:
+                disabled_components.append(component_name)
+
+        # Add heading with checkbox and totals on the same line
+        text += "<div style='display: flex; align-items: center; margin-bottom: 15px;'>\n"
+        text += "<h2 style='margin: 0; margin-right: 20px;'>Component Status</h2>\n"
+        text += "<label style='cursor: pointer; margin-right: 20px; white-space: nowrap;'>\n"
+        text += "<input type='checkbox' id='showDisabledCheckbox' onclick='toggleDisabledComponents()' style='margin-right: 8px;'>\n"
+        text += "Show disabled components\n"
+        text += "</label>\n"
+        text += "<div style='white-space: nowrap;'>\n"
+        text += f"<span style='color: #d32f2f; font-weight: bold;'>{len(error_components)} Error</span> | \n"
+        text += f"<span style='color: #4CAF50; font-weight: bold;'>{len(active_healthy_components)} Active</span> | \n"
+        text += f"<span style='color: #666; font-weight: bold;'>{len(disabled_components)} Disabled</span>\n"
+        text += "</div>\n"
+        text += "</div>\n"
+
+        text += "<div class='components-grid'>\n"
+
+        # Sort components: errors first, then active, then disabled
+        sorted_components = error_components + active_healthy_components + disabled_components
+
+        for component_name in sorted_components:
             from components import COMPONENT_LIST
 
             component_info = COMPONENT_LIST.get(component_name, {})
@@ -3770,7 +3820,11 @@ chart.render();
             card_class = "active" if is_active else "inactive"
             if is_active and not is_alive:
                 card_class += " error"
-            text += f'<div class="component-card {card_class}">\n'
+
+            # Add data-disabled attribute for filtering
+            disabled_attr = 'data-disabled="true"' if not is_active else 'data-disabled="false"'
+
+            text += f'<div class="component-card {card_class}" {disabled_attr}>\n'
             text += f'<div class="component-header">\n'
             text += f'<h3>{component_info.get("name", component_name)}</h3>\n'
 
@@ -3907,6 +3961,40 @@ chart.render();
 """
 
         text += get_restart_button_js()
+
+        # Add JavaScript for toggling disabled components
+        text += """
+<script>
+function toggleDisabledComponents() {
+    const checkbox = document.getElementById('showDisabledCheckbox');
+    const showDisabled = checkbox.checked;
+
+    // Save preference to sessionStorage
+    sessionStorage.setItem('showDisabledComponents', showDisabled);
+
+    // Get all component cards
+    const cards = document.querySelectorAll('.component-card[data-disabled="true"]');
+
+    // Show or hide disabled components
+    cards.forEach(card => {
+        card.style.display = showDisabled ? '' : 'none';
+    });
+}
+
+// On page load, restore checkbox state from sessionStorage
+document.addEventListener('DOMContentLoaded', function() {
+    const checkbox = document.getElementById('showDisabledCheckbox');
+    const savedState = sessionStorage.getItem('showDisabledComponents');
+
+    // Default to false (unchecked) if no saved state
+    const showDisabled = savedState === 'true';
+    checkbox.checked = showDisabled;
+
+    // Apply the initial state
+    toggleDisabledComponents();
+});
+</script>
+"""
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
