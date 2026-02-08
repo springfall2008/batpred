@@ -5342,8 +5342,8 @@ function initializeCodeMirror() {
                 .catch(err => console.error('Error checking for external changes:', err));
         }
 
-        // Check every 2 seconds for external changes
-        setInterval(checkForExternalChanges, 2000);
+        // Check every 5 seconds for external changes
+        setInterval(checkForExternalChanges, 5000);
 
         // Initial lint after a short delay to ensure editor is fully loaded
         setTimeout(() => {
