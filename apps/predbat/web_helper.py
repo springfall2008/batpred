@@ -5293,6 +5293,58 @@ function initializeCodeMirror() {
             }
         });
 
+        // Set up external change detection
+        const form = document.getElementById('editorForm');
+        let originalChecksum = form.getAttribute('data-file-checksum');
+        let externalChangeWarningShown = false;
+
+        console.log('Initial checksum:', originalChecksum);
+
+        function checkForExternalChanges() {
+            fetch('./apps_editor_checksum')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Current file checksum:', data.checksum, 'Original:', originalChecksum);
+                    if (data.checksum && data.checksum !== originalChecksum && !externalChangeWarningShown) {
+                        const currentContent = editor.getValue();
+                        const hasLocalChanges = currentContent !== window.originalContent;
+
+                        console.log('External change detected! Has local changes:', hasLocalChanges);
+
+                        if (!hasLocalChanges) {
+                            // No local edits - auto-reload
+                            console.log('File changed externally, auto-reloading...');
+                            editor.setValue(data.content);
+                            window.originalContent = data.content;
+                            originalChecksum = data.checksum;  // Update the variable
+                            form.setAttribute('data-file-checksum', data.checksum);
+                            showMessage('File was changed externally and has been reloaded.', 'success');
+                            externalChangeWarningShown = false;  // Reset so we can detect future changes
+                        } else {
+                            // Has local edits - show warning
+                            externalChangeWarningShown = true;
+                            const warningDiv = document.createElement('div');
+                            warningDiv.className = 'message warning';
+                            warningDiv.style.display = 'block';
+                            warningDiv.style.backgroundColor = '#fff3cd';
+                            warningDiv.style.color = '#856404';
+                            warningDiv.style.border = '1px solid #ffeeba';
+                            warningDiv.innerHTML = `
+                                <strong>⚠️ Warning:</strong> The apps.yaml file has been changed externally. You have unsaved local changes.<br>
+                                <button onclick="location.reload()" style="margin-top: 10px; padding: 5px 10px; background: #856404; color: white; border: none; border-radius: 4px; cursor: pointer;">Reload and discard local changes</button>
+                            `;
+                            const messageContainer = document.getElementById('messageContainer');
+                            messageContainer.innerHTML = '';
+                            messageContainer.appendChild(warningDiv);
+                        }
+                    }
+                })
+                .catch(err => console.error('Error checking for external changes:', err));
+        }
+
+        // Check every 5 seconds for external changes
+        setInterval(checkForExternalChanges, 5000);
+
         // Initial lint after a short delay to ensure editor is fully loaded
         setTimeout(() => {
             // Perform the lint
