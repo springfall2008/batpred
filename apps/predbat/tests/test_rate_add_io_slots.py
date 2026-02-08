@@ -255,10 +255,10 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     failed |= run_rate_add_io_slots_test("test13_partial_slot_issue3328", my_predbat, slots, True, 12, expected_rates)
 
-    # Test 14: Another partial slot example - 1 minute into a 30-min slot should make entire slot off-peak
-    print("\n**** Test 14: Tiny overlap (1 min) should still make entire 30-min slot off-peak ****")
+    # Test 14: Another partial slot example - tiny overlap within a 30-min slot should make entire slot off-peak
+    print("\n**** Test 14: Tiny overlap (within one 30-min slot) should still make entire 30-min slot off-peak ****")
     slot_start = midnight_utc + timedelta(hours=13, minutes=37, seconds=11)  # 13:37:11
-    slot_end = slot_start + timedelta(minutes=1, seconds=16)  # 13:38:27 (spans two 5-min or 30-min slots)
+    slot_end = slot_start + timedelta(minutes=1, seconds=16)  # 13:38:27 (fully within the same 5-min and 30-min slot)
     slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 0.16, "source": "smart-charge", "location": "AT_HOME"}]
 
     expected_rates = {}
