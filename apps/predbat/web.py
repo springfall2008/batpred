@@ -2960,7 +2960,7 @@ chart.render();
                     data = yaml.load(f)
             except Exception as e:
                 return web.json_response({"success": False, "message": f"Error reading apps.yaml: {str(e)}"})
-
+            
             # Navigate to the predbat section
             if ROOT_YAML_KEY not in data:
                 return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
@@ -3411,7 +3411,9 @@ chart.render();
         """
         try:
             postdata = await request.post()
-            apps_content = postdata.get("apps_content", "")
+            apps_content = postdata.get("apps_content", None)
+            if apps_content is None:
+                raise web.HTTPFound("./apps_editor?error=" + urllib.parse.quote("No content provided to save"))
 
             # Remove dos line endings
             apps_content = apps_content.replace("\r\n", "\n").replace("\r", "\n")
@@ -4147,6 +4149,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     data = yaml.load(f)
             except Exception as e:
                 return web.json_response({"success": False, "message": f"Error reading apps.yaml: {str(e)}"}, status=500)
+            
+            if not data:
+                data = {}
 
             if ROOT_YAML_KEY not in data:
                 return web.json_response({"success": False, "message": f"{ROOT_YAML_KEY} section not found in apps.yaml"}, status=500)

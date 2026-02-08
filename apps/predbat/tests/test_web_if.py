@@ -32,6 +32,9 @@ def run_test_web_if(my_predbat):
         # Copy apps.yaml to temp directory
         if os.path.exists("apps.yaml"):
             shutil.copy("apps.yaml", os.path.join(temp_dir, "apps.yaml"))
+        # Create dummy predbat.log
+        with open(os.path.join(temp_dir, "predbat.log"), "w") as f:
+            f.write("Predbat debug log\n")
 
         # Change to temp directory
         os.chdir(temp_dir)
@@ -115,7 +118,10 @@ def run_test_web_if(my_predbat):
 
             # /api/ping returns 500 when Predbat isn't fully initialized (expected in test)
             # Other endpoints may return 400 for missing optional params, which is fine
-            if res.status_code in [200, 400, 404, 500]:
+            acceptable_statuses = [200]
+            if page == "/api/ping":
+                acceptable_statuses.append(500)
+            if res.status_code in acceptable_statuses:
                 accessed_endpoints.add(("GET", page))
             else:
                 print("ERROR: Unexpected status from {} got {} value {}".format(address, res.status_code, res.text))
@@ -166,7 +172,7 @@ def run_test_web_if(my_predbat):
         address = "http://127.0.0.1:5052/config"
         data = {"set_read_only": "true"}
         res = requests.post(address, data=data)
-        if res.status_code in [200, 302, 303]:  # Redirects are OK
+        if res.status_code in [200]:  # Redirects are OK
             accessed_endpoints.add(("POST", "/config"))
         else:
             print("ERROR: Unexpected response from /config: {} - {}".format(res.status_code, res.text))
@@ -177,7 +183,7 @@ def run_test_web_if(my_predbat):
         address = "http://127.0.0.1:5052/dash"
         data = {"mode": "Monitor"}
         res = requests.post(address, data=data)
-        if res.status_code in [200, 302, 303]:
+        if res.status_code in [200]:
             accessed_endpoints.add(("POST", "/dash"))
         else:
             print("ERROR: Unexpected response from /dash: {} - {}".format(res.status_code, res.text))
@@ -188,7 +194,7 @@ def run_test_web_if(my_predbat):
         address = "http://127.0.0.1:5052/entity"
         data = {"entity_id": "switch.predbat_active", "value": "on"}
         res = requests.post(address, data=data)
-        if res.status_code in [200, 302, 303]:
+        if res.status_code in [200]:
             accessed_endpoints.add(("POST", "/entity"))
         else:
             print("ERROR: Unexpected response from /entity: {} - {}".format(res.status_code, res.text))
@@ -199,7 +205,7 @@ def run_test_web_if(my_predbat):
         address = "http://127.0.0.1:5052/apps"
         data = {"apps_content": "test: value"}
         res = requests.post(address, data=data)
-        if res.status_code in [200, 302, 303, 400]:
+        if res.status_code in [200]:
             accessed_endpoints.add(("POST", "/apps"))
         else:
             print("ERROR: Unexpected response from /apps: {} - {}".format(res.status_code, res.text))
@@ -208,9 +214,9 @@ def run_test_web_if(my_predbat):
         # Test /apps_editor POST
         print("Test POST /apps_editor")
         address = "http://127.0.0.1:5052/apps_editor"
-        data = {"apps_content": "test: value"}
+        data = {"dummy": "data"}
         res = requests.post(address, data=data)
-        if res.status_code in [200, 302, 303, 400]:
+        if res.status_code in [200]:
             accessed_endpoints.add(("POST", "/apps_editor"))
         else:
             print("ERROR: Unexpected response from /apps_editor: {} - {}".format(res.status_code, res.text))
@@ -219,9 +225,9 @@ def run_test_web_if(my_predbat):
         # Test /plan_override POST
         print("Test POST /plan_override")
         address = "http://127.0.0.1:5052/plan_override"
-        data = {"soc": "50"}
+        data = {"time": "00:00", "action": "Clear"}
         res = requests.post(address, data=data)
-        if res.status_code in [200, 302, 303, 400]:
+        if res.status_code in [200]:
             accessed_endpoints.add(("POST", "/plan_override"))
         else:
             print("ERROR: Unexpected response from /plan_override: {} - {}".format(res.status_code, res.text))
@@ -230,9 +236,9 @@ def run_test_web_if(my_predbat):
         # Test /rate_override POST
         print("Test POST /rate_override")
         address = "http://127.0.0.1:5052/rate_override"
-        data = {"rate": "15"}
+        data = {"time": "00:00", "rate": "15", "action": "Clear SOC"}
         res = requests.post(address, data=data)
-        if res.status_code in [200, 302, 303, 400]:
+        if res.status_code in [200]:
             accessed_endpoints.add(("POST", "/rate_override"))
         else:
             print("ERROR: Unexpected response from /rate_override: {} - {}".format(res.status_code, res.text))
@@ -242,7 +248,7 @@ def run_test_web_if(my_predbat):
         print("Test POST /restart")
         address = "http://127.0.0.1:5052/restart"
         res = requests.post(address, data={})
-        if res.status_code in [200, 400]:
+        if res.status_code in [200]:
             accessed_endpoints.add(("POST", "/restart"))
         else:
             print("ERROR: Unexpected response from /restart: {} - {}".format(res.status_code, res.text))
@@ -251,9 +257,9 @@ def run_test_web_if(my_predbat):
         # Test /component_restart POST
         print("Test POST /component_restart")
         address = "http://127.0.0.1:5052/component_restart"
-        data = {"component_name": "web"}
+        data = {"component": "db"}
         res = requests.post(address, data=data)
-        if res.status_code in [200, 302, 303, 400]:
+        if res.status_code in [200]:
             accessed_endpoints.add(("POST", "/component_restart"))
         else:
             print("ERROR: Unexpected response from /component_restart: {} - {}".format(res.status_code, res.text))
@@ -265,7 +271,7 @@ def run_test_web_if(my_predbat):
         # Correct format: JSON with component_name, changes, deletions
         data = {"component_name": "web", "changes": {}, "deletions": []}
         res = requests.post(address, json=data)
-        if res.status_code in [200, 400, 500]:  # May fail if component doesn't support config changes
+        if res.status_code in [200]:  # May fail if component doesn't support config changes
             accessed_endpoints.add(("POST", "/component_config_save"))
         else:
             print("ERROR: Unexpected response from /component_config_save: {} - {}".format(res.status_code, res.text))
@@ -274,9 +280,9 @@ def run_test_web_if(my_predbat):
         # Test /api/login POST
         print("Test POST /api/login")
         address = "http://127.0.0.1:5052/api/login"
-        data = {"username": "test", "password": "test"}
+        data = {"token": "invalid_token"}
         res = requests.post(address, json=data)
-        if res.status_code in [200, 401, 400]:  # Expect auth failure
+        if res.status_code in [200]:  # Expect auth failure
             accessed_endpoints.add(("POST", "/api/login"))
         else:
             print("ERROR: Unexpected response from /api/login: {} - {}".format(res.status_code, res.text))
