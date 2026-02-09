@@ -76,6 +76,13 @@ class TemperatureAPI(ComponentBase):
         if longitude is None:
             longitude = self.get_state_wrapper("zone.home", attribute="longitude")
 
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (TypeError, ValueError):
+            self.log("Warn: TemperatureAPI: Invalid latitude or longitude values: latitude {}, longitude {}".format(latitude, longitude))
+            return None, None
+
         if latitude is not None and longitude is not None:
             self.log("TemperatureAPI: Using coordinates latitude {}, longitude {}".format(dp1(latitude), dp1(longitude)))
             return latitude, longitude
