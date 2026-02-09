@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -25,6 +25,7 @@ import traceback
 import threading
 import io
 from io import StringIO
+import hashlib
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
@@ -57,7 +58,7 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, format_time_ago, get_override_time_from_string, history_attribute, prune_today
+from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
@@ -127,6 +128,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/compare", self.html_compare_post)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
+        app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
         app.router.add_post("/plan_override", self.html_plan_override)
         app.router.add_post("/rate_override", self.html_rate_override)
         app.router.add_post("/restart", self.html_restart)
@@ -142,6 +144,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
+        app.router.add_get("/api/status", self.html_api_get_status)
 
         # Notify plugin system that web interface is ready
         if hasattr(self.base, "plugin_system") and self.base.plugin_system:
@@ -1785,7 +1788,7 @@ chart.render();
         JSON API
         """
         json_data = await request.json()
-        entity_id = json.get("entity_id", None)
+        entity_id = json_data.get("entity_id", None)
         state = json_data.get("state", None)
         attributes = json_data.get("attributes", {})
         if entity_id:
@@ -1793,6 +1796,24 @@ chart.render();
             return web.Response(content_type="application/json", text='{"result": "ok"}')
         else:
             return web.Response(content_type="application/json", text='{"result": "error"}')
+
+    async def html_api_get_status(self, request):
+        """
+        Get current Predbat status (calculating state and battery info)
+        """
+        try:
+            calculating = self.get_arg("active", False)
+            if self.base.update_pending:
+                calculating = True
+
+            battery_icon = self.get_battery_status_icon()
+
+            status_data = {"calculating": calculating, "battery_html": battery_icon}
+
+            return web.Response(content_type="application/json", text=json.dumps(status_data))
+        except Exception as e:
+            self.log("Error getting status: {}".format(e))
+            return web.Response(status=500, content_type="application/json", text=json.dumps({"error": str(e)}))
 
     async def html_api_ping(self, request):
         """
@@ -2570,6 +2591,127 @@ chart.render();
                 {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
+        elif chart == "LoadML":
+            # Get historical load data for last 24 hours
+            load_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today"), self.now_utc, self.midnight_utc, prune=False)
+            load_today_h1 = prune_today(
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1
+            )
+            load_today_h8 = prune_today(
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 1, required=False), attributes=True, state_key="load_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8
+            )
+
+            # Get ML forecast from load_forecast_ml entity results
+            load_ml_forecast = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
+
+            series_data = [
+                {"name": "Load (Actual)", "data": load_today, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Forecast (+1h)", "data": load_today_h1, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#f5a442"},
+                {"name": "Forecast (+8h)", "data": load_today_h8, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "color": "#9b59b6"},
+                {"name": "Load (ML Forecast)", "data": load_ml_forecast, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323"},
+            ]
+            text += self.render_chart(series_data, "kWh", "ML Load Forecast", now_str)
+        elif chart == "LoadMLPower":
+            # Get historical load power
+            load_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".load_power", 7, required=False))
+            load_power = prune_today(load_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
+
+            # Get ML predicted load energy (cumulative) and convert to power (kW)
+            load_ml_forecast_energy = self.get_entity_results("sensor." + self.prefix + "_load_ml_forecast")
+            load_ml_forecast_power = {}
+
+            power_today = prune_today(history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today"), self.now_utc, self.midnight_utc, prune=False)
+            power_today_h1 = prune_today(
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today_h1"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 1
+            )
+            power_today_h8 = prune_today(
+                history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_load_ml_stats", 7, required=False), attributes=True, state_key="power_today_h8"), self.now_utc, self.midnight_utc, prune=False, offset_minutes=60 * 8
+            )
+
+            # Sort timestamps and calculate deltas to get energy per interval
+            if load_ml_forecast_energy:
+                from datetime import datetime
+
+                sorted_timestamps = sorted(load_ml_forecast_energy.keys())
+                prev_energy = 0
+                prev_timestamp = None
+                for timestamp in sorted_timestamps:
+                    energy = load_ml_forecast_energy[timestamp]
+                    energy_delta = max(energy - prev_energy, 0)
+
+                    # Calculate actual interval in hours between this and previous timestamp
+                    if prev_timestamp:
+                        # Parse timestamps and calculate difference in hours
+                        curr_dt = datetime.strptime(timestamp, TIME_FORMAT)
+                        prev_dt = datetime.strptime(prev_timestamp, TIME_FORMAT)
+                        interval_hours = (curr_dt - prev_dt).total_seconds() / 3600.0
+                        load_ml_forecast_power[timestamp] = dp4(energy_delta / interval_hours)
+
+                    prev_energy = energy
+                    prev_timestamp = timestamp
+
+            # Get historical PV power
+            pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 1, required=False))
+            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
+
+            # Get temperature prediction data and limit to 48 hours forward
+            temperature_forecast = prune_today(self.get_entity_results("sensor." + self.prefix + "_temperature"), self.now_utc, self.midnight_utc, prune_future=True, prune_future_days=2, prune=True, prune_past_days=7)
+
+            series_data = [
+                {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
+                {"name": "Load Power (ML Predicted Future)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
+                {"name": "Load Power ML History", "data": power_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#eb2323"},
+                {"name": "Load Power ML History +1h", "data": power_today_h1, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#716d63"},
+                {"name": "Load Power ML History +8h", "data": power_today_h8, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#a6a5a3"},
+                {"name": "PV Power (Actual)", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": "kW"},
+                {"name": "PV Power (Predicted)", "data": pv_power_best, "opacity": "0.7", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#ffa500", "unit": "kW"},
+                {"name": "Temperature", "data": temperature_forecast, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#75ff6b", "unit": "°C"},
+            ]
+
+            # Configure secondary axis for temperature
+            secondary_axis = [
+                {
+                    "title": "°C",
+                    "series_name": "Temperature",
+                    "decimals": 1,
+                    "opposite": True,
+                    "labels_formatter": "return val.toFixed(1) + '°C';",
+                }
+            ]
+
+            text += self.render_chart(series_data, "kW", "ML Load & PV Power with Temperature", now_str, extra_yaxis=secondary_axis)
+        elif chart == "Savings":
+            # Get daily savings data (historical)
+            savings_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_predbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            savings_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_yesterday_pvbat", 28, required=False), daily=True, offset_days=-1, pounds=True)
+            cost_yesterday_hist = history_attribute(self.get_history_wrapper(self.prefix + ".cost_yesterday", 28, required=False), daily=True, offset_days=-1, pounds=True)
+
+            # Get cumulative/total savings over time (historical)
+            savings_total_predbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_predbat", 28, required=False), daily=True, pounds=True)
+            savings_total_pvbat_hist = history_attribute(self.get_history_wrapper(self.prefix + ".savings_total_pvbat", 28, required=False), daily=True, pounds=True)
+
+            series_data = [
+                # Daily savings (bars) on primary axis
+                {"name": "Daily Predbat Saving", "data": savings_predbat_hist, "opacity": "1.0", "stroke_width": "2", "chart_type": "bar", "color": "#f5a442", "unit": self.currency_symbols[0]},
+                {"name": "Daily PV/Battery Saving", "data": savings_pvbat_hist, "opacity": "1.0", "stroke_width": "2", "chart_type": "bar", "color": "#3291a8", "unit": self.currency_symbols[0]},
+                {"name": "Daily Actual Cost", "data": cost_yesterday_hist, "opacity": "1.0", "stroke_width": "2", "chart_type": "bar", "color": "#eb2323", "unit": self.currency_symbols[0]},
+                # Cumulative savings (lines) on secondary axis
+                {"name": "Total Predbat Saving", "data": savings_total_predbat_hist, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d", "unit": self.currency_symbols[0]},
+                {"name": "Total PV/Battery Saving", "data": savings_total_pvbat_hist, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#15eb8b", "unit": self.currency_symbols[0]},
+            ]
+
+            # Configure secondary axis for cumulative totals
+            secondary_axis = [
+                {
+                    "title": f"Total Savings ({self.currency_symbols[0]})",
+                    "series_names": ["Total Predbat Saving", "Total PV/Battery Saving"],
+                    "decimals": 0,
+                    "opposite": True,
+                    "labels_formatter": f"return val.toFixed(0);",
+                }
+            ]
+
+            text += self.render_chart(series_data, f"Daily Savings ({self.currency_symbols[0]})", "Cost Savings Analysis", now_str, daily_chart=False, extra_yaxis=secondary_axis)
         else:
             text += "<br><h2>Unknown chart type</h2>"
 
@@ -2586,39 +2728,20 @@ chart.render();
         text += "<body>\n"
         text += get_charts_css()
 
-        # Define which chart is active
-        active_battery = ""
-        active_power = ""
-        active_cost = ""
-        active_rates = ""
-        active_inday = ""
-        active_pv = ""
-        active_pv7 = ""
-
-        if chart == "Battery":
-            active_battery = "active"
-        elif chart == "Power":
-            active_power = "active"
-        elif chart == "Cost":
-            active_cost = "active"
-        elif chart == "Rates":
-            active_rates = "active"
-        elif chart == "InDay":
-            active_inday = "active"
-        elif chart == "PV":
-            active_pv = "active"
-        elif chart == "PV7":
-            active_pv7 = "active"
-
         text += '<div class="charts-menu">'
         text += "<h3>Charts</h3> "
-        text += f'<a href="./charts?chart=Battery" class="{active_battery}">Battery</a>'
-        text += f'<a href="./charts?chart=Power" class="{active_power}">Power</a>'
-        text += f'<a href="./charts?chart=Cost" class="{active_cost}">Cost</a>'
-        text += f'<a href="./charts?chart=Rates" class="{active_rates}">Rates</a>'
-        text += f'<a href="./charts?chart=InDay" class="{active_inday}">InDay</a>'
-        text += f'<a href="./charts?chart=PV" class="{active_pv}">PV</a>'
-        text += f'<a href="./charts?chart=PV7" class="{active_pv7}">PV7</a>'
+        text += f'<a href="./charts?chart=Battery" class="{"active" if chart == "Battery" else ""}">Battery</a>'
+        text += f'<a href="./charts?chart=Power" class="{"active" if chart == "Power" else ""}">Power</a>'
+        text += f'<a href="./charts?chart=Cost" class="{"active" if chart == "Cost" else ""}">Cost</a>'
+        text += f'<a href="./charts?chart=Rates" class="{"active" if chart == "Rates" else ""}">Rates</a>'
+        text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
+        text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
+        text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
+        text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
+        # Only show LoadML chart if ML is enabled
+        if self.base.get_arg("load_ml_enable", False):
+            text += f'<a href="./charts?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
+            text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
         text += '<div id="chart"></div>'
@@ -3216,6 +3339,9 @@ chart.render();
         except Exception as e:
             file_error = f"Error reading apps.yaml: {str(e)}"
 
+        # Calculate MD5 checksum of the content for external change detection
+        file_checksum = hashlib.md5(apps_yaml_content.encode("utf-8")).hexdigest() if apps_yaml_content else ""
+
         text += get_editor_css()
         text += """
 
@@ -3225,10 +3351,10 @@ chart.render();
         <div id="lintStatus" style="margin-top: 8px;"></div>
 """
 
-        text += """
+        text += f"""
     </div>
 
-    <form id="editorForm" class="editor-form" method="post" action="./apps_editor">
+    <form id="editorForm" class="editor-form" method="post" action="./apps_editor" data-file-checksum="{file_checksum}">
         <!-- We use a regular textarea that CodeMirror will replace -->
         <textarea class="editor-textarea" name="apps_content" id="appsContent" placeholder="Loading apps.yaml content...">"""
 
@@ -3265,13 +3391,28 @@ chart.render();
 
         return web.Response(content_type="text/html", text=text)
 
+    async def html_apps_editor_checksum(self, request):
+        """
+        Return the current checksum and content of apps.yaml for external change detection
+        """
+        try:
+            apps_yaml_path = "apps.yaml"
+            with open(apps_yaml_path, "r") as f:
+                content = f.read()
+            checksum = hashlib.md5(content.encode("utf-8")).hexdigest()
+            return web.json_response({"checksum": checksum, "content": content})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     async def html_apps_editor_post(self, request):
         """
         Handle POST request for apps.yaml editor - save the file
         """
         try:
             postdata = await request.post()
-            apps_content = postdata.get("apps_content", "")
+            apps_content = postdata.get("apps_content", None)
+            if apps_content is None:
+                raise web.HTTPFound("./apps_editor?error=" + urllib.parse.quote("No content provided to save"))
 
             # Remove dos line endings
             apps_content = apps_content.replace("\r\n", "\n").replace("\r", "\n")
@@ -3624,14 +3765,46 @@ chart.render();
         text += get_entity_modal_js()
         text += get_component_edit_modal_js()
 
-        text += "<h2>Component Status</h2>\n"
-        text += "<div class='components-grid'>\n"
-
         # Get all component information
         all_components = self.base.components.get_all()
         active_components = self.base.components.get_active()
 
+        # Count components by status
+        error_components = []
+        active_healthy_components = []
+        disabled_components = []
+
         for component_name in all_components:
+            is_alive = self.base.components.is_alive(component_name)
+            is_active = component_name in active_components
+
+            if is_active and not is_alive:
+                error_components.append(component_name)
+            elif is_active and is_alive:
+                active_healthy_components.append(component_name)
+            else:
+                disabled_components.append(component_name)
+
+        # Add heading with checkbox and totals on the same line
+        text += "<div style='display: flex; align-items: center; margin-bottom: 15px;'>\n"
+        text += "<h2 style='margin: 0; margin-right: 20px;'>Component Status</h2>\n"
+        text += "<label style='cursor: pointer; margin-right: 20px; white-space: nowrap;'>\n"
+        text += "<input type='checkbox' id='showDisabledCheckbox' onclick='toggleDisabledComponents()' style='margin-right: 8px;'>\n"
+        text += "Show disabled components\n"
+        text += "</label>\n"
+        text += "<div style='white-space: nowrap;'>\n"
+        text += f"<span style='color: #d32f2f; font-weight: bold;'>{len(error_components)} Error</span> | \n"
+        text += f"<span style='color: #4CAF50; font-weight: bold;'>{len(active_healthy_components)} Active</span> | \n"
+        text += f"<span style='color: #666; font-weight: bold;'>{len(disabled_components)} Disabled</span>\n"
+        text += "</div>\n"
+        text += "</div>\n"
+
+        text += "<div class='components-grid'>\n"
+
+        # Sort components: errors first, then active, then disabled
+        sorted_components = error_components + active_healthy_components + disabled_components
+
+        for component_name in sorted_components:
             from components import COMPONENT_LIST
 
             component_info = COMPONENT_LIST.get(component_name, {})
@@ -3648,7 +3821,11 @@ chart.render();
             card_class = "active" if is_active else "inactive"
             if is_active and not is_alive:
                 card_class += " error"
-            text += f'<div class="component-card {card_class}">\n'
+
+            # Add data-disabled attribute for filtering
+            disabled_attr = 'data-disabled="true"' if not is_active else 'data-disabled="false"'
+
+            text += f'<div class="component-card {card_class}" {disabled_attr}>\n'
             text += f'<div class="component-header">\n'
             text += f'<h3>{component_info.get("name", component_name)}</h3>\n'
 
@@ -3785,6 +3962,40 @@ chart.render();
 """
 
         text += get_restart_button_js()
+
+        # Add JavaScript for toggling disabled components
+        text += """
+<script>
+function toggleDisabledComponents() {
+    const checkbox = document.getElementById('showDisabledCheckbox');
+    const showDisabled = checkbox.checked;
+
+    // Save preference to sessionStorage
+    sessionStorage.setItem('showDisabledComponents', showDisabled);
+
+    // Get all component cards
+    const cards = document.querySelectorAll('.component-card[data-disabled="true"]');
+
+    // Show or hide disabled components
+    cards.forEach(card => {
+        card.style.display = showDisabled ? '' : 'none';
+    });
+}
+
+// On page load, restore checkbox state from sessionStorage
+document.addEventListener('DOMContentLoaded', function() {
+    const checkbox = document.getElementById('showDisabledCheckbox');
+    const savedState = sessionStorage.getItem('showDisabledComponents');
+
+    // Default to false (unchecked) if no saved state
+    const showDisabled = savedState === 'true';
+    checkbox.checked = showDisabled;
+
+    // Apply the initial state
+    toggleDisabledComponents();
+});
+</script>
+"""
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -3937,6 +4148,9 @@ chart.render();
                     data = yaml.load(f)
             except Exception as e:
                 return web.json_response({"success": False, "message": f"Error reading apps.yaml: {str(e)}"}, status=500)
+
+            if not data:
+                data = {}
 
             if ROOT_YAML_KEY not in data:
                 return web.json_response({"success": False, "message": f"{ROOT_YAML_KEY} section not found in apps.yaml"}, status=500)

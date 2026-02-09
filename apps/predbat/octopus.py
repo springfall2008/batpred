@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
@@ -2130,8 +2130,10 @@ class Octopus:
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
                     # Round slots to 30 minute boundary
-                    start_minutes = int(round(start_minutes / plan_interval_minutes, 0) * plan_interval_minutes)
-                    end_minutes = int(round(end_minutes / plan_interval_minutes, 0) * plan_interval_minutes)
+                    # Floor the start (round down) and ceiling the end (round up)
+                    # This ensures any partial overlap with a 30-min slot marks the entire slot as off-peak
+                    start_minutes = (start_minutes // plan_interval_minutes) * plan_interval_minutes
+                    end_minutes = ((end_minutes + plan_interval_minutes - 1) // plan_interval_minutes) * plan_interval_minutes
                     start_minutes = max(start_minutes, -96 * 60)  # Allow for previous 2 days
                     end_minutes = min(end_minutes, self.forecast_minutes)
 

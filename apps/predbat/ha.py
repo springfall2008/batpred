@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2024 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -808,7 +808,13 @@ class HAInterface(ComponentBase):
         data = {}
         for key in kwargs:
             data[key] = kwargs[key]
-        domain, service = service.split("/")
+        if "/" in service:
+            domain, service = service.split("/")
+        elif "." in service:
+            domain, service = service.split(".")
+        else:
+            domain = ""
+
         if self.websocket_active:
             return self.call_service_websocket_command(domain, service, data)
         else:

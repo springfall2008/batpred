@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
-# Copyright Trefor Southwell 2025 - All Rights Reserved
+# Copyright Trefor Southwell 2026 - All Rights Reserved
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 # fmt off
@@ -96,6 +96,8 @@ from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_component_base import test_component_base_all
 from tests.test_solis import run_solis_tests
+from tests.test_load_ml import test_load_ml
+from tests.test_temperature import test_temperature
 from tests.test_rate_store import run_rate_store_tests
 
 
@@ -245,11 +247,15 @@ def main():
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         # Solis Cloud API unit tests
         ("solis", run_solis_tests, "Solis Cloud API tests (V1/V2 time window writes, change detection)", False),
-        # Rate Store unit tests
-        ("rate_store", run_rate_store_tests, "Rate Store persistence and finalization tests (write, rehydrate, finalize, priority, cleanup)", False),
+        # ML Load Forecaster tests
+        ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", False),
+        # External Temperature API tests
+        ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
+        # Rate Store unit tests
+        ("rate_store", run_rate_store_tests, "Rate Store persistence and finalization tests (write, rehydrate, finalize, priority, cleanup)", False),
     ]
 
     # Parse command line arguments
