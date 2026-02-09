@@ -150,9 +150,6 @@ class LoadMLComponent(ComponentBase):
                 load_power_data, _ = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
 
-            # Get current cumulative load value
-            load_minutes_now = get_now_from_cumulative(load_minutes, self.minutes_now, backwards=True)
-
             car_charging_energy = {}
             if self.get_arg("car_charging_energy", default=None, indirect=False):
                 car_charging_energy = self.base.minute_data_import_export(days_to_fetch, self.now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
@@ -188,6 +185,9 @@ class LoadMLComponent(ComponentBase):
 
             # Calculate age of data
             age_days = max_minute / (24 * 60)
+
+            # Get current cumulative load value (excludes car)
+            load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_now, backwards=True)
 
             # PV Data
             if self.ml_pv_sensor:
