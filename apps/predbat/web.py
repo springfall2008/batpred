@@ -2652,7 +2652,7 @@ chart.render();
 
             # Get historical PV power
             pv_power_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_power", 1, required=False))
-            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=False)
+            pv_power = prune_today(pv_power_hist, self.now_utc, self.midnight_utc, prune=True, prune_past_days=7)
 
             # Get temperature prediction data and limit to 48 hours forward
             temperature_forecast = prune_today(self.get_entity_results("sensor." + self.prefix + "_temperature"), self.now_utc, self.midnight_utc, prune_future=True, prune_future_days=2, prune=True, prune_past_days=7)
@@ -2660,7 +2660,6 @@ chart.render();
             series_data = [
                 {"name": "Load Power (Actual)", "data": load_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8", "unit": "kW"},
                 {"name": "Load Power (ML Predicted Future)", "data": load_ml_forecast_power, "opacity": "0.5", "stroke_width": "3", "chart_type": "area", "stroke_curve": "smooth", "color": "#eb2323", "unit": "kW"},
-                {"name": "Load Power (Used)", "data": load_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW"},
                 {"name": "Load Power ML History", "data": power_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#eb2323"},
                 {"name": "Load Power ML History +1h", "data": power_today_h1, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#716d63"},
                 {"name": "Load Power ML History +8h", "data": power_today_h8, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "unit": "kW", "color": "#a6a5a3"},
