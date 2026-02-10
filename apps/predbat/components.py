@@ -328,8 +328,6 @@ class Components:
                     have_all_args = False
                 else:
                     arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
-                print("Component {} arg {} required {} required_true {}".format(component_name, arg, required, required_true))
-            print("Component {} have_all_args {} arg_dict {}".format(component_name, have_all_args, arg_dict))
             required_or = component_info.get("required_or", [])
             # If required_or is set we must have at least one of the listed args
             if required_or:
