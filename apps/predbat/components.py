@@ -35,12 +35,11 @@ COMPONENT_LIST = {
         "class": DatabaseManager,
         "name": "Database Manager",
         "args": {
-            "db_enable": {"required": True, "config": "db_enable"},
+            "db_enable": {"required_true": True, "config": "db_enable"},
             "db_days": {"required": False, "config": "db_days", "default": 30},
         },
         "can_restart": False,
         "phase": 0,
-        "new": True,
     },
     "ha": {
         "class": HAInterface,
@@ -55,7 +54,7 @@ COMPONENT_LIST = {
         "can_restart": False,
         "phase": 0,
     },
-    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0, "new": True},
+    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0},
     "web": {
         "class": WebInterface,
         "name": "Web Interface",
@@ -329,6 +328,8 @@ class Components:
                     have_all_args = False
                 else:
                     arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
+                print("Component {} arg {} required {} required_true {}".format(component_name, arg, required, required_true))
+            print("Component {} have_all_args {} arg_dict {}".format(component_name, have_all_args, arg_dict))
             required_or = component_info.get("required_or", [])
             # If required_or is set we must have at least one of the listed args
             if required_or:
