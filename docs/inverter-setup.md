@@ -42,8 +42,8 @@ Steps vary for each inverter, for some there are no additional steps, but for ot
    | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
    | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) | [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
    | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
-   | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)<BR>in Modbus Power Control Mode | [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
    | [Solax Cloud](#solax-cloud) | Predbat | [solax_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solax_cloud.yaml) |
+   | [Solax Gen4 inverters](#solax-gen4-inverters) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)<BR>in Modbus Power Control Mode | [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
    | [Solis Cloud](#solis-cloud) | Predbat | [solis_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_cloud.yaml) |
    | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
@@ -210,22 +210,6 @@ Replace the **pv_today** and **pv_power** entries in `apps.yaml` with the approp
 - Predbat now has a built-in Fox cloud integration. Today it requires a battery that supports the scheduler mode to function.
 
 See the components documentation for details [Components - Fox cloud](components.md#fox-ess-api-fox)
-
-## Solax Cloud
-
-**Experimental**
-
-- Predbat now has a built-in Solax cloud integration.
-
-See the components documentation for details [Components - Solax cloud](components.md#solax-cloud-api-solax)
-
-## Solis Cloud
-
-**Experimental**
-
-- Predbat now has a built-in Solis cloud integration.
-
-See the components documentation for details [Components - Solis cloud](components.md#solis-cloud-api-solax)
 
 ## Growatt with Solar Assistant
 
@@ -1247,6 +1231,8 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
     - number.sigen_plant_ess_discharge_cut_off_state_of_charge
+    - sensor.sigen_plant_ess_max_charging_limit
+    - sensor.sigen_plant_ess_max_discharging_limit
     - sensor.sigen_plant_max_active_power
 
 - The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
@@ -1385,36 +1371,34 @@ Add the following automations to `automations.yaml` (or configure via the UI):
                 entity_id: number.sigen_plant_grid_import_limitation
                 value: 100
 
-- id: "automation_sigen_ess_max_charging_limit_input_number_action"
-  alias: "Predbat max charging limit action"
-  description: "Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit"
-  triggers:
+  - id: automation_sigen_ess_max_charging_limit_input_number_action
+    alias: Predbat max charging limit action
+    description: Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit
+    triggers:
     - trigger: state
       entity_id: input_number.charge_rate
-  action:
+    actions:
     - action: number.set_value
       target:
         entity_id: number.sigen_plant_ess_max_charging_limit
       data:
-        value: >-
-          "{{ [(states('input_number.charge_rate') | float / 1000) | round(2),
-          states('sensor.sigen_inverter_ess_rated_charging_power') | float] | min}}"
-  mode: single
+        value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
+          states(''sensor.sigen_inverter_ess_rated_charge_power'') | float] | min}}'
+    mode: single
 
-- id: "automation_sigen_ess_max_discharging_limit_input_number_action"
-  alias: "Predbat max discharging limit action"
-  description: "Mapper from input_number.discharge_rate to number.sigen_plant_ess_max_discharging_limit"
+- id: automation_sigen_ess_max_discharging_limit_input_number_action
+  alias: Predbat max discharging limit action
+  description: Mapper from input_number.discharge_rate to number.sigen_plant_ess_max_discharging_limit
   triggers:
-    - trigger: state
-      entity_id: input_number.discharge_rate
-  action:
-    - action: number.set_value
-      target:
-        entity_id: number.sigen_plant_ess_max_discharging_limit
-      data:
-        value: >-
-          "{{ [(states('input_number.discharge_rate') | float / 1000) | round(2),
-          states('sensor.sigen_inverter_ess_rated_discharging_power') | float] | min}}"
+  - trigger: state
+    entity_id: input_number.discharge_rate
+  actions:
+  - action: number.set_value
+    target:
+      entity_id: number.sigen_plant_ess_max_discharging_limit
+    data:
+      value: '{{ [(states(''input_number.discharge_rate'') | float / 1000) | round(2),
+        states(''sensor.sigen_inverter_ess_rated_discharge_power'') | float] | min}}'
   mode: single
 ```
 
@@ -1576,6 +1560,14 @@ You will need to make a number of changes to the solaredge apps.yaml, replacing 
         {% set myValue = (float(states('sensor.calc_battery_all_state'),0) / 100) * float(states('sensor.calc_battery_total_capacity'),0) %}
         {{ myValue }}
 ```
+
+## Solax Cloud
+
+**Experimental**
+
+- Predbat now has a built-in Solax cloud integration.
+
+See the components documentation for details [Components - Solax cloud](components.md#solax-cloud-api-solax)
 
 ## Solax Gen4+ Inverters
 
@@ -1798,6 +1790,14 @@ max: 10
 - When you first start Predbat, check the [Predbat log](output-data.md#predbat-logfile) to confirm that the correct sensor names are identified by the regular expressions in `apps.yaml`. Any non-matching expressions should be investigated and resolved.
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
+
+## Solis Cloud
+
+**Experimental**
+
+- Predbat now has a built-in Solis cloud integration.
+
+See the components documentation for details [Components - Solis cloud](components.md#solis-cloud-api-solax)
 
 ## Solis Inverters before FB00
 
