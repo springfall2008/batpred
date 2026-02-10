@@ -35,12 +35,11 @@ COMPONENT_LIST = {
         "class": DatabaseManager,
         "name": "Database Manager",
         "args": {
-            "db_enable": {"required": True, "config": "db_enable"},
+            "db_enable": {"required_true": True, "config": "db_enable"},
             "db_days": {"required": False, "config": "db_days", "default": 30},
         },
         "can_restart": False,
         "phase": 0,
-        "new": True,
     },
     "ha": {
         "class": HAInterface,
@@ -55,7 +54,7 @@ COMPONENT_LIST = {
         "can_restart": False,
         "phase": 0,
     },
-    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0, "new": True},
+    "ha_history": {"class": HAHistory, "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0},
     "web": {
         "class": WebInterface,
         "name": "Web Interface",

@@ -606,6 +606,8 @@ class HAInterface(ComponentBase):
         Update state for entity_id from the SQLLite database
         """
         self.db_mirror_list[entity_id.lower()] = True
+        if not self.db_enable:
+            return
         item = self.db_manager.get_state_db(entity_id)
         if item:
             self.update_state_item(item, entity_id, nodb=True)
@@ -637,7 +639,7 @@ class HAInterface(ComponentBase):
         if "state" in item:
             state = item["state"]
             self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
-            if not nodb and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
+            if not nodb and self.db_enable and ((self.db_mirror_ha and (entity_id in self.db_mirror_list)) or self.db_primary):
                 # Instead of appending to a local mirror_updates list, call the database manager to schedule the update
                 if last_changed:
                     try:
@@ -787,7 +789,7 @@ class HAInterface(ComponentBase):
         """
         self.db_mirror_list[entity_id] = True
 
-        if self.db_mirror_ha or self.db_primary:
+        if self.db_enable and (self.db_mirror_ha or self.db_primary):
             item = self.db_manager.set_state_db(entity_id, state, attributes)
             # Locally cache state until DB update happens
             self.update_state_item(item, entity_id, nodb=True)
