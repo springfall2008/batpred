@@ -501,6 +501,8 @@ content: >-
 
 You'll need to change the hard-coded timestamp "2024-12-12..." to the date/time you first started counting Predbat inverter writes from to get the number of days and average writes per day correct.
 
+*TIP:* If your inverter is ever replaced and you want to reset the inverter register writes back to zero, simply update the entity state of predbat.inverter_register_writes using Settings / Developer Tools / States and search for the entity.
+
 ## Car data
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
