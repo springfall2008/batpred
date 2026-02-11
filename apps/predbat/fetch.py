@@ -384,7 +384,8 @@ class Fetch:
         else:
             average_non_zero_day = 24  # Assume a nominal 24kWh day if no data
 
-        self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(days_list, sum_days, min_sum))
+        # log the unsorted list of days and load kWh, easier to read and ensures correct 'lowest day' is reported
+        self.log("Historical load totals for days {} are {}kWh, minimum value {}kWh".format(self.days_previous.copy(), sum_days, min_sum))
         if self.load_filter_modal and total_points >= 3 and (min_sum_day > 0):
             self.log("Modal filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(days_list)))
             min_sum_day_idx = days_list.index(min_sum_day)
