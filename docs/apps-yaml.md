@@ -716,7 +716,7 @@ The example below is defined in `configuration.yaml` (not the HA user interface)
 e.g.
 
 ```yaml
-# Home consumption sensor, updated every 5 minutes instead of the default of every sensor state change
+# Home consumption energy sensor, updated every 5 minutes instead of the default of every sensor state change
 template:
   - trigger:
       - platform: time_pattern
@@ -728,13 +728,76 @@ template:
         state_class: total
         device_class: energy
         state: >
-          {% set x=( states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
-            + states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
-            - states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
-            + states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
-            - states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) )
-          %}
-          {{ max(x,0)|round(1) }}
+          {% set pv_xxx = states('sensor.givtcp_xxx_pv_energy_today_kwh') %}
+          {% set pv_yyy = states('sensor.givtcp2_yyy_pv_energy_today_kwh') %}
+          {% set dis_xxx = states('sensor.givtcp_xxx_battery_discharge_energy_today_kwh') %}
+          {% set dis_yyy = states('sensor.givtcp2_yyy_battery_discharge_energy_today_kwh') %}
+          {% set chg_xxx = states('sensor.givtcp_xxx_battery_charge_energy_today_kwh') %}
+          {% set chg_yyy = states('sensor.givtcp2_yyy_battery_charge_energy_today_kwh') %}
+          {% set import = states('sensor.givtcp_xxx_import_energy_today_kwh') %}
+          {% set export = states('sensor.givtcp_xxx_export_energy_today_kwh') %}
+          {% if pv_xxx in ['unknown','unavailable'] or
+              pv_yyy in ['unknown','unavailable'] or
+              dis_xxx in ['unknown','unavailable'] or
+              dis_yyy in ['unknown','unavailable'] or
+              chg_xxx in ['unknown','unavailable'] or
+              chg_yyy in ['unknown','unavailable'] or
+              import in ['unknown','unavailable'] or
+              export in ['unknown','unavailable'] %}
+              {{ this.state }}
+          {% else %}
+              {% if now().hour == 0 and now().minute < 1 %}
+                0.0
+              {% else %}
+                  {% set load = (import | float(0)
+                    + pv_xxx | float(0)
+                    + pv_yyy | float(0)
+                    + dis_xxx | float(0)
+                    + dis_yyy | float(0)
+                    - export | float(0)
+                    - chg_xxx | float(0)
+                    - chg_yyy | float(0)) | round(2) %}
+                  {% set previous = this.state | float(0) %}
+                  {{ [load, previous] | max }}
+              {% endif %}
+          {% endif %}
+```
+
+The template looks complex but it ensures that if any of the underlying sensors is unavailable, the load sensor returns the previous energy value, at midnight the sensor resets to zero properly,
+and during the day the sensor can only ever increase, never decrease.
+
+If you are using the LoadML feature of Predbat and have multiple inverters that share the load, you will similarly need to create a template load power sensor:
+
+```yaml
+# Home consumption power sensor, updated every 5 minutes instead of the default of every sensor state change
+- trigger:
+    - platform: time_pattern
+      minutes: "/5"
+  sensor:
+    - name: "House Load Power"
+      unique_id: "house_load_power"
+      unit_of_measurement: kW
+      device_class: power
+      state_class: measurement
+      state: >
+        {% set pv_xxx = states('sensor.givtcp_xxx_pv_power') %}
+        {% set pv_yyy = states('sensor.givtcp2_yyy_pv_power') %}
+        {% set bat_xxx = states('sensor.givtcp_xxx_battery_power') %}
+        {% set bat_yyy = states('sensor.givtcp2_yyy_battery_power') %}
+        {% set grid = states('sensor.givtcp_xxx_grid_power') %}
+        {% if pv_xxx in ['unknown','unavailable'] or
+              pv_yyy in ['unknown','unavailable'] or
+              bat_xxx in ['unknown','unavailable'] or
+              bat_yyy in ['unknown','unavailable'] or
+              grid in ['unknown','unavailable'] %}
+              {{ this.state }}
+        {% else %}
+          {{ (pv_xxx | float(0)
+            + pv_yyy | float(0)
+            + bat_xxx | float(0)
+            + bat_yyy | float(0)
+            - grid | float(0)) | round(2) }}
+        {% endif %}
 ```
 
 ### GivEnergy Cloud Data
