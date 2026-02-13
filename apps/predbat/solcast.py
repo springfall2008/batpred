@@ -805,7 +805,16 @@ class SolarAPI(ComponentBase):
         self.dashboard_item(
             "sensor." + self.prefix + "_pv_forecast_raw",
             state=current_pv_power,
-            attributes={"friendly_name": "PV Forecast minute data", "icon": "mdi:solar-power", "forecast": pv_forecast_pack, "forecast10": pv_forecast_pack10, "unit_of_measurement": "kW", "device_class": "power", "state_class": "measurement"},
+            attributes={
+                "friendly_name": "PV Forecast minute data",
+                "icon": "mdi:solar-power",
+                "relative_time": self.midnight_utc.strftime(TIME_FORMAT),
+                "forecast": pv_forecast_pack,
+                "forecast10": pv_forecast_pack10,
+                "unit_of_measurement": "kW",
+                "device_class": "power",
+                "state_class": "measurement",
+            },
         )
 
     async def fetch_pv_forecast(self):
