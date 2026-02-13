@@ -1492,7 +1492,7 @@ def run_inverter_tests(my_predbat_dummy):
         assert_soc_max=9.523,
         assert_soc=3.333,
         assert_pv_power=10,
-        assert_load_power=590,  # Calculated from energy balance: PV(10) + Grid(-79) + Battery(659) = 590
+        assert_load_power=624,
         assert_charge_start_time_minutes=1410,
         assert_charge_end_time_minutes=1770,
         assert_discharge_start_time_minutes=1380,
@@ -1513,7 +1513,7 @@ def run_inverter_tests(my_predbat_dummy):
         assert_serial_number="EA2303G082",
         assert_soc=7.62,
         assert_pv_power=247.0,
-        assert_load_power=233.0,  # Calculated from energy balance: PV(247) + Grid(3) + Battery(-17) = 233
+        assert_load_power=197.0,
         assert_charge_start_time_minutes=1440,
         assert_charge_end_time_minutes=1440,
         assert_discharge_start_time_minutes=1445,

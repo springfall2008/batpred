@@ -1101,16 +1101,14 @@ class Inverter:
         else:
             self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
-        if self.rest_data and ("Power" in self.rest_data) and not self.base.get_arg("givtcp_rest_power", default=False, index=self.id):
+        if self.rest_data and ("Power" in self.rest_data) and not self.base.get_arg("givtcp_rest_power_ignore", default=False, index=self.id):
             pdetails = self.rest_data["Power"]
             if "Power" in pdetails:
                 ppdetails = pdetails["Power"]
                 self.battery_power = float(ppdetails.get("Battery_Power", 0.0))
                 self.pv_power = float(ppdetails.get("PV_Power", 0.0))
                 self.grid_power = float(ppdetails.get("Grid_Power", 0.0))
-                # Calculate load from energy balance instead of using inverter register (which is incorrect during grid charging)
-                # Load = PV + Grid + Battery (battery negative when charging, positive when discharging)
-                self.load_power = self.pv_power + self.grid_power + self.battery_power
+                self.load_power = float(ppdetails.get("Load_Power", 0.0))
                 if self.rest_v3:
                     self.battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
                 else:
