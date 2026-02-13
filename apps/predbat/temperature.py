@@ -208,6 +208,8 @@ class TemperatureAPI(ComponentBase):
                     "last_updated": last_updated_str,
                     "results": forecast,
                     "timezone_offset": timezone_offset,
+                    "device_class": "temperature",
+                    "state_class": "measurement",
                     "data_points": len(forecast)
                 },
                 app="temperature"
