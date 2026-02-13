@@ -1101,7 +1101,7 @@ class Inverter:
         else:
             self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
-        if self.rest_data and ("Power" in self.rest_data):
+        if self.rest_data and ("Power" in self.rest_data) and not self.base.get_arg("givtcp_rest_power", default=False, index=self.id):
             pdetails = self.rest_data["Power"]
             if "Power" in pdetails:
                 ppdetails = pdetails["Power"]
