@@ -1103,6 +1103,12 @@ class Fetch:
         entity_id = "sensor." + self.prefix + "_pv_forecast_raw"
         pv_forecast_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
         pv_forecast10_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast10")
+        relative_time = self.get_state_wrapper(entity_id=entity_id, attribute="relative_time")
+        try:
+            relative_time = datetime.strptime(relative_time, TIME_FORMAT)
+        except (ValueError, TypeError):
+            self.log(f"Warn: Unable to parse relative_time from PV forecast sensor: {relative_time}, using midnight UTC as fallback")
+            relative_time = self.midnight_utc
 
         # Convert keys to integers and values to floats
         pv_forecast_packed = {}
@@ -1128,11 +1134,14 @@ class Fetch:
         max_minute = max(pv_forecast_packed.keys()) if pv_forecast_packed else 0
         last_value = 0
         last_value10 = 0
+        # The forecast could be for a different time to our relative time, so we need to offset the minutes to align with our midnight_utc
+        minute_offset = int((self.midnight_utc - relative_time).total_seconds() / 60)
         for minute in range(0, max_minute + 1):
+            target_minute = minute + minute_offset
             last_value = pv_forecast_packed.get(minute, last_value)
             last_value10 = pv_forecast10_packed.get(minute, last_value10)
-            pv_forecast_minute[minute] = last_value
-            pv_forecast_minute10[minute] = last_value10
+            pv_forecast_minute[target_minute] = last_value
+            pv_forecast_minute10[target_minute] = last_value10
 
         return pv_forecast_minute, pv_forecast_minute10
 
