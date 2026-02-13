@@ -503,6 +503,7 @@ class Prediction:
         carbon_enable = self.carbon_enable
         reserve = self.reserve
         soc_max = self.soc_max
+        reserve_percent = calc_percent_limit(reserve, soc_max)
         battery_loss = self.battery_loss
         battery_loss_discharge = self.battery_loss_discharge
         battery_temperature_prediction = self.battery_temperature_prediction
@@ -591,7 +592,7 @@ class Prediction:
             charge_limit_n = 0
             if charge_window_active:
                 charge_limit_n = charge_limit[charge_window_n]
-                if self.set_charge_freeze and (charge_limit_n == reserve):
+                if self.set_charge_freeze and (calc_percent_limit(charge_limit_n, soc_max) == reserve_percent):
                     # Charge freeze via reserve
                     charge_limit_n = max(soc, reserve)
 
