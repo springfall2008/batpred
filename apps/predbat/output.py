@@ -1486,10 +1486,9 @@ class Output:
             json_row["time"] = rate_start.strftime(TIME_FORMAT)
             json_row["import_rate"] = rate_value_import
             json_row["export_rate"] = rate_value_export
-            # Add adjusted rates for debug mode
-            if plan_debug:
-                json_row["import_rate_adjusted"] = dp2(rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
-                json_row["export_rate_adjusted"] = dp2(rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)
+            # Add adjusted rates (always included for client-side debug toggle)
+            json_row["import_rate_adjusted"] = dp2(rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
+            json_row["export_rate_adjusted"] = dp2(rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)
             json_row["state"] = raw_state
             json_row["state_target"] = raw_state_target
             json_row["state_override"] = raw_state_override
@@ -1604,10 +1603,9 @@ class Output:
         totals["total_cost"] = dp2(metric_end / 100.0)
         totals["pv_forecast"] = dp2(pv_total)
         totals["load_forecast"] = dp2(load_total)
-        if plan_debug:
-            clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
-            totals["clipped"] = dp2(clipped_amount_end)
-        if plan_debug and self.load_forecast:
+        clipped_amount_end = self.predict_clipped_best.get(minute_relative_slot_end, clipped_amount)
+        totals["clipped"] = dp2(clipped_amount_end)
+        if self.load_forecast:
             totals["extra_load"] = dp2(xload_total)
         if self.num_cars > 0:
             totals["car_charging"] = dp2(car_total)
