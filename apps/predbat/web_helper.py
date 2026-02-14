@@ -935,10 +935,8 @@ function typeIsNumerical(value) {
     try {
         if (value.includes('.')) {
             value = parseFloat(value);
-            console.log("Parsed as float:", value);
         } else {
             value = parseInt(value);
-            console.log("Parsed as integer:", value);
         }
     } catch (e) {
         return false; // Not a numerical value
@@ -5234,11 +5232,9 @@ function initializeCodeMirror() {
 
         // Update button states based on YAML validation result
         updateButtonStates(saveButton, revertButton, content, !isValid);
-        console.log('Button states updated by change handler, YAML valid:', isValid);
 
         // Save content to localStorage whenever it changes
         localStorage.setItem('appsYamlContent', content);
-        console.log('Content saved to localStorage');
     });
 
     // Make CodeMirror fill the available space
@@ -5282,14 +5278,12 @@ function initializeCodeMirror() {
 
                 // Update button states with error flag
                 updateButtonStates(saveButton, revertButton, content, true);
-                console.log('Button states updated by lint event (with errors)');
             } else {
                 // Clear the lint status when syntax is valid
                 lintStatusEl.innerHTML = '';
 
                 // Update button states with no error flag
                 updateButtonStates(saveButton, revertButton, content, false);
-                console.log('Button states updated by lint event (no errors)');
             }
         });
 
@@ -5298,22 +5292,16 @@ function initializeCodeMirror() {
         let originalChecksum = form.getAttribute('data-file-checksum');
         let externalChangeWarningShown = false;
 
-        console.log('Initial checksum:', originalChecksum);
-
         function checkForExternalChanges() {
             fetch('./apps_editor_checksum')
                 .then(response => response.json())
                 .then(data => {
-                    console.log('Current file checksum:', data.checksum, 'Original:', originalChecksum);
                     if (data.checksum && data.checksum !== originalChecksum && !externalChangeWarningShown) {
                         const currentContent = editor.getValue();
                         const hasLocalChanges = currentContent !== window.originalContent;
 
-                        console.log('External change detected! Has local changes:', hasLocalChanges);
-
                         if (!hasLocalChanges) {
                             // No local edits - auto-reload
-                            console.log('File changed externally, auto-reloading...');
                             editor.setValue(data.content);
                             window.originalContent = data.content;
                             originalChecksum = data.checksum;  // Update the variable
@@ -5370,7 +5358,6 @@ function initializeCodeMirror() {
 
                         // Update button states based on content validity
                         updateButtonStates(saveButton, revertButton, content, !isValidYaml);
-                        console.log('Button states updated by initial validation');
 
                         // Also clear the lint status if it exists and YAML is valid
                         if (lintStatusEl && isValidYaml) {
@@ -5379,12 +5366,9 @@ function initializeCodeMirror() {
                     } else {
                         // Empty content is considered valid
                         updateButtonStates(saveButton, revertButton, content, false);
-                        console.log('Button states updated for empty content');
                     }
                 } catch (e) {
                     // Something went wrong, keep the save button disabled but enable revert if changed
-                    console.log('Error during initialization button state update:', e.message);
-
                     const content = editor.getValue();
                     updateButtonStates(saveButton, revertButton, content, true);
                 }
@@ -5456,10 +5440,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 // Update buttons states consistently
                 updateButtonStates(saveButton, revertButton, content, !isValid);
-                console.log('Button states updated by DOMContentLoaded final check, YAML valid:', isValid);
 
             } catch (e) {
-                console.log('YAML validation error in DOMContentLoaded:', e.message);
                 // We already know there's an error, but we won't disable the button here
                 // as that should be handled by the lint event
             }
@@ -5981,14 +5963,10 @@ def get_plan_css():
             const override = overrideList.find(r => r.minutes === minutesFromMidnight);
             if (override) {
                 rate = override.rate;
-                console.log(`Found stored ${type} override at ${minutesFromMidnight} minutes: rate=${rate}`);
             } else {
                 rate = 0; // Fallback if not found
-                console.log(`WARNING: No stored ${type} override found at ${minutesFromMidnight} minutes, using fallback rate=0`);
             }
         }
-
-        console.log("Rate override:", time, "Type:", type, "Rate:", rate, "Clear:", clear);
 
         // Construct the action string the server expects
         let action;
@@ -6071,8 +6049,6 @@ def get_plan_css():
             }
         }
 
-        console.log("Load override:", time, "Adjustment:", adjustment, "Clear:", clear);
-
         // Construct the action string the server expects
         const action = clear ? 'Clear Load' : 'Set Load';
 
@@ -6131,7 +6107,6 @@ def get_plan_css():
 
     // Handle option selection
     function handleTimeOverride(time, action) {
-        console.log("Time override:", time, "Action:", action);
 
         // Create a form data object to send the override parameters
         const formData = new FormData();
@@ -6200,8 +6175,6 @@ def get_plan_css():
                 value = 0; // Fallback if not found
             }
         }
-
-        console.log("SOC override:", time, "Value:", value, "Clear:", isClear);
 
         // Construct the action string the server expects
         const action = isClear ? 'Clear SOC' : 'Set SOC';
@@ -6273,7 +6246,7 @@ def get_plan_css():
 def get_plan_renderer_js():
     """
     JavaScript renderer for client-side plan table generation from JSON data
-    Includes timestamp-based change detection, 30-second polling, error handling, and stale data warnings
+    Includes timestamp-based change detection, 5-second polling, error handling, and stale data warnings
     """
     text = """
     <script>
@@ -6413,7 +6386,7 @@ def get_plan_renderer_js():
 
                 // Load forecast (with 10% value in brackets if debug mode)
                 if (editable) {
-                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides);
+                    html += renderLoadCell(row.time, timeDisplay, row.load_forecast, row.load_forecast10, row.load_color, showDebug, overrides, jsonData.manual_load_value !== undefined ? jsonData.manual_load_value : 0.5);
                 } else {
                     let loadText = row.load_forecast !== undefined ? row.load_forecast : '';
                     if (showDebug && row.load_forecast10 > 0) {
@@ -6655,7 +6628,7 @@ def get_plan_renderer_js():
     }
 
     // Render load cell with dropdown for load adjustments
-    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides) {
+    function renderLoadCell(timeStr, timeDisplay, loadValue, loadValue10, bgColor, showDebug, overrides, manualLoadValue) {
         const dropdownId = `dropdown_${dropdownCounter++}`;
         const minutesFromMidnight = getMinutesFromTimeString(timeStr);
         const isOverride = overrides.manual_load_adjust.some(r => r.minutes === minutesFromMidnight);
@@ -6666,12 +6639,13 @@ def get_plan_renderer_js():
             displayValue += ` (${loadValue10})`;
         }
 
+        const defaultLoadValue = manualLoadValue !== undefined ? manualLoadValue : 0.5;
         let html = `<td id=load data-minute="${minutesFromMidnight}" bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell">`;
         html += `${displayValue}${isOverride ? ' &#8526;' : ''}`;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;
         html += '<label>Adjust load (kWh):</label>';
-        html += `<input type="number" id="load_${dropdownId}" value="0" step="0.1">`;
+        html += `<input type="number" id="load_${dropdownId}" value="${defaultLoadValue}" step="0.1">`;
         html += `<button onclick="handleLoadOverride('${timeDisplay}', '${dropdownId}')">Set Adjustment</button>`;
         if (isOverride) {
             html += `<a onclick="handleLoadOverride('${timeDisplay}', null, true)">Clear</a>`;

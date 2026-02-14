@@ -1924,10 +1924,6 @@ chart.render();
                 if newest_timestamp is None or ts > newest_timestamp:
                     newest_timestamp = ts
 
-        # Log timestamp comparison for debugging
-        self.log(f"Plan data API: client_newest={client_newest_timestamp}, server plan={plan_timestamp}, yesterday={yesterday_timestamp}, baseline={baseline_timestamp}, newest={newest_timestamp}")
-        self.log(f"Plan data API: client_overrides_hash={client_overrides_hash}, server_overrides_hash={overrides_hash}, match={client_overrides_hash == overrides_hash}")
-
         # Check if data has changed - compare client's newest timestamp with server's newest
         data_unchanged = False
         if client_newest_timestamp and newest_timestamp:
@@ -1936,17 +1932,12 @@ chart.render();
             timestamp_match = client_newest_timestamp >= newest_timestamp
             overrides_match = client_overrides_hash == overrides_hash
             data_unchanged = timestamp_match and overrides_match
-            self.log(f"Plan data API: timestamp_match={timestamp_match}, overrides_match={overrides_match}, data_unchanged={data_unchanged}")
         elif not newest_timestamp:
             # No server data available yet
             data_unchanged = True
-            self.log(f"Plan data API: No server data available, returning unchanged=True")
 
         if data_unchanged:
-            self.log(f"Plan data API: Returning unchanged response")
             return web.json_response({"unchanged": True, "overrides_hash": overrides_hash})
-
-        self.log(f"Plan data API: Returning full data response")
 
         # Build full response with data
         response_data = {"unchanged": False, "plan": plan_json, "yesterday": yesterday_json, "baseline": baseline_json, "overrides": overrides, "overrides_hash": overrides_hash}

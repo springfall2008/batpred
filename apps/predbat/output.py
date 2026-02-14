@@ -988,6 +988,7 @@ class Output:
         raw_plan["num_cars"] = self.num_cars
         raw_plan["iboost_enable"] = self.iboost_enable
         raw_plan["carbon_enable"] = self.carbon_enable
+        raw_plan["manual_load_value"] = self.get_arg("manual_load_value", 0.5)
 
         rate_start = self.midnight_utc
         for minute in range(minute_now_align, end_plan, self.plan_interval_minutes):
