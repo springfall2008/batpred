@@ -773,7 +773,6 @@ CONFIG_ITEMS = [
         "name": "calculate_inday_adjustment",
         "friendly_name": "Calculate in-day adjustment",
         "type": "switch",
-        "enable": "expert_mode",
         "default": True,
     },
     {
