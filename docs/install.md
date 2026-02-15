@@ -349,8 +349,8 @@ or by turning on the **switch.predbat_auto_update** to auto-update Predbat.
 
 ## Manually installing a Predbat release
 
-The Predbat version selector **select.predbat_update** contains the last 25 release of Predbat, but sometimes if Predbat has stopped working,
-or if you wish to downgrade to an older version that is not on the drop-down menu, then you can manually install a Predbat release.
+The Predbat version selector **select.predbat_update** contains the last 25 Predbat releases, but sometimes if Predbat has stopped working,
+or if you wish to downgrade to an older version that is not on the drop-down menu, then you might need to manually install a Predbat release.
 
 Go to [Predbat releases on GitHub](https://github.com/springfall2008/batpred/releases) and find the release you wish to install.
 

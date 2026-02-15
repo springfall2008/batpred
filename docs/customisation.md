@@ -735,10 +735,7 @@ mode: single
 
 You can either manually update Predbat to a new (or old) version or set Predbat to automatically update itself.
 
-These are described in detail in [Updating Predbat](install.md#updating-predbat) and are listed here just for completeness:
-
-- **switch.predbat_car_charging_hold** - remove the historical car charging load from the house load
-- **input_number.predbat_car_charging_threshold** - power threshold above which Predbat assumes the car is being charged
+These are described in detail in [Updating Predbat](install.md#predbat-built-in-update) and are listed here just for completeness:
 
 - **select.predbat_update** - List of Predbat software versions you can select to update Predbat to
 - **switch.predbat_auto_update** - When On, Predbat will automatically update itself as new releases are published on GitHub.

@@ -800,6 +800,8 @@ If you are using the LoadML feature of Predbat and have multiple inverters that 
         {% endif %}
 ```
 
+If you have GivEnergy inverters and are using REST mode, then also set **givtcp_rest_power_ignore** to True in `apps.yaml` for both inverter so Predbat uses your custom power sensor (and not the inverter sensors via REST).
+
 ### GivEnergy Cloud Data
 
 If you have an issue with the GivTCP data, Predbat can get the required historical data from the GivEnergy cloud instead. This data is updated every 30 minutes.
