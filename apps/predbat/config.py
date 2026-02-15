@@ -617,7 +617,7 @@ CONFIG_ITEMS = [
         "icon": "mdi:ev-station",
         "enable": "car_charging_manual_soc",
         "default": 0.0,
-        "restore": False,
+        "restore": True,
     },
     {
         "name": "car_charging_manual_soc_1",
@@ -638,7 +638,7 @@ CONFIG_ITEMS = [
         "icon": "mdi:ev-station",
         "enable": "car_charging_manual_soc_1",
         "default": 0.0,
-        "restore": False,
+        "restore": True,
     },
     {
         "name": "car_charging_manual_soc_2",
@@ -659,7 +659,7 @@ CONFIG_ITEMS = [
         "icon": "mdi:ev-station",
         "enable": "car_charging_manual_soc_2",
         "default": 0.0,
-        "restore": False,
+        "restore": True,
     },
     {
         "name": "car_charging_manual_soc_3",
@@ -680,7 +680,7 @@ CONFIG_ITEMS = [
         "icon": "mdi:ev-station",
         "enable": "car_charging_manual_soc_3",
         "default": 0.0,
-        "restore": False,
+        "restore": True,
     },
     {
         "name": "octopus_intelligent_charging",
