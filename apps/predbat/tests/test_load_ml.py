@@ -53,7 +53,7 @@ def test_load_ml(my_predbat=None):
         ("prediction", _test_prediction, "End-to-end prediction"),
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
-        #("real_data_training", _test_real_data_training, "Train on real load_minutes_debug.json data with chart"),
+        # ("real_data_training", _test_real_data_training, "Train on real load_minutes_debug.json data with chart"),
         ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
         ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
     ]
