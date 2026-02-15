@@ -870,6 +870,7 @@ def _test_axle_load_slot_export(my_predbat=None):
             self.minutes_now = 10 * 60  # 10:00 AM
             self.forecast_minutes = 24 * 60  # 24 hours
             self.prefix = "predbat"
+            self.rate_store = None  # No rate persistence in tests
 
             # Initialize rate_export with base rates for each minute
             self.rate_export = {}
