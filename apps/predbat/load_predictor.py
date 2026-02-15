@@ -16,7 +16,7 @@ import os
 from datetime import datetime, timezone, timedelta
 
 # Architecture constants (not user-configurable)
-MODEL_VERSION = 5  # Bumped for temperature feature
+MODEL_VERSION = 6  # Bumped for import/export rate features
 LOOKBACK_STEPS = 288  # 24 hours at 5-min intervals
 OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 576  # 48 hours of predictions (576 * 5 min)
@@ -30,7 +30,9 @@ NUM_TIME_FEATURES = 4  # sin/cos minute-of-day, sin/cos day-of-week (for TARGET 
 NUM_LOAD_FEATURES = LOOKBACK_STEPS  # Historical load values
 NUM_PV_FEATURES = LOOKBACK_STEPS  # Historical PV generation values
 NUM_TEMP_FEATURES = LOOKBACK_STEPS  # Historical temperature values
-TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_TIME_FEATURES
+NUM_IMPORT_RATE_FEATURES = LOOKBACK_STEPS  # Historical import rates
+NUM_EXPORT_RATE_FEATURES = LOOKBACK_STEPS  # Historical export rates
+TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES + NUM_EXPORT_RATE_FEATURES + NUM_TIME_FEATURES
 
 
 def relu(x):
@@ -383,7 +385,7 @@ class LoadPredictor:
 
         return smoothed
 
-    def _create_dataset(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, is_finetune=False, time_decay_days=7, validation_holdout_hours=24):
+    def _create_dataset(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, is_finetune=False, time_decay_days=7, validation_holdout_hours=24):
         """
         Create training dataset from load_minutes dict.
 
@@ -398,6 +400,8 @@ class LoadPredictor:
             now_utc: Current UTC timestamp
             pv_minutes: Dict of {minute: cumulative_kwh} PV generation (backwards for history, negative for future)
             temp_minutes: Dict of {minute: temperature_celsius} Temperature (backwards for history, negative for future)
+            import_rates: Dict of {minute: rate_per_kwh} Import rates (backwards for history, negative for future)
+            export_rates: Dict of {minute: rate_per_kwh} Export rates (backwards for history, negative for future)
             is_finetune: If True, only use last 24 hours; else use full data with time-decay
             time_decay_days: Time constant for exponential decay weighting
             validation_holdout_hours: Hours of most recent data to hold out for validation
@@ -411,6 +415,9 @@ class LoadPredictor:
         pv_energy_per_step = self._load_to_energy_per_step(pv_minutes) if pv_minutes else {}
         # Temperature is not cumulative, so just use the raw values (already in correct format)
         temp_values = temp_minutes if temp_minutes else {}
+        # Import and export rates are not cumulative, use raw values
+        import_rate_values = import_rates if import_rates else {}
+        export_rate_values = export_rates if export_rates else {}
 
         if not energy_per_step:
             return None, None, None, None, None
@@ -455,6 +462,8 @@ class LoadPredictor:
             lookback_values = []
             pv_lookback_values = []
             temp_lookback_values = []
+            import_rate_lookback = []
+            export_rate_lookback = []
             valid_sample = True
 
             for lb_offset in range(LOOKBACK_STEPS):
@@ -465,6 +474,9 @@ class LoadPredictor:
                     pv_lookback_values.append(pv_energy_per_step.get(lb_minute, 0.0))
                     # Add temperature for the same time period (0 if no temp data)
                     temp_lookback_values.append(temp_values.get(lb_minute, 0.0))
+                    # Add import/export rates for the same time period (0 if no rate data)
+                    import_rate_lookback.append(import_rate_values.get(lb_minute, 0.0))
+                    export_rate_lookback.append(export_rate_values.get(lb_minute, 0.0))
                 else:
                     valid_sample = False
                     break
@@ -483,8 +495,17 @@ class LoadPredictor:
             day_of_week = target_time.weekday()
             time_features = self._create_time_features(minute_of_day, day_of_week)
 
-            # Combine features: [load_lookback..., pv_lookback..., temp_lookback..., time_features...]
-            features = np.concatenate([np.array(lookback_values, dtype=np.float32), np.array(pv_lookback_values, dtype=np.float32), np.array(temp_lookback_values, dtype=np.float32), time_features])
+            # Combine features: [load_lookback..., pv_lookback..., temp_lookback..., import_rates..., export_rates..., time_features...]
+            features = np.concatenate(
+                [
+                    np.array(lookback_values, dtype=np.float32),
+                    np.array(pv_lookback_values, dtype=np.float32),
+                    np.array(temp_lookback_values, dtype=np.float32),
+                    np.array(import_rate_lookback, dtype=np.float32),
+                    np.array(export_rate_lookback, dtype=np.float32),
+                    time_features,
+                ]
+            )
 
             X_train_list.append(features)
             y_train_list.append(np.array([target_value], dtype=np.float32))
@@ -507,6 +528,8 @@ class LoadPredictor:
             lookback_values = []
             pv_lookback_values = []
             temp_lookback_values = []
+            import_rate_lookback = []
+            export_rate_lookback = []
             valid_sample = True
 
             for lb_offset in range(LOOKBACK_STEPS):
@@ -515,6 +538,8 @@ class LoadPredictor:
                     lookback_values.append(energy_per_step[lb_minute])
                     pv_lookback_values.append(pv_energy_per_step.get(lb_minute, 0.0))
                     temp_lookback_values.append(temp_values.get(lb_minute, 0.0))
+                    import_rate_lookback.append(import_rate_values.get(lb_minute, 0.0))
+                    export_rate_lookback.append(export_rate_values.get(lb_minute, 0.0))
                 else:
                     valid_sample = False
                     break
@@ -533,7 +558,16 @@ class LoadPredictor:
             day_of_week = target_time.weekday()
             time_features = self._create_time_features(minute_of_day, day_of_week)
 
-            features = np.concatenate([np.array(lookback_values, dtype=np.float32), np.array(pv_lookback_values, dtype=np.float32), np.array(temp_lookback_values, dtype=np.float32), time_features])
+            features = np.concatenate(
+                [
+                    np.array(lookback_values, dtype=np.float32),
+                    np.array(pv_lookback_values, dtype=np.float32),
+                    np.array(temp_lookback_values, dtype=np.float32),
+                    np.array(import_rate_lookback, dtype=np.float32),
+                    np.array(export_rate_lookback, dtype=np.float32),
+                    time_features,
+                ]
+            )
 
             X_val_list.append(features)
             y_val_list.append(np.array([target_value], dtype=np.float32))
@@ -640,7 +674,7 @@ class LoadPredictor:
 
         return predictions
 
-    def train(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, is_initial=True, epochs=50, time_decay_days=7, patience=5):
+    def train(self, load_minutes, now_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, is_initial=True, epochs=100, time_decay_days=7, patience=5):
         """
         Train or fine-tune the model.
 
@@ -652,6 +686,8 @@ class LoadPredictor:
             now_utc: Current UTC timestamp
             pv_minutes: Dict of {minute: cumulative_kwh} PV generation (backwards for history, negative for future)
             temp_minutes: Dict of {minute: temperature_celsius} Temperature (backwards for history, negative for future)
+            import_rates: Dict of {minute: rate_per_kwh} Import rates (backwards for history, negative for future)
+            export_rates: Dict of {minute: rate_per_kwh} Export rates (backwards for history, negative for future)
             is_initial: If True, full training; else fine-tuning on last 24h
             epochs: Number of training epochs
             time_decay_days: Time constant for sample weighting
@@ -663,7 +699,7 @@ class LoadPredictor:
         self.log("ML Predictor: Starting {} training with {} epochs".format("initial" if is_initial else "fine-tune", epochs))
 
         # Create dataset with train/validation split
-        result = self._create_dataset(load_minutes, now_utc, pv_minutes=pv_minutes, temp_minutes=temp_minutes, is_finetune=not is_initial, time_decay_days=time_decay_days)
+        result = self._create_dataset(load_minutes, now_utc, pv_minutes=pv_minutes, temp_minutes=temp_minutes, import_rates=import_rates, export_rates=export_rates, is_finetune=not is_initial, time_decay_days=time_decay_days)
 
         if result[0] is None:
             self.log("Warn: ML Predictor: Failed to create dataset")
@@ -755,7 +791,7 @@ class LoadPredictor:
 
         return best_val_loss
 
-    def predict(self, load_minutes, now_utc, midnight_utc, pv_minutes=None, temp_minutes=None, exog_features=None):
+    def predict(self, load_minutes, now_utc, midnight_utc, pv_minutes=None, temp_minutes=None, import_rates=None, export_rates=None, exog_features=None):
         """
         Generate predictions for the next 48 hours using autoregressive approach.
 
@@ -772,6 +808,8 @@ class LoadPredictor:
             midnight_utc: Today's midnight UTC timestamp
             pv_minutes: Dict of {minute: cumulative_kwh} PV generation (backwards for history, negative for future)
             temp_minutes: Dict of {minute: temperature_celsius} Temperature (backwards for history, negative for future)
+            import_rates: Dict of {minute: rate_per_kwh} Import rates (backwards for history, negative for future)
+            export_rates: Dict of {minute: rate_per_kwh} Export rates (backwards for history, negative for future)
             exog_features: Optional dict with future exogenous data
 
         Returns:
@@ -786,6 +824,9 @@ class LoadPredictor:
         pv_energy_per_step = self._load_to_energy_per_step(pv_minutes) if pv_minutes else {}
         # Temperature is not cumulative, so just use the raw values
         temp_values = temp_minutes if temp_minutes else {}
+        # Import and export rates are not cumulative, use raw values
+        import_rate_values = import_rates if import_rates else {}
+        export_rate_values = export_rates if export_rates else {}
 
         if not energy_per_step:
             self.log("Warn: ML Predictor: No load data available for prediction")
@@ -800,6 +841,8 @@ class LoadPredictor:
         lookback_buffer = []
         pv_lookback_buffer = []
         temp_lookback_buffer = []
+        import_rate_buffer = []
+        export_rate_buffer = []
         for lb_offset in range(LOOKBACK_STEPS):
             lb_minute = lb_offset * STEP_MINUTES
             if lb_minute in energy_per_step:
@@ -810,6 +853,9 @@ class LoadPredictor:
             pv_lookback_buffer.append(pv_energy_per_step.get(lb_minute, 0.0))
             # Add temperature (0 if no data)
             temp_lookback_buffer.append(temp_values.get(lb_minute, 0.0))
+            # Add import/export rates (0 if no data)
+            import_rate_buffer.append(import_rate_values.get(lb_minute, 0.0))
+            export_rate_buffer.append(export_rate_values.get(lb_minute, 0.0))
 
         # Autoregressive prediction loop: predict one step at a time
         predictions_energy = []
@@ -831,9 +877,21 @@ class LoadPredictor:
             next_pv_value = pv_energy_per_step.get(future_minute, 0.0)
             # Get temperature value for the next step from forecast (negative minutes are future)
             next_temp_value = temp_values.get(future_minute, 0.0)
+            # Get import/export rate values for the next step from forecast
+            next_import_rate = import_rate_values.get(future_minute, 0.0)
+            next_export_rate = export_rate_values.get(future_minute, 0.0)
 
-            # Combine features: [load_lookback..., pv_lookback..., temp_lookback..., time_features...]
-            features = np.concatenate([np.array(lookback_buffer, dtype=np.float32), np.array(pv_lookback_buffer, dtype=np.float32), np.array(temp_lookback_buffer, dtype=np.float32), time_features])
+            # Combine features: [load_lookback..., pv_lookback..., temp_lookback..., import_rates..., export_rates..., time_features...]
+            features = np.concatenate(
+                [
+                    np.array(lookback_buffer, dtype=np.float32),
+                    np.array(pv_lookback_buffer, dtype=np.float32),
+                    np.array(temp_lookback_buffer, dtype=np.float32),
+                    np.array(import_rate_buffer, dtype=np.float32),
+                    np.array(export_rate_buffer, dtype=np.float32),
+                    time_features,
+                ]
+            )
             features = self._add_exog_features(features, exog_features)
 
             # Normalize and forward pass
@@ -873,6 +931,12 @@ class LoadPredictor:
             # Update temperature lookback buffer with next forecast value
             temp_lookback_buffer.insert(0, next_temp_value)
             temp_lookback_buffer.pop()  # Remove oldest value
+
+            # Update import/export rate buffers with next forecast values
+            import_rate_buffer.insert(0, next_import_rate)
+            import_rate_buffer.pop()  # Remove oldest value
+            export_rate_buffer.insert(0, next_export_rate)
+            export_rate_buffer.pop()  # Remove oldest value
 
         # Convert to cumulative kWh format (incrementing into future)
         # Format matches fetch_extra_load_forecast output

@@ -586,14 +586,12 @@ def test_minute_data_load(my_predbat):
     try:
         load_minutes, age_days = my_predbat.minute_data_load(now_utc=now, entity_name="test_missing_entity", max_days_previous=1, load_scaling=1.0, required_unit="kWh", interpolate=False)
         # Should raise TypeError when entity_ids is None
-        print("ERROR: Missing entity test failed - expected TypeError but got no exception")
-        failed = True
-    except TypeError as e:
-        if "'NoneType' object is not iterable" in str(e):
-            print("SUCCESS: Missing entity handled correctly (raised TypeError as expected)")
-        else:
-            print(f"ERROR: Missing entity test failed - unexpected TypeError: {e}")
+        if load_minutes != {}:
+            print("ERROR: Missing entity test failed - expected empty dict, got data")
             failed = True
+    except TypeError as e:
+        print(f"ERROR: Missing entity test failed - unexpected TypeError: {e}")
+        failed = True
 
     # Test 4: History fetch returns None (error condition)
     print("Test 4: History fetch returns None (error)")

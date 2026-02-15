@@ -562,9 +562,16 @@ class Fetch:
         """
         Download one or more entities for load data
         """
-        entity_ids = self.get_arg(entity_name, indirect=False)
+        if "." not in entity_name:
+            entity_ids = self.get_arg(entity_name, indirect=False)
+        else:
+            entity_ids = entity_name
+
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
+        if entity_ids is None:
+            self.log("Error: No entity IDs provided for {}".format(entity_name))
+            entity_ids = []
 
         load_minutes = {}
         age_days = None

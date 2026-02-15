@@ -23,6 +23,7 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 - Learns daily and weekly patterns automatically
 - Supports historical PV generation data as an input feature
 - Supports temperature forecast data for improved accuracy
+- Uses historical and future energy rates as an input feature
 - Automatically trains on historical data (requires at least 1 day, recommended 7+ days)
 - Fine-tunes periodically to adapt to changing patterns
 - Model persists across restarts

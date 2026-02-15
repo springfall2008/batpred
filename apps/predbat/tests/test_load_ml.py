@@ -434,10 +434,10 @@ def _test_dataset_with_pv():
     assert X_train is not None, "Training X should not be None"
     assert X_train.shape[0] > 0, "Training should have samples"
 
-    # Feature dimension should include PV features: LOOKBACK_STEPS (load) + LOOKBACK_STEPS (PV) + LOOKBACK_STEPS (temp) + 4 (time) = TOTAL_FEATURES
-    from load_predictor import NUM_LOAD_FEATURES, NUM_PV_FEATURES, NUM_TEMP_FEATURES, NUM_TIME_FEATURES
+    # Feature dimension should include PV features: load + PV + temp + import_rates + export_rates + time = TOTAL_FEATURES
+    from load_predictor import NUM_LOAD_FEATURES, NUM_PV_FEATURES, NUM_TEMP_FEATURES, NUM_IMPORT_RATE_FEATURES, NUM_EXPORT_RATE_FEATURES, NUM_TIME_FEATURES
 
-    expected_features = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_TIME_FEATURES
+    expected_features = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES + NUM_EXPORT_RATE_FEATURES + NUM_TIME_FEATURES
     assert X_train.shape[1] == expected_features, f"Expected {expected_features} features with PV, got {X_train.shape[1]}"
     assert X_train.shape[1] == TOTAL_FEATURES, f"TOTAL_FEATURES should be {expected_features}, is {TOTAL_FEATURES}"
 
@@ -450,6 +450,12 @@ def _test_dataset_with_pv():
     # Temperature features should be all zeros since we didn't provide temp_minutes
     temp_feature_section = X_train[:, NUM_LOAD_FEATURES + NUM_PV_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES]
     assert np.all(temp_feature_section == 0), "Temperature features should be zero when no temp data provided"
+
+    # Import/export rate features should be all zeros since we didn't provide rate data
+    import_rate_section = X_train[:, NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES]
+    export_rate_section = X_train[:, NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES + NUM_EXPORT_RATE_FEATURES]
+    assert np.all(import_rate_section == 0), "Import rate features should be zero when no rate data provided"
+    assert np.all(export_rate_section == 0), "Export rate features should be zero when no rate data provided"
 
 
 def _test_dataset_with_temp():
@@ -470,9 +476,9 @@ def _test_dataset_with_temp():
     assert X_train.shape[0] > 0, "Training should have samples"
 
     # Feature dimension should include temperature features
-    from load_predictor import NUM_LOAD_FEATURES, NUM_PV_FEATURES, NUM_TEMP_FEATURES, NUM_TIME_FEATURES
+    from load_predictor import NUM_LOAD_FEATURES, NUM_PV_FEATURES, NUM_TEMP_FEATURES, NUM_IMPORT_RATE_FEATURES, NUM_EXPORT_RATE_FEATURES, NUM_TIME_FEATURES
 
-    expected_features = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_TIME_FEATURES
+    expected_features = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES + NUM_EXPORT_RATE_FEATURES + NUM_TIME_FEATURES
     assert X_train.shape[1] == expected_features, f"Expected {expected_features} features with temp, got {X_train.shape[1]}"
     assert X_train.shape[1] == TOTAL_FEATURES, f"TOTAL_FEATURES should be {expected_features}, is {TOTAL_FEATURES}"
 
@@ -488,6 +494,12 @@ def _test_dataset_with_temp():
     # PV features should be all zeros since we didn't provide pv_minutes
     pv_feature_section = X_train[:, NUM_LOAD_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES]
     assert np.all(pv_feature_section == 0), "PV features should be zero when no PV data provided"
+
+    # Import/export rate features should be all zeros since we didn't provide rate data
+    import_rate_section = X_train[:, NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES]
+    export_rate_section = X_train[:, NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES : NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES + NUM_EXPORT_RATE_FEATURES]
+    assert np.all(import_rate_section == 0), "Import rate features should be zero when no rate data provided"
+    assert np.all(export_rate_section == 0), "Export rate features should be zero when no rate data provided"
 
 
 def _test_normalization():
@@ -782,21 +794,31 @@ def _test_real_data_training():
     load_data = None
     pv_data = None
     temp_data = None
+    import_rates_data = None
+    export_rates_data = None
 
     for json_path in input_train_paths:
         if os.path.exists(json_path):
             with open(json_path, "r") as f:
                 train_data = json.load(f)
-            # Format: [load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data]
+            # Format: [load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates, export_rates]
             if len(train_data) >= 5:
                 # Convert string keys to integers
                 load_data = {int(k): float(v) for k, v in train_data[0].items()}
                 pv_data = {int(k): float(v) for k, v in train_data[3].items()} if train_data[3] else {}
                 temp_data = {int(k): float(v) for k, v in train_data[4].items()} if train_data[4] else {}
+                # Load import/export rates if available (elements 5 and 6)
+                if len(train_data) >= 7:
+                    import_rates_data = {int(k): float(v) for k, v in train_data[5].items()} if train_data[5] else {}
+                    export_rates_data = {int(k): float(v) for k, v in train_data[6].items()} if train_data[6] else {}
                 print(f"  Loaded training data from {json_path}")
                 print(f"    Load: {len(load_data)} datapoints")
                 print(f"    PV: {len(pv_data)} datapoints")
                 print(f"    Temperature: {len(temp_data)} datapoints")
+                if import_rates_data is not None:
+                    print(f"    Import rates: {len(import_rates_data)} datapoints")
+                if export_rates_data is not None:
+                    print(f"    Export rates: {len(export_rates_data)} datapoints")
                 break
 
     if load_data is None:
@@ -826,15 +848,17 @@ def _test_real_data_training():
 
     # Train on full dataset with more epochs for larger network
     data_source = "real" if (pv_data and len(pv_data) > 100 and temp_data and len(temp_data) > 100) else "synthetic"
-    print(f"  Training on real load + {data_source} PV/temperature with {len(load_data)} points...")
-    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, is_initial=True, epochs=50, time_decay_days=7)
+    has_rates = import_rates_data and export_rates_data and len(import_rates_data) > 0 and len(export_rates_data) > 0
+    rates_info = " + import/export rates" if has_rates else ""
+    print(f"  Training on real load + {data_source} PV/temperature{rates_info} with {len(load_data)} points...")
+    success = predictor.train(load_data, now_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data, is_initial=True, epochs=50, time_decay_days=7)
 
     assert success, "Training on real data should succeed"
     assert predictor.model_initialized, "Model should be initialized after training"
 
     # Make predictions
-    print("  Generating predictions with PV + temperature forecasts...")
-    predictions = predictor.predict(load_data, now_utc, midnight_utc, pv_minutes=pv_data, temp_minutes=temp_data)
+    print(f"  Generating predictions with PV + temperature{rates_info} forecasts...")
+    predictions = predictor.predict(load_data, now_utc, midnight_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data)
 
     assert isinstance(predictions, dict), "Predictions should be a dict"
     assert len(predictions) > 0, "Should have predictions"
@@ -900,15 +924,51 @@ def _test_real_data_training():
             shifted_pv_data = {}
             for minute, cum_kwh in pv_data.items():
                 if minute >= val_holdout_minutes:
+                    # Shift historical data back by 24h
                     shifted_pv_data[minute - val_holdout_minutes] = cum_kwh
+                elif minute < 0:
+                    # Keep future forecast data (negative minutes) as-is
+                    shifted_pv_data[minute] = cum_kwh
 
             # Create shifted temperature data for validation prediction
             shifted_temp_data = {}
             for minute, temp in temp_data.items():
                 if minute >= val_holdout_minutes:
+                    # Shift historical data back by 24h
                     shifted_temp_data[minute - val_holdout_minutes] = temp
+                elif minute < 0:
+                    # Keep future forecast data (negative minutes) as-is
+                    shifted_temp_data[minute] = temp
 
-            val_predictions = predictor.predict(shifted_load_data, shifted_now, shifted_midnight, pv_minutes=shifted_pv_data, temp_minutes=shifted_temp_data)
+            # Create shifted import/export rate data for validation prediction
+            shifted_import_rates = {}
+            shifted_export_rates = {}
+            if import_rates_data:
+                for minute, rate in import_rates_data.items():
+                    if minute >= val_holdout_minutes:
+                        # Shift historical data back by 24h
+                        shifted_import_rates[minute - val_holdout_minutes] = rate
+                    elif minute < 0:
+                        # Keep future forecast data (negative minutes) as-is
+                        shifted_import_rates[minute] = rate
+            if export_rates_data:
+                for minute, rate in export_rates_data.items():
+                    if minute >= val_holdout_minutes:
+                        # Shift historical data back by 24h
+                        shifted_export_rates[minute - val_holdout_minutes] = rate
+                    elif minute < 0:
+                        # Keep future forecast data (negative minutes) as-is
+                        shifted_export_rates[minute] = rate
+
+            val_predictions = predictor.predict(
+                shifted_load_data,
+                shifted_now,
+                shifted_midnight,
+                pv_minutes=shifted_pv_data,
+                temp_minutes=shifted_temp_data,
+                import_rates=shifted_import_rates if shifted_import_rates else None,
+                export_rates=shifted_export_rates if shifted_export_rates else None,
+            )
 
             # Extract first 24h of validation predictions
             val_pred_keys = sorted(val_predictions.keys())
@@ -1124,6 +1184,10 @@ def _test_component_fetch_load_data():
             """Mock fetch_pv_forecast - returns empty forecasts"""
             return {}, {}
 
+        def minute_data_import_export(self, days, now_utc, entity, scale=1.0, increment=False, smoothing=False, required_unit=None):
+            """Mock minute_data_import_export - returns empty dict"""
+            return {}
+
     # Create synthetic load data (28 days worth)
     def create_load_minutes(days=28, all_minutes=False):
         """
@@ -1171,7 +1235,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
         assert result_data is not None, "Should return load data"
         assert result_age == 28, f"Expected 28 days, got {result_age}"
@@ -1208,7 +1272,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
         assert result_data is None, "Should return None when sensor missing"
         assert result_age == 0, "Age should be 0 when sensor missing"
@@ -1252,7 +1316,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
         assert result_data is not None, f"Should return load data"
         assert result_age > 0, f"Should have valid age (got {result_age})"
@@ -1302,7 +1366,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
         assert result_data is not None, "Should return load data"
         assert mock_base_with_power.fill_load_from_power.called, "fill_load_from_power should be called"
@@ -1325,7 +1389,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
         assert result_data is None, "Should return None on exception"
         assert result_age == 0, "Age should be 0 on exception"
@@ -1349,7 +1413,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
         assert result_data is None, "Should return None when load data is empty"
         assert result_age == 0, "Age should be 0 when load data is empty"
@@ -1396,7 +1460,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
         assert result_data is not None, "Should return load data"
         assert result_temp is not None, "Should return temperature data"
@@ -1434,7 +1498,7 @@ def _test_component_fetch_load_data():
         component.ml_max_load_kw = 23.0
         component.ml_max_model_age_hours = 48
 
-        result_data, result_age, result_now, result_pv, result_temp = await component._fetch_load_data()
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
 
         assert result_data is not None, "Should return load data"
         assert result_temp is not None, "Should return temperature data (empty dict)"
