@@ -131,7 +131,8 @@ class LoadMLComponent(ComponentBase):
         Fetch and process load data from configured sensors.
 
         Returns:
-            Tuple of (load_minutes_dict, age_days, load_minutes_now, pv_data) or (None, 0, 0, None) on failure
+            Tuple of (load_minutes_dict, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data)
+            or (None, 0, 0, None, None, None, None) on failure
         """
         if not self.ml_load_sensor:
             return None, 0, 0, None, None, None, None
