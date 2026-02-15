@@ -56,8 +56,8 @@ class LoadMLComponent(ComponentBase):
         self.car_charging_rate = float(self.get_arg("car_charging_rate", 7.5)) / 60.0
 
         self.ml_learning_rate = 0.001
-        self.ml_epochs_initial = 50
-        self.ml_epochs_update = 2
+        self.ml_epochs_initial = 100
+        self.ml_epochs_update = 5
         self.ml_min_days = 1
         self.ml_validation_threshold = 2.0
         self.ml_time_decay_days = 7
@@ -69,6 +69,8 @@ class LoadMLComponent(ComponentBase):
         self.load_data_age_days = 0
         self.pv_data = None
         self.temperature_data = None
+        self.import_rates_data = None
+        self.export_rates_data = None
         self.data_ready = False
         self.data_lock = asyncio.Lock()
         self.last_data_fetch = None
@@ -132,7 +134,7 @@ class LoadMLComponent(ComponentBase):
             Tuple of (load_minutes_dict, age_days, load_minutes_now, pv_data) or (None, 0, 0, None) on failure
         """
         if not self.ml_load_sensor:
-            return None, 0, 0, None, None
+            return None, 0, 0, None, None, None, None
 
         try:
             # Determine how many days of history to fetch, up to 7 days back
@@ -144,7 +146,7 @@ class LoadMLComponent(ComponentBase):
             load_minutes, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_today", days_to_fetch, required_unit="kWh", load_scaling=self.get_arg("load_scaling", 1.0), interpolate=True)
             if not load_minutes:
                 self.log("Warn: ML Component: Failed to convert load history to minute data")
-                return None, 0, 0, None, None
+                return None, 0, 0, None, None, None, None
 
             if self.get_arg("load_power", default=None, indirect=False):
                 load_power_data, _ = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
@@ -220,16 +222,70 @@ class LoadMLComponent(ComponentBase):
                 )
                 self.log("ML Temperature data points: {}".format(len(temperature_data)))
 
+            # Import and export prices
+            import_entity = self.prefix + ".rates"
+            export_entity = self.prefix + ".rates_export"
+            import_rates_future = self.get_state_wrapper(import_entity, attribute="results")
+            import_rates_data = {}
+            if import_rates_future:
+                data_array = []
+                for key, value in import_rates_future.items():
+                    data_array.append({"state": value, "last_updated": key})
+                import_rates_data, _ = minute_data(
+                    data_array,
+                    days_to_fetch,
+                    self.now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    clean_increment=False,
+                    smoothing=False,
+                    divide_by=1.0,
+                    scale=1.0,
+                )
+            export_rates_future = self.get_state_wrapper(export_entity, attribute="results")
+            export_rates_data = {}
+            if export_rates_future:
+                data_array = []
+                for key, value in export_rates_future.items():
+                    data_array.append({"state": value, "last_updated": key})
+                export_rates_data, _ = minute_data(
+                    data_array,
+                    days_to_fetch,
+                    self.now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    clean_increment=False,
+                    smoothing=False,
+                    divide_by=1.0,
+                    scale=1.0,
+                )
+            import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False)
+            export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False)
+
+            # Merge import_rates_history with import_rates_data
+            if import_rates_history is None:
+                import_rates_history = {}
+            if export_rates_history is None:
+                export_rates_history = {}
+
+            for minute in range(0, int(days_to_fetch * 24 * 60), PREDICT_STEP):
+                # Note we offset by 2 minutes to allow predbat to have published the rate for this period
+                value = import_rates_history.get(minute + 2, None)
+                if value is not None and minute not in import_rates_data:
+                    import_rates_data[minute] = value
+                value = export_rates_history.get(minute + 2, None)
+                if value is not None and minute not in export_rates_data:
+                    export_rates_data[minute] = value
+
             self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), age_days))
-            # with open("input_train_data.json", "w") as f:
-            #    import json
-            #    json.dump([load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data], f, indent=2)
-            return load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data
+            return load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data
 
         except Exception as e:
             self.log("Error: ML Component: Failed to fetch load data: {}".format(e))
             self.log("Error: ML Component: {}".format(traceback.format_exc()))
-            return None, 0, 0, None, None
+            return None, 0, 0, None, None, None, None
 
     def get_current_prediction(self):
         """
@@ -267,7 +323,7 @@ class LoadMLComponent(ComponentBase):
 
         # Generate predictions using current model
         try:
-            predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, exog_features=exog_features)
+            predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, import_rates=self.import_rates_data, export_rates=self.export_rates_data, exog_features=exog_features)
 
             if predictions:
                 self.current_predictions = predictions
@@ -299,7 +355,7 @@ class LoadMLComponent(ComponentBase):
 
         if should_fetch:
             async with self.data_lock:
-                load_data, age_days, load_minutes_now, pv_data, temperature_data = await self._fetch_load_data()
+                load_data, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data = await self._fetch_load_data()
                 if load_data:
                     self.load_data = load_data
                     self.load_data_age_days = age_days
@@ -318,6 +374,8 @@ class LoadMLComponent(ComponentBase):
                             current_value += pv_forecast_minute.get(minute, current_value)
                             pv_data[-minute + self.minutes_now] = current_value
                     self.temperature_data = temperature_data
+                    self.import_rates_data = import_rates_data
+                    self.export_rates_data = export_rates_data
                 else:
                     self.log("Warn: ML Component: Failed to fetch load data")
 
@@ -385,7 +443,17 @@ class LoadMLComponent(ComponentBase):
                 # Run training in executor to avoid blocking
                 epochs = self.ml_epochs_initial if is_initial else self.ml_epochs_update
 
-                val_mae = self.predictor.train(self.load_data, self.now_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, is_initial=is_initial, epochs=epochs, time_decay_days=self.ml_time_decay_days)
+                val_mae = self.predictor.train(
+                    self.load_data,
+                    self.now_utc,
+                    pv_minutes=self.pv_data,
+                    temp_minutes=self.temperature_data,
+                    import_rates=self.import_rates_data,
+                    export_rates=self.export_rates_data,
+                    is_initial=is_initial,
+                    epochs=epochs,
+                    time_decay_days=self.ml_time_decay_days,
+                )
 
                 if val_mae is not None:
                     self.last_train_time = datetime.now(timezone.utc)
