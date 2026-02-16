@@ -1675,7 +1675,7 @@ class Fetch:
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
 
-        self.log("Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(self.rate_import_cost_threshold, curr, self.rate_low_threshold, curr, self.rate_export_cost_threshold, curr, self.rate_high_threshold, curr))
+        self.log("Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(dp2(self.rate_import_cost_threshold), curr, dp2(self.rate_low_threshold), curr, dp2(self.rate_export_cost_threshold), curr, dp2(self.rate_high_threshold), curr))
 
     def rate_scan(self, rates, print=True):
         """
