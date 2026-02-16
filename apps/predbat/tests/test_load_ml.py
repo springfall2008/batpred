@@ -13,6 +13,7 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 import tempfile
 import os
+from dateutil import parser
 
 from load_predictor import LoadPredictor, OUTPUT_STEPS, HIDDEN_SIZES, TOTAL_FEATURES, STEP_MINUTES, relu, relu_derivative, huber_loss
 
@@ -1186,8 +1187,6 @@ def _test_pretrained_model_prediction():
                 export_rates_data = {int(k): float(v) for k, v in train_data["export_rates"].items()} if train_data.get("export_rates") else {}
                 # Load timestamps
                 if "now_utc" in train_data:
-                    from dateutil import parser
-
                     now_utc = parser.parse(train_data["now_utc"])
                     midnight_utc = parser.parse(train_data["midnight_utc"])
                     minutes_now = train_data["minutes_now"]

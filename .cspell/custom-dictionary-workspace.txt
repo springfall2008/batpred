@@ -64,6 +64,7 @@ datalog
 datap
 datapoints
 datas
+dateutil
 dayname
 daynumber
 daysymbol
