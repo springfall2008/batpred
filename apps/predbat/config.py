@@ -596,7 +596,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_hold",
         "friendly_name": "Car charging hold",
         "type": "switch",
-        "default": True,
+        "default": False,
     },
     {
         "name": "car_charging_manual_soc",

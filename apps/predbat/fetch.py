@@ -2197,7 +2197,7 @@ class Fetch:
         self.iboost_plan = []
 
         # Car options
-        self.car_charging_hold = self.get_arg("car_charging_hold")
+        self.car_charging_hold = self.get_arg("car_charging_hold", False)
         self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
         for car_n in range(self.num_cars):
             car_postfix = "" if car_n == 0 else "_" + str(car_n)

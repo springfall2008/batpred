@@ -50,7 +50,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_load_power_sensor = self.get_arg("load_power", default=[], indirect=False)
         self.ml_pv_sensor = self.get_arg("pv_today", default=[], indirect=False)
         self.ml_subtract_sensors = self.get_arg("car_charging_energy", default=[], indirect=False)
-        self.car_charging_hold = self.get_arg("car_charging_hold", True)
+        self.car_charging_hold = self.get_arg("car_charging_hold", False)
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
         self.car_charging_rate = float(self.get_arg("car_charging_rate", 7.5)) / 60.0
@@ -163,15 +163,20 @@ class LoadMLComponent(ComponentBase):
 
             # Subtract configured sensors (e.g., car charging)
             total_load_energy = 0
-            car_delta = 0.0
             STEP = PREDICT_STEP
+
+            has_cars = int(self.get_arg("num_cars", 0)) >= 0
+
             for minute in range(max_minute, -STEP, -STEP):
-                if self.car_charging_hold and car_charging_energy:
-                    car_delta = abs(car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - STEP, car_charging_energy.get(minute, 0.0)))
-                elif self.car_charging_hold:
-                    load_now = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
-                    if load_now >= self.car_charging_threshold * STEP:
-                        car_delta = self.car_charging_rate * STEP
+                car_delta = 0.0
+                if has_cars:
+                    if self.car_charging_hold and car_charging_energy:
+                        car_delta = abs(car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - STEP, car_charging_energy.get(minute, 0.0)))
+                    elif self.car_charging_hold:
+                        load_now = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
+                        if load_now >= self.car_charging_threshold * STEP:
+                            car_delta = self.car_charging_rate * STEP
+
                 if car_delta > 0:
                     # When car is enable spread over 5 minutes due to alignment between car and house load data
                     load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
