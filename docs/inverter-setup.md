@@ -1221,7 +1221,7 @@ increase the delay in the LuxPower Freeze Predbat Override automation.
 
 To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to follow the steps below:
 
-- make sure the inverter is already integrated into Home Assistant. Here is a ([repo](https://github.com/TypQxQ/Sigenergy-Local-Modbus)) with full integration (this is the Python version of the Sigenergy Home Assistant integration).
+- make sure the inverter is already integrated into Home Assistant. The Predbat configuration has been developed with the [SigEnergy local modbus](https://github.com/TypQxQ/Sigenergy-Local-Modbus) integration (the Python version of the Sigenergy HA integration).
 - Copy the template [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) template over your `apps.yaml`, and edit for your system.
 
 - All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
@@ -1383,7 +1383,7 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         entity_id: number.sigen_plant_ess_max_charging_limit
       data:
         value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
-          states(''sensor.sigen_inverter_ess_rated_charge_power'') | float] | min}}'
+          states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
     mode: single
 
 - id: automation_sigen_ess_max_discharging_limit_input_number_action
@@ -1398,9 +1398,15 @@ Add the following automations to `automations.yaml` (or configure via the UI):
       entity_id: number.sigen_plant_ess_max_discharging_limit
     data:
       value: '{{ [(states(''input_number.discharge_rate'') | float / 1000) | round(2),
-        states(''sensor.sigen_inverter_ess_rated_discharge_power'') | float] | min}}'
+        states(''sensor.sigen_inverter_ess_rated_discharging_power'') | float] | min}}'
   mode: single
 ```
+
+*Note:* Some Sigenergy Predbat users have reported that their installation has some of the entity that Predbat requires with different names so you may need to adapt the script and apps.yaml (or rename your entities) to match:
+
+- sensor.sigen_inverter_ess_rated_discharging_power is instead named sensor.sigen_inverter_ess_rated_discharge_power
+- sensor.sigen_inverter_ess_rated_charging_power is sensor.sigen_inverter_ess_rated_charge_power
+- sensor.sigen_plant_daily_consumed_energy is sensor.sigen_plant_daily_load_consumption
 
 ## Sofar Inverters
 
