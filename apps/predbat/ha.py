@@ -20,6 +20,7 @@ import time
 from utils import str2time
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
+from copy import deepcopy
 
 
 class RunThread(threading.Thread):
@@ -69,8 +70,10 @@ class HAHistory(ComponentBase):
         """
         Get history data for an entity
         """
+        result = None
+
         if self.history_data.get(entity_id, None) and self.history_entities.get(entity_id, 0) >= days:
-            return [self.history_data[entity_id]]
+            result = [self.history_data[entity_id]]
         else:
             ha_interface = self.base.components.get_component("ha")
             if not ha_interface:
@@ -84,8 +87,9 @@ class HAHistory(ComponentBase):
                 history_data = history_data[0]
                 if tracked:
                     self.update_entity(entity_id, history_data)
-                return [history_data]
-        return None
+                result = [history_data]
+        
+        return deepcopy(result)
 
     def prune_history(self, now):
         """
@@ -128,17 +132,22 @@ class HAHistory(ComponentBase):
                 entry.pop(entry_attr, None)
 
         current_history_data = self.history_data.get(entity_id, None)
-        last_updated = current_history_data[-1].get("last_updated", None) if current_history_data and len(current_history_data) > 0 else None
-        count_added = 0
+        if current_history_data and len(current_history_data) > 0:
+            first_updated = current_history_data[0].get("last_updated", None)
+            last_updated = current_history_data[-1].get("last_updated", None)
+        else:
+            first_updated = None
+            last_updated = None
+        
         if last_updated:
             # Find the last timestamp in the previous history data, data is always in order from oldest to newest
+            first_timestamp = str2time(first_updated)
             last_timestamp = str2time(last_updated)
             # Scan new data, using the timestamp only add new entries
             add_all = False
             for entry in new_history_data:
                 if add_all:
                     self.history_data[entity_id].append(entry)
-                    count_added += 1
                 else:
                     this_updated = entry.get("last_updated", None)
                     if this_updated:
@@ -146,9 +155,11 @@ class HAHistory(ComponentBase):
                         if entry_time > last_timestamp:
                             self.history_data[entity_id].append(entry)
                             add_all = True  # Remaining entries are all newer
-                            count_added += 1
+                        elif entry_time < first_timestamp:
+                            self.history_data[entity_id].append(entry)
+            
+            self.history_data[entity_id].sort(key=lambda x: x.get("last_updated"))
         else:
-            count_added += len(new_history_data)
             self.history_data[entity_id] = new_history_data
 
         # Update last success timestamp
