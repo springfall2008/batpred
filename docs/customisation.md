@@ -138,9 +138,8 @@ This setting will not impact the real calculated costs and is only used for plan
 
 ## Scaling and weight options
 
-**switch.predbat_metric_dynamic_load_adjust** is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
-If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, this preventing
-and type of forced export in the plan.
+**switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
+If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
 If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this slot thus allowing the plan to include potential export.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.

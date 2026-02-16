@@ -154,6 +154,8 @@ to multiply the **car_charging_energy** sensor data by if required (e.g. set to 
 - **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
 and **input_number.predbat_car_charging_rate** will be subtracted from the historical load data.
 
+- **switch.predbat_metric_dynamic_load_adjust** (default False) - If turned off then Predbat won't export during times the car is planned to charge even if the car is not charging.
+
 ## Example EV and charger setup
 
 Sample setup and Predbat automation to use the cheapest charging slots with no/limited Home Assistant Integration.
