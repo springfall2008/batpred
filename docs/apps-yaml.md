@@ -256,14 +256,19 @@ A list of device names to notify when Predbat sends a notification. The default 
 
 Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
 days_previous defines a list (which has to be entered as one entry per line) of the previous days of historical house load that are to be used to predict your future daily load.<BR>
-It's recommended that you set days_previous so Predbat calculates an average house load using sufficient days' history so that 'unusual' load activity
-(e.g. saving sessions, "big washing day", etc) get averaged out.
+It's recommended that you set days_previous so Predbat calculates an average house load using multiple days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.
 
-For example, if you just want Predbat to assume the house load on a particular day is the same as the same day of last week:
+For example, if you want Predbat to average house load for the past week:
 
 ```yaml
   days_previous:
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
     - 7
+    - 8
 ```
 
 Or if you want Predbat to take the average of the same day for the last two weeks:
@@ -272,6 +277,13 @@ Or if you want Predbat to take the average of the same day for the last two week
   days_previous:
     - 7
     - 14
+```
+
+ Or to just assume that house load on a particular day is the same as the same day of last week (not recommended):
+
+```yaml
+  days_previous:
+    - 7
 ```
 
 Further details and worked examples of [how days_previous works](#understanding-how-days_previous-works) are covered at the end of this document.
