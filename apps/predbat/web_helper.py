@@ -6518,18 +6518,7 @@ def get_plan_renderer_js():
 
     // Render time cell (simple, no highlighting - that's moved to state column)
     function renderTimeCell(timeStr, timeDisplay, overrides) {
-        // Just render a simple time cell without dropdown or highlighting
-        let html = '<td bgcolor=#FFFFFF>';
-        html += timeDisplay;
-        html += '</td>';
-        return html;
-    }
-
-    // Render state cell with dropdown for charge/export overrides
-    function renderStateCell(row, timeDisplay, overrides) {
-        const cellStyle = 'style="padding: 4px;"';
         const dropdownId = `dropdown_${dropdownCounter++}`;
-        const timeStr = row.time;
         const minutesFromMidnight = getMinutesFromTimeString(timeStr);
 
         const manualTimes = overrides.manual_charge_times.concat(
@@ -6538,6 +6527,62 @@ def get_plan_renderer_js():
             overrides.manual_freeze_export_times,
             overrides.manual_demand_times
         );
+
+        // Determine highlight color based on override type
+        let bgColor = '#FFFFFF';
+        let overrideClass = '';
+
+        if (overrides.manual_charge_times.includes(minutesFromMidnight)) {
+            bgColor = '#D0F0D0';  // Light green hint
+            overrideClass = 'override-charge';
+        } else if (overrides.manual_export_times.includes(minutesFromMidnight)) {
+            bgColor = '#FFFFE0';  // Light yellow hint
+            overrideClass = 'override-export';
+        } else if (overrides.manual_demand_times.includes(minutesFromMidnight)) {
+            bgColor = '#FFE0E0';  // Light red hint
+            overrideClass = 'override-demand';
+        } else if (overrides.manual_freeze_charge_times.includes(minutesFromMidnight)) {
+            bgColor = '#E8E8E8';  // Light gray hint
+            overrideClass = 'override-freeze-charge';
+        } else if (overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
+            bgColor = '#D8D8D8';  // Darker gray hint
+            overrideClass = 'override-freeze-export';
+        }
+
+        let html = `<td bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell ${overrideClass}">`;
+        html += timeDisplay;
+        html += '<div class="dropdown">';
+        html += `<div id="${dropdownId}" class="dropdown-content">`;
+
+        // Add dropdown options
+        if (manualTimes.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Clear')">Clear</a>`;
+        }
+        if (!overrides.manual_demand_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Demand')">Manual Demand</a>`;
+        }
+        if (!overrides.manual_charge_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Charge')">Manual Charge</a>`;
+        }
+        if (!overrides.manual_export_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Export')">Manual Export</a>`;
+        }
+        if (!overrides.manual_freeze_charge_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Charge')">Manual Freeze Charge</a>`;
+        }
+        if (!overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
+            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Export')">Manual Freeze Export</a>`;
+        }
+
+        html += '</div></div></td>';
+        return html;
+    }
+
+    // Render state cell without dropdown (dropdown moved to time column)
+    function renderStateCell(row, timeDisplay, overrides) {
+        const cellStyle = 'style="padding: 4px;"';
+        const timeStr = row.time;
+        const minutesFromMidnight = getMinutesFromTimeString(timeStr);
 
         // Determine background color based on override type (prioritize manual overrides over default state color)
         let bgColor = row.state_color || '#FFFFFF';
@@ -6563,32 +6608,9 @@ def get_plan_renderer_js():
         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
         const colspanAttr = row.split ? '' : ' colspan=2';
 
-        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor} onclick="toggleForceDropdown('${dropdownId}')" class="clickable-time-cell ${overrideClass}">`;
+        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor} class="${overrideClass}">`;
         html += row.state_text || '';
-        html += '<div class="dropdown">';
-        html += `<div id="${dropdownId}" class="dropdown-content">`;
-
-        // Add dropdown options
-        if (manualTimes.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Clear')">Clear</a>`;
-        }
-        if (!overrides.manual_demand_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Demand')">Manual Demand</a>`;
-        }
-        if (!overrides.manual_charge_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Charge')">Manual Charge</a>`;
-        }
-        if (!overrides.manual_export_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Export')">Manual Export</a>`;
-        }
-        if (!overrides.manual_freeze_charge_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Charge')">Manual Freeze Charge</a>`;
-        }
-        if (!overrides.manual_freeze_export_times.includes(minutesFromMidnight)) {
-            html += `<a onclick="handleTimeOverride('${timeDisplay}', 'Manual Freeze Export')">Manual Freeze Export</a>`;
-        }
-
-        html += '</div></div></td>';
+        html += '</td>';
 
         // Second state cell if split
         if (row.split && row.state2_text) {

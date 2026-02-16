@@ -64,6 +64,7 @@ datalog
 datap
 datapoints
 datas
+dateutil
 dayname
 daynumber
 daysymbol
@@ -225,6 +226,7 @@ nord
 Nordpool
 nosc
 nrgheat
+numpy
 octo
 octoplus
 octopoints

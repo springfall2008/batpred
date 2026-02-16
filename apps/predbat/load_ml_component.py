@@ -57,7 +57,7 @@ class LoadMLComponent(ComponentBase):
 
         self.ml_learning_rate = 0.001
         self.ml_epochs_initial = 100
-        self.ml_epochs_update = 5
+        self.ml_epochs_update = 3
         self.ml_min_days = 1
         self.ml_validation_threshold = 2.0
         self.ml_time_decay_days = 7
@@ -198,6 +198,17 @@ class LoadMLComponent(ComponentBase):
             else:
                 pv_data = {}
 
+            pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
+            # PV Data has the historical PV data (minute is the number of minutes in the past)
+            # PV forecast has the predicted PV generation for the next 24 hours (minute is the number of minutes from midnight forward
+            # Combine the two into a new dict where negative minutes are in the future and positive in the past
+            current_value = pv_data.get(0, 0)
+            if pv_forecast_minute:
+                max_minute = max(pv_forecast_minute.keys()) + PREDICT_STEP
+                for minute in range(self.minutes_now + PREDICT_STEP, max_minute, PREDICT_STEP):
+                    current_value += pv_forecast_minute.get(minute, 0.0)  # Add 0 if missing, not current_value
+                    pv_data[-minute + self.minutes_now] = current_value
+
             # Temperature predictions
             temp_entity = "sensor." + self.prefix + "_temperature"
             temperature_info = self.get_state_wrapper(temp_entity, attribute="results")
@@ -281,6 +292,26 @@ class LoadMLComponent(ComponentBase):
                     export_rates_data[minute] = value
 
             self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), age_days))
+            if 0:
+                with open("ml_load_debug.json", "w") as f:
+                    import json
+
+                    json.dump(
+                        {
+                            "load_minutes": load_minutes_new,
+                            "age_days": age_days,
+                            "load_minutes_now": load_minutes_now,
+                            "pv_data": pv_data,
+                            "temperature_data": temperature_data,
+                            "import_rates": import_rates_data,
+                            "export_rates": export_rates_data,
+                            "now_utc": self.now_utc.isoformat(),
+                            "midnight_utc": self.midnight_utc.isoformat(),
+                            "minutes_now": self.minutes_now,
+                        },
+                        f,
+                        indent=2,
+                    )
             return load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data
 
         except Exception as e:
@@ -361,22 +392,12 @@ class LoadMLComponent(ComponentBase):
                     self.load_data = load_data
                     self.load_data_age_days = age_days
                     self.load_minutes_now = load_minutes_now
-                    self.data_ready = True
-                    self.last_data_fetch = self.now_utc
-                    pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
-                    # PV Data has the historical PV data (minute is the number of minutes in the past)
-                    # PV forecast has the predicted PV generation for the next 24 hours (minute is the number of minutes from midnight forward
-                    # Combine the two into a new dict where negative minutes are in the future and positive in the past
                     self.pv_data = pv_data
-                    current_value = pv_data.get(0, 0)
-                    if pv_forecast_minute:
-                        max_minute = max(pv_forecast_minute.keys()) + PREDICT_STEP
-                        for minute in range(self.minutes_now + PREDICT_STEP, max_minute, PREDICT_STEP):
-                            current_value += pv_forecast_minute.get(minute, current_value)
-                            pv_data[-minute + self.minutes_now] = current_value
                     self.temperature_data = temperature_data
                     self.import_rates_data = import_rates_data
                     self.export_rates_data = export_rates_data
+                    self.last_data_fetch = self.now_utc
+                    self.data_ready = True
                 else:
                     self.log("Warn: ML Component: Failed to fetch load data")
 
