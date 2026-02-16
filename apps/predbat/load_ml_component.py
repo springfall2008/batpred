@@ -149,7 +149,7 @@ class LoadMLComponent(ComponentBase):
                 self.log("Warn: ML Component: Failed to convert load history to minute data")
                 return None, 0, 0, None, None, None, None
 
-            if self.get_arg("load_power", default=None, indirect=False):
+            if self.get_arg("load_power", default=None, indirect=False) and self.get_arg("load_power_fill_enable", True):
                 load_power_data, _ = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
 
