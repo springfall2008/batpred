@@ -57,7 +57,7 @@ class LoadMLComponent(ComponentBase):
 
         self.ml_learning_rate = 0.001
         self.ml_epochs_initial = 100
-        self.ml_epochs_update = 5
+        self.ml_epochs_update = 3
         self.ml_min_days = 1
         self.ml_validation_threshold = 2.0
         self.ml_time_decay_days = 7

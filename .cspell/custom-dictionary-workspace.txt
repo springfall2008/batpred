@@ -225,6 +225,7 @@ nord
 Nordpool
 nosc
 nrgheat
+numpy
 octo
 octoplus
 octopoints

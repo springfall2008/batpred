@@ -1,7 +1,7 @@
-numpy==2.3.5
 aiohttp
 coverage
 matplotlib
+numpy==2.3.5
 pre-commit
 pyjwt
 pytz
