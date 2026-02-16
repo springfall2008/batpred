@@ -6430,7 +6430,7 @@ def get_plan_renderer_js():
                 // Cost change
                 const costChange = row.cost_change || 0;
                 let costStr = '';
-                if (costChange >= 0.1) {
+                if (costChange >= 0.005) {
                     costStr = `+${Math.round(costChange * 100)} ${jsonData.currency_symbols[1]} &nearr;`;
                 } else if (costChange <= -0.005) {
                     costStr = `-${Math.round(Math.abs(costChange) * 100)} ${jsonData.currency_symbols[1]} &searr;`;
