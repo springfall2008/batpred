@@ -54,6 +54,7 @@ def test_load_ml(my_predbat=None):
         ("prediction_with_pv", _test_prediction_with_pv, "Prediction with PV forecast data"),
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
         # ("real_data_training", _test_real_data_training, "Train on real load_minutes_debug.json data with chart"),
+        # ("pretrained_model_prediction", _test_pretrained_model_prediction, "Load pre-trained model and generate predictions with chart"),
         ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
         ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
     ]
@@ -1122,6 +1123,281 @@ def _test_real_data_training():
 
         # Save to coverage directory
         chart_paths = ["../coverage/ml_prediction_chart.png", "coverage/ml_prediction_chart.png", "ml_prediction_chart.png"]
+        for chart_path in chart_paths:
+            try:
+                plt.savefig(chart_path, dpi=150, bbox_inches="tight")
+                print(f"  Chart saved to {chart_path}")
+                break
+            except:
+                continue
+
+        plt.close()
+
+    except ImportError:
+        print("  WARNING: matplotlib not available, skipping chart generation")
+
+
+def _test_pretrained_model_prediction():
+    """
+    Test loading a pre-trained model and generating predictions with chart
+    """
+    import json
+    import os
+
+    # Try to find the saved model
+    model_paths = ["predbat_ml_model.npz"]
+
+    model_path = None
+    for path in model_paths:
+        if os.path.exists(path):
+            model_path = path
+            break
+
+    if model_path is None:
+        print("  WARNING: No saved model found, skipping pre-trained model test")
+        return
+
+    print(f"  Found saved model at {model_path}")
+
+    # Load the input_train_data.json for data to predict on
+    input_train_paths = ["ml_pretrained_debug.json"]
+
+    load_data = None
+    pv_data = None
+    temp_data = None
+    import_rates_data = None
+    export_rates_data = None
+    now_utc = None
+    midnight_utc = None
+    minutes_now = None
+
+    for json_path in input_train_paths:
+        if os.path.exists(json_path):
+            with open(json_path, "r") as f:
+                train_data = json.load(f)
+
+            # Check if new dict format (with timestamps) or old array format
+            if isinstance(train_data, dict):
+                # New format: dict with named keys including timestamps
+                load_data = {int(k): float(v) for k, v in train_data["load_minutes"].items()}
+                pv_data = {int(k): float(v) for k, v in train_data["pv_data"].items()} if train_data.get("pv_data") else {}
+                temp_data = {int(k): float(v) for k, v in train_data["temperature_data"].items()} if train_data.get("temperature_data") else {}
+                import_rates_data = {int(k): float(v) for k, v in train_data["import_rates"].items()} if train_data.get("import_rates") else {}
+                export_rates_data = {int(k): float(v) for k, v in train_data["export_rates"].items()} if train_data.get("export_rates") else {}
+                # Load timestamps
+                if "now_utc" in train_data:
+                    from dateutil import parser
+
+                    now_utc = parser.parse(train_data["now_utc"])
+                    midnight_utc = parser.parse(train_data["midnight_utc"])
+                    minutes_now = train_data["minutes_now"]
+                    print(f"  Using captured timestamp: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
+                    print(f"  Minutes since midnight: {minutes_now}")
+            else:
+                # Old format: [load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates, export_rates]
+                if len(train_data) >= 5:
+                    load_data = {int(k): float(v) for k, v in train_data[0].items()}
+                    pv_data = {int(k): float(v) for k, v in train_data[3].items()} if train_data[3] else {}
+                    temp_data = {int(k): float(v) for k, v in train_data[4].items()} if train_data[4] else {}
+                    if len(train_data) >= 7:
+                        import_rates_data = {int(k): float(v) for k, v in train_data[5].items()} if train_data[5] else {}
+                        export_rates_data = {int(k): float(v) for k, v in train_data[6].items()} if train_data[6] else {}
+
+            print(f"  Loaded data from {json_path}")
+            print(f"    Load: {len(load_data)} datapoints")
+            print(f"    PV: {len(pv_data)} datapoints")
+            print(f"    Temperature: {len(temp_data)} datapoints")
+            if import_rates_data is not None:
+                print(f"    Import rates: {len(import_rates_data)} datapoints")
+            if export_rates_data is not None:
+                print(f"    Export rates: {len(export_rates_data)} datapoints")
+            break
+
+    if load_data is None:
+        print("  WARNING: No data found, skipping pre-trained model test")
+        return
+
+    # Initialize predictor and load the model
+    predictor = LoadPredictor(learning_rate=0.0005, max_load_kw=20.0)
+
+    print(f"  Loading model from {model_path}...")
+    success = predictor.load(model_path)
+
+    if not success:
+        print("  WARNING: Failed to load model, skipping pre-trained model test")
+        return
+
+    assert predictor.model_initialized, "Model should be initialized after loading"
+    print(f"  Model loaded successfully")
+    print(f"    Validation MAE: {predictor.validation_mae:.4f} kWh")
+    print(f"    Epochs trained: {predictor.epochs_trained}")
+    print(f"    Training timestamp: {predictor.training_timestamp}")
+
+    # Use captured timestamps if available, otherwise use current time
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+        midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        minutes_now = int((now_utc - midnight_utc).total_seconds() / 60)
+        print(f"  WARNING: No timestamp in data, using current time: {now_utc.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Calculate how many days of data we have
+    max_minute = max(load_data.keys())
+    n_days = max_minute / (24 * 60)
+    print(f"  Data spans {n_days:.1f} days ({max_minute} minutes)")
+
+    # Generate synthetic data only if real data wasn't loaded
+    if pv_data is None or len(pv_data) == 0:
+        print(f"  Generating synthetic PV data for {n_days:.1f} days...")
+        pv_data = _create_synthetic_pv_data(n_days=int(n_days) + 1, now_utc=now_utc, forecast_hours=48)
+        print(f"  Generated {len(pv_data)} PV datapoints")
+
+    if temp_data is None or len(temp_data) == 0:
+        print(f"  Generating synthetic temperature data for {n_days:.1f} days...")
+        temp_data = _create_synthetic_temp_data(n_days=int(n_days) + 1, now_utc=now_utc, forecast_hours=48)
+        print(f"  Generated {len(temp_data)} temperature datapoints")
+
+    # Make predictions using the loaded model
+    has_rates = import_rates_data and export_rates_data and len(import_rates_data) > 0 and len(export_rates_data) > 0
+    rates_info = " + import/export rates" if has_rates else ""
+    data_source = "real" if (pv_data and len(pv_data) > 100 and temp_data and len(temp_data) > 100) else "synthetic"
+
+    print(f"  Generating predictions using loaded model with {data_source} PV/temperature{rates_info}...")
+    predictions = predictor.predict(load_data, now_utc, midnight_utc, pv_minutes=pv_data, temp_minutes=temp_data, import_rates=import_rates_data, export_rates=export_rates_data)
+
+    assert isinstance(predictions, dict), "Predictions should be a dict"
+    assert len(predictions) > 0, "Should have predictions"
+
+    print(f"  Generated {len(predictions)} predictions")
+
+    # Create comparison chart using matplotlib (reuse chart code from real_data_training)
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")  # Non-interactive backend
+        import matplotlib.pyplot as plt
+
+        # Chart layout: 7 days of history (negative hours) + 2 days of predictions (positive hours)
+        history_hours = 7 * 24  # 7 days back
+        prediction_hours = 48  # 2 days forward
+
+        # Convert historical load_data to energy per 5-min step
+        historical_minutes = []
+        historical_energy = []
+        max_history_minutes = min(history_hours * 60, max_minute)
+
+        for minute in range(0, max_history_minutes, STEP_MINUTES):
+            if minute in load_data and (minute + STEP_MINUTES) in load_data:
+                energy_kwh = max(0, load_data[minute] - load_data.get(minute + STEP_MINUTES, load_data[minute]))
+                historical_minutes.append(minute)
+                historical_energy.append(energy_kwh)
+
+        # Convert predictions to energy per step
+        pred_minutes = []
+        pred_energy = []
+        pred_keys = sorted(predictions.keys())
+        for i, minute in enumerate(pred_keys):
+            if minute >= prediction_hours * 60:
+                break
+            if i == 0:
+                energy_kwh = predictions[minute]
+            else:
+                prev_minute = pred_keys[i - 1]
+                energy_kwh = max(0, predictions[minute] - predictions[prev_minute])
+            pred_minutes.append(minute)
+            pred_energy.append(energy_kwh)
+
+        # Convert PV data to energy per step
+        pv_historical_minutes = []
+        pv_historical_energy = []
+        for minute in range(0, max_history_minutes, STEP_MINUTES):
+            if minute in pv_data and (minute + STEP_MINUTES) in pv_data:
+                energy_kwh = max(0, pv_data[minute] - pv_data.get(minute + STEP_MINUTES, pv_data[minute]))
+                pv_historical_minutes.append(minute)
+                pv_historical_energy.append(energy_kwh)
+
+        pv_forecast_minutes = []
+        pv_forecast_energy = []
+        for minute in range(-prediction_hours * 60, 0, STEP_MINUTES):
+            if minute in pv_data and (minute + STEP_MINUTES) in pv_data:
+                energy_kwh = max(0, pv_data[minute] - pv_data.get(minute + STEP_MINUTES, pv_data[minute]))
+                pv_forecast_minutes.append(minute)
+                pv_forecast_energy.append(energy_kwh)
+
+        # Extract temperature data
+        temp_historical_minutes = []
+        temp_historical_celsius = []
+        for minute in range(0, max_history_minutes, STEP_MINUTES):
+            if minute in temp_data:
+                temp_celsius = temp_data[minute]
+                temp_historical_minutes.append(minute)
+                temp_historical_celsius.append(temp_celsius)
+
+        temp_forecast_minutes = []
+        temp_forecast_celsius = []
+        for minute in range(-prediction_hours * 60, 0, STEP_MINUTES):
+            if minute in temp_data:
+                temp_celsius = temp_data[minute]
+                temp_forecast_minutes.append(minute)
+                temp_forecast_celsius.append(temp_celsius)
+
+        # Create figure
+        fig, ax = plt.subplots(1, 1, figsize=(16, 6))
+        ax2 = ax.twinx()
+
+        # Plot PV data
+        if pv_historical_minutes:
+            pv_hist_hours = [-m / 60 for m in pv_historical_minutes]
+            ax.plot(pv_hist_hours, pv_historical_energy, "orange", linewidth=0.8, label="Historical PV (7 days)", alpha=0.3, linestyle="--")
+
+        if pv_forecast_minutes:
+            pv_forecast_hours = [-m / 60 for m in pv_forecast_minutes]
+            ax.plot(pv_forecast_hours, pv_forecast_energy, "orange", linewidth=1.2, label="PV Forecast (48h)", alpha=0.5, linestyle="--")
+
+        # Plot temperature
+        if temp_historical_minutes:
+            temp_hist_hours = [-m / 60 for m in temp_historical_minutes]
+            ax2.plot(temp_hist_hours, temp_historical_celsius, "purple", linewidth=0.8, label="Historical Temp (7 days)", alpha=0.4, linestyle="-.")
+
+        if temp_forecast_minutes:
+            temp_forecast_hours = [-m / 60 for m in temp_forecast_minutes]
+            ax2.plot(temp_forecast_hours, temp_forecast_celsius, "purple", linewidth=1.2, label="Temp Forecast (48h)", alpha=0.6, linestyle="-.")
+
+        # Plot historical load
+        if historical_minutes:
+            hist_hours = [-m / 60 for m in historical_minutes]
+            ax.plot(hist_hours, historical_energy, "b-", linewidth=0.8, label="Historical Load (7 days)", alpha=0.5)
+
+        # Plot predictions
+        if pred_minutes:
+            pred_hours = [m / 60 for m in pred_minutes]
+            ax.plot(pred_hours, pred_energy, "r-", linewidth=1.5, label="ML Prediction (48h future)", alpha=0.9)
+
+        # Add vertical line at "now"
+        ax.axvline(x=0, color="black", linestyle="--", linewidth=2, label="Now", alpha=0.8)
+
+        # Labels and formatting
+        ax.set_xlabel("Hours from Now (negative = past, positive = future)", fontsize=12)
+        ax.set_ylabel("Energy per 5 min (kWh)", fontsize=12)
+        ax2.set_ylabel("Temperature (°C)", fontsize=12)
+        ax.set_title("Pre-trained ML Model: Load Prediction (Day 7) + 48h Forecast", fontsize=14, fontweight="bold")
+
+        # Combine legends
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(-history_hours, prediction_hours)
+
+        # Add day markers
+        for day in range(-7, 3):
+            hour = day * 24
+            if -history_hours <= hour <= prediction_hours:
+                ax.axvline(x=hour, color="gray", linestyle=":", linewidth=0.5, alpha=0.5)
+
+        plt.tight_layout()
+
+        # Save to coverage directory with different name
+        chart_paths = ["../coverage/ml_pretrained_chart.png", "coverage/ml_pretrained_chart.png", "ml_pretrained_chart.png"]
         for chart_path in chart_paths:
             try:
                 plt.savefig(chart_path, dpi=150, bbox_inches="tight")
