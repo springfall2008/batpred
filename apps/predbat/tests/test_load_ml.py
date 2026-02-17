@@ -1915,13 +1915,13 @@ def _test_component_fetch_load_data():
         """
         mock_base_step_size = MockBase()
 
-        # Create load data with clear 5-minute intervals
-        # Cumulative load INCREASES going forward in time (minute 0 = oldest, minute 1440 = newest)
+        # Create load data with 5-minute intervals following Predbat convention:
+        # minute 0 = now (highest cumulative value), minute 1440 = 24h ago (lowest value)
         load_data = {}
-        cumulative = 0.0
-        for minute in range(0, 1441, 5):  # 24 hours at 5-min intervals, going forward
+        cumulative = 144.0  # Total energy over 24h (288 intervals * 0.5 kWh)
+        for minute in range(0, 1441, 5):  # 24 hours at 5-min intervals
             load_data[minute] = cumulative
-            cumulative += 0.5  # 0.5 kWh per step (6 kW average power)
+            cumulative -= 0.5  # Decrease going backwards in time (0.5 kWh per 5-min step)
 
         # No car charging - this is the bug scenario
         mock_base_step_size.minute_data_load = MagicMock(return_value=(load_data, 1.0))
@@ -1947,40 +1947,50 @@ def _test_component_fetch_load_data():
         assert len(result_data) > 0, "Load data should not be empty"
 
         # CRITICAL: Verify values are NOT near-zero (the bug would cause this)
-        # With the bug, minute-1 lookups would fail and return 0 deltas
-        # With the fix, data is stored at 5-minute intervals with full delta values
+        # The bug was using minute-1 instead of minute-STEP for delta calculations.
+        # With 5-minute interval data, minute-1 would usually equal minute, giving 0 delta.
+        # The fix uses minute-STEP (minute-5) which correctly calculates non-zero deltas.
 
-        # The function converts cumulative energy at 5-minute intervals (not spread per-minute)
-        # For minute 1440 (most recent): delta = 0.5 kWh total (full step value)
-        # total_load_energy = 0.5 at minute 1440 (just the first step)
+        # The function processes data from minute 1440 (oldest) to minute 0 (now),
+        # calculating deltas and accumulating them into a new cumulative series.
+        # Input:  load_data[1440]=0.0, load_data[1435]=0.5, ..., load_data[0]=144.0
+        # Output: result_data[1440]=0.5 (first delta), result_data[1435]=1.0 (accumulated), ..., result_data[0]=144.0 (total)
 
-        # Check that values at minute 1440 are correct (not near-zero)
+        # Check minute 1440 (oldest data point, just the first delta)
         if 1440 in result_data:
             value_1440 = result_data[1440]
-            # Value should be 0.0 + 0.5 = 0.5 kWh (full delta, not spread)
+            # delta = abs(load_data[1440] - load_data[1435]) = abs(0.0 - 0.5) = 0.5
+            # result_data[1440] = 0 + 0.5 = 0.5 kWh
             expected_value = 0.5
             assert abs(value_1440 - expected_value) < 0.01, f"Energy at minute 1440 should be ~{expected_value:.2f} kWh (got {value_1440:.4f}). Bug #3384 would cause 0.0."
-            assert value_1440 > 0.01, f"Energy at minute 1440 should be > 0.01 kWh (got {value_1440:.4f}). Bug #3384 would cause near-zero values."
+            assert value_1440 > 0.01, f"Energy at minute 1440 should be > 0.01 kWh (got {value_1440:.4f}). Bug #3384 would cause near-zero."
 
-        # Check minute 1435 (second interval)
+        # Check minute 1435 (second oldest interval, accumulated)
         if 1435 in result_data:
             value_1435 = result_data[1435]
-            # Value should be 0.5 + 0.5 = 1.0 kWh (accumulated from previous interval)
+            # delta = abs(load_data[1435] - load_data[1430]) = abs(0.5 - 1.0) = 0.5
+            # result_data[1435] = 0.5 + 0.5 = 1.0 kWh (accumulated from 1440 + 1435)
             expected_value = 1.0
             assert abs(value_1435 - expected_value) < 0.01, f"Energy at minute 1435 should be ~{expected_value:.2f} kWh (got {value_1435:.4f})."
             assert value_1435 > 0.5, f"Energy at minute 1435 should be > 0.5 kWh (got {value_1435:.4f})."
 
-        # Check an earlier minute (e.g., minute 100)
+        # Check minute 100 (more recent, should have high accumulated value)
         if 100 in result_data:
             value_100 = result_data[100]
-            # This should have accumulated many intervals (1440-100)/5 = 268 intervals * 0.5 kWh = 134 kWh accumulated
-            # Plus 0.5 kWh for the current interval = ~134.5 kWh
-            assert value_100 > 130, f"Energy at minute 100 should be > 130 kWh (got {value_100:.2f}). Bug #3384 would cause near-zero total."
+            # (1440-100)/5 = 268 intervals processed, each delta = 0.5 kWh
+            # result_data[100] ≈ 268 * 0.5 = 134 kWh accumulated
+            expected_value = 134.0
+            assert abs(value_100 - expected_value) < 1.0, f"Energy at minute 100 should be ~{expected_value:.1f} kWh (got {value_100:.2f}). Bug #3384 would cause near-zero."
+            assert value_100 > 130, f"Energy at minute 100 should be > 130 kWh (got {value_100:.2f})."
 
-        # Verify maximum cumulative energy is reasonable (not near-zero)
-        # With 0.5 kWh per 5-min step and 288 steps in 24h, total should be ~144 kWh at minute 0
-        max_value = max(result_data.values()) if result_data else 0
-        assert max_value > 140, f"Maximum cumulative energy should be > 140 kWh (got {max_value:.2f}). Bug #3384 would cause near-zero total."
+        # Check minute 0 (now, should have maximum accumulated energy)
+        # Note: minute 0 has 0 delta (no data at minute -5), but accumulated total is carried forward
+        if 0 in result_data:
+            value_0 = result_data[0]
+            # 288 intervals (1440/5) * 0.5 kWh = 144 kWh total
+            expected_value = 144.0
+            assert abs(value_0 - expected_value) < 1.0, f"Energy at minute 0 should be ~{expected_value:.1f} kWh (got {value_0:.2f}). Bug #3384 would cause near-zero."
+            assert value_0 > 140, f"Energy at minute 0 should be > 140 kWh (got {value_0:.2f})."
 
         # Verify current load is reasonable (not near-zero)
         assert result_now > 0.05, f"Current load should be > 0.05 kWh (got {result_now:.4f}). Bug #3384 would cause near-zero."

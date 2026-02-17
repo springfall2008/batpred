@@ -16,7 +16,7 @@ import os
 from datetime import datetime, timezone, timedelta
 
 # Architecture constants (not user-configurable)
-MODEL_VERSION = 6  # Bumped for import/export rate features
+MODEL_VERSION = 7  # Bumped due to bug fixes in input data, should be retrained - 17/2/26
 LOOKBACK_STEPS = 288  # 24 hours at 5-min intervals
 OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 576  # 48 hours of predictions (576 * 5 min)
