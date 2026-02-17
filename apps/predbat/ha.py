@@ -88,7 +88,7 @@ class HAHistory(ComponentBase):
                 if tracked:
                     self.update_entity(entity_id, history_data)
                 result = [history_data]
-        
+
         return deepcopy(result)
 
     def prune_history(self, now):
@@ -138,7 +138,7 @@ class HAHistory(ComponentBase):
         else:
             first_updated = None
             last_updated = None
-        
+
         if last_updated:
             # Find the last timestamp in the previous history data, data is always in order from oldest to newest
             first_timestamp = str2time(first_updated)
@@ -157,7 +157,7 @@ class HAHistory(ComponentBase):
                             add_all = True  # Remaining entries are all newer
                         elif entry_time < first_timestamp:
                             self.history_data[entity_id].append(entry)
-            
+
             self.history_data[entity_id].sort(key=lambda x: x.get("last_updated"))
         else:
             self.history_data[entity_id] = new_history_data

@@ -283,14 +283,14 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
     else:
         print("✓ Entity tracking updated to 60 days")
 
-    # Test 4: Request more days again - cache should have them populated 
+    # Test 4: Request more days again - cache should have them populated
     result4 = ha_history.get_history(entity_id, days=60, tracked=True)
     if len(result4[0]) != length_60_days_history:
         print("ERROR: Cache did not correctly return 60 days")
         failed += 1
     else:
         print("✓ Cache correctly populated with longer history")
-    
+
     sorted_result4 = sorted(result4[0], key=lambda x: x["last_updated"])
     if sorted_result4 != result4[0]:
         print("ERROR: Cache population did not correctly order entries when adding longer history")
