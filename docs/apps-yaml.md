@@ -1365,7 +1365,7 @@ high battery charge levels when the car was charged previously (e.g. last week).
 
 *TIP:* Check the house load being reported by your inverter when your car is charging. If it doesn't include the car charging load then there is no need to follow these steps below (and if you do, you'll artificially deflate your house load).
 
-- **switch.predbat_car_charging_hold** - A switch that when turned on (True) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. Default is off.
+- **switch.predbat_car_charging_hold** - A switch that when turned on (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging.
 
 If you are getting erroneous house load predictions in your plan then check this setting and **car_charging_energy** are set correctly.
 

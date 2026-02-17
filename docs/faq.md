@@ -49,7 +49,8 @@ If you do something like have export>import then Predbat will try to export as m
 - Have you tuned **predbat_best_soc_keep settings**?
 - Do you have predicted car charging during the time period?
 - You can also tune **predbat_load_scaling** and **predbat_pv_scaling** to adjust predictions up and down a bit
-- Maybe your historical data includes car charging, you might want to filter this out using [car_charging_hold in apps.yaml](apps-yaml.md#car-charging-filtering)
+- Maybe your historical data includes car charging, you might want to filter this out using [car_charging_hold in apps.yaml](apps-yaml.md#car-charging-filtering),
+and conversely if your predicted load is too low, maybe you have excluded car charging but your load_today sensor doesn't include car charging energy?
 
 ## Why didn't the slot get configured?
 
