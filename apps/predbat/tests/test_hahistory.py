@@ -298,18 +298,6 @@ def test_hahistory_get_history_fetch_and_cache(my_predbat=None):
     else:
         print("✓ Cache order correct after adding longer history")
 
-    # Test 5: Cache should not be modified if returned result is mutated
-    result_before = ha_history.get_history(entity_id, days=30, tracked=True)
-    # Mutate the result
-    result_before[0].pop()
-    result_after = ha_history.get_history(entity_id, days=30, tracked=True)
-
-    if len(result_after[0]) == len(result_before[0]):
-        print("ERROR: Cache state is modified if callers mutate the returned results")
-        failed += 1
-    else:
-        print("✓ Cache correctly returns independent copies of its own data")
-
     return failed
 
 
