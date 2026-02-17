@@ -11,6 +11,7 @@
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -325,6 +326,8 @@ def minute_data(
     # Check history is valid, if not empty return
     if not history:
         return mdata, io_adjusted
+
+    history = copy.deepcopy(history)  # Copy to avoid modifying original history
 
     # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
     if clean_increment and backwards:
