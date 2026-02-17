@@ -14,7 +14,7 @@ import asyncio
 import os
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
-from utils import get_now_from_cumulative, dp2, minute_data
+from utils import get_now_from_cumulative, dp2, dp4, minute_data
 from load_predictor import LoadPredictor, MODEL_VERSION
 from const import TIME_FORMAT, PREDICT_STEP
 import traceback
@@ -163,28 +163,23 @@ class LoadMLComponent(ComponentBase):
 
             # Subtract configured sensors (e.g., car charging)
             total_load_energy = 0
-            car_delta = 0.0
             STEP = PREDICT_STEP
             for minute in range(max_minute, -STEP, -STEP):
+                car_delta = 0.0
                 if self.car_charging_hold and car_charging_energy:
                     car_delta = abs(car_charging_energy.get(minute, 0.0) - car_charging_energy.get(minute - STEP, car_charging_energy.get(minute, 0.0)))
                 elif self.car_charging_hold:
                     load_now = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
                     if load_now >= self.car_charging_threshold * STEP:
                         car_delta = self.car_charging_rate * STEP
-                if car_delta > 0:
-                    # When car is enable spread over 5 minutes due to alignment between car and house load data
-                    load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
-                    load_delta = max(0.0, load_delta - car_delta)
-                    for m in range(minute, minute - STEP, -1):
-                        load_minutes_new[m] = total_load_energy + load_delta / STEP
-                    total_load_energy += load_delta
-                else:
-                    # Otherwise just copy load data
-                    for m in range(minute, minute - STEP, -1):
-                        load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - 1, load_minutes.get(minute, 0.0)))
-                        load_minutes_new[m] = total_load_energy
-                        total_load_energy += load_delta
+
+                # Work out load delta and subtract car delta
+                load_delta = abs(load_minutes.get(minute, 0.0) - load_minutes.get(minute - STEP, load_minutes.get(minute, 0.0)))
+                load_delta = max(0.0, load_delta - car_delta)
+
+                # Store at 5-minute intervals (ML only uses PREDICT_STEP data)
+                load_minutes_new[minute] = total_load_energy + load_delta
+                total_load_energy += load_delta
 
             # Calculate age of data
             age_days = max_minute / (24 * 60)
@@ -194,9 +189,27 @@ class LoadMLComponent(ComponentBase):
 
             # PV Data
             if self.ml_pv_sensor:
-                pv_data, _ = self.base.minute_data_load(self.now_utc, "pv_today", days_to_fetch, required_unit="kWh", load_scaling=1.0, interpolate=True)
+                pv_data_hist, _ = self.base.minute_data_load(self.now_utc, "pv_today", days_to_fetch, required_unit="kWh", load_scaling=1.0, interpolate=True)
             else:
-                pv_data = {}
+                pv_data_hist = {}
+
+            pv_data = {}
+            # The historical PV data is incrementing, but samples can be taken quite frequently.
+            # As the future forecast is only in 30 minute slots aligned to 30 minute boundary
+            # we should try to normalise the historical data otherwise future predictions will be very inaccurate when the historical data is sampled at a different frequency to the future predictions.
+            # To do this we will take the historical PV data and resample it to 30 minute slots aligned to 30 minute boundary, we will then use the future forecast to fill in the gaps between the historical data and the future predictions.
+            alignment = self.minutes_now % 30  # e.g. we are 17 minutes past a 30 minute boundary
+            current_value = 0
+            for minute_align in range(max_minute - alignment, -30, -30):
+                new_value = pv_data_hist.get(minute_align, current_value)
+                delta_per_minute = max(new_value - current_value, 0) / 30.0
+                # Spread the delta evenly over the 30 minute period leading up to this point
+                # Interpolate backwards from new_value at minute_align to current_value at minute_align-30
+                for m in range(29, -1, -1):
+                    minute = minute_align + m
+                    if minute >= 0:
+                        pv_data[minute] = dp4(new_value - (delta_per_minute * m))
+                current_value = new_value
 
             pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
             # PV Data has the historical PV data (minute is the number of minutes in the past)
@@ -207,7 +220,7 @@ class LoadMLComponent(ComponentBase):
                 max_minute = max(pv_forecast_minute.keys()) + PREDICT_STEP
                 for minute in range(self.minutes_now + PREDICT_STEP, max_minute, PREDICT_STEP):
                     current_value += pv_forecast_minute.get(minute, 0.0)  # Add 0 if missing, not current_value
-                    pv_data[-minute + self.minutes_now] = current_value
+                    pv_data[-minute + self.minutes_now] = dp4(current_value)
 
             # Temperature predictions
             temp_entity = "sensor." + self.prefix + "_temperature"
