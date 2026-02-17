@@ -20,7 +20,6 @@ import time
 from utils import str2time
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
-from copy import deepcopy
 
 
 class RunThread(threading.Thread):
@@ -89,7 +88,7 @@ class HAHistory(ComponentBase):
                     self.update_entity(entity_id, history_data)
                 result = [history_data]
 
-        return deepcopy(result)
+        return result
 
     def prune_history(self, now):
         """
