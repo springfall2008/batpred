@@ -644,6 +644,9 @@ _NOTE_: once you select a day/time slot from any of the **select.predbat_manual_
 Predbat still has to update the plan which it will be doing so in the background, and this can take a few minutes to run (depending on the speed and power of the device you are running Home Assistant on),
 so don't be surprised why the [Predbat plan](predbat-plan-card.md) doesn't change immediately - remember you can see the date/time the plan was last updated on the first row of the plan.
 
+As an alternative to selecting day/time slots from the **select.predbat_manual_xx** drop down lists, you can select a time slot then select the mode you want Predbat to be in from the [Predbat plan shown in the Web Console](web-interface.md#plan-view).
+This might be easier to use than the selector controls.
+
 _CAUTION: If you leave Predbat turned off for a long period of time then the override timeslots could end up repeating when you restart_
 
 The **select.predbat_manual_export** selector can be used to manually force Predbat to export within a slot. If you set a force export then this takes priority over force charging.
