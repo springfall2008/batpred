@@ -699,7 +699,7 @@ class WebInterface(ComponentBase):
         """
         Get history for an entity including the current state
         """
-        history = copy.deepcopy(self.get_history_wrapper(entity_id, days, required=False, tracked=False)) # Copy to avoid modifying original history
+        history = copy.deepcopy(self.get_history_wrapper(entity_id, days, required=False, tracked=False))  # Copy to avoid modifying original history
         current_value = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
         if current_value is not None:
             if not history:
