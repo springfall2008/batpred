@@ -1556,13 +1556,25 @@ def _test_component_fetch_load_data():
 
     # Test 3: Car charging subtraction
     async def test_car_charging_subtraction():
+        """Test that car charging energy is correctly subtracted from load data."""
         mock_base_with_car = MockBase()
 
-        # Create load data with entries for EVERY minute (not just 5-min intervals)
-        # This is required because the component's car charging subtraction loop
-        # iterates over every minute from 1 to max_minute
-        original_load_data, age = create_load_minutes(7, all_minutes=True)
-        car_charging_data = {i: i * 0.001 for i in range(0, 7 * 24 * 60 + 1)}  # Small cumulative car charging (0.001 kWh/min)
+        # Create load data at 5-minute intervals (matches PREDICT_STEP)
+        # Total load: 1.0 kWh per 5-min step
+        original_load_data = {}
+        cumulative_load = 0.0
+        for minute in range(0, 1441, 5):
+            original_load_data[minute] = cumulative_load
+            cumulative_load += 1.0  # 1.0 kWh per step
+
+        # Car charging data: 0.3 kWh per 5-min step
+        car_charging_data = {}
+        cumulative_car = 0.0
+        for minute in range(0, 1441, 5):
+            car_charging_data[minute] = cumulative_car
+            cumulative_car += 0.3  # 0.3 kWh per step
+
+        age = 1.0
 
         # Override get_arg to enable car_charging_energy
         def mock_get_arg_with_car(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
@@ -1579,6 +1591,7 @@ def _test_component_fetch_load_data():
         # Return a copy of the data so the original isn't modified
         mock_base_with_car.minute_data_load = MagicMock(return_value=(dict(original_load_data), age))
         mock_base_with_car.minute_data_import_export = MagicMock(return_value=car_charging_data)
+        mock_base_with_car.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
 
         component = LoadMLComponent(mock_base_with_car, load_ml_enable=True)
         # Override default values for testing
@@ -1605,7 +1618,117 @@ def _test_component_fetch_load_data():
         for minute, value in result_data.items():
             assert value >= 0, f"Load at minute {minute} should be non-negative, got {value}"
 
+        # CRITICAL: Verify actual subtraction occurred correctly
+        # At minute 1440: load delta = 1.0 kWh, car delta = 0.3 kWh
+        # Result should be 1.0 - 0.3 = 0.7 kWh (not 1.0 kWh)
+        if 1440 in result_data:
+            value_1440 = result_data[1440]
+            expected = 0.7  # load (1.0) - car (0.3)
+            assert abs(value_1440 - expected) < 0.01, f"At minute 1440, expected ~{expected} kWh (1.0 - 0.3), got {value_1440:.4f}"
+
+        # At minute 1435: should have accumulated 0.7 + 0.7 = 1.4 kWh
+        if 1435 in result_data:
+            value_1435 = result_data[1435]
+            expected = 1.4  # Two intervals of (1.0 - 0.3)
+            assert abs(value_1435 - expected) < 0.01, f"At minute 1435, expected ~{expected} kWh, got {value_1435:.4f}"
+
         print("    ✓ Car charging subtraction works")
+
+    # Test 3b: Car charging threshold-based detection (without sensor)
+    async def test_car_charging_threshold_detection():
+        """Test that car charging is detected based on load threshold when no sensor is configured."""
+        mock_base_threshold = MockBase()
+
+        # Create load data at 5-minute intervals with varying consumption
+        # Some intervals will exceed threshold (car charging), others won't
+        # IMPORTANT: Cumulative value represents total UP TO AND INCLUDING that minute
+        original_load_data = {}
+        cumulative_load = 0.0
+
+        # Pattern: high (1.0) at i=0,4,8... and normal (0.2) at other positions
+        for i, minute in enumerate(range(0, 1441, 5)):
+            if i % 4 == 0:
+                # High load interval: 1.0 kWh per 5-min (exceeds threshold)
+                delta = 1.0
+            else:
+                # Normal load: 0.2 kWh per 5-min (below threshold)
+                delta = 0.2
+            cumulative_load += delta
+            original_load_data[minute] = cumulative_load  # Store AFTER adding delta
+
+        age = 1.0
+
+        # Override get_arg to DISABLE car_charging_energy sensor but keep car_charging_hold enabled
+        def mock_get_arg_threshold(key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": None,
+                "car_charging_energy": None,  # No sensor - will use threshold detection
+                "load_scaling": 1.0,
+                "car_charging_energy_scale": 1.0,
+                "car_charging_hold": True,  # Enable threshold-based detection
+                "car_charging_threshold": 6.0,  # 6.0 kW/h threshold (0.5 kWh per 5 min)
+                "car_charging_rate": 7.5,  # 7.5 kW/h charging rate (0.625 kWh per 5 min)
+            }.get(key, default)
+
+        mock_base_threshold.get_arg = mock_get_arg_threshold
+
+        mock_base_threshold.minute_data_load = MagicMock(return_value=(dict(original_load_data), age))
+        mock_base_threshold.minute_data_import_export = MagicMock(return_value={})  # No car sensor data
+        mock_base_threshold.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base_threshold, load_ml_enable=True)
+        # Component will use default thresholds from get_arg
+
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
+
+        assert result_data is not None, "Should return load data"
+        assert len(result_data) > 0, "Result data should not be empty"
+
+        # Verify threshold-based detection worked
+        # car_charging_threshold = 6.0 kW/h / 60 = 0.1 kW/min
+        # Threshold per 5-min interval: 0.1 * 5 = 0.5 kWh
+        # car_charging_rate = 7.5 kW/h / 60 = 0.125 kW/min
+        # Estimated car delta per 5-min: 0.125 * 5 = 0.625 kWh
+
+        # At minute 1440: load delta = 1.0 kWh (exceeds 0.5 threshold)
+        # Should subtract estimated car delta: 1.0 - 0.625 = 0.375 kWh
+        if 1440 in result_data:
+            value_1440 = result_data[1440]
+            expected = 0.375  # 1.0 - 0.625 (threshold triggered)
+            assert abs(value_1440 - expected) < 0.01, f"At minute 1440 (high load), expected ~{expected} kWh (1.0 - 0.625 car estimate), got {value_1440:.4f}"
+
+        # At minute 1435: load delta = 0.2 kWh (below 0.5 threshold, no car charging detected)
+        # Should NOT subtract car delta: just 0.2 kWh
+        # Total accumulated: 0.375 + 0.2 = 0.575 kWh
+        if 1435 in result_data:
+            value_1435 = result_data[1435]
+            expected = 0.575  # 0.375 + 0.2 (no car detection)
+            assert abs(value_1435 - expected) < 0.01, f"At minute 1435 (normal load), expected ~{expected} kWh, got {value_1435:.4f}"
+
+        # At minute 1430: load delta = 0.2 kWh (below threshold)
+        # Total: 0.575 + 0.2 = 0.775 kWh
+        if 1430 in result_data:
+            value_1430 = result_data[1430]
+            expected = 0.775
+            assert abs(value_1430 - expected) < 0.01, f"At minute 1430, expected ~{expected} kWh, got {value_1430:.4f}"
+
+        # At minute 1425: load delta = 0.2 kWh (below threshold)
+        # Total: 0.775 + 0.2 = 0.975 kWh
+        if 1425 in result_data:
+            value_1425 = result_data[1425]
+            expected = 0.975
+            assert abs(value_1425 - expected) < 0.01, f"At minute 1425, expected ~{expected} kWh, got {value_1425:.4f}"
+
+        # At minute 1420: load delta = 1.0 kWh (exceeds threshold again)
+        # Subtract car delta: 1.0 - 0.625 = 0.375
+        # Total: 0.975 + 0.375 = 1.35 kWh
+        if 1420 in result_data:
+            value_1420 = result_data[1420]
+            expected = 1.35
+            assert abs(value_1420 - expected) < 0.01, f"At minute 1420 (high load again), expected ~{expected} kWh, got {value_1420:.4f}"
+
+        print("    ✓ Car charging threshold detection works")
 
     # Test 4: Load power fill
     async def test_load_power_fill():
@@ -1782,16 +1905,100 @@ def _test_component_fetch_load_data():
 
         print("    ✓ Temperature data with no predictions handled correctly")
 
+    # Test 9: Step-size calculation correctness (bug #3384 regression test)
+    async def test_step_size_calculation():
+        """
+        Regression test for issue #3384: LoadML near-zero predictions due to step-size mismatch.
+
+        This test validates that energy deltas are correctly calculated with STEP (5 minutes)
+        instead of 1 minute when data is at 5-minute intervals without car charging.
+        """
+        mock_base_step_size = MockBase()
+
+        # Create load data with clear 5-minute intervals
+        # Cumulative load INCREASES going forward in time (minute 0 = oldest, minute 1440 = newest)
+        load_data = {}
+        cumulative = 0.0
+        for minute in range(0, 1441, 5):  # 24 hours at 5-min intervals, going forward
+            load_data[minute] = cumulative
+            cumulative += 0.5  # 0.5 kWh per step (6 kW average power)
+
+        # No car charging - this is the bug scenario
+        mock_base_step_size.minute_data_load = MagicMock(return_value=(load_data, 1.0))
+        mock_base_step_size.minute_data_import_export = MagicMock(return_value={})
+        mock_base_step_size.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base_step_size, load_ml_enable=True)
+        # Override default values for testing
+        component.ml_learning_rate = 0.001
+        component.ml_epochs_initial = 10
+        component.ml_epochs_update = 2
+        component.ml_min_days = 1
+        component.ml_validation_threshold = 2.0
+        component.ml_time_decay_days = 7
+        component.ml_max_load_kw = 23.0
+        component.ml_max_model_age_hours = 48
+        # IMPORTANT: Disable car charging hold to test the non-car-charging branch (the bug scenario)
+        component.car_charging_hold = False
+
+        result_data, result_age, result_now, result_pv, result_temp, result_import_rates, result_export_rates = await component._fetch_load_data()
+
+        assert result_data is not None, "Should return load data"
+        assert len(result_data) > 0, "Load data should not be empty"
+
+        # CRITICAL: Verify values are NOT near-zero (the bug would cause this)
+        # With the bug, minute-1 lookups would fail and return 0 deltas
+        # With the fix, data is stored at 5-minute intervals with full delta values
+
+        # The function converts cumulative energy at 5-minute intervals (not spread per-minute)
+        # For minute 1440 (most recent): delta = 0.5 kWh total (full step value)
+        # total_load_energy = 0.5 at minute 1440 (just the first step)
+
+        # Check that values at minute 1440 are correct (not near-zero)
+        if 1440 in result_data:
+            value_1440 = result_data[1440]
+            # Value should be 0.0 + 0.5 = 0.5 kWh (full delta, not spread)
+            expected_value = 0.5
+            assert abs(value_1440 - expected_value) < 0.01, f"Energy at minute 1440 should be ~{expected_value:.2f} kWh (got {value_1440:.4f}). Bug #3384 would cause 0.0."
+            assert value_1440 > 0.01, f"Energy at minute 1440 should be > 0.01 kWh (got {value_1440:.4f}). Bug #3384 would cause near-zero values."
+
+        # Check minute 1435 (second interval)
+        if 1435 in result_data:
+            value_1435 = result_data[1435]
+            # Value should be 0.5 + 0.5 = 1.0 kWh (accumulated from previous interval)
+            expected_value = 1.0
+            assert abs(value_1435 - expected_value) < 0.01, f"Energy at minute 1435 should be ~{expected_value:.2f} kWh (got {value_1435:.4f})."
+            assert value_1435 > 0.5, f"Energy at minute 1435 should be > 0.5 kWh (got {value_1435:.4f})."
+
+        # Check an earlier minute (e.g., minute 100)
+        if 100 in result_data:
+            value_100 = result_data[100]
+            # This should have accumulated many intervals (1440-100)/5 = 268 intervals * 0.5 kWh = 134 kWh accumulated
+            # Plus 0.5 kWh for the current interval = ~134.5 kWh
+            assert value_100 > 130, f"Energy at minute 100 should be > 130 kWh (got {value_100:.2f}). Bug #3384 would cause near-zero total."
+
+        # Verify maximum cumulative energy is reasonable (not near-zero)
+        # With 0.5 kWh per 5-min step and 288 steps in 24h, total should be ~144 kWh at minute 0
+        max_value = max(result_data.values()) if result_data else 0
+        assert max_value > 140, f"Maximum cumulative energy should be > 140 kWh (got {max_value:.2f}). Bug #3384 would cause near-zero total."
+
+        # Verify current load is reasonable (not near-zero)
+        assert result_now > 0.05, f"Current load should be > 0.05 kWh (got {result_now:.4f}). Bug #3384 would cause near-zero."
+
+        print("    ✓ Step-size calculation correct (bug #3384 regression test passed)")
+
     # Run all sub-tests
     print("  Running LoadMLComponent._fetch_load_data tests:")
     run_async(test_basic_fetch())
     run_async(test_missing_sensor())
     run_async(test_car_charging_subtraction())
+    run_async(test_car_charging_threshold_detection())
     run_async(test_load_power_fill())
     run_async(test_exception_handling())
     run_async(test_empty_load_data())
     run_async(test_temperature_data_fetch())
     run_async(test_temperature_no_data())
+    run_async(test_step_size_calculation())
     print("  All _fetch_load_data tests passed!")
 
 
