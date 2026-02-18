@@ -1793,6 +1793,9 @@ max: 10
 
 - If you are using the inverter in Backup mode then you will need to set **input_number.predbat_set_reserve_min** to no lower than 15% minimum SoC, other modes allow a lower minimum SoC of 10%. This is a Solax limitation.
 
+- It has been reported by one Solax user that his inverter did not respond to commands from either the mode 1 or mode 8 scripts.
+The fix was to enable the hidden HA entity 'VPP Exit Idle Enable' and then change the entity value from Disabled to Enabled. Once this was Enabled the inverter responded correctly to Predbat commands.
+
 - When you first start Predbat, check the [Predbat log](output-data.md#predbat-logfile) to confirm that the correct sensor names are identified by the regular expressions in `apps.yaml`. Any non-matching expressions should be investigated and resolved.
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
