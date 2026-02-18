@@ -904,7 +904,6 @@ description: |
   Cleanup when Predbat leaves Freeze charging.
 triggers:
   - entity_id: predbat.status
-    from: Freeze charging
     trigger: state
 conditions:
   - condition: state
@@ -912,9 +911,12 @@ conditions:
     state: "on"
   - condition: template
     value_template: |
-      {{ not trigger.to_state.state.startswith('Warn:')
-         and not trigger.to_state.state.startswith('Error:')
-         and trigger.to_state.state not in ['unknown','unavailable'] }}
+      {% set new = trigger.to_state.state | default('') %} {{
+        new not in ['unknown','unavailable'] and
+        not new.startswith('Warn:') and
+        not new.startswith('Error:') and
+        'Freeze charging' not in new
+      }}
 actions:
   - target:
       entity_id:
