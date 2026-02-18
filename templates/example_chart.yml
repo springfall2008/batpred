@@ -1083,3 +1083,353 @@ series:
       let res = []; for (const item of entity.attributes.detailedForecast) {
       res.push([new Date(item.period_start).getTime(), item.pv_estimateCL]); }
       return res.sort((a, b) => a[0] - b[0]);
+
+
+###############################################
+#------------------------ML Home Load Forecast (excl EV)-------------------------------
+###############################################
+
+type: custom:apexcharts-card
+header:
+  show: true
+  title: ML Home Load Forecast (excl EV)
+  show_states: true
+  colorize_states: true
+graph_span: 4d
+update_interval: 15min
+span:
+  start: day
+  offset: "-2d"
+apex_config:
+  legend:
+    show: true
+now:
+  show: true
+yaxis:
+  - id: forecasts
+    show: true
+    opposite: true
+    decimals: 0
+    max: 60
+    min: 0
+    apex_config:
+      tickAmount: 6
+  - id: mae
+    show: false
+    opposite: true
+    decimals: 2
+    max: auto
+    min: -0.1
+    apex_config:
+      tickAmount: 6
+series:
+  - entity: sensor.predbat_load_ml_stats
+    attribute: load_today
+    stroke_width: 2
+    extend_to: now
+    curve: smooth
+    name: Load
+    opacity: 0.2
+    type: area
+    yaxis_id: forecasts
+    color: orange
+  - entity: sensor.predbat_load_ml_stats
+    attribute: load_today
+    stroke_width: 3
+    extend_to: now
+    curve: smooth
+    name: Load
+    opacity: 1
+    type: line
+    yaxis_id: forecasts
+    color: orange
+    show:
+      in_header: false
+      in_legend: false
+  - entity: sensor.predbat_load_ml_forecast
+    stroke_width: 3
+    curve: smooth
+    name: ML Load
+    color: red
+    opacity: 0.35
+    yaxis_id: forecasts
+    show:
+      in_header: false
+      in_legend: true
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: sensor.predbat_load_ml_stats
+    attribute: load_today_h1
+    stroke_width: 2
+    color: green
+    curve: smooth
+    name: FC
+    opacity: 0.6
+    type: line
+    offset: "-1h"
+    extend_to: now
+    yaxis_id: forecasts
+  - entity: sensor.predbat_load_ml_stats
+    attribute: load_today_h8
+    stroke_width: 2
+    color: purple
+    curve: smooth
+    name: FC
+    opacity: 0.35
+    type: line
+    offset: "-8h"
+    extend_to: now
+    yaxis_id: forecasts
+  - entity: sensor.predbat_load_ml_stats
+    attribute: mae_kwh
+    float_precision: 4
+    stroke_width: 2
+    color: black
+    curve: smooth
+    name: MAE
+    opacity: 1
+    type: line
+    extend_to: now
+    yaxis_id: mae
+    transform: |
+      if (x === null || x === undefined) return null;
+      return Number(parseFloat(x).toFixed(3));
+
+###############################################
+#------------------------ML Home Power Forecast (excl EV)-------------------------------
+###############################################
+
+type: custom:apexcharts-card
+header:
+  show: true
+  title: ML Home Power Forecast (excl EV)
+  show_states: true
+  colorize_states: true
+graph_span: 4d
+update_interval: 15min
+span:
+  start: day
+  offset: "-2d"
+apex_config:
+  legend:
+    show: true
+  tooltip:
+    shared: true
+now:
+  show: true
+yaxis:
+  - id: forecasts
+    show: true
+    opposite: false
+    decimals: 0
+    max: 4
+    min: 0
+    apex_config:
+      tickAmount: 12
+  - id: temp
+    show: true
+    opposite: true
+    decimals: 0
+    max: auto
+    min: -10
+    apex_config:
+      tickAmount: 6
+series:
+  - entity: sensor.predbat_temperature
+    stroke_width: 2
+    extend_to: now
+    curve: smooth
+    name: Temp
+    opacity: 1
+    type: line
+    yaxis_id: temp
+    color: blue
+  - entity: sensor.predbat_temperature
+    name: Temp FC
+    type: line
+    yaxis_id: temp
+    stroke_width: 2
+    curve: smooth
+    color: blue
+    opacity: 0.35
+    extend_to: false
+    show:
+      in_header: false
+      in_legend: false
+    data_generator: |
+      const results = entity.attributes.results;
+      if (!results) return [];
+
+      const now = Date.now();
+
+      return Object.entries(results)
+        .map(([dt, val]) => [new Date(dt).getTime(), val])
+        .filter(([ts, _]) => ts >= now);
+  - entity: sensor.predbat_load_ml_stats
+    attribute: power_today_now
+    stroke_width: 2
+    extend_to: now
+    curve: smooth
+    name: Power
+    opacity: 0.2
+    type: area
+    yaxis_id: forecasts
+    color: orange
+  - entity: sensor.predbat_load_ml_stats
+    attribute: power_today_now
+    stroke_width: 2
+    extend_to: now
+    curve: smooth
+    name: Power
+    opacity: 1
+    type: line
+    yaxis_id: forecasts
+    color: orange
+    show:
+      in_header: false
+      in_legend: false
+  - entity: sensor.predbat_load_ml_stats
+    attribute: power_today_h1
+    stroke_width: 2
+    color: green
+    curve: smooth
+    name: FC
+    opacity: 0.6
+    type: line
+    offset: "-1h"
+    extend_to: now
+    yaxis_id: forecasts
+  - entity: sensor.predbat_load_ml_stats
+    attribute: power_today_h8
+    stroke_width: 2
+    color: purple
+    curve: smooth
+    name: FC
+    opacity: 0.35
+    type: line
+    offset: "-8h"
+    extend_to: now
+    yaxis_id: forecasts
+  - entity: sensor.predbat_load_ml_forecast
+    name: ML FC
+    type: line
+    curve: smooth
+    stroke_width: 3
+    color: red
+    opacity: 0.35
+    yaxis_id: forecasts
+    show:
+      in_header: false
+    data_generator: |
+      const raw = Object.entries(entity.attributes.results || {})
+        .map(([ts, v]) => [new Date(ts).getTime(), Number(v)])
+        .filter(p => !isNaN(p[0]) && !isNaN(p[1]))
+        .sort((a,b) => a[0]-b[0]);
+
+      const res = [];
+      for (let i = 1; i < raw.length; i++) {
+        const [t1, e1] = raw[i-1];   // previous cumulative kWh
+        const [t2, e2] = raw[i];     // current cumulative kWh
+
+        const dt_hours = (t2 - t1) / 3600000;  // ms → hours
+        if (dt_hours <= 0) continue;
+
+        const dE = e2 - e1;  // kWh used during interval
+
+        const power_kw = dE / dt_hours;
+
+        res.push([t2, power_kw]);
+      }
+      return res;
+  - entity: sensor.predbat_load_ml_stats
+    attribute: power_today_now
+    name: Home Power (Avg 1h)
+    type: line
+    yaxis_id: forecasts
+    color: black
+    stroke_width: 3
+    curve: smooth
+    opacity: 1
+    extend_to: now
+    show:
+      in_header: false
+      in_legend: false
+    group_by:
+      func: avg
+      duration: 6h
+  - entity: sensor.predbat_load_ml_forecast
+    name: ML Forecast Power (Avg 6h)
+    type: line
+    curve: smooth
+    stroke_width: 3
+    color: black
+    opacity: 1
+    yaxis_id: forecasts
+    show:
+      in_header: false
+      in_legend: false
+    data_generator: |
+      // Build raw cumulative kWh points
+      const raw = Object.entries(entity.attributes.results || {})
+        .map(([ts, v]) => [new Date(ts).getTime(), Number(v)])
+        .filter(([t, v]) => !isNaN(t) && !isNaN(v))
+        .sort((a, b) => a[0] - b[0]);
+
+      if (raw.length < 2) return [];
+
+      // Convert cumulative kWh -> interval energy (kWh) + duration (ms)
+      const intervals = [];
+      for (let i = 1; i < raw.length; i++) {
+        const [t1, e1] = raw[i - 1];
+        const [t2, e2] = raw[i];
+
+        const dt = t2 - t1;              // ms
+        if (dt <= 0) continue;
+
+        const dE = e2 - e1;              // kWh used during interval
+        if (!isFinite(dE)) continue;
+
+        // Skip resets/backsteps that create negative "power" spikes/dropouts
+        if (dE < 0) continue;
+
+        intervals.push([t2, dE, dt]);    // store at interval end time
+      }
+
+      if (!intervals.length) return [];
+
+      // Rolling window: 6 hours
+      const windowMs = 6 * 60 * 60 * 1000;
+
+      // Optional: require at least 1 hour of data in the window before plotting
+      const minCoverageMs = 60 * 60 * 1000;
+
+      // Two-pointer, time-weighted rolling mean: sum(kWh)/sum(hours)
+      let sumE = 0;      // kWh
+      let sumMs = 0;     // ms
+      let j = 0;
+      const out = [];
+
+      for (let i = 0; i < intervals.length; i++) {
+        const [ti, dEi, dti] = intervals[i];
+        sumE += dEi;
+        sumMs += dti;
+
+        while (intervals[j][0] < ti - windowMs) {
+          sumE -= intervals[j][1];
+          sumMs -= intervals[j][2];
+          j++;
+        }
+
+        if (sumMs <= 0 || sumMs < minCoverageMs) {
+          out.push([ti, null]);          // plot gaps until enough window coverage
+        } else {
+          const avgKw = sumE / (sumMs / 3600000);  // kWh / hours = kW
+          out.push([ti, avgKw]);
+        }
+      }
+
+      return out;
+
