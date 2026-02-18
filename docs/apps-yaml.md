@@ -1367,7 +1367,9 @@ high battery charge levels when the car was charged previously (e.g. last week).
 
 - **switch.predbat_car_charging_hold** - A switch that when turned on (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging.
 
-If you are getting erroneous house load predictions in your plan then check this setting and **car_charging_energy** are set correctly.
+If you are getting [erroneous house load predictions in your plan](faq.md#why-is-my-house-load-lower-than-expected-or-zero) then check this setting and **car_charging_energy** or **input_number.predbat_car_charging_threshold** are set correctly.
+
+If you don't have an EV then turn **switch.predbat_car_charging_hold** Off as Predbat will by default still consider any house load in excess of **input_number.predbat_car_charging_threshold** to be car charging activity and will exclude it.
 
 - **car_charging_energy** - Set in `apps.yaml` to point to an entity which is the daily incrementing kWh data for the car charger.
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
@@ -1393,7 +1395,7 @@ car_charging_energy can be set to a list of energy sensors, one per line if you 
 - **input_number.predbat_car_charging_energy_scale** - Used to define a scaling factor (in the range of 0 to 1.0)
 to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW). Default 1.0, i.e. no scaling.
 
-If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure **input_number.predbat_car_charging_threshold** (see [Additional car charging configuration](car-charging.md#additional-car-charging-configurations)).
+If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the **car_charging_energy** line out of `apps.yaml` and configure **input_number.predbat_car_charging_threshold** (see [Additional car charging configuration](car-charging.md#additional-car-charging-configurations)).
 
 ### Planned Car Charging
 

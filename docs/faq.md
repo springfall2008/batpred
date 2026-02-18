@@ -8,7 +8,6 @@ check your entity settings are correct.
 - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the [Solcast instructions](install.md#solcast-install)).
 The default Solcast sensor names may be wrong, you might need to update the `apps.yaml` config to match your own names
 (some people don't have the solcast_ bit in their names)
-- Did you configure AppDaemon apps_dir correctly in `appdaemon.yaml`?
 
 ## Predbat is failing with Warn: Service call select/select_option data failed
 
@@ -22,7 +21,7 @@ failed
 ```
 
 This will happen if you have no actual selectors provided by integrations in Home Assistant before Predbat starts. You can workaround this by adding a
-dummy selector to configuration.yaml and restarting HA e.g:
+dummy selector to `configuration.yaml` and restarting HA e.g:
 
 ```yaml
 template:
@@ -38,6 +37,22 @@ template:
               option: "{{ option }}"
 ```
 
+## Why is my house load lower than expected, or zero?
+
+If your house load is unusually low in the Predbat plan, then its often due to Predbat excluding some of your house load.
+
+- Are your **load_today**, **import_today**, **export_today** and **pv_today** entries in `apps.yaml` correctly configured and pointing to the right inverter/Home Assistant entities?
+- Check the history of these entities, are there gaps in them or do the entities go down during the day rather than continually increment - these need to be resolved if they do not increment continually over the day and reset at midnight.
+- Have you accidentally used a power sensor (W or kW) rather than a daily energy sensor (Wh or kWh)?
+- In the logfile do you see car/iBoost energy being excluded, e.g. "Today's predicted so far 19.0kWh with 3.2kWh car/iBoost excluded"?
+- If energy is being excluded and you have an EV/iBoost, have you configured the correct **car_charging_energy** energy sensor(s) to [filter car charging energy](apps-yaml.md#car-charging-filtering) in `apps.yaml`?
+- Do these sensors increment over the day or are there gaps or resets back to zero during the day?  Use a daily utility meter to wrap around your EV charger sensor to provide Predbat with a sensor that doesn't do this.
+- Depending on the wiring of your EV charger and inverter, the inverter may not 'see' the EV charging energy.
+If you configure car_charging_energy in `apps.yaml` then Predbat will be calculating an artificially low house load - turn **switch.car_charging_hold** off to stop this.
+- If you don't have a sensor that provides car charging energy then Predbat will use **input_number.predbat_car_charging_threshold** as the
+[threshold to detect car charging](car-charging.md/#additional-car-charging-configurations) - adjust as necessary for your EV charger.
+- If you don't have an EV charger then turn **switch.car_charging_hold** off as Predbat will still use **input_number.predbat_car_charging_threshold** and assume any house load above this is EV charging.
+
 ## Why is my predicted charge % higher or lower than I might expect?
 
 - Predbat is based on cost, so it will try to save you money. If you have the PV 10% option enabled it will also
@@ -49,8 +64,6 @@ If you do something like have export>import then Predbat will try to export as m
 - Have you tuned **predbat_best_soc_keep settings**?
 - Do you have predicted car charging during the time period?
 - You can also tune **predbat_load_scaling** and **predbat_pv_scaling** to adjust predictions up and down a bit
-- Maybe your historical data includes car charging, you might want to filter this out using [car_charging_hold in apps.yaml](apps-yaml.md#car-charging-filtering),
-and conversely if your predicted load is too low, maybe you have excluded car charging but your load_today sensor doesn't include car charging energy?
 
 ## Why didn't the slot get configured?
 
@@ -274,9 +287,9 @@ It's recommended that you don't include the Solcast forecast within your GivEner
 If you get the message "Note: Can not find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml" in the logfile
 then Predbat tries to create a battery charge curve but does not have access to the required history information in Home Assistant.
 
-[Creating the battery charge curve](apps-yaml.md#workarounds) is described in the apps.yaml document.
-The most likely cause of the above message appearing in the logfile is that you are controlling the inverter in REST mode
-but have not uncommented the following entities in apps.yaml that Predbat needs to obtain history from to create the battery charge curve:
+[Creating the battery charge curve](apps-yaml.md#battery-chargedischarge-curves) is described in the `apps.yaml` document.
+The most likely cause of the above message appearing in the logfile is that you are controlling a GivEnergy inverter in REST mode
+but have not uncommented the following entities in `apps.yaml` that Predbat needs to obtain history from to create the battery charge curve:
 
 ```yaml
   charge_rate:
@@ -288,6 +301,8 @@ but have not uncommented the following entities in apps.yaml that Predbat needs 
   soc_kw:
     - sensor.givtcp_{geserial}_soc_kwh
 ```
+
+You should also check that all the entities Predbat highlights that it are using have history, and that the charging/discharging goes to full/empty as described in the battery curve documentation.
 
 ## WARN: Inverter is in calibration mode
 

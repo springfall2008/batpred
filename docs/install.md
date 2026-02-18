@@ -239,7 +239,7 @@ Predbat needs to know what your electricity import and export rates are to optim
 These rates are configured in Predbat's `apps.yaml` configuration file. Follow the instructions in the [Energy Rates](energy-rates.md) document.
 
 **Note:** that if you are using the Octopus integration the 'sensor.octopus_xxx' and 'event.octopus_xxx' entities must have a similar pattern of
-names for Predbat to work correctly - see the [FAQ's](faq.md) if they are not.
+names for Predbat to work correctly - see the [FAQ's](faq.md#error---metric_octopus_import-not-set-correctly-or-no-energy-rates-can-be-read) if they are not.
 
 ## Configuring Predbat
 
@@ -250,14 +250,14 @@ When Predbat starts up initially it will perform a sanity check of itself and th
 You will see this check in the log, should it fail a warning will be issued and **predbat.status** will also reflect the warning.
 While the above warning might not prevent Predbat from starting up, you should fix the issue ASAP as it may cause future problems.
 
-**Note:** If you are running the Predbat through the Predbat app or via Docker you will get a logfile warning message
+**Note:** If you are running the Predbat through the Predbat app or via Docker you will get a logfile warning message.
 
 ## Predbat Output and Configuration Controls
 
 As described above, the basic configuration of Predbat is held in the `apps.yaml` configuration file.
 
 When Predbat first runs it will create a number of output and configuration control entities in Home Assistant which are used to fine-tune how Predbat operates.
-The entities are all prefixed *predbat* and can be seen (and changed) from the Settings / Devices & Services / Entities list in Home Assistant.
+The entities are all prefixed *predbat* and can be seen (and changed) from the Settings / Devices & Services / Entities list in Home Assistant or the [Config view in Predbat web console](web-interface.md#config-view).
 
 It is recommended that you create a dashboard page with all the required entities to control Predbat
 and another page to display Predbat's charging and discharging plan for your battery.
