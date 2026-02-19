@@ -45,12 +45,12 @@ If your house load is unusually low in the Predbat plan, then its often due to P
 - Check the history of these entities, are there gaps in them or do the entities go down during the day rather than continually increment - these need to be resolved if they do not increment continually over the day and reset at midnight.
 - Have you accidentally used a power sensor (W or kW) rather than a daily energy sensor (Wh or kWh)?
 - In the logfile do you see car/iBoost energy being excluded, e.g. "Today's predicted so far 19.0kWh with 3.2kWh car/iBoost excluded"?
-- If energy is being excluded and you have an EV/iBoost, have you configured the correct **car_charging_energy** energy sensor(s) to [filter car charging energy](apps-yaml.md#car-charging-filtering) in `apps.yaml`?
+- If energy is being excluded and you have an EV/iBoost, have you configured the correct **car_charging_energy** energy sensor(s) to [filter car charging energy](car-charging.md#filtering-car-charging-energy-from-house-load) in `apps.yaml`?
 - Do these sensors increment over the day or are there gaps or resets back to zero during the day?  Use a daily utility meter to wrap around your EV charger sensor to provide Predbat with a sensor that doesn't do this.
 - Depending on the wiring of your EV charger and inverter, the inverter may not 'see' the EV charging energy.
 If you configure car_charging_energy in `apps.yaml` then Predbat will be calculating an artificially low house load - turn **switch.car_charging_hold** off to stop this.
 - If you don't have a sensor that provides car charging energy then Predbat will use **input_number.predbat_car_charging_threshold** as the
-[threshold to detect car charging](car-charging.md/#additional-car-charging-configurations) - adjust as necessary for your EV charger.
+[threshold to detect car charging](car-charging.md/#filtering-car-charging-energy-from-house-load) - adjust as necessary for your EV charger.
 - If you don't have an EV charger then turn **switch.car_charging_hold** off as Predbat will still use **input_number.predbat_car_charging_threshold** and assume any house load above this is EV charging.
 
 ## Why is my predicted charge % higher or lower than I might expect?

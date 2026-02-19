@@ -364,7 +364,7 @@ Set the list of [devices to notify](apps-yaml.md#notify_devices) in `apps.yaml`.
 
 **switch.predbat_set_charge_low_power** Enables low-power charging mode where the max charge rate will be automatically determined by Predbat to be the
 lowest possible rate to meet the charge target. This is only really effective for charge windows longer than a single slot.
-If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#workarounds)
+If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#battery-chargedischarge-curves)
 as otherwise the low power charge may not reach the charge target in time.
 This setting is off by default.
 

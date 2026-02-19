@@ -20,7 +20,7 @@ The apps.yaml file will be in either the directory `/addon_configs/6adb4f0d_pred
         - Adjust your **inverter_limit** and **export_limit** as required
     - You have your [energy rates](energy-rates.md) set correctly either using Octopus Energy integration or entered manually
     - That the Solcast integration (if being used) is matching the configuration correctly - should be automatic
-    - If you have an electric car you have set up the [Car Charging](apps-yaml.md#car-charging-integration) configuration
+    - If you have an electric car you have set up the [Car Charging](car-charging.md) configuration
 8. Add the Predbat entities to your dashboard - [Output data](output-data.md)
 9. Follow the [Configuration Guide](configuration-guide.md) to set 'standard' Predbat configuration settings depending on your import and export tariffs
 10. The detailed [Customisation Guide](customisation.md) lists all Predbat's controls and settings in Home Assistant that can be tuned for your system

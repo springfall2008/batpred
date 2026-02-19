@@ -287,6 +287,7 @@ class LoadMLComponent(ComponentBase):
                     divide_by=1.0,
                     scale=1.0,
                 )
+            # try to retrieve import and export rate history to detect rate-based load patterns
             import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False)
             export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False)
 
