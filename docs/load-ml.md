@@ -238,7 +238,7 @@ You can visualize these predictions in the Predbat web interface or by creating 
 The ML component tracks several status indicators:
 
 - **Model Status**: `not_initialized`, `training`, `active`, `validation_failed`, `stale`
-- **Validation MAE**: Mean Absolute Error on validation data (in kWh per 5-min step)
+- **Validation MAE**: Mean Absolute Error on validation data (see [Understanding MAE](#understanding-mae-mean-absolute-error) for details)
 - **Model Age**: How long since the model was last trained
 
 You can check model status in the Predbat logs or via the component status page in the web interface.
@@ -254,6 +254,40 @@ Good predictions require:
 5. **PV Generation Data**: If you have solar panels, include `pv_today` sensor for better correlation
 6. **Clean Data**: Avoid gaps or incorrect readings in historical data
 7. **Recent Training**: Model should be retrained periodically (happens automatically every 2 hours)
+
+### Understanding MAE (Mean Absolute Error)
+
+The model's accuracy is measured using **MAE (Mean Absolute Error)**, which is the primary metric used for validation and monitoring.
+
+**What is MAE?**
+
+MAE measures the average absolute difference between predicted and actual energy consumption values. For example:
+
+- If the model predicts 0.5 kWh for a 5-minute period and actual consumption is 0.7 kWh, the error is 0.2 kWh
+- MAE is the average of these errors across all predictions
+
+**How to interpret MAE:**
+
+- **MAE is in kWh per 5-minute step** - this is the average prediction error for each 5-minute interval
+- **Lower is better** - an MAE of 0.3 kWh means predictions are typically off by ±0.3 kWh per 5-minute period
+- **Scale matters** - a 0.3 kWh error means different things for different households:
+    - Low consumption home (2 kW average): 0.3 kWh per 5-min ≈ 3.6 kW error → significant
+    - High consumption home (8 kW average): 0.3 kWh per 5-min ≈ 3.6 kW error → moderate
+
+**Practical example:**
+
+If your validation MAE is 0.4 kWh per 5-min step:
+
+- Each 5-minute prediction is off by an average of 0.4 kWh (±24 Wh/min)
+- This translates to roughly ±4.8 kW average power error
+- Over 1 hour (12 steps), cumulative error averages out but could be up to ±4.8 kWh
+- The model learns patterns, so errors tend to cancel out over longer periods
+
+**Why MAE is used:**
+
+- **Easy to interpret**: Errors are in the same units as predictions (kWh)
+- **Robust to outliers**: Unlike squared errors, large mistakes don't dominate the metric
+- **Practical measure**: Directly relates to how much your battery plan might be affected
 
 ### Expected Accuracy
 
