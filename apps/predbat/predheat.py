@@ -11,6 +11,14 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Heat pump prediction and heating energy forecasting.
+
+Physics-based heating simulation using COP efficiency tables, weather
+compensation curves, and thermal models to predict heating energy
+requirements and costs for heat pump systems.
+"""
+
 from datetime import datetime, timedelta
 import pytz
 from utils import str2time, dp2, dp3, minute_data

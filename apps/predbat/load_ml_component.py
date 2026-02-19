@@ -10,6 +10,15 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""ML load forecasting component integrating LoadPredictor with PredBat.
+
+ComponentBase wrapper that manages the LoadPredictor lifecycle including
+data fetching, periodic training/fine-tuning, prediction generation, and
+status sensor publishing. Retrains every 2 hours and updates predictions
+every 30 minutes.
+"""
+
 import asyncio
 import os
 from datetime import datetime, timezone, timedelta

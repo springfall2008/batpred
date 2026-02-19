@@ -10,6 +10,15 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""NumPy-only MLP neural network for household load forecasting.
+
+Implements a 4-layer feed-forward network (512-256-128-64) trained via
+Adam optimiser with autoregressive prediction for 48-hour load forecasts.
+Uses historical load, PV generation, temperature, and energy rates as
+input features with cyclical time encoding.
+"""
+
 import numpy as np
 import json
 import os

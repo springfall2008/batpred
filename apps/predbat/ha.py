@@ -8,6 +8,15 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Home Assistant communication interface.
+
+Provides the HAInterface class for direct WebSocket and REST API communication
+with Home Assistant. Manages state caching, entity synchronisation, service
+calls, history retrieval, and optional SQLite database mirroring. Also includes
+HAHistory for automatic entity history tracking and pruning.
+"""
+
 import os
 from datetime import timedelta, datetime
 import asyncio

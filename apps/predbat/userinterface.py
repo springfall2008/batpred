@@ -8,6 +8,15 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Configuration management and Home Assistant event handling.
+
+Mixin class for loading, validating, and synchronising configuration settings
+between PredBat and Home Assistant. Handles entity creation for switches,
+input_numbers, and select inputs, and routes HA events (state changes,
+service calls) to the appropriate handlers.
+"""
+
 import os
 from datetime import timedelta
 from utils import get_override_time_from_string
@@ -48,6 +57,13 @@ DEBUG_EXCLUDE_LIST = [
 
 
 class UserInterface:
+    """Configuration management and HA event handling mixin.
+
+    Loads, validates, and synchronises configuration settings between
+    PredBat and Home Assistant. Creates entities for switches, input_numbers,
+    and selects. Routes HA events to appropriate handlers.
+    """
+
     def call_notify(self, message):
         """
         Sync wrapper for call_notify

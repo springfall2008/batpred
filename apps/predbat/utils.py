@@ -8,6 +8,14 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Utility functions for data processing, time manipulation, and calculations.
+
+Provides helpers for parsing Home Assistant history data into per-minute
+dictionaries, time string parsing, data filtering/pruning, rounding,
+and historical data extraction from incrementing energy counters.
+"""
+
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY

@@ -4,6 +4,14 @@
 # This application maybe used for personal use only and not for commercial use
 # -----------------------------------------------------------------------------
 
+
+"""GivEnergy Cloud API integration.
+
+Direct cloud API client for GivEnergy inverters, providing real-time
+status monitoring, meter data collection, and inverter control settings
+management via the GivEnergy Cloud REST API.
+"""
+
 import aiohttp
 from datetime import timedelta, datetime
 from utils import str2time, dp1

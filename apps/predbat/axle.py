@@ -8,6 +8,14 @@
 
 # API Documentation: https://vpp.axle.energy/landing/home-assistant
 
+
+"""Axle Energy Virtual Power Plant (VPP) event management.
+
+Integrates with the Axle Energy API to receive and process VPP events
+(import/export commands) with event history tracking and binary sensor
+publishing for demand response participation.
+"""
+
 from datetime import datetime, timedelta
 import asyncio
 import aiohttp

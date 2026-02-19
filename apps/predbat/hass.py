@@ -1,3 +1,11 @@
+"""Standalone mode wrapper for running PredBat outside AppDaemon.
+
+Provides the Hass class that emulates the AppDaemon interface for standalone
+execution, including YAML configuration loading, secret management, log
+rotation, scheduled callback execution, and file change detection for
+development hot-reload.
+"""
+
 import io
 import yaml
 import sys
@@ -96,6 +104,13 @@ if __name__ == "__main__":
 
 
 class Hass:
+    """Standalone mode wrapper emulating the AppDaemon interface.
+
+    Enables PredBat to run outside Home Assistant/AppDaemon with YAML
+    config loading, secret management, log rotation, scheduled callbacks,
+    and file change detection for development hot-reload.
+    """
+
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile

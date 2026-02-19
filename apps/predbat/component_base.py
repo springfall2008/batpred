@@ -8,6 +8,16 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+
+"""Abstract base class for all PredBat components.
+
+Provides standardised lifecycle management (initialise, start, stop),
+health monitoring with exponential backoff on startup failures, error
+counting, and delegation to the main PredBat instance for HA operations.
+All component types (HAInterface, WebInterface, SolarAPI, etc.) inherit
+from this class.
+"""
+
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 import asyncio
