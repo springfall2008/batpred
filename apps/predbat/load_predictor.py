@@ -247,7 +247,7 @@ class LoadPredictor:
 
             # Apply weight decay (AdamW-style L2 regularization)
             if self.weight_decay > 0:
-                self.weights[i] *= (1 - self.learning_rate * self.weight_decay)
+                self.weights[i] *= 1 - self.learning_rate * self.weight_decay
 
             # Update momentum for biases
             self.m_biases[i] = beta1 * self.m_biases[i] + (1 - beta1) * bias_grads[i]

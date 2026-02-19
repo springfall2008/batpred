@@ -25,6 +25,7 @@ axvspan
 backprop
 Backpropagate
 backpropagation
+backsteps
 Basepath
 Batpred
 battemperature
@@ -162,6 +163,7 @@ isort
 itemtype
 ivtime
 jsyaml
+kaiming
 killall
 kopt
 Kostal
@@ -239,6 +241,7 @@ oninput
 onmouseout
 onmouseover
 openweathermap
+overfitting
 ownerapi
 pdata
 pdetails
