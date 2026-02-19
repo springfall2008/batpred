@@ -63,6 +63,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_time_decay_days = 7
         self.ml_max_load_kw = 50.0
         self.ml_max_model_age_hours = 48
+        self.ml_weight_decay = 0.01
 
         # Data state
         self.load_data = None
@@ -98,7 +99,7 @@ class LoadMLComponent(ComponentBase):
 
     def _init_predictor(self):
         """Initialize or reinitialize the predictor."""
-        self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw)
+        self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay)
 
         # Determine model save path
         if self.config_root:
@@ -124,7 +125,7 @@ class LoadMLComponent(ComponentBase):
                 # Model load failed (version mismatch, architecture change, etc.)
                 # Reinitialize predictor to ensure clean state
                 self.log("ML Component: Failed to load model, reinitializing predictor")
-                self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw)
+                self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay)
 
     async def _fetch_load_data(self):
         """

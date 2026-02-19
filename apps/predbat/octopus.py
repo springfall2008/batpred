@@ -1164,6 +1164,11 @@ class OctopusAPI(ComponentBase):
         """
         max_retries = OCTOPUS_MAX_RETRIES
         for attempt in range(max_retries):
+            # Check for shutdown signal
+            if self.api_stop:
+                self.log("Octopus API: Aborting retry loop due to shutdown")
+                return None
+
             data_as_json = await self.async_read_response(response, url, ignore_errors=ignore_errors)
             if data_as_json is not None:
                 return data_as_json
@@ -1212,7 +1217,9 @@ class OctopusAPI(ComponentBase):
                 if error_code == "KT-CT-1199":
                     msg = f'Warn: Octopus API: Rate limit error in request ({url}): {data_as_json["errors"]}'
                     self.log(msg)
-                    await asyncio.sleep(5)  # Sleep briefly to avoid hammering
+                    # Don't sleep if shutting down
+                    if not self.api_stop:
+                        await asyncio.sleep(5)  # Sleep briefly to avoid hammering
                     return None
 
         # Return the response as-is - let caller handle other errors (including auth errors that need retry)

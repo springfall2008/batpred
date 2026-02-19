@@ -23,7 +23,9 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 - Learns daily and weekly patterns automatically
 - Supports historical PV generation data as an input feature
 - Supports temperature forecast data for improved accuracy
-- Uses historical and future energy rates as an input feature
+- Uses historical and future energy import/export rates as input features
+- Deep neural network with 4 hidden layers [512, 256, 128, 64 neurons]
+- Optimized with He initialization and AdamW weight decay for robust training
 - Automatically trains on historical data (requires at least 1 day, recommended 7+ days)
 - Fine-tunes periodically to adapt to changing patterns
 - Model persists across restarts
@@ -33,7 +35,19 @@ The ML Load Prediction component uses a lightweight multi-layer perceptron (MLP)
 
 ### Architecture
 
-The ML Load Predictor uses a deep neural network with an input layer, some hidden layers and an output layer.
+The ML Load Predictor uses a deep multi-layer perceptron (MLP) with the following architecture:
+
+- **Input Layer**: 1444 features (288 load + 288 PV + 288 temperature + 288 import rates + 288 export rates + 4 time features)
+- **Hidden Layers**: 4 layers with [512, 256, 128, 64] neurons using ReLU activation
+- **Output Layer**: 1 neuron (predicts next 5-minute step)
+- **Total Parameters**: ~500,000 trainable weights
+
+**Optimization Techniques:**
+
+- **He Initialization**: Weights initialized using He/Kaiming method (`std = sqrt(2/fan_in)`), optimized for ReLU activations
+- **AdamW Optimizer**: Adam optimization with weight decay (L2 regularization, default 0.01) to prevent overfitting
+- **Early Stopping**: Training halts if validation error stops improving (patience=5 epochs)
+- **Weighted Samples**: Recent data weighted more heavily (exponential decay over 7 days)
 
 ### Input Features
 
@@ -49,12 +63,19 @@ The neural network uses several types of input features to make predictions:
    - Requires `pv_today` sensor to be configured
 
 3. **Historical Temperature**
-   - Past 7 days and future 2 days of temperature data at 5-minute intervals
+   - Past 24 hours of temperature data at 5-minute intervals
    - Helps correlate temperature with energy usage (heating/cooling)
    - **Requires the Temperature component to be enabled**
 
-4. **Cyclical Time Features** (4 features)
-   - Sin/Cos encoding of hour-of-day (captures daily patterns)
+4. **Historical Import/Export Energy Rates** (288 + 288 features)
+   - Past 24 hours of electricity import rates at 5-minute intervals
+   - Past 24 hours of electricity export rates at 5-minute intervals
+   - Helps the model learn consumption patterns based on time-of-use pricing
+   - Automatically extracted from your configured Octopus Energy tariffs or other rate sources
+   - Particularly useful for homes that shift usage to cheaper rate periods
+
+5. **Cyclical Time Features** (4 features)
+   - Sin/Cos encoding of minute-of-day (captures daily patterns with 5-min precision)
    - Sin/Cos encoding of day-of-week (captures weekly patterns)
    - These features help the network understand that 23:55 is close to 00:05
 
@@ -75,16 +96,26 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 **Initial Training:**
 
 - Requires at least 1 day of historical data (7+ days recommended)
-- Uses 50 epochs with early stopping
+- Uses 100 epochs with early stopping (patience=5)
+- Batch size: 128 samples
+- AdamW optimizer with learning rate 0.001 and weight decay 0.01
+- Sample weighting: exponential time decay (recent data weighted more)
 - Validates on the last 24 hours of data
 - Saves model to disk: `predbat_ml_model.npz`
+
+**Regularization:**
+
+- **Weight Decay**: L2 penalty (0.01) applied to network weights to prevent overfitting
+- **Early Stopping**: Training halts if validation error doesn't improve for 5 consecutive epochs
+- **Time-Weighted Samples**: Recent data has higher importance (7-day exponential decay)
 
 **Fine-tuning:**
 
 - Runs every 2 hours if enabled
 - Uses last 24 hours of data
-- Uses 2 epochs to quickly adapt to recent changes
+- Uses 3 epochs to quickly adapt to recent changes
 - Preserves learned patterns while adapting to new ones
+- Same regularization techniques applied
 
 **Model Validation:**
 
@@ -187,7 +218,7 @@ Check the Predbat logs for training progress:
 
 ```text
 ML Component: Starting initial training
-ML Predictor: Starting initial training with 50 epochs
+ML Predictor: Starting initial training with 100 epochs
 ML Predictor: Training complete, final val_mae=0.3245 kWh
 ML Component: Initial training completed, validation MAE=0.3245 kWh
 ```
@@ -207,7 +238,7 @@ You can visualize these predictions in the Predbat web interface or by creating 
 The ML component tracks several status indicators:
 
 - **Model Status**: `not_initialized`, `training`, `active`, `validation_failed`, `stale`
-- **Validation MAE**: Mean Absolute Error on validation data (in kWh per 5-min step)
+- **Validation MAE**: Mean Absolute Error on validation data (see [Understanding MAE](#understanding-mae-mean-absolute-error) for details)
 - **Model Age**: How long since the model was last trained
 
 You can check model status in the Predbat logs or via the component status page in the web interface.
@@ -216,11 +247,47 @@ You can check model status in the Predbat logs or via the component status page 
 
 Good predictions require:
 
-1. **Sufficient Historical Data**: At least 7 days recommended
+1. **Sufficient Historical Data**: At least 7 days recommended for stable patterns
 2. **Consistent Patterns**: Regular daily/weekly routines improve accuracy
-3. **Temperature Data**: Especially important for homes with electric heating/cooling
-4. **Clean Data**: Avoid gaps or incorrect readings in historical data
-5. **Recent Training**: Model should be retrained periodically (happens automatically)
+3. **Temperature Data**: Especially important for homes with electric heating/cooling (requires Temperature component)
+4. **Energy Rate Data**: Automatically included - helps model learn consumption patterns based on time-of-use tariffs
+5. **PV Generation Data**: If you have solar panels, include `pv_today` sensor for better correlation
+6. **Clean Data**: Avoid gaps or incorrect readings in historical data
+7. **Recent Training**: Model should be retrained periodically (happens automatically every 2 hours)
+
+### Understanding MAE (Mean Absolute Error)
+
+The model's accuracy is measured using **MAE (Mean Absolute Error)**, which is the primary metric used for validation and monitoring.
+
+**What is MAE?**
+
+MAE measures the average absolute difference between predicted and actual energy consumption values. For example:
+
+- If the model predicts 0.5 kWh for a 5-minute period and actual consumption is 0.7 kWh, the error is 0.2 kWh
+- MAE is the average of these errors across all predictions
+
+**How to interpret MAE:**
+
+- **MAE is in kWh per 5-minute step** - this is the average prediction error for each 5-minute interval
+- **Lower is better** - an MAE of 0.3 kWh means predictions are typically off by ±0.3 kWh per 5-minute period
+- **Scale matters** - a 0.3 kWh error means different things for different households:
+    - Low consumption home (2 kW average): 0.3 kWh per 5-min ≈ 3.6 kW error → significant
+    - High consumption home (8 kW average): 0.3 kWh per 5-min ≈ 3.6 kW error → moderate
+
+**Practical example:**
+
+If your validation MAE is 0.4 kWh per 5-min step:
+
+- Each 5-minute prediction is off by an average of 0.4 kWh (±24 Wh/min)
+- This translates to roughly ±4.8 kW average power error
+- Over 1 hour (12 steps), cumulative error averages out but could be up to ±4.8 kWh
+- The model learns patterns, so errors tend to cancel out over longer periods
+
+**Why MAE is used:**
+
+- **Easy to interpret**: Errors are in the same units as predictions (kWh)
+- **Robust to outliers**: Unlike squared errors, large mistakes don't dominate the metric
+- **Practical measure**: Directly relates to how much your battery plan might be affected
 
 ### Expected Accuracy
 
@@ -296,13 +363,14 @@ Access predictions via:
 
 The trained model is saved to disk as `predbat_ml_model.npz` in your Predbat config directory. This file contains:
 
-- Network weights and biases
-- Normalization parameters (mean, standard deviation)
-- Training metadata (epochs, timestamp, version)
+- **Network weights and biases**: All 4 hidden layers plus output layer
+- **Optimizer state**: Adam momentum terms for continuing fine-tuning
+- **Normalization parameters**: Feature and target mean/standard deviation
+- **Training metadata**: Epochs trained, timestamp, model version, architecture details
 
 The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining.
 
-If the model becomes unstable you can also delete this file to start again.
+**Note**: If you update Predbat and the model architecture or version changes, the old model will be rejected and a new model will be trained from scratch. If the model becomes unstable, you can manually delete `predbat_ml_model.npz` to force retraining.
 
 ---
 
