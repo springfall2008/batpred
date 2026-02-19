@@ -228,7 +228,7 @@ COMPONENT_LIST = {
             "temperature_enable": {"required_true": True, "config": "temperature_enable", "default": False},
             "temperature_latitude": {"required": False, "config": "temperature_latitude", "default": None},
             "temperature_longitude": {"required": False, "config": "temperature_longitude", "default": None},
-            "temperature_url": {"required": False, "config": "temperature_url", "default": "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m&past_days=7"},
+            "temperature_url": {"required": False, "config": "temperature_url", "default": "https://api.open-meteo.com/v1/forecast?latitude=LATITUDE&longitude=LONGITUDE&hourly=temperature_2m&current=temperature_2m&past_days=28"},
         },
         "phase": 1,
     },
@@ -284,6 +284,7 @@ COMPONENT_LIST = {
         "args": {
             "load_ml_enable": {"required_true": True, "config": "load_ml_enable", "default": False},
             "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
+            "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
         },
         "phase": 1,
         "can_restart": True,

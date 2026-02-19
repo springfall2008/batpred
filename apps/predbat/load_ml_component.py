@@ -37,13 +37,16 @@ class LoadMLComponent(ComponentBase):
     - Falls back to empty predictions when validation fails or model is stale
     """
 
-    def initialize(self, load_ml_enable, load_ml_source=True):
+    def initialize(self, load_ml_enable, load_ml_source=True, load_ml_max_days_history=28):
         """
         Initialize the ML load forecaster component.
 
         Args:
             load_ml_enable: Whether ML forecasting is enabled
+            load_ml_source: Whether using ML as the data source is enabled or not
+            load_ml_max_days_history: Maximum number of days of load history to use for training
         """
+
         self.ml_enable = load_ml_enable
         self.ml_source = load_ml_source
         self.ml_load_sensor = self.get_arg("load_today", default=[], indirect=False)
@@ -57,13 +60,14 @@ class LoadMLComponent(ComponentBase):
 
         self.ml_learning_rate = 0.001
         self.ml_epochs_initial = 100
-        self.ml_epochs_update = 3
+        self.ml_epochs_update = 20
         self.ml_min_days = 1
         self.ml_validation_threshold = 2.0
         self.ml_time_decay_days = 7
         self.ml_max_load_kw = 50.0
         self.ml_max_model_age_hours = 48
         self.ml_weight_decay = 0.01
+        self.ml_max_days_history = load_ml_max_days_history
 
         # Data state
         self.load_data = None
@@ -139,8 +143,8 @@ class LoadMLComponent(ComponentBase):
             return None, 0, 0, None, None, None, None
 
         try:
-            # Determine how many days of history to fetch, up to 7 days back
-            days_to_fetch = max(7, self.ml_min_days)
+            # Determine how many days of history to fetch, up to N days back
+            days_to_fetch = max(self.ml_max_days_history, self.ml_min_days)
 
             # Fetch load sensor history
             self.log("ML Component: Fetching {} days of load history from {}".format(days_to_fetch, self.ml_load_sensor))
@@ -149,9 +153,11 @@ class LoadMLComponent(ComponentBase):
             if not load_minutes:
                 self.log("Warn: ML Component: Failed to convert load history to minute data")
                 return None, 0, 0, None, None, None, None
+            days_to_fetch = min(days_to_fetch, load_minutes_age)
 
             if self.get_arg("load_power", default=None, indirect=False) and self.get_arg("load_power_fill_enable", True):
-                load_power_data, _ = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
+                load_power_data, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True)
+                days_to_fetch = min(days_to_fetch, load_minutes_age)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
 
             car_charging_energy = {}
@@ -182,15 +188,13 @@ class LoadMLComponent(ComponentBase):
                 load_minutes_new[minute] = total_load_energy + load_delta
                 total_load_energy += load_delta
 
-            # Calculate age of data
-            age_days = max_minute / (24 * 60)
-
             # Get current cumulative load value (excludes car)
             load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_now, backwards=True)
 
             # PV Data
             if self.ml_pv_sensor:
-                pv_data_hist, _ = self.base.minute_data_load(self.now_utc, "pv_today", days_to_fetch, required_unit="kWh", load_scaling=1.0, interpolate=True)
+                pv_data_hist, pv_minutes_age = self.base.minute_data_load(self.now_utc, "pv_today", days_to_fetch, required_unit="kWh", load_scaling=1.0, interpolate=True)
+                days_to_fetch = min(days_to_fetch, pv_minutes_age)
             else:
                 pv_data_hist = {}
 
@@ -233,7 +237,7 @@ class LoadMLComponent(ComponentBase):
                     data_array.append({"state": value, "last_updated": key})
 
                 # Load data from past and future predictions, base backwards around now_utc
-                # We also get the last 7 days in the past to help the model learn the daily pattern
+                # We also get the last N days in the past to help the model learn the daily pattern
                 temperature_data, _ = minute_data(
                     data_array,
                     days_to_fetch,
@@ -305,7 +309,7 @@ class LoadMLComponent(ComponentBase):
                 if value is not None and minute not in export_rates_data:
                     export_rates_data[minute] = value
 
-            self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), age_days))
+            self.log("ML Component: Fetched {} load data points, {:.1f} days of history".format(len(load_minutes_new), days_to_fetch))
             if 0:
                 with open("ml_load_debug.json", "w") as f:
                     import json
@@ -313,7 +317,7 @@ class LoadMLComponent(ComponentBase):
                     json.dump(
                         {
                             "load_minutes": load_minutes_new,
-                            "age_days": age_days,
+                            "age_days": days_to_fetch,
                             "load_minutes_now": load_minutes_now,
                             "pv_data": pv_data,
                             "temperature_data": temperature_data,
@@ -326,7 +330,7 @@ class LoadMLComponent(ComponentBase):
                         f,
                         indent=2,
                     )
-            return load_minutes_new, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data
+            return load_minutes_new, days_to_fetch, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data
 
         except Exception as e:
             self.log("Error: ML Component: Failed to fetch load data: {}".format(e))

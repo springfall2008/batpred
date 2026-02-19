@@ -430,16 +430,9 @@ class LoadPredictor:
 
         max_minute = max(energy_per_step.keys())
 
-        # Determine data range
-        if is_finetune:
-            # Only use last 48 hours for fine-tuning (24h train + 24h for lookback)
-            start_minute = 0
-            end_minute = min(48 * 60, max_minute)
-            validation_holdout_hours = 12  # Smaller holdout for fine-tuning
-        else:
-            # Use 7 days of data for initial training
-            start_minute = 0
-            end_minute = min(7 * 24 * 60, max_minute)
+        # Use the entire data set for both training and fine tuning
+        start_minute = 0
+        end_minute = max_minute
 
         # Need enough history for lookback plus validation holdout
         min_required = LOOKBACK_STEPS * STEP_MINUTES + validation_holdout_hours * 60 + STEP_MINUTES
@@ -518,10 +511,7 @@ class LoadPredictor:
 
             # Time-decay weighting (older samples get lower weight)
             age_days = target_minute / (24 * 60)
-            if is_finetune:
-                weight = 1.0  # Equal weight for fine-tuning
-            else:
-                weight = np.exp(-age_days / time_decay_days)
+            weight = np.exp(-age_days / time_decay_days)
             weight_list.append(weight)
 
         # Create validation samples (from most recent data, minute 0 to validation_end)
