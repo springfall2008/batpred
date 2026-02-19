@@ -126,7 +126,7 @@ To prevent drift in long-range predictions, the model blends autoregressive pred
 
 **Why Full Dataset for Fine-tuning?**
 
-Although fine-tuning uses only 3 epochs (vs 100 for initial training), it still uses the full dataset with time-weighted sampling. This approach:
+Although fine-tuning uses up to 20 epochs (vs 100 for initial training), it still uses the full dataset with time-weighted sampling. This approach:
 
 - **Prevents catastrophic forgetting**: Using only recent data would cause the model to gradually forget older patterns
 - **Balances adaptation**: Time weighting (7-day decay) ensures recent changes are prioritized while maintaining long-term pattern knowledge
