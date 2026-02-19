@@ -333,7 +333,7 @@ class Inverter:
                         self.in_calibration = True
 
             if self.in_calibration:
-                self.log("Warn: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
+                self.log("Warn: Inverter {} is in calibration mode '{}', Predbat will not function correctly and will be disabled".format(self.id, soc_force_adjust))
 
             # Max battery rate
             if "Invertor_Max_Bat_Rate" in idetails:
