@@ -1105,7 +1105,7 @@ class Inverter:
             pdetails = self.rest_data["Power"]
             if "Power" in pdetails:
                 ppdetails = pdetails["Power"]
-                #self.log("DEBUG: Power details from REST: {}".format(ppdetails))
+                # self.log("DEBUG: Power details from REST: {}".format(ppdetails))
                 self.battery_power = float(ppdetails.get("Battery_Power", 0.0))
                 self.pv_power = float(ppdetails.get("PV_Power", 0.0))
                 self.grid_power = float(ppdetails.get("Grid_Power", 0.0))
